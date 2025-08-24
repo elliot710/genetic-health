@@ -1,18 +1,34 @@
-import React from 'react'
-import { Palette, Users, Smile, Zap, Heart } from 'lucide-react'
+import React from 'react';
+import { Brain, Heart, Users, Target, TrendingUp, Briefcase, Palette, Zap, Smile } from 'lucide-react';
+import { 
+  getThemeClass, 
+  getGlassBackground, 
+  getGlassBorder, 
+  getTextPrimary, 
+  getTextSecondary, 
+  getTagClass, 
+  getProgressBarBg 
+} from '../../utils/theme';
 
 interface AnalysisData {
-  summary?: any
-  health_risks?: any
-  drug_interactions?: any
-  recommendations?: string[]
+  traits?: any[];
+  behaviors?: any[];
 }
 
 interface PersonalityPanelProps {
-  data: AnalysisData
+  isDarkMode?: boolean;
+  theme?: any;
+  data: AnalysisData;
 }
 
-export default function PersonalityPanel({ data }: PersonalityPanelProps) {
+export default function PersonalityPanel({ data, isDarkMode = false, theme }: PersonalityPanelProps) {
+  const glassBackground = getGlassBackground(isDarkMode);
+  const glassBorder = getGlassBorder(isDarkMode);
+  const textPrimary = getTextPrimary(isDarkMode);
+  const textSecondary = getTextSecondary(isDarkMode);
+  const tagClass = getTagClass(isDarkMode);
+  const progressBarBg = getProgressBarBg(isDarkMode);
+
   const personalityTraits = [
     {
       trait: 'Openness to Experience',
@@ -20,141 +36,116 @@ export default function PersonalityPanel({ data }: PersonalityPanelProps) {
       gene: 'DRD4',
       description: 'High creativity and willingness to try new things',
       icon: Palette,
-      color: 'bg-purple-50 text-purple-700',
+      color: `${getThemeClass('bg-purple-50', isDarkMode)} ${getThemeClass('text-purple-700', isDarkMode)}`,
       characteristics: ['Curious', 'Creative', 'Open-minded', 'Imaginative']
     },
     {
       trait: 'Extraversion',
       score: 65,
       gene: 'DRD2',
-      description: 'Moderate social energy and outward focus',
+      description: 'Moderate social energy and outgoingness',
       icon: Users,
-      color: 'bg-blue-50 text-blue-700',
-      characteristics: ['Sociable', 'Assertive', 'Energetic', 'Talkative']
+      color: `${getThemeClass('bg-blue-50', isDarkMode)} ${getThemeClass('text-blue-700', isDarkMode)}`,
+      characteristics: ['Sociable', 'Energetic', 'Assertive', 'Talkative']
     },
     {
       trait: 'Agreeableness',
       score: 82,
       gene: 'OXTR',
-      description: 'High tendency to be cooperative and trusting',
+      description: 'High empathy and cooperation',
       icon: Heart,
-      color: 'bg-pink-50 text-pink-700',
-      characteristics: ['Compassionate', 'Cooperative', 'Trusting', 'Helpful']
+      color: `${getThemeClass('bg-pink-50', isDarkMode)} ${getThemeClass('text-pink-700', isDarkMode)}`,
+      characteristics: ['Trusting', 'Helpful', 'Compassionate', 'Cooperative']
     },
     {
       trait: 'Conscientiousness',
-      score: 70,
-      gene: 'KATNAL2',
-      description: 'Good self-discipline and organization',
-      icon: Zap,
-      color: 'bg-green-50 text-green-700',
-      characteristics: ['Organized', 'Disciplined', 'Goal-oriented', 'Reliable']
+      score: 71,
+      gene: 'COMT',
+      description: 'Good organization and self-discipline',
+      icon: Target,
+      color: `${getThemeClass('bg-green-50', isDarkMode)} ${getThemeClass('text-green-700', isDarkMode)}`,
+      characteristics: ['Organized', 'Responsible', 'Persistent', 'Goal-oriented']
     },
     {
-      trait: 'Emotional Stability',
-      score: 60,
+      trait: 'Neuroticism',
+      score: 45,
       gene: '5-HTTLPR',
-      description: 'Moderate resilience to stress',
-      icon: Smile,
-      color: 'bg-yellow-50 text-yellow-700',
-      characteristics: ['Calm', 'Resilient', 'Confident', 'Relaxed']
+      description: 'Moderate emotional stability',
+      icon: Zap,
+      color: `${getThemeClass('bg-yellow-50', isDarkMode)} ${getThemeClass('text-yellow-700', isDarkMode)}`,
+      characteristics: ['Calm', 'Resilient', 'Stable', 'Confident']
     }
-  ]
+  ];
 
   const behavioralTendencies = [
     {
       behavior: 'Risk Taking',
       level: 'Moderate',
-      gene: 'DRD4',
+      confidence: 72,
       description: 'Balanced approach to risk assessment',
-      implications: 'Good at calculated risks, not impulsive'
+      gene: 'DRD4'
     },
     {
-      behavior: 'Stress Response',
-      level: 'Sensitive',
-      gene: 'COMT',
-      description: 'Higher sensitivity to stressful situations',
-      implications: 'Benefits from stress management techniques'
-    },
-    {
-      behavior: 'Social Bonding',
+      behavior: 'Empathy',
       level: 'High',
-      gene: 'OXTR',
-      description: 'Strong capacity for forming social bonds',
-      implications: 'Thrives in collaborative environments'
+      confidence: 85,
+      description: 'Strong ability to understand others emotions',
+      gene: 'OXTR'
     },
     {
       behavior: 'Novelty Seeking',
       level: 'High',
-      gene: 'DRD4',
-      description: 'Strong drive to seek new experiences',
-      implications: 'Enjoys variety and new challenges'
+      confidence: 78,
+      description: 'Strong drive for new experiences',
+      gene: 'DRD4'
     }
-  ]
-
-  const getScoreColor = (score: number) => {
-    if (score >= 75) return 'text-green-600'
-    if (score >= 50) return 'text-yellow-600'
-    return 'text-red-600'
-  }
-
-  const getScoreBg = (score: number) => {
-    if (score >= 75) return 'bg-green-500'
-    if (score >= 50) return 'bg-yellow-500'
-    return 'bg-red-500'
-  }
+  ];
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
+      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
         <div className="flex items-center mb-4">
-          <Palette className="h-8 w-8 text-pink-600 mr-3" />
+          <Palette className={`h-8 w-8 ${getThemeClass('text-pink-600', isDarkMode)} mr-3`} />
           <div>
-            <h2 className="text-2xl font-bold text-gray-900">Personality & Behavior</h2>
-            <p className="text-gray-600">Your genetic behavioral tendencies and personality traits</p>
+            <h2 className={`text-2xl font-bold ${textPrimary}`}>Personality & Behavior</h2>
+            <p className={textSecondary}>Your genetic behavioral tendencies and personality traits</p>
           </div>
         </div>
       </div>
 
-      {/* Big Five Personality Traits */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Big Five Personality Dimensions</h3>
-        <div className="space-y-6">
+      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
+        <h3 className={`text-lg font-semibold ${textPrimary} mb-4`}>Big Five Personality Dimensions</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {personalityTraits.map((trait, index) => {
-            const Icon = trait.icon
+            const IconComponent = trait.icon;
             return (
-              <div key={index} className="border rounded-lg p-4">
-                <div className="flex items-start space-x-4">
-                  <div className={`p-3 rounded-lg ${trait.color}`}>
-                    <Icon className="h-6 w-6" />
-                  </div>
+              <div key={index} className={`p-4 rounded-lg border ${glassBorder} ${trait.color}`}>
+                <div className="flex items-start justify-between mb-3">
                   <div className="flex-1">
-                    <div className="flex justify-between items-start mb-3">
+                    <div className="flex items-center mb-2">
+                      <IconComponent className="h-5 w-5 mr-2" />
                       <div>
-                        <h4 className="font-medium text-gray-900 text-lg">{trait.trait}</h4>
-                        <p className="text-sm text-gray-600">{trait.description}</p>
-                      </div>
-                      <div className="text-right">
-                        <span className={`text-2xl font-bold ${getScoreColor(trait.score)}`}>
-                          {trait.score}
-                        </span>
-                        <p className="text-xs text-gray-500">{trait.gene}</p>
+                        <h4 className={`font-medium ${textPrimary} text-lg`}>{trait.trait}</h4>
+                        <p className={`text-sm ${textSecondary}`}>{trait.description}</p>
                       </div>
                     </div>
                     <div className="mb-3">
-                      <div className="w-full bg-gray-200 rounded-full h-3">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-medium">{trait.score}%</span>
+                        <p className={`text-xs ${getThemeClass('text-gray-500', isDarkMode)}`}>{trait.gene}</p>
+                      </div>
+                      <div className={`w-full rounded-full h-3 ${progressBarBg}`}>
                         <div 
-                          className={`h-3 rounded-full ${getScoreBg(trait.score)}`}
+                          className="h-3 rounded-full bg-gradient-to-r from-blue-500 to-purple-600"
                           style={{ width: `${trait.score}%` }}
                         ></div>
                       </div>
                     </div>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-1">
                       {trait.characteristics.map((char, charIndex) => (
                         <span 
                           key={charIndex}
-                          className="px-2 py-1 bg-gray-100 text-gray-700 text-xs rounded-full"
+                          className={`px-2 py-1 text-xs rounded-full ${tagClass}`}
                         >
                           {char}
                         </span>
@@ -163,96 +154,89 @@ export default function PersonalityPanel({ data }: PersonalityPanelProps) {
                   </div>
                 </div>
               </div>
-            )
+            );
           })}
         </div>
       </div>
 
-      {/* Behavioral Tendencies */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Behavioral Tendencies</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
+        <h3 className={`text-lg font-semibold ${textPrimary} mb-4`}>Behavioral Tendencies</h3>
+        <div className="space-y-4">
           {behavioralTendencies.map((behavior, index) => (
-            <div key={index} className="border rounded-lg p-4">
-              <div className="flex justify-between items-start mb-2">
-                <h4 className="font-medium text-gray-900">{behavior.behavior}</h4>
-                <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
+            <div key={index} className={`p-4 rounded-lg border ${glassBorder}`}>
+              <div className="flex items-start justify-between">
+                <h4 className={`font-medium ${textPrimary}`}>{behavior.behavior}</h4>
+                <span className={`text-xs px-2 py-1 rounded ${tagClass}`}>
                   {behavior.gene}
                 </span>
               </div>
-              <p className="text-sm font-medium text-gray-700 mb-2">{behavior.level}</p>
-              <p className="text-xs text-gray-600 mb-2">{behavior.description}</p>
-              <div className="bg-blue-50 p-2 rounded text-xs text-blue-700">
-                💡 {behavior.implications}
+              <p className={`text-sm font-medium ${getThemeClass('text-gray-700', isDarkMode)} mb-2`}>{behavior.level}</p>
+              <p className={`text-xs ${textSecondary} mb-2`}>{behavior.description}</p>
+              <div className="flex items-center space-x-2">
+                <span className="text-xs font-medium">Confidence:</span>
+                <div className={`flex-1 ${progressBarBg} rounded-full h-2`}>
+                  <div 
+                    className="h-2 rounded-full bg-green-500"
+                    style={{ width: `${behavior.confidence}%` }}
+                  ></div>
+                </div>
+                <span className="text-xs font-medium">{behavior.confidence}%</span>
               </div>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Personality-Based Recommendations */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Personalized Recommendations</h3>
+      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
+        <h3 className={`text-lg font-semibold ${textPrimary} mb-4`}>Personalized Recommendations</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="space-y-4">
-            <h4 className="font-medium text-gray-900">Career Strengths</h4>
-            <div className="space-y-3">
-              <div className="p-3 bg-green-50 rounded-lg">
-                <h5 className="font-medium text-green-900">Creative Roles</h5>
-                <p className="text-sm text-green-700">High openness supports innovative thinking</p>
+          <div>
+            <h4 className={`font-medium ${textPrimary}`}>Career Strengths</h4>
+            <div className={`mt-2 p-3 rounded-lg ${getThemeClass('bg-green-50', isDarkMode)}`}>
+              <div className="space-y-2">
+                <h5 className={`font-medium ${getThemeClass('text-green-700', isDarkMode)}`}>Creative Roles</h5>
+                <p className={`text-sm ${getThemeClass('text-green-700', isDarkMode)}`}>High openness supports innovative thinking</p>
               </div>
-              <div className="p-3 bg-blue-50 rounded-lg">
-                <h5 className="font-medium text-blue-900">Team Collaboration</h5>
-                <p className="text-sm text-blue-700">Strong agreeableness enhances teamwork</p>
-              </div>
-              <div className="p-3 bg-purple-50 rounded-lg">
-                <h5 className="font-medium text-purple-900">Project Management</h5>
-                <p className="text-sm text-purple-700">Good conscientiousness for organization</p>
+            </div>
+            <div className={`mt-2 p-3 rounded-lg ${getThemeClass('bg-blue-50', isDarkMode)}`}>
+              <div className="space-y-2">
+                <h5 className={`font-medium ${getThemeClass('text-blue-700', isDarkMode)}`}>Team Leadership</h5>
+                <p className={`text-sm ${getThemeClass('text-blue-700', isDarkMode)}`}>Good balance of empathy and assertiveness</p>
               </div>
             </div>
           </div>
           
-          <div className="space-y-4">
-            <h4 className="font-medium text-gray-900">Personal Development</h4>
-            <div className="space-y-3">
-              <div className="p-3 bg-yellow-50 rounded-lg">
-                <h5 className="font-medium text-yellow-900">Stress Management</h5>
-                <p className="text-sm text-yellow-700">Regular mindfulness and relaxation</p>
+          <div>
+            <h4 className={`font-medium ${textPrimary}`}>Personal Development</h4>
+            <div className={`mt-2 p-3 rounded-lg ${getThemeClass('bg-yellow-50', isDarkMode)}`}>
+              <div className="space-y-2">
+                <h5 className={`font-medium ${getThemeClass('text-yellow-700', isDarkMode)}`}>Stress Management</h5>
+                <p className={`text-sm ${getThemeClass('text-yellow-700', isDarkMode)}`}>Regular mindfulness and relaxation</p>
               </div>
-              <div className="p-3 bg-pink-50 rounded-lg">
-                <h5 className="font-medium text-pink-900">Social Activities</h5>
-                <p className="text-sm text-pink-700">Engage in group activities and networking</p>
-              </div>
-              <div className="p-3 bg-orange-50 rounded-lg">
-                <h5 className="font-medium text-orange-900">Learning Style</h5>
-                <p className="text-sm text-orange-700">Interactive and experiential learning</p>
+            </div>
+            <div className={`mt-2 p-3 rounded-lg ${getThemeClass('bg-purple-50', isDarkMode)}`}>
+              <div className="space-y-2">
+                <h5 className={`font-medium ${getThemeClass('text-purple-700', isDarkMode)}`}>Skill Development</h5>
+                <p className={`text-sm ${getThemeClass('text-purple-700', isDarkMode)}`}>Focus on creative and analytical skills</p>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Relationship Insights */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Relationship Insights</h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="p-4 bg-pink-50 rounded-lg text-center">
-            <Heart className="h-8 w-8 text-pink-600 mx-auto mb-2" />
-            <h4 className="font-medium text-pink-900 mb-1">Communication Style</h4>
-            <p className="text-sm text-pink-700">Empathetic and cooperative</p>
+      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
+        <h3 className={`text-lg font-semibold ${textPrimary} mb-4`}>Relationship Insights</h3>
+        <div className="text-center">
+          <div className={`inline-flex items-center justify-center w-16 h-16 rounded-full mb-4 ${getThemeClass('bg-green-50', isDarkMode)}`}>
+            <Smile className={`h-8 w-8 ${getThemeClass('text-green-600', isDarkMode)} mx-auto mb-2`} />
           </div>
-          <div className="p-4 bg-blue-50 rounded-lg text-center">
-            <Users className="h-8 w-8 text-blue-600 mx-auto mb-2" />
-            <h4 className="font-medium text-blue-900 mb-1">Social Preference</h4>
-            <p className="text-sm text-blue-700">Enjoys both groups and one-on-one</p>
-          </div>
-          <div className="p-4 bg-green-50 rounded-lg text-center">
-            <Smile className="h-8 w-8 text-green-600 mx-auto mb-2" />
-            <h4 className="font-medium text-green-900 mb-1">Conflict Resolution</h4>
-            <p className="text-sm text-green-700">Seeks harmony and compromise</p>
-          </div>
+          <h4 className={`text-lg font-semibold ${textPrimary} mb-2`}>Strong Relationship Potential</h4>
+          <p className={`${textSecondary} max-w-md mx-auto`}>
+            Your high agreeableness and moderate extraversion suggest you form strong, 
+            lasting relationships while maintaining healthy boundaries.
+          </p>
         </div>
       </div>
     </div>
-  )
+  );
 }

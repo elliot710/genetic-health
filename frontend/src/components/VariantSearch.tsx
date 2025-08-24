@@ -5,9 +5,23 @@ import { Search, Loader2, AlertCircle, CheckCircle, Info, ExternalLink, AlertTri
 
 interface VariantSearchProps {
   token?: string
+  isDarkMode?: boolean
+  theme?: any
 }
 
-export default function VariantSearch({ token }: VariantSearchProps) {
+export default function VariantSearch({ token, isDarkMode = false, theme }: VariantSearchProps) {
+  // Default theme if not provided
+  const defaultTheme = {
+    glass: isDarkMode ? 'bg-slate-800/40 backdrop-blur-xl' : 'bg-white/40 backdrop-blur-xl',
+    glassBorder: isDarkMode ? 'border-slate-700/50' : 'border-gray-200/30',
+    text: {
+      primary: isDarkMode ? 'text-white' : 'text-slate-900',
+      secondary: isDarkMode ? 'text-slate-300' : 'text-slate-600',
+      muted: isDarkMode ? 'text-slate-400' : 'text-slate-500'
+    }
+  }
+  
+  const currentTheme = theme || defaultTheme
   const [searchTerm, setSearchTerm] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [results, setResults] = useState<any>(null)
@@ -55,12 +69,12 @@ export default function VariantSearch({ token }: VariantSearchProps) {
   }
 
   return (
-    <div className="bg-white/70 backdrop-blur-xl rounded-2xl shadow-xl border border-white/30 p-6">
+    <div className={`${currentTheme.glass} border ${currentTheme.glassBorder} rounded-2xl shadow-xl p-6`}>
       <div className="flex items-center space-x-3 mb-6">
         <div className="p-2 bg-gradient-to-r from-indigo-500 to-purple-500 rounded-xl">
           <Search className="h-5 w-5 text-white" />
         </div>
-        <h3 className="text-xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 bg-clip-text text-transparent">
+        <h3 className={`text-xl font-bold ${currentTheme.text.primary}`}>
           Variant Lookup
         </h3>
       </div>
@@ -74,13 +88,13 @@ export default function VariantSearch({ token }: VariantSearchProps) {
             onChange={(e) => setSearchTerm(e.target.value)}
             onKeyPress={handleKeyPress}
             placeholder="Enter variant ID (e.g., rs53576, rs1695, rs429358)"
-            className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white/80 backdrop-blur-sm"
+            className={`w-full px-4 py-3 rounded-xl border ${currentTheme.glassBorder} focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent ${currentTheme.glass} backdrop-blur-sm ${currentTheme.text.primary} placeholder-gray-400`}
           />
         </div>
         <button
           onClick={searchVariant}
           disabled={isLoading}
-          className="px-6 py-3 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl hover:from-purple-600 hover:to-indigo-500 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+          className="px-6 py-3 bg-gradient-to-r from-indigo-500/80 to-purple-600/80 text-white rounded-xl hover:from-purple-600/80 hover:to-indigo-500/80 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 backdrop-blur-xl border border-white/20 shadow-lg"
         >
           {isLoading ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -93,9 +107,9 @@ export default function VariantSearch({ token }: VariantSearchProps) {
 
       {/* Error State */}
       {error && (
-        <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl flex items-start space-x-3">
+        <div className={`mb-6 p-4 ${isDarkMode ? 'bg-red-500/20 border-red-500/30' : 'bg-red-50 border-red-200'} border rounded-xl flex items-start space-x-3`}>
           <AlertCircle className="h-5 w-5 text-red-600 flex-shrink-0 mt-0.5" />
-          <div className="text-red-700 text-sm">{error}</div>
+          <div className={`${isDarkMode ? 'text-red-200' : 'text-red-700'} text-sm`}>{error}</div>
         </div>
       )}
 
@@ -103,15 +117,15 @@ export default function VariantSearch({ token }: VariantSearchProps) {
       {results && (
         <div className="space-y-4">
           {/* Basic Info */}
-          <div className="bg-white/80 rounded-xl p-4">
-            <h4 className="font-bold text-gray-900 mb-3 flex items-center space-x-2">
+          <div className={`${currentTheme.glass} border ${currentTheme.glassBorder} rounded-xl p-4`}>
+            <h4 className={`font-bold ${currentTheme.text.primary} mb-3 flex items-center space-x-2`}>
               <CheckCircle className="h-4 w-4 text-green-600" />
               <span>Variant Information</span>
             </h4>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
               <div>
-                <span className="text-gray-600">Variant ID:</span>
-                <span className="ml-2 font-medium text-gray-900">{results.rsid || searchTerm}</span>
+                <span className={currentTheme.text.secondary}>Variant ID:</span>
+                <span className={`ml-2 font-medium ${currentTheme.text.primary}`}>{results.rsid || searchTerm}</span>
               </div>
               <div>
                 <span className="text-gray-600">Source:</span>
@@ -134,8 +148,8 @@ export default function VariantSearch({ token }: VariantSearchProps) {
 
           {/* Clinical Significance */}
           {results.clinical_significance && results.clinical_significance.length > 0 && (
-            <div className="bg-white/80 rounded-xl p-4">
-              <h4 className="font-bold text-gray-900 mb-3 flex items-center space-x-2">
+            <div className={`${currentTheme.glass} border ${currentTheme.glassBorder} rounded-xl p-4`}>
+              <h4 className={`font-bold ${currentTheme.text.primary} mb-3 flex items-center space-x-2`}>
                 <AlertTriangle className="h-4 w-4 text-amber-600" />
                 <span>Clinical Significance</span>
               </h4>
@@ -147,7 +161,7 @@ export default function VariantSearch({ token }: VariantSearchProps) {
                       sig.toLowerCase().includes('risk') ? 'bg-orange-500' :
                       'bg-gray-400'
                     }`} />
-                    <span className="text-sm text-gray-700">{sig}</span>
+                    <span className={`text-sm ${currentTheme.text.secondary}`}>{sig}</span>
                   </div>
                 ))}
               </div>
@@ -156,14 +170,14 @@ export default function VariantSearch({ token }: VariantSearchProps) {
 
           {/* Population Data */}
           {results.minor_allele && (
-            <div className="bg-white/80 rounded-xl p-4">
-              <h4 className="font-bold text-gray-900 mb-3 flex items-center space-x-2">
+            <div className={`${currentTheme.glass} border ${currentTheme.glassBorder} rounded-xl p-4`}>
+              <h4 className={`font-bold ${currentTheme.text.primary} mb-3 flex items-center space-x-2`}>
                 <Info className="h-4 w-4 text-blue-600" />
                 <span>Population Data</span>
               </h4>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                 <div>
-                  <span className="text-gray-600">Minor Allele:</span>
+                  <span className={currentTheme.text.secondary}>Minor Allele:</span>
                   <span className="ml-2 font-medium text-gray-900">{results.minor_allele}</span>
                 </div>
                 {results.minor_allele_freq && (
@@ -177,8 +191,8 @@ export default function VariantSearch({ token }: VariantSearchProps) {
           )}
 
           {/* External Links */}
-          <div className="bg-white/80 rounded-xl p-4">
-            <h4 className="font-bold text-gray-900 mb-3 flex items-center space-x-2">
+          <div className={`${currentTheme.glass} border ${currentTheme.glassBorder} rounded-xl p-4`}>
+            <h4 className={`font-bold ${currentTheme.text.primary} mb-3 flex items-center space-x-2`}>
               <ExternalLink className="h-4 w-4 text-purple-600" />
               <span>External Resources</span>
             </h4>
@@ -187,7 +201,7 @@ export default function VariantSearch({ token }: VariantSearchProps) {
                 href={`https://www.ncbi.nlm.nih.gov/snp/${searchTerm}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="px-3 py-2 bg-blue-100 hover:bg-blue-200 text-blue-800 rounded-lg text-xs font-medium transition-colors"
+                className={`px-3 py-2 ${isDarkMode ? 'bg-blue-500/20 hover:bg-blue-500/30 text-blue-300' : 'bg-blue-100 hover:bg-blue-200 text-blue-800'} rounded-lg text-xs font-medium transition-colors`}
               >
                 dbSNP
               </a>
@@ -195,7 +209,7 @@ export default function VariantSearch({ token }: VariantSearchProps) {
                 href={`https://www.ensembl.org/Homo_sapiens/Variation/Summary?v=${searchTerm}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="px-3 py-2 bg-green-100 hover:bg-green-200 text-green-800 rounded-lg text-xs font-medium transition-colors"
+                className={`px-3 py-2 ${isDarkMode ? 'bg-green-500/20 hover:bg-green-500/30 text-green-300' : 'bg-green-100 hover:bg-green-200 text-green-800'} rounded-lg text-xs font-medium transition-colors`}
               >
                 Ensembl
               </a>
@@ -203,7 +217,7 @@ export default function VariantSearch({ token }: VariantSearchProps) {
                 href={`https://www.pharmgkb.org/variant/${searchTerm}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="px-3 py-2 bg-purple-100 hover:bg-purple-200 text-purple-800 rounded-lg text-xs font-medium transition-colors"
+                className={`px-3 py-2 ${isDarkMode ? 'bg-purple-500/20 hover:bg-purple-500/30 text-purple-300' : 'bg-purple-100 hover:bg-purple-200 text-purple-800'} rounded-lg text-xs font-medium transition-colors`}
               >
                 PharmGKB
               </a>

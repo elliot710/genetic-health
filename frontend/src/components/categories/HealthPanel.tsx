@@ -1,5 +1,6 @@
 import React from 'react'
 import { Heart, Shield, Pill, AlertTriangle, Activity } from 'lucide-react'
+import { getTheme } from '../../utils/theme'
 
 interface AnalysisData {
   summary?: any
@@ -9,10 +10,14 @@ interface AnalysisData {
 }
 
 interface HealthPanelProps {
+  isDarkMode?: boolean
+  theme?: any
   data: AnalysisData
 }
 
-export default function HealthPanel({ data }: HealthPanelProps) {
+export default function HealthPanel({ isDarkMode = false, theme, data }: HealthPanelProps) {
+  const currentTheme = getTheme(isDarkMode)
+  
   const healthRisks = [
     {
       condition: 'Type 2 Diabetes',
@@ -21,7 +26,7 @@ export default function HealthPanel({ data }: HealthPanelProps) {
       gene: 'TCF7L2',
       description: 'Genetic variants associated with insulin sensitivity',
       icon: Activity,
-      color: 'bg-yellow-50 text-yellow-700',
+      color: `${currentTheme.warning.bg} ${currentTheme.warning.text}`,
       prevention: ['Regular exercise', 'Low glycemic diet', 'Weight management']
     },
     {
@@ -31,7 +36,7 @@ export default function HealthPanel({ data }: HealthPanelProps) {
       gene: 'APOE',
       description: 'Favorable lipid metabolism genetics',
       icon: Heart,
-      color: 'bg-green-50 text-green-700',
+      color: `${currentTheme.success.bg} ${currentTheme.success.text}`,
       prevention: ['Heart-healthy diet', 'Regular cardio', 'Stress management']
     },
     {
@@ -41,7 +46,7 @@ export default function HealthPanel({ data }: HealthPanelProps) {
       gene: 'ACE',
       description: 'Genetic predisposition to elevated blood pressure',
       icon: AlertTriangle,
-      color: 'bg-orange-50 text-orange-700',
+      color: `${currentTheme.warning.bg} ${currentTheme.warning.text}`,
       prevention: ['Low sodium diet', 'Regular exercise', 'Meditation']
     },
     {
@@ -51,7 +56,7 @@ export default function HealthPanel({ data }: HealthPanelProps) {
       gene: 'VDR',
       description: 'Good bone mineral density genetics',
       icon: Shield,
-      color: 'bg-blue-50 text-blue-700',
+      color: `${currentTheme.categories.wellness.bg} ${currentTheme.categories.wellness.text}`,
       prevention: ['Calcium intake', 'Weight-bearing exercise', 'Vitamin D']
     }
   ]
@@ -121,10 +126,17 @@ export default function HealthPanel({ data }: HealthPanelProps) {
     }
   ]
 
-  const getRiskColor = (risk: string) => {
-    if (risk.includes('High')) return 'text-red-600'
-    if (risk.includes('Moderate')) return 'text-yellow-600'
-    return 'text-green-600'
+  const getRiskColor = (risk: string): string => {
+    switch (risk.toLowerCase()) {
+      case 'high':
+        return currentTheme.error.text
+      case 'moderate':
+        return currentTheme.warning.text
+      case 'low':
+        return currentTheme.success.text
+      default:
+        return currentTheme.text.secondary
+    }
   }
 
   const getRiskBg = (riskScore: number) => {
@@ -142,24 +154,24 @@ export default function HealthPanel({ data }: HealthPanelProps) {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
+      <div className={`${currentTheme.glass} border ${currentTheme.glassBorder} rounded-xl p-6`}>
         <div className="flex items-center mb-4">
-          <Heart className="h-8 w-8 text-teal-600 mr-3" />
+          <Heart className={`h-8 w-8 ${currentTheme.primary.text} mr-3`} />
           <div>
-            <h2 className="text-2xl font-bold text-gray-900">Health & Wellness</h2>
-            <p className="text-gray-600">Your genetic health risks and drug response profile</p>
+            <h2 className={`text-2xl font-bold ${currentTheme.text.primary}`}>Health & Wellness</h2>
+            <p className={`${currentTheme.text.secondary}`}>Your genetic health risks and drug response profile</p>
           </div>
         </div>
       </div>
 
       {/* Health Risk Assessment */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Health Risk Assessment</h3>
+      <div className={`${currentTheme.glass} border ${currentTheme.glassBorder} rounded-xl p-6`}>
+        <h3 className={`text-lg font-semibold ${currentTheme.text.primary} mb-4`}>Health Risk Assessment</h3>
         <div className="space-y-4">
           {healthRisks.map((risk, index) => {
             const Icon = risk.icon
             return (
-              <div key={index} className="border rounded-lg p-4">
+              <div key={index} className={`${currentTheme.glassSecondary} border ${currentTheme.glassBorder} rounded-lg p-4`}>
                 <div className="flex items-start space-x-4">
                   <div className={`p-3 rounded-lg ${risk.color}`}>
                     <Icon className="h-6 w-6" />
@@ -167,26 +179,26 @@ export default function HealthPanel({ data }: HealthPanelProps) {
                   <div className="flex-1">
                     <div className="flex justify-between items-start mb-3">
                       <div>
-                        <h4 className="font-medium text-gray-900 text-lg">{risk.condition}</h4>
+                        <h4 className={`font-medium ${currentTheme.text.primary} text-lg`}>{risk.condition}</h4>
                         <p className={`text-sm font-medium ${getRiskColor(risk.risk)}`}>{risk.risk} Risk</p>
                       </div>
                       <div className="text-right">
-                        <span className="text-xs text-gray-500">{risk.gene}</span>
+                        <span className={`text-xs ${currentTheme.text.secondary}`}>{risk.gene}</span>
                       </div>
                     </div>
                     <div className="mb-3">
-                      <div className="w-full bg-gray-200 rounded-full h-2">
+                      <div className={`w-full rounded-full h-2 ${currentTheme.glassSecondary}`}>
                         <div 
                           className={`h-2 rounded-full ${getRiskBg(risk.riskScore)}`}
                           style={{ width: `${risk.riskScore}%` }}
                         ></div>
                       </div>
-                      <p className="text-xs text-gray-500 mt-1">{risk.riskScore}% lifetime risk</p>
+                      <p className={`text-xs ${currentTheme.text.muted} mt-1`}>{risk.riskScore}% lifetime risk</p>
                     </div>
-                    <p className="text-sm text-gray-600 mb-3">{risk.description}</p>
-                    <div className="bg-blue-50 p-3 rounded-lg">
-                      <h5 className="text-sm font-medium text-blue-900 mb-1">Prevention Strategies:</h5>
-                      <ul className="text-sm text-blue-700">
+                    <p className={`text-sm ${currentTheme.text.secondary} mb-3`}>{risk.description}</p>
+                    <div className={`${currentTheme.categories.wellness.bg} p-3 rounded-lg`}>
+                      <h5 className={`text-sm font-medium ${currentTheme.categories.wellness.text} mb-1`}>Prevention Strategies:</h5>
+                      <ul className={`text-sm ${currentTheme.categories.wellness.text}`}>
                         {risk.prevention.map((strategy, strategyIndex) => (
                           <li key={strategyIndex}>• {strategy}</li>
                         ))}
@@ -201,14 +213,14 @@ export default function HealthPanel({ data }: HealthPanelProps) {
       </div>
 
       {/* Drug Response */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Pharmacogenomics - Drug Response</h3>
+      <div className={`${currentTheme.glass} border ${currentTheme.glassBorder} rounded-xl p-6`}>
+        <h3 className={`text-lg font-semibold ${currentTheme.text.primary} mb-4`}>Pharmacogenomics - Drug Response</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {drugResponses.map((drug, index) => (
-            <div key={index} className="border rounded-lg p-4">
+            <div key={index} className={`${currentTheme.glassSecondary} border ${currentTheme.glassBorder} rounded-lg p-4`}>
               <div className="flex justify-between items-start mb-2">
-                <h4 className="font-medium text-gray-900">{drug.drug}</h4>
-                <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
+                <h4 className={`font-medium ${currentTheme.text.primary}`}>{drug.drug}</h4>
+                <span className={`text-xs px-2 py-1 rounded ${currentTheme.glassSecondary} ${currentTheme.text.secondary}`}>
                   {drug.gene}
                 </span>
               </div>
@@ -216,10 +228,10 @@ export default function HealthPanel({ data }: HealthPanelProps) {
                 <span className={`text-sm font-medium ${getResponseColor(drug.response)}`}>
                   {drug.response} Response
                 </span>
-                <span className="text-sm text-gray-600 ml-2">({drug.dosage} Dosage)</span>
+                <span className={`text-sm ${currentTheme.text.secondary} ml-2`}>({drug.dosage} Dosage)</span>
               </div>
-              <p className="text-xs text-gray-600 mb-3">{drug.description}</p>
-              <div className="bg-yellow-50 p-2 rounded text-xs text-yellow-800">
+              <p className={`text-xs ${currentTheme.text.secondary} mb-3`}>{drug.description}</p>
+              <div className={`${currentTheme.warning.bg} p-2 rounded text-xs ${currentTheme.warning.text}`}>
                 🏥 {drug.recommendation}
               </div>
             </div>
@@ -228,15 +240,15 @@ export default function HealthPanel({ data }: HealthPanelProps) {
       </div>
 
       {/* Preventive Recommendations */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Preventive Health Recommendations</h3>
+      <div className={`${currentTheme.glass} border ${currentTheme.glassBorder} rounded-xl p-6`}>
+        <h3 className={`text-lg font-semibold ${currentTheme.text.primary} mb-4`}>Preventive Health Recommendations</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {preventiveRecommendations.map((category, index) => (
             <div key={index} className="space-y-3">
-              <h4 className="font-medium text-gray-900">{category.category}</h4>
+              <h4 className={`font-medium ${currentTheme.text.primary}`}>{category.category}</h4>
               <div className="space-y-2">
                 {category.recommendations.map((rec, recIndex) => (
-                  <div key={recIndex} className="p-2 bg-gray-50 rounded text-sm text-gray-700">
+                  <div key={recIndex} className={`p-2 rounded text-sm ${currentTheme.glassSecondary} ${currentTheme.text.secondary}`}>
                     • {rec}
                   </div>
                 ))}
@@ -247,39 +259,39 @@ export default function HealthPanel({ data }: HealthPanelProps) {
       </div>
 
       {/* Health Score Summary */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Overall Health Profile</h3>
+      <div className={`${currentTheme.glass} border ${currentTheme.glassBorder} rounded-xl p-6`}>
+        <h3 className={`text-lg font-semibold ${currentTheme.text.primary} mb-4`}>Overall Health Profile</h3>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="text-center p-4 bg-green-50 rounded-lg">
-            <div className="text-2xl font-bold text-green-600 mb-1">78</div>
-            <div className="text-sm font-medium text-green-900">Genetic Health Score</div>
-            <div className="text-xs text-green-700">Above Average</div>
+          <div className={`text-center p-4 ${currentTheme.success.bg} rounded-lg`}>
+            <div className={`text-2xl font-bold ${currentTheme.success.text} mb-1`}>78</div>
+            <div className={`text-sm font-medium ${currentTheme.success.text}`}>Genetic Health Score</div>
+            <div className={`text-xs ${currentTheme.success.text}`}>Above Average</div>
           </div>
-          <div className="text-center p-4 bg-blue-50 rounded-lg">
-            <div className="text-2xl font-bold text-blue-600 mb-1">85%</div>
-            <div className="text-sm font-medium text-blue-900">Drug Compatibility</div>
-            <div className="text-xs text-blue-700">Most drugs effective</div>
+          <div className={`text-center p-4 ${currentTheme.categories.ancestry.bg} rounded-lg`}>
+            <div className={`text-2xl font-bold ${currentTheme.categories.ancestry.text} mb-1`}>85%</div>
+            <div className={`text-sm font-medium ${currentTheme.categories.ancestry.text}`}>Drug Compatibility</div>
+            <div className={`text-xs ${currentTheme.categories.ancestry.text}`}>Most drugs effective</div>
           </div>
-          <div className="text-center p-4 bg-yellow-50 rounded-lg">
-            <div className="text-2xl font-bold text-yellow-600 mb-1">3</div>
-            <div className="text-sm font-medium text-yellow-900">Risk Factors</div>
-            <div className="text-xs text-yellow-700">Moderate monitoring</div>
+          <div className={`text-center p-4 ${currentTheme.warning.bg} rounded-lg`}>
+            <div className={`text-2xl font-bold ${currentTheme.warning.text} mb-1`}>3</div>
+            <div className={`text-sm font-medium ${currentTheme.warning.text}`}>Risk Factors</div>
+            <div className={`text-xs ${currentTheme.warning.text}`}>Moderate monitoring</div>
           </div>
-          <div className="text-center p-4 bg-purple-50 rounded-lg">
-            <div className="text-2xl font-bold text-purple-600 mb-1">92%</div>
-            <div className="text-sm font-medium text-purple-900">Prevention Potential</div>
-            <div className="text-xs text-purple-700">High lifestyle impact</div>
+          <div className={`text-center p-4 ${currentTheme.categories.wellness.bg} rounded-lg`}>
+            <div className={`text-2xl font-bold ${currentTheme.categories.wellness.text} mb-1`}>92%</div>
+            <div className={`text-sm font-medium ${currentTheme.categories.wellness.text}`}>Prevention Potential</div>
+            <div className={`text-xs ${currentTheme.categories.wellness.text}`}>High lifestyle impact</div>
           </div>
         </div>
       </div>
 
       {/* Important Disclaimer */}
-      <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-6">
+      <div className={`${currentTheme.warning.bg} border ${currentTheme.warning.border} rounded-xl p-6`}>
         <div className="flex items-start space-x-3">
-          <AlertTriangle className="h-6 w-6 text-yellow-600 mt-0.5 flex-shrink-0" />
+          <AlertTriangle className={`h-6 w-6 ${currentTheme.warning.text} mt-0.5 flex-shrink-0`} />
           <div>
-            <h4 className="font-medium text-yellow-900 mb-2">Medical Disclaimer</h4>
-            <p className="text-yellow-800 text-sm">
+            <h4 className={`font-medium ${currentTheme.warning.text} mb-2`}>Medical Disclaimer</h4>
+            <p className={`${currentTheme.warning.text} text-sm`}>
               This genetic analysis is for informational purposes only and should not replace professional medical advice. 
               Always consult with qualified healthcare providers before making medical decisions or changing treatments 
               based on genetic information. Genetic predisposition does not guarantee disease development.

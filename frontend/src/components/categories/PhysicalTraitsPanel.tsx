@@ -1,5 +1,14 @@
 import React from 'react'
 import { Zap, Eye, Ruler, Palette, Sun } from 'lucide-react'
+import { 
+  getThemeClass, 
+  getGlassBackground, 
+  getGlassBorder, 
+  getTextPrimary, 
+  getTextSecondary, 
+  getTagClass, 
+  getProgressBarBg 
+} from '../../utils/theme'
 
 interface AnalysisData {
   summary?: any
@@ -9,10 +18,20 @@ interface AnalysisData {
 }
 
 interface PhysicalTraitsPanelProps {
+  isDarkMode?: boolean
+  theme?: any
   data: AnalysisData
 }
 
-export default function PhysicalTraitsPanel({ data }: PhysicalTraitsPanelProps) {
+export default function PhysicalTraitsPanel({ isDarkMode = false, theme, data }: PhysicalTraitsPanelProps) {
+  const glassBackground = getGlassBackground(isDarkMode);
+  const glassBorder = getGlassBorder(isDarkMode);
+  const textPrimary = getTextPrimary(isDarkMode);
+  const textSecondary = getTextSecondary(isDarkMode);
+  const tagClass = getTagClass(isDarkMode);
+  const progressBarBg = getProgressBarBg(isDarkMode);
+  const cardBackground = getThemeClass('bg-gray-50', isDarkMode);
+  
   const physicalTraits = [
     {
       category: 'Eye Color',
@@ -21,7 +40,7 @@ export default function PhysicalTraitsPanel({ data }: PhysicalTraitsPanelProps) 
       probability: 85,
       description: 'High likelihood of brown eye pigmentation',
       icon: Eye,
-      color: 'bg-amber-50 text-amber-700'
+      color: getThemeClass('bg-amber-50', isDarkMode) + ' ' + getThemeClass('text-amber-700', isDarkMode)
     },
     {
       category: 'Hair Texture',
@@ -30,7 +49,7 @@ export default function PhysicalTraitsPanel({ data }: PhysicalTraitsPanelProps) 
       probability: 70,
       description: 'Genetic predisposition to straight hair texture',
       icon: Palette,
-      color: 'bg-purple-50 text-purple-700'
+      color: getThemeClass('bg-purple-50', isDarkMode) + ' ' + getThemeClass('text-purple-700', isDarkMode)
     },
     {
       category: 'Height Potential',
@@ -39,7 +58,7 @@ export default function PhysicalTraitsPanel({ data }: PhysicalTraitsPanelProps) 
       probability: 75,
       description: 'Genetic variants associated with increased height',
       icon: Ruler,
-      color: 'bg-blue-50 text-blue-700'
+      color: getThemeClass('bg-blue-50', isDarkMode) + ' ' + getThemeClass('text-blue-700', isDarkMode)
     },
     {
       category: 'Skin Pigmentation',
@@ -48,7 +67,7 @@ export default function PhysicalTraitsPanel({ data }: PhysicalTraitsPanelProps) 
       probability: 80,
       description: 'Moderate melanin production capacity',
       icon: Sun,
-      color: 'bg-orange-50 text-orange-700'
+      color: getThemeClass('bg-orange-50', isDarkMode) + ' ' + getThemeClass('text-orange-700', isDarkMode)
     },
     {
       category: 'Muscle Fiber Type',
@@ -57,7 +76,7 @@ export default function PhysicalTraitsPanel({ data }: PhysicalTraitsPanelProps) 
       probability: 65,
       description: 'Enhanced power and strength muscle composition',
       icon: Zap,
-      color: 'bg-red-50 text-red-700'
+      color: getThemeClass('bg-red-50', isDarkMode) + ' ' + getThemeClass('text-red-700', isDarkMode)
     }
   ]
 
@@ -103,24 +122,24 @@ export default function PhysicalTraitsPanel({ data }: PhysicalTraitsPanelProps) 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
+      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
         <div className="flex items-center mb-4">
-          <Zap className="h-8 w-8 text-orange-600 mr-3" />
+          <Zap className={`h-8 w-8 ${getThemeClass('text-orange-600', isDarkMode)} mr-3`} />
           <div>
-            <h2 className="text-2xl font-bold text-gray-900">Physical Traits</h2>
-            <p className="text-gray-600">Your genetic physical characteristics and appearance</p>
+            <h2 className={`text-2xl font-bold ${textPrimary}`}>Physical Traits</h2>
+            <p className={`${textSecondary}`}>Your genetic physical characteristics and appearance</p>
           </div>
         </div>
       </div>
 
       {/* Major Physical Traits */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Primary Characteristics</h3>
+      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
+        <h3 className={`text-lg font-semibold ${textPrimary} mb-4`}>Primary Characteristics</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {physicalTraits.map((trait, index) => {
             const Icon = trait.icon
             return (
-              <div key={index} className="border rounded-lg p-4 hover:shadow-md transition-shadow">
+              <div key={index} className={`${cardBackground} border ${glassBorder} rounded-lg p-4 hover:shadow-md transition-shadow`}>
                 <div className="flex items-start space-x-3">
                   <div className={`p-2 rounded-lg ${trait.color}`}>
                     <Icon className="h-5 w-5" />
@@ -128,15 +147,15 @@ export default function PhysicalTraitsPanel({ data }: PhysicalTraitsPanelProps) 
                   <div className="flex-1">
                     <div className="flex justify-between items-start mb-2">
                       <div>
-                        <h4 className="font-medium text-gray-900">{trait.category}</h4>
-                        <p className="text-sm text-gray-600">{trait.trait}</p>
+                        <h4 className={`font-medium ${textPrimary}`}>{trait.category}</h4>
+                        <p className={`text-sm ${textSecondary}`}>{trait.trait}</p>
                       </div>
-                      <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
+                      <span className={`text-xs px-2 py-1 rounded ${tagClass}`}>
                         {trait.gene}
                       </span>
                     </div>
                     <div className="flex items-center space-x-3 mb-2">
-                      <div className="w-20 bg-gray-200 rounded-full h-2">
+                      <div className={`w-20 rounded-full h-2 ${progressBarBg}`}>
                         <div 
                           className={`h-2 rounded-full ${getProbabilityBg(trait.probability)}`}
                           style={{ width: `${trait.probability}%` }}
@@ -146,7 +165,7 @@ export default function PhysicalTraitsPanel({ data }: PhysicalTraitsPanelProps) 
                         {trait.probability}%
                       </span>
                     </div>
-                    <p className="text-xs text-gray-600">{trait.description}</p>
+                    <p className={`text-xs ${textSecondary}`}>{trait.description}</p>
                   </div>
                 </div>
               </div>
@@ -156,74 +175,74 @@ export default function PhysicalTraitsPanel({ data }: PhysicalTraitsPanelProps) 
       </div>
 
       {/* Additional Features */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Additional Features</h3>
+      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
+        <h3 className={`text-lg font-semibold ${textPrimary} mb-4`}>Additional Features</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {appearanceFeatures.map((feature, index) => (
-            <div key={index} className="border rounded-lg p-4">
+            <div key={index} className={`${cardBackground} border ${glassBorder} rounded-lg p-4`}>
               <div className="flex justify-between items-start mb-2">
-                <h4 className="font-medium text-gray-900">{feature.feature}</h4>
-                <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
+                <h4 className={`font-medium ${textPrimary}`}>{feature.feature}</h4>
+                <span className={`text-xs px-2 py-1 rounded ${tagClass}`}>
                   {feature.gene}
                 </span>
               </div>
-              <p className="text-sm font-medium text-gray-700 mb-1">{feature.likelihood}</p>
-              <p className="text-xs text-gray-600">{feature.description}</p>
+              <p className={`text-sm font-medium ${textSecondary} mb-1`}>{feature.likelihood}</p>
+              <p className={`text-xs ${textSecondary}`}>{feature.description}</p>
             </div>
           ))}
         </div>
       </div>
 
       {/* Body Composition */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Body Composition Genetics</h3>
+      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
+        <h3 className={`text-lg font-semibold ${textPrimary} mb-4`}>Body Composition Genetics</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="text-center p-4 bg-blue-50 rounded-lg">
-            <div className="text-2xl font-bold text-blue-600 mb-2">72%</div>
-            <h4 className="font-medium text-blue-900 mb-1">Muscle Building</h4>
-            <p className="text-sm text-blue-700">Good response to strength training</p>
+          <div className={`text-center p-4 rounded-lg ${getThemeClass('bg-blue-50', isDarkMode)} border ${getThemeClass('border-blue-200', isDarkMode)}`}>
+            <div className={`text-2xl font-bold ${getThemeClass('text-blue-600', isDarkMode)} mb-2`}>72%</div>
+            <h4 className={`font-medium mb-1 ${getThemeClass('text-blue-900', isDarkMode)}`}>Muscle Building</h4>
+            <p className={`text-sm ${getThemeClass('text-blue-700', isDarkMode)}`}>Good response to strength training</p>
           </div>
-          <div className="text-center p-4 bg-green-50 rounded-lg">
-            <div className="text-2xl font-bold text-green-600 mb-2">68%</div>
-            <h4 className="font-medium text-green-900 mb-1">Fat Metabolism</h4>
-            <p className="text-sm text-green-700">Moderate fat burning efficiency</p>
+          <div className={`text-center p-4 rounded-lg ${getThemeClass('bg-green-50', isDarkMode)} border ${getThemeClass('border-green-200', isDarkMode)}`}>
+            <div className={`text-2xl font-bold ${getThemeClass('text-green-600', isDarkMode)} mb-2`}>68%</div>
+            <h4 className={`font-medium mb-1 ${getThemeClass('text-green-900', isDarkMode)}`}>Fat Metabolism</h4>
+            <p className={`text-sm ${getThemeClass('text-green-700', isDarkMode)}`}>Moderate fat burning efficiency</p>
           </div>
-          <div className="text-center p-4 bg-purple-50 rounded-lg">
-            <div className="text-2xl font-bold text-purple-600 mb-2">85%</div>
-            <h4 className="font-medium text-purple-900 mb-1">Bone Density</h4>
-            <p className="text-sm text-purple-700">Strong genetic bone health</p>
+          <div className={`text-center p-4 rounded-lg ${getThemeClass('bg-purple-50', isDarkMode)} border ${getThemeClass('border-purple-200', isDarkMode)}`}>
+            <div className={`text-2xl font-bold ${getThemeClass('text-purple-600', isDarkMode)} mb-2`}>85%</div>
+            <h4 className={`font-medium mb-1 ${getThemeClass('text-purple-900', isDarkMode)}`}>Bone Density</h4>
+            <p className={`text-sm ${getThemeClass('text-purple-700', isDarkMode)}`}>Strong genetic bone health</p>
           </div>
         </div>
       </div>
 
       {/* Age-Related Changes */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Age-Related Considerations</h3>
+      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
+        <h3 className={`text-lg font-semibold ${textPrimary} mb-4`}>Age-Related Considerations</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="space-y-4">
-            <h4 className="font-medium text-gray-900">Hair & Skin</h4>
+            <h4 className={`font-medium ${textPrimary}`}>Hair & Skin</h4>
             <div className="space-y-3">
-              <div className="p-3 bg-gray-50 rounded-lg">
-                <h5 className="font-medium text-gray-900">Male Pattern Baldness</h5>
-                <p className="text-sm text-gray-600">Moderate genetic risk (AR gene)</p>
+              <div className={`p-3 rounded-lg ${cardBackground}`}>
+                <h5 className={`font-medium ${textPrimary}`}>Male Pattern Baldness</h5>
+                <p className={`text-sm ${textSecondary}`}>Moderate genetic risk (AR gene)</p>
               </div>
-              <div className="p-3 bg-yellow-50 rounded-lg">
-                <h5 className="font-medium text-yellow-900">Skin Aging</h5>
-                <p className="text-sm text-yellow-700">Average collagen degradation rate</p>
+              <div className={`p-3 rounded-lg ${getThemeClass('bg-yellow-50', isDarkMode)} border ${getThemeClass('border-yellow-200', isDarkMode)}`}>
+                <h5 className={`font-medium ${getThemeClass('text-yellow-900', isDarkMode)}`}>Skin Aging</h5>
+                <p className={`text-sm ${getThemeClass('text-yellow-700', isDarkMode)}`}>Average collagen degradation rate</p>
               </div>
             </div>
           </div>
           
           <div className="space-y-4">
-            <h4 className="font-medium text-gray-900">Body Changes</h4>
+            <h4 className={`font-medium ${textPrimary}`}>Body Changes</h4>
             <div className="space-y-3">
-              <div className="p-3 bg-blue-50 rounded-lg">
-                <h5 className="font-medium text-blue-900">Muscle Maintenance</h5>
-                <p className="text-sm text-blue-700">Good genetic preservation with activity</p>
+              <div className={`p-3 rounded-lg ${getThemeClass('bg-blue-50', isDarkMode)}`}>
+                <h5 className={`font-medium ${getThemeClass('text-blue-900', isDarkMode)}`}>Muscle Maintenance</h5>
+                <p className={`text-sm ${getThemeClass('text-blue-700', isDarkMode)}`}>Good genetic preservation with activity</p>
               </div>
-              <div className="p-3 bg-green-50 rounded-lg">
-                <h5 className="font-medium text-green-900">Weight Management</h5>
-                <p className="text-sm text-green-700">Moderate tendency for weight gain</p>
+              <div className={`p-3 rounded-lg ${getThemeClass('bg-green-50', isDarkMode)}`}>
+                <h5 className={`font-medium ${getThemeClass('text-green-900', isDarkMode)}`}>Weight Management</h5>
+                <p className={`text-sm ${getThemeClass('text-green-700', isDarkMode)}`}>Moderate tendency for weight gain</p>
               </div>
             </div>
           </div>

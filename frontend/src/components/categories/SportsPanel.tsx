@@ -1,5 +1,14 @@
 import React from 'react'
-import { Dumbbell, Zap, Timer, Trophy, Heart } from 'lucide-react'
+import { Dumbbell, Zap, Heart, Trophy, Target, Timer } from 'lucide-react'
+import { 
+  getThemeClass, 
+  getGlassBackground, 
+  getGlassBorder, 
+  getTextPrimary, 
+  getTextSecondary, 
+  getTagClass, 
+  getProgressBarBg 
+} from '../../utils/theme'
 
 interface AnalysisData {
   summary?: any
@@ -9,10 +18,20 @@ interface AnalysisData {
 }
 
 interface SportsPanelProps {
+  isDarkMode?: boolean
+  theme?: any
   data: AnalysisData
 }
 
-export default function SportsPanel({ data }: SportsPanelProps) {
+export default function SportsPanel({ isDarkMode = false, theme, data }: SportsPanelProps) {
+  const glassBackground = getGlassBackground(isDarkMode);
+  const glassBorder = getGlassBorder(isDarkMode);
+  const textPrimary = getTextPrimary(isDarkMode);
+  const textSecondary = getTextSecondary(isDarkMode);
+  const tagClass = getTagClass(isDarkMode);
+  const progressBarBg = getProgressBarBg(isDarkMode);
+  const cardBackground = getThemeClass('bg-gray-50', isDarkMode);
+  
   const athleticTraits = [
     {
       trait: 'Power vs Endurance',
@@ -21,7 +40,7 @@ export default function SportsPanel({ data }: SportsPanelProps) {
       score: 75,
       description: 'Genetic advantage for explosive movements and strength',
       icon: Zap,
-      color: 'bg-red-50 text-red-700',
+      color: getThemeClass('bg-red-50', isDarkMode) + ' ' + getThemeClass('text-red-700', isDarkMode),
       recommendation: 'Focus on sprinting, weightlifting, and power sports'
     },
     {
@@ -31,7 +50,7 @@ export default function SportsPanel({ data }: SportsPanelProps) {
       score: 85,
       description: 'Excellent genetic capacity for aerobic fitness',
       icon: Heart,
-      color: 'bg-blue-50 text-blue-700',
+      color: getThemeClass('bg-blue-50', isDarkMode) + ' ' + getThemeClass('text-blue-700', isDarkMode),
       recommendation: 'Great potential for endurance sports and cardio training'
     },
     {
@@ -41,7 +60,7 @@ export default function SportsPanel({ data }: SportsPanelProps) {
       score: 78,
       description: 'Enhanced ability to recover between training sessions',
       icon: Timer,
-      color: 'bg-green-50 text-green-700',
+      color: getThemeClass('bg-green-50', isDarkMode) + ' ' + getThemeClass('text-green-700', isDarkMode),
       recommendation: 'Can handle more frequent, intense training sessions'
     },
     {
@@ -51,7 +70,7 @@ export default function SportsPanel({ data }: SportsPanelProps) {
       score: 65,
       description: 'Average genetic protection against soft tissue injuries',
       icon: Dumbbell,
-      color: 'bg-yellow-50 text-yellow-700',
+      color: getThemeClass('bg-yellow-50', isDarkMode) + ' ' + getThemeClass('text-yellow-700', isDarkMode),
       recommendation: 'Focus on proper warm-up and injury prevention'
     },
     {
@@ -61,7 +80,7 @@ export default function SportsPanel({ data }: SportsPanelProps) {
       score: 70,
       description: 'Balanced fast and slow twitch muscle fibers',
       icon: Trophy,
-      color: 'bg-purple-50 text-purple-700',
+      color: getThemeClass('bg-purple-50', isDarkMode) + ' ' + getThemeClass('text-purple-700', isDarkMode),
       recommendation: 'Versatile for both power and endurance activities'
     }
   ]
@@ -71,19 +90,19 @@ export default function SportsPanel({ data }: SportsPanelProps) {
       category: 'Highly Recommended',
       sports: ['Weightlifting', 'Sprinting', 'Basketball', 'Tennis'],
       reason: 'Power-oriented genetics with good recovery',
-      color: 'bg-green-50 border-green-200 text-green-800'
+      color: getThemeClass('bg-green-50', isDarkMode) + ' ' + getThemeClass('border-green-200', isDarkMode) + ' ' + getThemeClass('text-green-800', isDarkMode)
     },
     {
       category: 'Well Suited',
       sports: ['Soccer', 'Swimming', 'Cycling', 'Boxing'],
       reason: 'Good endurance capacity with mixed fiber types',
-      color: 'bg-blue-50 border-blue-200 text-blue-800'
+      color: getThemeClass('bg-blue-50', isDarkMode) + ' ' + getThemeClass('border-blue-200', isDarkMode) + ' ' + getThemeClass('text-blue-800', isDarkMode)
     },
     {
       category: 'Consider With Training',
       sports: ['Marathon Running', 'Rock Climbing', 'Martial Arts'],
       reason: 'Requires focused endurance development',
-      color: 'bg-yellow-50 border-yellow-200 text-yellow-800'
+      color: getThemeClass('bg-yellow-50', isDarkMode) + ' ' + getThemeClass('border-yellow-200', isDarkMode) + ' ' + getThemeClass('text-yellow-800', isDarkMode)
     }
   ]
 
@@ -109,9 +128,9 @@ export default function SportsPanel({ data }: SportsPanelProps) {
   ]
 
   const getScoreColor = (score: number) => {
-    if (score >= 80) return 'text-green-600'
-    if (score >= 60) return 'text-yellow-600'
-    return 'text-red-600'
+    if (score >= 80) return getThemeClass('text-green-600', isDarkMode)
+    if (score >= 60) return getThemeClass('text-yellow-600', isDarkMode)
+    return getThemeClass('text-red-600', isDarkMode)
   }
 
   const getScoreBg = (score: number) => {
@@ -123,24 +142,24 @@ export default function SportsPanel({ data }: SportsPanelProps) {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
+      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
         <div className="flex items-center mb-4">
-          <Dumbbell className="h-8 w-8 text-red-600 mr-3" />
+          <Dumbbell className={`h-8 w-8 ${getThemeClass('text-red-600', isDarkMode)} mr-3`} />
           <div>
-            <h2 className="text-2xl font-bold text-gray-900">Sports & Fitness</h2>
-            <p className="text-gray-600">Your genetic athletic potential and training optimization</p>
+            <h2 className={`text-2xl font-bold ${textPrimary}`}>Sports & Fitness</h2>
+            <p className={`${textSecondary}`}>Your genetic athletic potential and training optimization</p>
           </div>
         </div>
       </div>
 
       {/* Athletic Traits */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Athletic Genetic Profile</h3>
+      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
+        <h3 className={`text-lg font-semibold ${textPrimary} mb-4`}>Athletic Genetic Profile</h3>
         <div className="space-y-6">
           {athleticTraits.map((trait, index) => {
             const Icon = trait.icon
             return (
-              <div key={index} className="border rounded-lg p-4">
+              <div key={index} className={`${cardBackground} border ${glassBorder} rounded-lg p-4`}>
                 <div className="flex items-start space-x-4">
                   <div className={`p-3 rounded-lg ${trait.color}`}>
                     <Icon className="h-6 w-6" />
@@ -148,26 +167,26 @@ export default function SportsPanel({ data }: SportsPanelProps) {
                   <div className="flex-1">
                     <div className="flex justify-between items-start mb-3">
                       <div>
-                        <h4 className="font-medium text-gray-900 text-lg">{trait.trait}</h4>
-                        <p className="text-sm font-medium text-gray-700">{trait.result}</p>
+                        <h4 className={`font-medium ${textPrimary} text-lg`}>{trait.trait}</h4>
+                        <p className={`text-sm font-medium ${textSecondary}`}>{trait.result}</p>
                       </div>
                       <div className="text-right">
                         <span className={`text-xl font-bold ${getScoreColor(trait.score)}`}>
                           {trait.score}%
                         </span>
-                        <p className="text-xs text-gray-500">{trait.gene}</p>
+                        <p className={`text-xs ${textSecondary}`}>{trait.gene}</p>
                       </div>
                     </div>
                     <div className="mb-3">
-                      <div className="w-full bg-gray-200 rounded-full h-2">
+                      <div className={`w-full rounded-full h-2 ${progressBarBg}`}>
                         <div 
                           className={`h-2 rounded-full ${getScoreBg(trait.score)}`}
                           style={{ width: `${trait.score}%` }}
                         ></div>
                       </div>
                     </div>
-                    <p className="text-sm text-gray-600 mb-2">{trait.description}</p>
-                    <div className="bg-blue-50 p-2 rounded text-sm text-blue-700">
+                    <p className={`text-sm ${textSecondary} mb-2`}>{trait.description}</p>
+                    <div className={`${getThemeClass('bg-blue-50', isDarkMode)} p-2 rounded text-sm ${getThemeClass('text-blue-700', isDarkMode)}`}>
                       💡 {trait.recommendation}
                     </div>
                   </div>
@@ -179,8 +198,8 @@ export default function SportsPanel({ data }: SportsPanelProps) {
       </div>
 
       {/* Sports Recommendations */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Recommended Sports</h3>
+      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
+        <h3 className={`text-lg font-semibold ${textPrimary} mb-4`}>Recommended Sports</h3>
         <div className="space-y-4">
           {sportsRecommendations.map((category, index) => (
             <div key={index} className={`border rounded-lg p-4 ${category.color}`}>
@@ -189,7 +208,7 @@ export default function SportsPanel({ data }: SportsPanelProps) {
                 {category.sports.map((sport, sportIndex) => (
                   <span 
                     key={sportIndex}
-                    className="px-3 py-1 bg-white bg-opacity-60 rounded-full text-sm font-medium"
+                    className={`px-3 py-1 rounded-full text-sm font-medium ${tagClass}`}
                   >
                     {sport}
                   </span>
@@ -202,15 +221,15 @@ export default function SportsPanel({ data }: SportsPanelProps) {
       </div>
 
       {/* Training Optimization */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Training Optimization</h3>
+      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
+        <h3 className={`text-lg font-semibold ${textPrimary} mb-4`}>Training Optimization</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {trainingOptimization.map((training, index) => (
-            <div key={index} className="border rounded-lg p-4">
-              <h4 className="font-medium text-gray-900 mb-2">{training.aspect}</h4>
-              <p className="text-lg font-bold text-blue-600 mb-2">{training.recommendation}</p>
-              <p className="text-sm text-gray-600 mb-3">{training.reason}</p>
-              <ul className="text-sm text-gray-700 space-y-1">
+            <div key={index} className={`${cardBackground} border ${glassBorder} rounded-lg p-4`}>
+              <h4 className={`font-medium ${textPrimary} mb-2`}>{training.aspect}</h4>
+              <p className={`text-lg font-bold ${getThemeClass('text-blue-600', isDarkMode)} mb-2`}>{training.recommendation}</p>
+              <p className={`text-sm ${textSecondary} mb-3`}>{training.reason}</p>
+              <ul className={`text-sm space-y-1 ${textSecondary}`}>
                 {training.details.map((detail, detailIndex) => (
                   <li key={detailIndex}>• {detail}</li>
                 ))}
@@ -221,41 +240,41 @@ export default function SportsPanel({ data }: SportsPanelProps) {
       </div>
 
       {/* Performance Metrics */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Expected Performance Ranges</h3>
+      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
+        <h3 className={`text-lg font-semibold ${textPrimary} mb-4`}>Expected Performance Ranges</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="space-y-4">
-            <h4 className="font-medium text-gray-900">Strength Metrics</h4>
+            <h4 className={`font-medium ${textPrimary}`}>Strength Metrics</h4>
             <div className="space-y-3">
-              <div className="flex justify-between items-center p-3 bg-red-50 rounded-lg">
-                <span className="font-medium text-red-900">1-Rep Max Potential</span>
-                <span className="text-red-700">Above Average</span>
+              <div className={`flex justify-between items-center p-3 ${getThemeClass('bg-red-50', isDarkMode)} rounded-lg`}>
+                <span className={`font-medium ${getThemeClass('text-red-900', isDarkMode)}`}>1-Rep Max Potential</span>
+                <span className={`${getThemeClass('text-red-700', isDarkMode)}`}>Above Average</span>
               </div>
-              <div className="flex justify-between items-center p-3 bg-orange-50 rounded-lg">
-                <span className="font-medium text-orange-900">Power Output</span>
-                <span className="text-orange-700">High</span>
+              <div className={`flex justify-between items-center p-3 ${getThemeClass('bg-orange-50', isDarkMode)} rounded-lg`}>
+                <span className={`font-medium ${getThemeClass('text-orange-900', isDarkMode)}`}>Power Output</span>
+                <span className={`${getThemeClass('text-orange-700', isDarkMode)}`}>High</span>
               </div>
-              <div className="flex justify-between items-center p-3 bg-yellow-50 rounded-lg">
-                <span className="font-medium text-yellow-900">Muscle Growth Rate</span>
-                <span className="text-yellow-700">Good</span>
+              <div className={`flex justify-between items-center p-3 ${getThemeClass('bg-yellow-50', isDarkMode)} rounded-lg`}>
+                <span className={`font-medium ${getThemeClass('text-yellow-900', isDarkMode)}`}>Muscle Growth Rate</span>
+                <span className={`${getThemeClass('text-yellow-700', isDarkMode)}`}>Good</span>
               </div>
             </div>
           </div>
           
           <div className="space-y-4">
-            <h4 className="font-medium text-gray-900">Endurance Metrics</h4>
+            <h4 className={`font-medium ${textPrimary}`}>Endurance Metrics</h4>
             <div className="space-y-3">
-              <div className="flex justify-between items-center p-3 bg-blue-50 rounded-lg">
-                <span className="font-medium text-blue-900">VO2 Max Ceiling</span>
-                <span className="text-blue-700">High</span>
+              <div className={`flex justify-between items-center p-3 ${getThemeClass('bg-blue-50', isDarkMode)} rounded-lg`}>
+                <span className={`font-medium ${getThemeClass('text-blue-900', isDarkMode)}`}>VO2 Max Ceiling</span>
+                <span className={`${getThemeClass('text-blue-700', isDarkMode)}`}>High</span>
               </div>
-              <div className="flex justify-between items-center p-3 bg-teal-50 rounded-lg">
-                <span className="font-medium text-teal-900">Lactate Threshold</span>
-                <span className="text-teal-700">Moderate</span>
+              <div className={`flex justify-between items-center p-3 ${getThemeClass('bg-teal-50', isDarkMode)} rounded-lg`}>
+                <span className={`font-medium ${getThemeClass('text-teal-900', isDarkMode)}`}>Lactate Threshold</span>
+                <span className={`${getThemeClass('text-teal-700', isDarkMode)}`}>Moderate</span>
               </div>
-              <div className="flex justify-between items-center p-3 bg-green-50 rounded-lg">
-                <span className="font-medium text-green-900">Fat Oxidation</span>
-                <span className="text-green-700">Good</span>
+              <div className={`flex justify-between items-center p-3 ${getThemeClass('bg-green-50', isDarkMode)} rounded-lg`}>
+                <span className={`font-medium ${getThemeClass('text-green-900', isDarkMode)}`}>Fat Oxidation</span>
+                <span className={`${getThemeClass('text-green-700', isDarkMode)}`}>Good</span>
               </div>
             </div>
           </div>
@@ -263,13 +282,13 @@ export default function SportsPanel({ data }: SportsPanelProps) {
       </div>
 
       {/* Nutrition for Athletes */}
-      <div className="bg-white rounded-xl shadow-sm border p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Athletic Nutrition Recommendations</h3>
+      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
+        <h3 className={`text-lg font-semibold ${textPrimary} mb-4`}>Athletic Nutrition Recommendations</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="space-y-3">
-            <h4 className="font-medium text-gray-900">Pre-Workout</h4>
-            <div className="bg-blue-50 p-3 rounded-lg">
-              <p className="text-sm text-blue-700">
+            <h4 className={`font-medium ${textPrimary}`}>Pre-Workout</h4>
+            <div className={`${getThemeClass('bg-blue-50', isDarkMode)} p-3 rounded-lg`}>
+              <p className={`text-sm ${getThemeClass('text-blue-700', isDarkMode)}`}>
                 • Complex carbs 2-3 hours before<br/>
                 • Moderate caffeine (good metabolism)<br/>
                 • Adequate hydration
@@ -277,9 +296,9 @@ export default function SportsPanel({ data }: SportsPanelProps) {
             </div>
           </div>
           <div className="space-y-3">
-            <h4 className="font-medium text-gray-900">Post-Workout</h4>
-            <div className="bg-green-50 p-3 rounded-lg">
-              <p className="text-sm text-green-700">
+            <h4 className={`font-medium ${textPrimary}`}>Post-Workout</h4>
+            <div className={`${getThemeClass('bg-green-50', isDarkMode)} p-3 rounded-lg`}>
+              <p className={`text-sm ${getThemeClass('text-green-700', isDarkMode)}`}>
                 • Protein within 30 minutes<br/>
                 • Carb replenishment for glycogen<br/>
                 • Anti-inflammatory foods

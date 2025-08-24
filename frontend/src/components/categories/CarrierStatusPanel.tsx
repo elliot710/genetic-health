@@ -1,5 +1,14 @@
 import React from 'react'
 import { AlertTriangle, CheckCircle, Info, User, Heart, Eye } from 'lucide-react'
+import { 
+  getThemeClass, 
+  getGlassBackground, 
+  getGlassBorder, 
+  getTextPrimary, 
+  getTextSecondary, 
+  getTagClass, 
+  getProgressBarBg 
+} from '../../utils/theme'
 
 interface CarrierStatusPanelProps {
   data: any
@@ -7,16 +16,12 @@ interface CarrierStatusPanelProps {
 }
 
 export default function CarrierStatusPanel({ data, isDarkMode = false }: CarrierStatusPanelProps) {
-  const theme = {
-    glass: isDarkMode 
-      ? 'bg-black/20 backdrop-blur-xl border-white/10' 
-      : 'bg-white/30 backdrop-blur-xl border-white/30',
-    text: {
-      primary: isDarkMode ? 'text-white' : 'text-gray-900',
-      secondary: isDarkMode ? 'text-gray-300' : 'text-gray-700',
-      muted: isDarkMode ? 'text-gray-400' : 'text-gray-500',
-    }
-  }
+  const glassBackground = getGlassBackground(isDarkMode);
+  const glassBorder = getGlassBorder(isDarkMode);
+  const textPrimary = getTextPrimary(isDarkMode);
+  const textSecondary = getTextSecondary(isDarkMode);
+  const tagClass = getTagClass(isDarkMode);
+  const progressBarBg = getProgressBarBg(isDarkMode);
 
   const carrierConditions = [
     {
@@ -95,21 +100,21 @@ export default function CarrierStatusPanel({ data, isDarkMode = false }: Carrier
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className={`text-2xl font-bold ${theme.text.primary} mb-2`}>
+          <h2 className={`text-2xl font-bold ${textPrimary} mb-2`}>
             Carrier Status
           </h2>
-          <p className={theme.text.secondary}>
+          <p className={textSecondary}>
             Genetic variants that could be passed to your children
           </p>
         </div>
-        <div className={`${theme.glass} rounded-xl p-4`}>
+        <div className={`${glassBackground} border ${glassBorder} rounded-xl p-4`}>
           <div className="flex items-center space-x-3">
-            <User className="h-8 w-8 text-blue-500" />
+            <User className={`h-8 w-8 ${getThemeClass('text-blue-500', isDarkMode)}`} />
             <div>
-              <div className={`text-2xl font-bold ${theme.text.primary}`}>
+              <div className={`text-2xl font-bold ${textPrimary}`}>
                 {summary.totalTested}
               </div>
-              <div className={`text-sm ${theme.text.muted}`}>
+              <div className={`text-sm ${getThemeClass("text-gray-500", isDarkMode)}`}>
                 Conditions Tested
               </div>
             </div>
@@ -119,32 +124,32 @@ export default function CarrierStatusPanel({ data, isDarkMode = false }: Carrier
 
       {/* Summary Cards */}
       <div className="grid grid-cols-3 gap-4">
-        <div className={`${theme.glass} rounded-xl p-4 border border-white/10`}>
+        <div className={`${glassBackground} border ${glassBorder} rounded-xl p-4`}>
           <div className="text-center">
-            <div className={`text-2xl font-bold text-green-500 mb-1`}>
+            <div className={`text-2xl font-bold ${getThemeClass('text-green-500', isDarkMode)} mb-1`}>
               {summary.notCarrier}
             </div>
-            <div className={`text-sm ${theme.text.muted}`}>
+            <div className={`text-sm ${getThemeClass("text-gray-500", isDarkMode)}`}>
               Not a Carrier
             </div>
           </div>
         </div>
-        <div className={`${theme.glass} rounded-xl p-4 border border-white/10`}>
+        <div className={`${glassBackground} border ${glassBorder} rounded-xl p-4`}>
           <div className="text-center">
-            <div className={`text-2xl font-bold text-yellow-500 mb-1`}>
+            <div className={`text-2xl font-bold ${getThemeClass('text-yellow-500', isDarkMode)} mb-1`}>
               {summary.carrier}
             </div>
-            <div className={`text-sm ${theme.text.muted}`}>
+            <div className={`text-sm ${getThemeClass("text-gray-500", isDarkMode)}`}>
               Carrier
             </div>
           </div>
         </div>
-        <div className={`${theme.glass} rounded-xl p-4 border border-white/10`}>
+        <div className={`${glassBackground} border ${glassBorder} rounded-xl p-4`}>
           <div className="text-center">
-            <div className={`text-2xl font-bold ${theme.text.primary} mb-1`}>
+            <div className={`text-2xl font-bold ${textPrimary} mb-1`}>
               {summary.totalTested}
             </div>
-            <div className={`text-sm ${theme.text.muted}`}>
+            <div className={`text-sm ${getThemeClass("text-gray-500", isDarkMode)}`}>
               Total Tested
             </div>
           </div>
@@ -156,13 +161,13 @@ export default function CarrierStatusPanel({ data, isDarkMode = false }: Carrier
         {carrierConditions.map((condition, index) => {
           const StatusIcon = getStatusIcon(condition.status)
           return (
-            <div key={index} className={`${theme.glass} rounded-xl p-6 border border-white/10`}>
+            <div key={index} className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
               <div className="flex items-start justify-between mb-4">
                 <div>
-                  <h3 className={`text-lg font-semibold ${theme.text.primary} mb-1`}>
+                  <h3 className={`text-lg font-semibold ${textPrimary} mb-1`}>
                     {condition.condition}
                   </h3>
-                  <p className={`text-sm ${theme.text.muted}`}>
+                  <p className={`text-sm ${getThemeClass("text-gray-500", isDarkMode)}`}>
                     Gene: {condition.gene} • {condition.inheritance}
                   </p>
                 </div>
@@ -174,21 +179,21 @@ export default function CarrierStatusPanel({ data, isDarkMode = false }: Carrier
                 </div>
               </div>
 
-              <p className={`text-sm ${theme.text.secondary} mb-4`}>
+              <p className={`text-sm ${textSecondary} mb-4`}>
                 {condition.description}
               </p>
 
               <div className="grid md:grid-cols-2 gap-4">
                 <div>
-                  <h4 className={`text-sm font-medium ${theme.text.secondary} mb-1`}>
+                  <h4 className={`text-sm font-medium ${textSecondary} mb-1`}>
                     Population Frequency
                   </h4>
-                  <p className={`text-sm ${theme.text.primary}`}>
+                  <p className={`text-sm ${textPrimary}`}>
                     {condition.frequency}
                   </p>
                 </div>
                 <div>
-                  <h4 className={`text-sm font-medium ${theme.text.secondary} mb-1`}>
+                  <h4 className={`text-sm font-medium ${textSecondary} mb-1`}>
                     Risk Level
                   </h4>
                   <p className={`text-sm font-medium ${getRiskColor(condition.risk)} capitalize`}>
@@ -202,14 +207,14 @@ export default function CarrierStatusPanel({ data, isDarkMode = false }: Carrier
       </div>
 
       {/* Educational Information */}
-      <div className={`${theme.glass} rounded-xl p-6 border border-blue-500/20 bg-blue-500/5`}>
+      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6 border border-blue-500/20 bg-blue-500/5`}>
         <div className="flex items-start space-x-3">
-          <Info className="h-5 w-5 text-blue-500 mt-0.5" />
+          <Info className={`h-5 w-5 ${getThemeClass('text-blue-500', isDarkMode)} mt-0.5`} />
           <div>
-            <h3 className={`font-semibold ${theme.text.primary} mb-2`}>
+            <h3 className={`font-semibold ${textPrimary} mb-2`}>
               Understanding Carrier Status
             </h3>
-            <div className={`text-sm ${theme.text.secondary} space-y-2`}>
+            <div className={`text-sm ${textSecondary} space-y-2`}>
               <p>
                 Being a carrier means you have one copy of a genetic variant that could cause a 
                 condition if paired with another copy from your partner.

@@ -9,6 +9,7 @@ import {
   Award, Lightbulb, Star, Flame, Sun, Moon, Users,
   MessageSquare, Bell, Menu, X, LogOut, Plus, Home
 } from 'lucide-react'
+import { getTheme } from '../utils/theme'
 
 // Import category components
 import FoodNutritionPanel from './categories/FoodNutritionPanel'
@@ -22,18 +23,23 @@ import AncestryPanel from './categories/AncestryPanel'
 import CarrierStatusPanel from './categories/CarrierStatusPanel'
 import WellnessPanel from './categories/WellnessPanel'
 import VariantSearch from './VariantSearch'
+import { getThemeClass } from '../utils/theme'
 
 interface ModernDashboardProps {
   token?: string
+  analysisData?: any
 }
 
-export default function ModernDashboard({ token }: ModernDashboardProps) {
-  const [data, setData] = useState<any>(null)
-  const [loading, setLoading] = useState(true)
+export default function ModernDashboard({ token, analysisData }: ModernDashboardProps) {
+  console.log('Dashboard component props:', { token: !!token, analysisData })
+  
+  const [data, setData] = useState<any>(analysisData || null)
+  const [loading, setLoading] = useState(!analysisData)
   const [activeCategory, setActiveCategory] = useState('overview')
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [variantsPerPage] = useState(10)
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   
   // Initialize theme from localStorage or default to false
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -51,13 +57,14 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
     }
   }, [isDarkMode])
 
-  // Load sample data on component mount
+  // Load sample data on component mount only if no analysisData provided
   useEffect(() => {
-    const loadSampleData = () => {
-      setLoading(true)
-      
-      // Simulate API call with sample data
-      setTimeout(() => {
+    if (!analysisData) {
+      const loadSampleData = () => {
+        setLoading(true)
+        
+        // Simulate API call with sample data
+        setTimeout(() => {
         setData({
           summary: {
             total_variants: 847,
@@ -92,7 +99,39 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
     }
 
     loadSampleData()
-  }, [])
+    }
+  }, [analysisData])
+
+  // Update data when analysisData prop changes
+  useEffect(() => {
+    if (analysisData) {
+      console.log('Dashboard received analysisData:', {
+        summary: analysisData.summary,
+        filename_paths: {
+          upload_info_filename: analysisData.summary?.upload_info?.filename,
+          data_sources: analysisData.summary?.data_sources,
+          real_data_filename: analysisData.real_data?.upload_result?.filename
+        }
+      })
+      setData(analysisData)
+      setLoading(false)
+    }
+  }, [analysisData])
+
+  // Safety check - if no data available, show loading or empty state
+  if (!data && !loading) {
+    console.log('Dashboard: No data and not loading, showing empty state')
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <h2 className="text-xl font-semibold mb-2">No Data Available</h2>
+          <p className="text-gray-600">Please upload your genetic data to get started.</p>
+        </div>
+      </div>
+    )
+  }
+
+  console.log('Dashboard about to render with data:', data)
 
   // Reset pagination when changing categories
   useEffect(() => {
@@ -114,21 +153,8 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
     }, 1000)
   }
 
-  // Glassmorphism theme configuration
-  const theme = {
-    background: isDarkMode ? 'bg-slate-900' : 'bg-gray-50',
-    glass: isDarkMode ? 'bg-slate-800/40 backdrop-blur-xl' : 'bg-white/40 backdrop-blur-xl',
-    glassBorder: isDarkMode ? 'border-slate-700/50' : 'border-gray-200/30',
-    glassHover: isDarkMode ? 'hover:bg-slate-700/50' : 'hover:bg-white/60',
-    secondary: isDarkMode ? 'bg-slate-800/30' : 'bg-white/20',
-    border: isDarkMode ? 'border-slate-700/40' : 'border-gray-200/30',
-    text: {
-      primary: isDarkMode ? 'text-white' : 'text-slate-900',
-      secondary: isDarkMode ? 'text-slate-300' : 'text-slate-600',
-      muted: isDarkMode ? 'text-slate-400' : 'text-slate-500'
-    },
-    hover: isDarkMode ? 'hover:bg-slate-700/40' : 'hover:bg-white/50'
-  }
+  // Use centralized theme system
+  const theme = getTheme(isDarkMode)
 
   const categories = [
     {
@@ -194,25 +220,25 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
   ]
 
   const handleDeleteData = async () => {
-    if (confirm('Are you sure you want to delete all your genetic data? This action cannot be undone.')) {
-      try {
-        const response = await fetch('http://localhost:8000/upload/data', {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        })
-
-        if (response.ok) {
-          alert('All data deleted successfully')
-          onReset()
-        } else {
-          alert('Failed to delete data')
+    try {
+      const response = await fetch('http://localhost:8000/upload/data', {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
         }
-      } catch (error) {
-        console.error('Error deleting data:', error)
-        alert('Error deleting data')
+      })
+
+      if (response.ok) {
+        setData(null)
+        setActiveCategory('overview')
+        setShowDeleteDialog(false)
+        alert('All data deleted successfully')
+      } else {
+        alert('Failed to delete data')
       }
+    } catch (error) {
+      console.error('Error deleting data:', error)
+      alert('Error deleting data')
     }
   }
 
@@ -233,22 +259,22 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
       title: 'Variants Analyzed',
       value: data?.summary?.total_variants || data?.real_data?.variants?.length || 0,
       icon: BarChart3,
-      color: 'text-blue-600',
-      bgColor: 'bg-blue-50'
+      color: getThemeClass('text-blue-600', isDarkMode),
+      bgColor: getThemeClass('bg-blue-50', isDarkMode)
     },
     {
       title: 'Health Score',
       value: `${Math.round(data?.health_risks?.overall_score || 85)}%`,
       icon: Activity,
-      color: 'text-green-600',
-      bgColor: 'bg-green-50'
+      color: getThemeClass('text-green-600', isDarkMode),
+      bgColor: getThemeClass('bg-green-50', isDarkMode)
     },
     {
       title: 'Insights Found',
       value: data?.insights?.length || data?.analysis_results?.insights?.length || 12,
       icon: TrendingUp,
-      color: 'text-purple-600',
-      bgColor: 'bg-purple-50'
+      color: getThemeClass('text-purple-600', isDarkMode),
+      bgColor: getThemeClass('bg-purple-50', isDarkMode)
     }
   ]
 
@@ -267,8 +293,8 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
           category: 'High Risk Variants',
           insight: `${highRisk} high-risk genetic variants identified requiring attention`,
           icon: AlertTriangle,
-          color: 'text-red-600',
-          bgColor: 'bg-red-50'
+          color: getThemeClass('text-red-600', isDarkMode),
+          bgColor: getThemeClass('bg-red-50', isDarkMode)
         })
       }
       
@@ -277,8 +303,8 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
           category: 'Moderate Risk',
           insight: `${moderateRisk} variants show moderate risk associations`,
           icon: Info,
-          color: 'text-amber-600',
-          bgColor: 'bg-amber-50'
+          color: getThemeClass('text-amber-600', isDarkMode),
+          bgColor: getThemeClass('bg-amber-50', isDarkMode)
         })
       }
     }
@@ -288,8 +314,8 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
         category: 'Drug Metabolism',
         insight: `${data.drug_interactions.high_risk_genes.length} genes may affect drug responses`,
         icon: Shield,
-        color: 'text-purple-600',
-        bgColor: 'bg-purple-50'
+        color: getThemeClass('text-purple-600', isDarkMode),
+        bgColor: getThemeClass('bg-purple-50', isDarkMode)
       })
     }
     
@@ -301,8 +327,8 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
         category: 'Analysis Coverage',
         insight: `${coverage}% of variants have reference IDs for clinical analysis`,
         icon: Target,
-        color: 'text-green-600',
-        bgColor: 'bg-green-50'
+        color: getThemeClass('text-green-600', isDarkMode),
+        bgColor: getThemeClass('bg-green-50', isDarkMode)
       })
     }
     
@@ -318,15 +344,15 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
         ? `${data.real_data.variants.length} variants uploaded and ready for analysis`
         : 'Upload genetic data to begin analysis',
       icon: Dna,
-      color: 'text-blue-600',
-      bgColor: 'bg-blue-50'
+      color: getThemeClass('text-blue-600', isDarkMode),
+      bgColor: getThemeClass('bg-blue-50', isDarkMode)
     },
     {
       category: 'Processing Status',
       insight: 'Background analysis in progress - check back for updated results',
       icon: Activity,
-      color: 'text-amber-600',
-      bgColor: 'bg-amber-50'
+      color: getThemeClass('text-amber-600', isDarkMode),
+      bgColor: getThemeClass('bg-amber-50', isDarkMode)
     },
     {
       category: 'Data Quality',
@@ -334,25 +360,25 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
         ? `Analysis ID: ${data.summary.analysis_id} - Data successfully stored`
         : 'Ready to process your genetic information',
       icon: CheckCircle,
-      color: 'text-green-600',
-      bgColor: 'bg-green-50'
+      color: getThemeClass('text-green-600', isDarkMode),
+      bgColor: getThemeClass('bg-green-50', isDarkMode)
     }
   ]
 
   const renderCategoryContent = () => {
     switch (activeCategory) {
       case 'food-nutrition':
-        return <FoodNutritionPanel data={data} />
+        return <FoodNutritionPanel data={data} isDarkMode={isDarkMode} theme={theme} />
       case 'intelligence':
-        return <IntelligencePanel data={data} />
+        return <IntelligencePanel data={data} isDarkMode={isDarkMode} theme={theme} />
       case 'physical-traits':
-        return <PhysicalTraitsPanel data={data} />
+        return <PhysicalTraitsPanel data={data} isDarkMode={isDarkMode} theme={theme} />
       case 'personality':
-        return <PersonalityPanel data={data} />
+        return <PersonalityPanel data={data} isDarkMode={isDarkMode} theme={theme} />
       case 'sports':
-        return <SportsPanel data={data} />
+        return <SportsPanel data={data} isDarkMode={isDarkMode} theme={theme} />
       case 'health':
-        return <HealthPanel data={data} />
+        return <HealthPanel data={data} isDarkMode={isDarkMode} theme={theme} />
       case 'drug-responses':
         return <DrugResponsesPanel data={data} isDarkMode={isDarkMode} />
       case 'ancestry':
@@ -362,7 +388,7 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
       case 'wellness':
         return <WellnessPanel data={data} isDarkMode={isDarkMode} />
       case 'variant-search':
-        return <VariantSearch token={token} />
+        return <VariantSearch token={token} isDarkMode={isDarkMode} theme={theme} />
       default:
         return (
           <div className="space-y-8">
@@ -399,7 +425,7 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
                   <div className="flex items-center justify-between mb-8">
                     <div className="flex items-center space-x-4">
                       <div className="p-3 bg-gradient-to-br from-blue-500/20 to-purple-500/20 backdrop-blur-xl rounded-xl border border-blue-500/30">
-                        <Sparkles className="h-7 w-7 text-blue-500" />
+                        <Sparkles className={`h-7 w-7 ${getThemeClass('text-blue-500', isDarkMode)}`} />
                       </div>
                       <div>
                         <h3 className={`text-2xl font-bold ${theme.text.primary}`}>
@@ -449,7 +475,7 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
                 <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-8`}>
                   <div className="flex items-center space-x-4 mb-8">
                     <div className="p-3 bg-gradient-to-br from-green-500/20 to-teal-500/20 backdrop-blur-xl rounded-xl border border-green-500/30">
-                      <BarChart3 className="h-7 w-7 text-green-600" />
+                      <BarChart3 className={`h-7 w-7 ${getThemeClass('text-green-600', isDarkMode)}`} />
                     </div>
                     <div>
                       <h3 className={`text-2xl font-bold ${theme.text.primary}`}>
@@ -465,33 +491,33 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
                     {[
                       { 
                         label: 'Total Variants', 
-                        value: data.summary?.total_variants || data.real_data?.variants?.length || 0,
+                        value: data?.summary?.total_variants || data?.real_data?.variants?.length || 0,
                         icon: Dna,
-                        color: 'text-blue-600',
-                        bgColor: 'bg-blue-50'
+                        color: getThemeClass('text-blue-600', isDarkMode),
+                        bgColor: getThemeClass('bg-blue-50', isDarkMode)
                       },
                       { 
                         label: 'Chromosomes', 
-                        value: data.real_data?.variants ? [...new Set(data.real_data.variants.map((v: any) => v.chromosome))].length : 0,
+                        value: data?.real_data?.variants ? [...new Set(data.real_data.variants.map((v: any) => v.chromosome))].length : 0,
                         icon: Target,
-                        color: 'text-purple-600',
-                        bgColor: 'bg-purple-50'
+                        color: getThemeClass('text-purple-600', isDarkMode),
+                        bgColor: getThemeClass('bg-purple-50', isDarkMode)
                       },
                       { 
                         label: 'With RS IDs', 
-                        value: data.real_data?.variants ? data.real_data.variants.filter((v: any) => v.rsid && v.rsid !== '-' && v.rsid !== 'nan').length : 0,
+                        value: data?.real_data?.variants ? data.real_data.variants.filter((v: any) => v.rsid && v.rsid !== '-' && v.rsid !== 'nan').length : 0,
                         icon: CheckCircle,
-                        color: 'text-green-600',
-                        bgColor: 'bg-green-50'
+                        color: getThemeClass('text-green-600', isDarkMode),
+                        bgColor: getThemeClass('bg-green-50', isDarkMode)
                       },
                       { 
                         label: 'Coverage', 
-                        value: data.real_data?.variants ? 
+                        value: data?.real_data?.variants ? 
                           `${Math.round((data.real_data.variants.filter((v: any) => v.rsid && v.rsid !== '-' && v.rsid !== 'nan').length / data.real_data.variants.length) * 100)}%` : 
                           '0%',
                         icon: Activity,
-                        color: 'text-orange-600',
-                        bgColor: 'bg-orange-50'
+                        color: getThemeClass('text-orange-600', isDarkMode),
+                        bgColor: getThemeClass('bg-orange-50', isDarkMode)
                       }
                     ].map((metric, index) => {
                       const Icon = metric.icon
@@ -519,7 +545,7 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
                 <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-6`}>
                   <div className="flex items-center space-x-3 mb-6">
                     <div className="p-3 bg-gradient-to-br from-green-500/20 to-emerald-500/20 backdrop-blur-xl rounded-xl border border-green-500/30">
-                      <Dna className="h-6 w-6 text-green-600" />
+                      <Dna className={`h-6 w-6 ${getThemeClass('text-green-600', isDarkMode)}`} />
                     </div>
                     <h3 className={`text-lg font-bold ${theme.text.primary}`}>
                       Your Data
@@ -527,20 +553,27 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
                   </div>
                   
                   <div className="space-y-4">
-                    {data.real_data?.variants && data.real_data.variants.length > 0 ? (
+                    {data && typeof data === 'object' && data.real_data && data.real_data.variants && Array.isArray(data.real_data.variants) && data.real_data.variants.length > 0 ? (
                       <>
                         <div className={`${theme.glass} border ${theme.glassBorder} rounded-xl p-4 text-center`}>
                           <div className="text-3xl font-bold text-green-600 mb-1">
-                            {data.real_data.variants.length}
+                            {data?.real_data?.variants?.length || 0}
                           </div>
                           <div className={`text-sm ${theme.text.secondary}`}>Variants Analyzed</div>
                         </div>
                         
                         <div className="space-y-3">
                           {[
-                            { label: 'File', value: data.real_data.upload_result?.filename || 'Unknown', icon: Upload },
-                            { label: 'Analysis ID', value: data.summary?.analysis_id || 'N/A', icon: Shield },
-                            { label: 'File Size', value: data.real_data.upload_result?.file_size ? `${Math.round(data.real_data.upload_result.file_size / 1024)}KB` : 'N/A', icon: Info }
+                            { 
+                              label: 'File', 
+                              value: data.summary?.upload_info?.filename || 
+                                     data.summary?.data_sources?.[0] || 
+                                     data.real_data?.upload_result?.filename ||
+                                     data.summary?.upload_info?.file_name ||
+                                     'Unknown', 
+                              icon: Upload 
+                            },
+                            { label: 'Analysis ID', value: data.summary?.analysis_id || 'N/A', icon: Shield }
                           ].map((item, index) => (
                             <div key={index} className={`flex items-center justify-between p-3 ${theme.glass} border ${theme.glassBorder} rounded-lg`}>
                               <div className="flex items-center space-x-2">
@@ -581,29 +614,29 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
                       { 
                         label: 'View Health Risks', 
                         icon: Heart, 
-                        color: 'text-red-600', 
-                        bgColor: 'bg-red-50',
+                        color: getThemeClass('text-red-600', isDarkMode), 
+                        bgColor: getThemeClass('bg-red-50', isDarkMode),
                         onClick: () => setActiveCategory('health')
                       },
                       { 
                         label: 'Drug Responses', 
                         icon: Shield, 
-                        color: 'text-purple-600', 
-                        bgColor: 'bg-purple-50',
+                        color: getThemeClass('text-purple-600', isDarkMode), 
+                        bgColor: getThemeClass('bg-purple-50', isDarkMode),
                         onClick: () => setActiveCategory('health')
                       },
                       { 
                         label: 'Search Variants', 
                         icon: Search, 
-                        color: 'text-blue-600', 
-                        bgColor: 'bg-blue-50',
+                        color: getThemeClass('text-blue-600', isDarkMode), 
+                        bgColor: getThemeClass('bg-blue-50', isDarkMode),
                         onClick: () => setActiveCategory('variant-search')
                       },
                       { 
                         label: 'Nutrition Insights', 
                         icon: Apple, 
-                        color: 'text-green-600', 
-                        bgColor: 'bg-green-50',
+                        color: getThemeClass('text-green-600', isDarkMode), 
+                        bgColor: getThemeClass('bg-green-50', isDarkMode),
                         onClick: () => setActiveCategory('food-nutrition')
                       }
                     ].map((action, index) => {
@@ -758,10 +791,10 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
     <div className={`min-h-screen ${theme.background} relative overflow-hidden`}>
       {/* Glassmorphism Background Elements */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className={`absolute -top-40 -right-40 w-96 h-96 ${isDarkMode ? 'bg-gradient-to-br from-blue-500/30 to-purple-500/20' : 'bg-gradient-to-br from-blue-300/40 to-purple-300/30'} rounded-full filter blur-3xl animate-float`}></div>
-        <div className={`absolute top-1/3 -left-40 w-80 h-80 ${isDarkMode ? 'bg-gradient-to-br from-purple-500/25 to-pink-500/20' : 'bg-gradient-to-br from-purple-300/35 to-pink-300/25'} rounded-full filter blur-3xl animate-float-delayed`}></div>
-        <div className={`absolute bottom-0 right-1/3 w-72 h-72 ${isDarkMode ? 'bg-gradient-to-br from-teal-500/20 to-cyan-500/15' : 'bg-gradient-to-br from-teal-300/30 to-cyan-300/20'} rounded-full filter blur-3xl animate-float-slow`}></div>
-        <div className={`absolute top-1/2 left-1/2 w-64 h-64 ${isDarkMode ? 'bg-gradient-to-br from-indigo-500/15 to-blue-500/10' : 'bg-gradient-to-br from-indigo-300/25 to-blue-300/15'} rounded-full filter blur-3xl animate-float-reverse`}></div>
+        <div className={`absolute -top-40 -right-40 w-96 h-96 ${theme.blobs.primary} rounded-full filter blur-3xl animate-float`}></div>
+        <div className={`absolute top-1/3 -left-40 w-80 h-80 ${theme.blobs.secondary} rounded-full filter blur-3xl animate-float-delayed`}></div>
+        <div className={`absolute bottom-0 right-1/3 w-72 h-72 ${theme.blobs.tertiary} rounded-full filter blur-3xl animate-float-slow`}></div>
+        <div className={`absolute top-1/2 left-1/2 w-64 h-64 ${theme.blobs.primary} rounded-full filter blur-3xl animate-float-reverse`}></div>
       </div>
 
       {/* Header - Glassmorphism Effect */}
@@ -838,7 +871,7 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
                     <span>Settings</span>
                   </button>
                   <button
-                    onClick={handleDeleteData}
+                    onClick={() => setShowDeleteDialog(true)}
                     className={`w-full text-left px-4 py-3 text-sm text-red-500 hover:bg-red-500/10 flex items-center space-x-3 transition-all duration-200`}
                   >
                     <Trash2 className="h-4 w-4" />
@@ -880,7 +913,7 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
                           : 'text-gray-600 hover:bg-gray-200/30 hover:text-gray-900 border border-transparent hover:border-gray-300/30 backdrop-blur-sm'
                     }`}
                   >
-                    <Icon className={`h-5 w-5 ${isActive ? 'text-white' : isDarkMode ? 'text-gray-400' : 'text-gray-500'}`} />
+                    <Icon className={`h-5 w-5 ${isActive ? 'text-white' : getThemeClass('text-gray-500', isDarkMode)}`} />
                     <span>{category.title}</span>
                   </button>
                 )
@@ -934,6 +967,44 @@ export default function ModernDashboard({ token }: ModernDashboardProps) {
           animation-delay: 6s;
         }
       `}</style>
+
+      {/* Delete Confirmation Dialog */}
+      {showDeleteDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className={`${theme.glass} border ${theme.glassBorder} rounded-xl p-6 m-4 max-w-md w-full`}>
+            <div className="text-center">
+              <div className="w-12 h-12 mx-auto mb-4 bg-red-100 rounded-full flex items-center justify-center">
+                <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
+              </div>
+              <h3 className={`text-lg font-semibold ${theme.text.primary} mb-2`}>
+                Delete All Data
+              </h3>
+              <p className={`${theme.text.secondary} mb-6`}>
+                Are you sure you want to delete all your genetic data? This action cannot be undone.
+              </p>
+              <div className="flex gap-3 justify-center">
+                <button
+                  onClick={() => setShowDeleteDialog(false)}
+                  className={`px-4 py-2 rounded-lg ${theme.glass} border ${theme.glassBorder} ${theme.text.primary} hover:bg-white/10 transition-colors`}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    setShowDeleteDialog(false);
+                    handleDeleteData();
+                  }}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

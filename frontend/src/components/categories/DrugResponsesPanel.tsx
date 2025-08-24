@@ -1,22 +1,28 @@
 import React from 'react'
 import { Pill, AlertTriangle, CheckCircle, Clock, Info } from 'lucide-react'
+import { 
+  getThemeClass, 
+  getGlassBackground, 
+  getGlassBorder, 
+  getTextPrimary, 
+  getTextSecondary, 
+  getTagClass, 
+  getProgressBarBg 
+} from '../../utils/theme'
 
 interface DrugResponsesPanelProps {
-  data: any
   isDarkMode?: boolean
+  theme?: any
+  data: any
 }
 
 export default function DrugResponsesPanel({ data, isDarkMode = false }: DrugResponsesPanelProps) {
-  const theme = {
-    glass: isDarkMode 
-      ? 'bg-black/20 backdrop-blur-xl border-white/10' 
-      : 'bg-white/30 backdrop-blur-xl border-white/30',
-    text: {
-      primary: isDarkMode ? 'text-white' : 'text-gray-900',
-      secondary: isDarkMode ? 'text-gray-300' : 'text-gray-700',
-      muted: isDarkMode ? 'text-gray-400' : 'text-gray-500',
-    }
-  }
+  const glassBackground = getGlassBackground(isDarkMode);
+  const glassBorder = getGlassBorder(isDarkMode);
+  const textPrimary = getTextPrimary(isDarkMode);
+  const textSecondary = getTextSecondary(isDarkMode);
+  const tagClass = getTagClass(isDarkMode);
+  const progressBarBg = getProgressBarBg(isDarkMode);
 
   const drugResponses = [
     {
@@ -83,21 +89,21 @@ export default function DrugResponsesPanel({ data, isDarkMode = false }: DrugRes
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className={`text-2xl font-bold ${theme.text.primary} mb-2`}>
+          <h2 className={`text-2xl font-bold ${textPrimary} mb-2`}>
             Drug Response Analysis
           </h2>
-          <p className={theme.text.secondary}>
+          <p className={textSecondary}>
             Pharmacogenomic insights based on your genetic variants
           </p>
         </div>
-        <div className={`${theme.glass} rounded-xl p-4`}>
+        <div className={`${glassBackground} border ${glassBorder} rounded-xl p-4`}>
           <div className="flex items-center space-x-3">
-            <Pill className="h-8 w-8 text-blue-500" />
+            <Pill className={`h-8 w-8 ${getThemeClass('text-blue-500', isDarkMode)}`} />
             <div>
-              <div className={`text-2xl font-bold ${theme.text.primary}`}>
+              <div className={`text-2xl font-bold ${textPrimary}`}>
                 {drugResponses.length}
               </div>
-              <div className={`text-sm ${theme.text.muted}`}>
+              <div className={`text-sm ${getThemeClass("text-gray-500", isDarkMode)}`}>
                 Analyzed Drugs
               </div>
             </div>
@@ -109,13 +115,13 @@ export default function DrugResponsesPanel({ data, isDarkMode = false }: DrugRes
         {drugResponses.map((drug, index) => {
           const RiskIcon = getRiskIcon(drug.risk)
           return (
-            <div key={index} className={`${theme.glass} rounded-xl p-6 border border-white/10`}>
+            <div key={index} className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
               <div className="flex items-start justify-between mb-4">
                 <div>
-                  <h3 className={`text-lg font-semibold ${theme.text.primary} mb-1`}>
+                  <h3 className={`text-lg font-semibold ${textPrimary} mb-1`}>
                     {drug.drug}
                   </h3>
-                  <p className={`text-sm ${theme.text.muted}`}>
+                  <p className={`text-sm ${getThemeClass("text-gray-500", isDarkMode)}`}>
                     Gene: {drug.gene}
                   </p>
                 </div>
@@ -129,26 +135,26 @@ export default function DrugResponsesPanel({ data, isDarkMode = false }: DrugRes
 
               <div className="grid md:grid-cols-3 gap-4">
                 <div>
-                  <h4 className={`text-sm font-medium ${theme.text.secondary} mb-2`}>
+                  <h4 className={`text-sm font-medium ${textSecondary} mb-2`}>
                     Response Type
                   </h4>
-                  <p className={`text-sm ${theme.text.primary} font-medium`}>
+                  <p className={`text-sm ${textPrimary} font-medium`}>
                     {drug.response}
                   </p>
                 </div>
                 <div>
-                  <h4 className={`text-sm font-medium ${theme.text.secondary} mb-2`}>
+                  <h4 className={`text-sm font-medium ${textSecondary} mb-2`}>
                     Genotype
                   </h4>
-                  <p className={`text-sm ${theme.text.primary} font-mono`}>
+                  <p className={`text-sm ${textPrimary} font-mono`}>
                     {drug.genotype}
                   </p>
                 </div>
                 <div>
-                  <h4 className={`text-sm font-medium ${theme.text.secondary} mb-2`}>
+                  <h4 className={`text-sm font-medium ${textSecondary} mb-2`}>
                     Recommendation
                   </h4>
-                  <p className={`text-sm ${theme.text.primary}`}>
+                  <p className={`text-sm ${textPrimary}`}>
                     {drug.recommendation}
                   </p>
                 </div>
@@ -158,14 +164,14 @@ export default function DrugResponsesPanel({ data, isDarkMode = false }: DrugRes
         })}
       </div>
 
-      <div className={`${theme.glass} rounded-xl p-6 border border-blue-500/20 bg-blue-500/5`}>
+      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6 border border-blue-500/20 bg-blue-500/5`}>
         <div className="flex items-start space-x-3">
-          <Info className="h-5 w-5 text-blue-500 mt-0.5" />
+          <Info className={`h-5 w-5 ${getThemeClass('text-blue-500', isDarkMode)} mt-0.5`} />
           <div>
-            <h3 className={`font-semibold ${theme.text.primary} mb-2`}>
+            <h3 className={`font-semibold ${textPrimary} mb-2`}>
               Important Disclaimer
             </h3>
-            <p className={`text-sm ${theme.text.secondary} leading-relaxed`}>
+            <p className={`text-sm ${textSecondary} leading-relaxed`}>
               This pharmacogenomic information is for educational purposes only and should not replace 
               professional medical advice. Always consult with your healthcare provider before making 
               any changes to your medication regimen.

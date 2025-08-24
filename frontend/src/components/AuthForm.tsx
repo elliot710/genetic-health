@@ -1,13 +1,16 @@
 'use client'
 
-import { useState } from 'react'
-import { Eye, EyeOff, Mail, Lock, User, Dna, Sparkles, Shield } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Eye, EyeOff, Mail, Lock, User, Dna, Sparkles, Shield, Sun, Moon } from 'lucide-react'
+import { getTheme } from '../utils/theme'
 
 interface AuthFormProps {
   onLogin: (token: string) => void
+  isDarkMode?: boolean
+  isHydrated?: boolean
 }
 
-export default function AuthForm({ onLogin }: AuthFormProps) {
+export default function AuthForm({ onLogin, isDarkMode: initialDarkMode = false, isHydrated = true }: AuthFormProps) {
   const [isLogin, setIsLogin] = useState(true)
   const [formData, setFormData] = useState({
     email: '',
@@ -18,6 +21,29 @@ export default function AuthForm({ onLogin }: AuthFormProps) {
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  
+  // Local dark mode state for auth form - initialize consistently
+  const [isDarkMode, setIsDarkMode] = useState(initialDarkMode)
+
+  // Load theme from localStorage after hydration
+  useEffect(() => {
+    if (isHydrated && typeof window !== 'undefined') {
+      const saved = localStorage.getItem('darkMode')
+      if (saved) {
+        setIsDarkMode(JSON.parse(saved))
+      }
+    }
+  }, [isHydrated])
+
+  // Save theme preference to localStorage whenever it changes
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('darkMode', JSON.stringify(isDarkMode))
+    }
+  }, [isDarkMode])
+
+  // Get theme object
+  const theme = getTheme(isDarkMode)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -55,27 +81,49 @@ export default function AuthForm({ onLogin }: AuthFormProps) {
         setError('')
         alert('Account created successfully! Please log in.')
       }
-    } catch (err: any) {
-      setError(err.message)
+    } catch (err: unknown) {
+      const error = err as Error
+      setError(error.message)
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="min-h-screen bg-white flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
-        {/* Main Container - Clean white design */}
-        <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-8">
+    <div className={`min-h-screen flex items-center justify-center p-4 relative overflow-hidden ${theme.background}`}>
+      {/* Glassmorphism Background Elements */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className={`absolute -top-40 -right-40 w-96 h-96 ${theme.blobs.primary} rounded-full filter blur-3xl animate-float`}></div>
+        <div className={`absolute top-1/3 -left-40 w-80 h-80 ${theme.blobs.secondary} rounded-full filter blur-3xl animate-float-delayed`}></div>
+        <div className={`absolute bottom-0 right-1/3 w-72 h-72 ${theme.blobs.tertiary} rounded-full filter blur-3xl animate-float-slow`}></div>
+      </div>
+
+      <div className="w-full max-w-md relative z-10">
+        {/* Main Container - Glassmorphism design */}
+        <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl backdrop-blur-xl p-8 shadow-2xl relative`}>
+          {/* Theme Toggle - Inside wrapper */}
+          <div className="absolute top-4 right-4">
+            <button
+              onClick={() => setIsDarkMode(!isDarkMode)}
+              className={`p-2.5 ${theme.glassSecondary} border ${theme.glassSecondaryBorder} rounded-lg backdrop-blur-sm transition-all duration-300 hover:scale-105 shadow-sm`}
+            >
+              {isDarkMode ? (
+                <Sun className={`h-4 w-4 ${theme.warning.text}`} />
+              ) : (
+                <Moon className={`h-4 w-4 ${theme.text.secondary}`} />
+              )}
+            </button>
+          </div>
+
           {/* Header */}
           <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-r from-purple-500 to-pink-500 rounded-xl mb-4">
+            <div className={`inline-flex items-center justify-center w-16 h-16 backdrop-blur-xl rounded-xl mb-4 border shadow-lg ${theme.primary.gradient} ${theme.glassBorder}`}>
               <Dna className="w-8 h-8 text-white" />
             </div>
-            <h1 className="text-2xl font-bold text-gray-900 mb-2">
+            <h1 className={`text-2xl font-bold ${theme.text.primary} mb-2`}>
               Genetic Health Analysis Toolkit
             </h1>
-            <p className="text-gray-600 text-sm">
+            <p className={`${theme.text.secondary} text-sm`}>
               {isLogin ? 'Welcome back' : 'Create your account'}
             </p>
           </div>
@@ -85,14 +133,16 @@ export default function AuthForm({ onLogin }: AuthFormProps) {
             {/* Email Field */}
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <Mail className="h-5 w-5 text-gray-400" />
+                <Mail className={`h-5 w-5 ${theme.text.muted}`} />
               </div>
               <input
                 type="email"
+                name="email"
+                autoComplete="email"
                 placeholder="Email address"
                 value={formData.email}
                 onChange={(e) => setFormData({...formData, email: e.target.value})}
-                className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-lg text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200"
+                className={`w-full pl-10 pr-4 py-3 border ${theme.form.input.border} rounded-lg ${theme.form.input.text} ${theme.form.input.placeholder} ${theme.form.input.bg} ${theme.form.input.focus} transition-all duration-200 backdrop-blur-sm`}
                 required
               />
             </div>
@@ -102,27 +152,31 @@ export default function AuthForm({ onLogin }: AuthFormProps) {
               <>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <User className="h-5 w-5 text-gray-400" />
+                    <User className={`h-5 w-5 ${theme.text.muted}`} />
                   </div>
                   <input
                     type="text"
+                    name="username"
+                    autoComplete="username"
                     placeholder="Username (optional)"
                     value={formData.username}
                     onChange={(e) => setFormData({...formData, username: e.target.value})}
-                    className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-lg text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200"
+                    className={`w-full pl-10 pr-4 py-3 border ${theme.form.input.border} rounded-lg ${theme.form.input.text} ${theme.form.input.placeholder} ${theme.form.input.bg} ${theme.form.input.focus} transition-all duration-200 backdrop-blur-sm`}
                   />
                 </div>
 
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <Sparkles className="h-5 w-5 text-gray-400" />
+                    <Sparkles className={`h-5 w-5 ${theme.text.muted}`} />
                   </div>
                   <input
                     type="text"
+                    name="fullName"
+                    autoComplete="name"
                     placeholder="Full name"
                     value={formData.fullName}
                     onChange={(e) => setFormData({...formData, fullName: e.target.value})}
-                    className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-lg text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200"
+                    className={`w-full pl-10 pr-4 py-3 border ${theme.form.input.border} rounded-lg ${theme.form.input.text} ${theme.form.input.placeholder} ${theme.form.input.bg} ${theme.form.input.focus} transition-all duration-200 backdrop-blur-sm`}
                     required
                   />
                 </div>
@@ -132,20 +186,22 @@ export default function AuthForm({ onLogin }: AuthFormProps) {
             {/* Password Field */}
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <Lock className="h-5 w-5 text-gray-400" />
+                <Lock className={`h-5 w-5 ${theme.text.muted}`} />
               </div>
               <input
                 type={showPassword ? 'text' : 'password'}
+                name="password"
+                autoComplete={isLogin ? 'current-password' : 'new-password'}
                 placeholder="Password"
                 value={formData.password}
                 onChange={(e) => setFormData({...formData, password: e.target.value})}
-                className="w-full pl-10 pr-12 py-3 border border-gray-200 rounded-lg text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200"
+                className={`w-full pl-10 pr-12 py-3 border ${theme.form.input.border} rounded-lg ${theme.form.input.text} ${theme.form.input.placeholder} ${theme.form.input.bg} ${theme.form.input.focus} transition-all duration-200 backdrop-blur-sm`}
                 required
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 transition-colors"
+                className={`absolute inset-y-0 right-0 pr-3 flex items-center ${theme.text.muted} hover:${theme.text.secondary} transition-colors`}
               >
                 {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
               </button>
@@ -153,8 +209,8 @@ export default function AuthForm({ onLogin }: AuthFormProps) {
 
             {/* Error Message */}
             {error && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-                <p className="text-red-700 text-sm text-center">{error}</p>
+              <div className={`p-3 ${theme.error.bg} border ${theme.error.border} rounded-lg backdrop-blur-sm`}>
+                <p className={`${theme.error.text} text-sm text-center`}>{error}</p>
               </div>
             )}
 
@@ -162,7 +218,11 @@ export default function AuthForm({ onLogin }: AuthFormProps) {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 disabled:from-gray-400 disabled:to-gray-500 text-white font-semibold rounded-lg transition-all duration-200 flex items-center justify-center space-x-2"
+              className={`w-full py-3 rounded-lg transition-all duration-200 flex items-center justify-center space-x-2 backdrop-blur-xl border shadow-lg ${
+                loading 
+                  ? 'bg-gray-400/80 text-white cursor-not-allowed border-gray-300' 
+                  : theme.form.button.primary
+              }`}
             >
               {loading ? (
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
@@ -177,7 +237,7 @@ export default function AuthForm({ onLogin }: AuthFormProps) {
 
           {/* Toggle */}
           <div className="mt-6 text-center">
-            <p className="text-gray-600 text-sm mb-3">
+            <p className={`${theme.text.secondary} text-sm mb-3`}>
               {isLogin ? "Don't have an account?" : "Already have an account?"}
             </p>
             <button
@@ -186,21 +246,50 @@ export default function AuthForm({ onLogin }: AuthFormProps) {
                 setError('')
                 setFormData({ email: '', username: '', password: '', fullName: '' })
               }}
-              className="text-purple-600 hover:text-purple-700 font-medium transition-colors duration-200 text-sm"
+              className={`${theme.text.accent} hover:${theme.primary.text} font-medium transition-colors duration-200 text-sm`}
             >
               {isLogin ? 'Create new account' : 'Sign in instead'}
             </button>
           </div>
 
           {/* Security Notice */}
-          <div className="mt-6 p-3 bg-gray-50 border border-gray-200 rounded-lg">
-            <div className="flex items-center space-x-2 text-gray-600 text-xs">
+          <div className={`mt-6 p-3 ${theme.glassSecondary} border ${theme.glassSecondaryBorder} rounded-lg backdrop-blur-sm`}>
+            <div className={`flex items-center space-x-2 ${theme.text.secondary} text-xs`}>
               <Shield className="w-4 h-4" />
               <span>Your genetic data is encrypted and secure</span>
             </div>
           </div>
         </div>
       </div>
+
+      {/* CSS Animations for Glassmorphism */}
+      <style jsx>{`
+        @keyframes float {
+          0%, 100% { transform: translate(0px, 0px) scale(1) rotate(0deg); }
+          33% { transform: translate(30px, -30px) scale(1.1) rotate(2deg); }
+          66% { transform: translate(-20px, 20px) scale(0.9) rotate(-1deg); }
+        }
+        @keyframes float-delayed {
+          0%, 100% { transform: translate(0px, 0px) scale(1) rotate(0deg); }
+          33% { transform: translate(-25px, 25px) scale(1.05) rotate(-2deg); }
+          66% { transform: translate(20px, -15px) scale(0.95) rotate(1deg); }
+        }
+        @keyframes float-slow {
+          0%, 100% { transform: translate(0px, 0px) scale(1) rotate(0deg); }
+          50% { transform: translate(15px, -15px) scale(1.03) rotate(1deg); }
+        }
+        .animate-float {
+          animation: float 15s ease-in-out infinite;
+        }
+        .animate-float-delayed {
+          animation: float-delayed 18s ease-in-out infinite;
+          animation-delay: 2s;
+        }
+        .animate-float-slow {
+          animation: float-slow 20s ease-in-out infinite;
+          animation-delay: 4s;
+        }
+      `}</style>
     </div>
   )
 }
