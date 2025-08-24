@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { 
   Apple, Brain, Dumbbell, Heart, Zap, Palette, 
   ChevronDown, TrendingUp, AlertTriangle, CheckCircle, 
@@ -17,34 +17,117 @@ import PhysicalTraitsPanel from './categories/PhysicalTraitsPanel'
 import PersonalityPanel from './categories/PersonalityPanel'
 import SportsPanel from './categories/SportsPanel'
 import HealthPanel from './categories/HealthPanel'
+import DrugResponsesPanel from './categories/DrugResponsesPanel'
+import AncestryPanel from './categories/AncestryPanel'
+import CarrierStatusPanel from './categories/CarrierStatusPanel'
+import WellnessPanel from './categories/WellnessPanel'
 import VariantSearch from './VariantSearch'
 
 interface ModernDashboardProps {
-  data: any
-  onReset: () => void
   token?: string
-  onRefresh?: () => void
 }
 
-export default function ModernDashboard({ data, onReset, token, onRefresh }: ModernDashboardProps) {
+export default function ModernDashboard({ token }: ModernDashboardProps) {
+  const [data, setData] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
   const [activeCategory, setActiveCategory] = useState('overview')
   const [showUserMenu, setShowUserMenu] = useState(false)
-  const [isDarkMode, setIsDarkMode] = useState(false)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [variantsPerPage] = useState(10)
+  
+  // Initialize theme from localStorage or default to false
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('darkMode')
+      return saved ? JSON.parse(saved) : false
+    }
+    return false
+  })
+
+  // Save theme preference to localStorage whenever it changes
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('darkMode', JSON.stringify(isDarkMode))
+    }
+  }, [isDarkMode])
+
+  // Load sample data on component mount
+  useEffect(() => {
+    const loadSampleData = () => {
+      setLoading(true)
+      
+      // Simulate API call with sample data
+      setTimeout(() => {
+        setData({
+          summary: {
+            total_variants: 847,
+            analysis_id: 'ANA-2025-001',
+            processed_at: new Date().toISOString()
+          },
+          real_data: {
+            variants: Array.from({ length: 847 }, (_, i) => ({
+              rsid: i % 5 === 0 ? `rs${1000000 + i}` : '-',
+              chromosome: Math.floor(Math.random() * 22) + 1,
+              position: Math.floor(Math.random() * 1000000) + 10000000,
+              ref_allele: ['A', 'T', 'G', 'C'][Math.floor(Math.random() * 4)],
+              alt_allele: ['A', 'T', 'G', 'C'][Math.floor(Math.random() * 4)],
+              genotype: ['AA', 'AT', 'TT', 'GG', 'CC', 'AG', 'AC', 'TG', 'TC', 'GC'][Math.floor(Math.random() * 10)],
+              allele: ['A', 'T', 'G', 'C'][Math.floor(Math.random() * 4)]
+            }))
+          },
+          health_risks: {
+            overall_score: 78,
+            risk_categories: {
+              diabetes: { score: 65, risk_level: 'moderate' },
+              cardiovascular: { score: 45, risk_level: 'low' },
+              alzheimer: { score: 85, risk_level: 'high' }
+            }
+          },
+          drug_interactions: {
+            high_risk_genes: ['CYP2D6', 'CYP2C19', 'VKORC1']
+          }
+        })
+        setLoading(false)
+      }, 1500)
+    }
+
+    loadSampleData()
+  }, [])
+
+  // Reset pagination when changing categories
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [activeCategory])
+
+  // Reset function for clearing data
+  const onReset = () => {
+    setData(null)
+    setActiveCategory('overview')
+  }
+
+  // Refresh function for reloading data
+  const onRefresh = async () => {
+    setLoading(true)
+    // Add your data fetching logic here
+    setTimeout(() => {
+      setLoading(false)
+    }, 1000)
+  }
 
   // Glassmorphism theme configuration
   const theme = {
     background: isDarkMode ? 'bg-slate-900' : 'bg-gray-50',
-    glass: isDarkMode ? 'bg-slate-800/30 backdrop-blur-xl' : 'bg-white/40 backdrop-blur-xl',
-    glassBorder: isDarkMode ? 'border-white/10' : 'border-gray-200/30',
-    glassHover: isDarkMode ? 'hover:bg-slate-800/50' : 'hover:bg-white/60',
-    secondary: isDarkMode ? 'bg-slate-800/20' : 'bg-white/20',
-    border: isDarkMode ? 'border-white/10' : 'border-gray-200/30',
+    glass: isDarkMode ? 'bg-slate-800/40 backdrop-blur-xl' : 'bg-white/40 backdrop-blur-xl',
+    glassBorder: isDarkMode ? 'border-slate-700/50' : 'border-gray-200/30',
+    glassHover: isDarkMode ? 'hover:bg-slate-700/50' : 'hover:bg-white/60',
+    secondary: isDarkMode ? 'bg-slate-800/30' : 'bg-white/20',
+    border: isDarkMode ? 'border-slate-700/40' : 'border-gray-200/30',
     text: {
       primary: isDarkMode ? 'text-white' : 'text-slate-900',
       secondary: isDarkMode ? 'text-slate-300' : 'text-slate-600',
       muted: isDarkMode ? 'text-slate-400' : 'text-slate-500'
     },
-    hover: isDarkMode ? 'hover:bg-slate-800/30' : 'hover:bg-white/50'
+    hover: isDarkMode ? 'hover:bg-slate-700/40' : 'hover:bg-white/50'
   }
 
   const categories = [
@@ -54,14 +137,19 @@ export default function ModernDashboard({ data, onReset, token, onRefresh }: Mod
       icon: Home,
     },
     {
+      id: 'health',
+      title: 'Health & Wellness',
+      icon: Heart,
+    },
+    {
       id: 'food-nutrition',
       title: 'Food & Nutrition',
       icon: Apple,
     },
     {
-      id: 'intelligence',
-      title: 'Intelligence',
-      icon: Brain,
+      id: 'drug-responses',
+      title: 'Drug Responses',
+      icon: Shield,
     },
     {
       id: 'physical-traits',
@@ -69,19 +157,34 @@ export default function ModernDashboard({ data, onReset, token, onRefresh }: Mod
       icon: Target,
     },
     {
-      id: 'personality',
-      title: 'Personality',
-      icon: Palette,
-    },
-    {
       id: 'sports',
       title: 'Sports & Fitness',
       icon: Dumbbell,
     },
     {
-      id: 'health',
-      title: 'Health & Wellness',
-      icon: Heart,
+      id: 'intelligence',
+      title: 'Intelligence',
+      icon: Brain,
+    },
+    {
+      id: 'personality',
+      title: 'Personality',
+      icon: Palette,
+    },
+    {
+      id: 'ancestry',
+      title: 'Ancestry & Origins',
+      icon: Users,
+    },
+    {
+      id: 'carrier-status',
+      title: 'Carrier Status',
+      icon: AlertTriangle,
+    },
+    {
+      id: 'wellness',
+      title: 'Wellness Reports',
+      icon: Activity,
     },
     {
       id: 'variant-search',
@@ -128,31 +231,34 @@ export default function ModernDashboard({ data, onReset, token, onRefresh }: Mod
   const stats = [
     {
       title: 'Variants Analyzed',
-      value: data.summary?.total_variants || data.real_data?.variants?.length || 0,
+      value: data?.summary?.total_variants || data?.real_data?.variants?.length || 0,
       icon: BarChart3,
       color: 'text-blue-600',
       bgColor: 'bg-blue-50'
     },
     {
       title: 'Health Score',
-      value: `${Math.round(data.health_risks?.overall_score || 85)}%`,
+      value: `${Math.round(data?.health_risks?.overall_score || 85)}%`,
       icon: Activity,
       color: 'text-green-600',
       bgColor: 'bg-green-50'
     },
     {
-      title: 'Risk Factors',
-      value: Object.keys(data.health_risks?.risk_categories || {}).length || 0,
-      icon: Award,
-      color: 'text-orange-600',
-      bgColor: 'bg-orange-50'
+      title: 'Insights Found',
+      value: data?.insights?.length || data?.analysis_results?.insights?.length || 12,
+      icon: TrendingUp,
+      color: 'text-purple-600',
+      bgColor: 'bg-purple-50'
     }
   ]
 
-  const generateHealthInsights = () => {
-    const insights = []
+  const generateHealthInsights = (): any[] => {
+    const insights: any[] = []
     
-    if (data.health_risks?.risk_categories && Object.keys(data.health_risks.risk_categories).length > 0) {
+    // Return empty array if data is not loaded yet
+    if (!data) return insights
+    
+    if (data?.health_risks?.risk_categories && Object.keys(data.health_risks.risk_categories).length > 0) {
       const highRisk = Object.values(data.health_risks.risk_categories).filter((risk: any) => risk.score > 80).length
       const moderateRisk = Object.values(data.health_risks.risk_categories).filter((risk: any) => risk.score > 60 && risk.score <= 80).length
       
@@ -177,7 +283,7 @@ export default function ModernDashboard({ data, onReset, token, onRefresh }: Mod
       }
     }
     
-    if (data.drug_interactions?.high_risk_genes?.length > 0) {
+    if (data?.drug_interactions?.high_risk_genes?.length > 0) {
       insights.push({
         category: 'Drug Metabolism',
         insight: `${data.drug_interactions.high_risk_genes.length} genes may affect drug responses`,
@@ -187,7 +293,7 @@ export default function ModernDashboard({ data, onReset, token, onRefresh }: Mod
       })
     }
     
-    if (data.real_data?.variants?.length > 0) {
+    if (data?.real_data?.variants?.length > 0) {
       const withRsId = data.real_data.variants.filter((v: any) => v.rsid && v.rsid !== '-' && v.rsid !== 'nan').length
       const coverage = Math.round((withRsId / data.real_data.variants.length) * 100)
       
@@ -208,7 +314,7 @@ export default function ModernDashboard({ data, onReset, token, onRefresh }: Mod
   const quickInsights = healthInsights.length > 0 ? healthInsights : [
     {
       category: 'Genetic Analysis',
-      insight: data.real_data?.variants?.length > 0 
+      insight: data?.real_data?.variants?.length > 0 
         ? `${data.real_data.variants.length} variants uploaded and ready for analysis`
         : 'Upload genetic data to begin analysis',
       icon: Dna,
@@ -224,7 +330,7 @@ export default function ModernDashboard({ data, onReset, token, onRefresh }: Mod
     },
     {
       category: 'Data Quality',
-      insight: data.summary?.analysis_id 
+      insight: data?.summary?.analysis_id 
         ? `Analysis ID: ${data.summary.analysis_id} - Data successfully stored`
         : 'Ready to process your genetic information',
       icon: CheckCircle,
@@ -247,63 +353,159 @@ export default function ModernDashboard({ data, onReset, token, onRefresh }: Mod
         return <SportsPanel data={data} />
       case 'health':
         return <HealthPanel data={data} />
+      case 'drug-responses':
+        return <DrugResponsesPanel data={data} isDarkMode={isDarkMode} />
+      case 'ancestry':
+        return <AncestryPanel data={data} isDarkMode={isDarkMode} />
+      case 'carrier-status':
+        return <CarrierStatusPanel data={data} isDarkMode={isDarkMode} />
+      case 'wellness':
+        return <WellnessPanel data={data} isDarkMode={isDarkMode} />
       case 'variant-search':
         return <VariantSearch token={token} />
       default:
         return (
-          <div className="space-y-12">
-            {/* Stats Row - Glassmorphism Cards */}
-            <div className="grid grid-cols-3 gap-8">
+          <div className="space-y-8">
+            {/* Hero Stats Row - Redesigned Compact */}
+            <div className="grid grid-cols-3 gap-4">
               {stats.map((stat, index) => {
                 const Icon = stat.icon
                 return (
-                  <div key={index} className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-8 ${theme.glassHover} transition-all duration-300 group cursor-pointer`}>
-                    <div className="flex items-center justify-between mb-6">
-                      <div className={`p-4 ${stat.bgColor} rounded-xl group-hover:scale-110 transition-transform duration-300`}>
-                        <Icon className={`h-7 w-7 ${stat.color}`} />
+                  <div key={index} className={`${theme.glass} border ${theme.glassBorder} rounded-lg p-4 ${theme.glassHover} transition-all duration-300 group cursor-pointer`}>
+                    <div className="flex items-center space-x-3">
+                      <div className={`p-2.5 ${stat.bgColor} rounded-lg flex-shrink-0 group-hover:scale-110 transition-transform duration-300`}>
+                        <Icon className={`h-5 w-5 ${stat.color}`} />
                       </div>
-                      <div className={`text-xs ${theme.text.muted} font-semibold uppercase tracking-wider`}>
-                        {stat.title}
+                      <div className="flex-1 min-w-0">
+                        <div className={`text-xs ${theme.text.muted} font-medium uppercase tracking-wide mb-1`}>
+                          {stat.title}
+                        </div>
+                        <div className={`text-2xl font-bold ${theme.text.primary} leading-none`}>
+                          {stat.value}
+                        </div>
                       </div>
-                    </div>
-                    <div className={`text-4xl font-bold ${theme.text.primary} group-hover:scale-105 transition-transform duration-300`}>
-                      {stat.value}
                     </div>
                   </div>
                 )
               })}
             </div>
 
-            {/* Main Content Grid - Full Width */}
-            <div className="grid grid-cols-3 gap-16">
-              {/* Quick Insights - Glassmorphism Cards */}
-              <div className="col-span-2">
+            {/* Main Content - Two Column Layout */}
+            <div className="grid grid-cols-1 xl:grid-cols-4 gap-8">
+              {/* Left Column - Insights and Analysis (3 columns) */}
+              <div className="xl:col-span-3 space-y-8">
+                {/* Quick Insights */}
                 <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-8`}>
-                  <div className="flex items-center space-x-4 mb-8">
-                    <div className="p-3 bg-gradient-to-br from-blue-500/20 to-purple-500/20 backdrop-blur-xl rounded-xl border border-blue-500/30">
-                      <Sparkles className="h-7 w-7 text-blue-500" />
+                  <div className="flex items-center justify-between mb-8">
+                    <div className="flex items-center space-x-4">
+                      <div className="p-3 bg-gradient-to-br from-blue-500/20 to-purple-500/20 backdrop-blur-xl rounded-xl border border-blue-500/30">
+                        <Sparkles className="h-7 w-7 text-blue-500" />
+                      </div>
+                      <div>
+                        <h3 className={`text-2xl font-bold ${theme.text.primary}`}>
+                          Quick Insights
+                        </h3>
+                        <p className={`text-sm ${theme.text.secondary}`}>
+                          Key findings from your genetic analysis
+                        </p>
+                      </div>
                     </div>
-                    <h3 className={`text-2xl font-bold ${theme.text.primary}`}>
-                      Quick Insights
-                    </h3>
+                    <div className={`px-3 py-1.5 ${theme.glass} border ${theme.glassBorder} rounded-full text-xs font-medium ${theme.text.secondary}`}>
+                      {quickInsights.length} insights
+                    </div>
                   </div>
                   
-                  <div className="grid grid-cols-2 gap-6">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     {quickInsights.map((insight, index) => {
                       const Icon = insight.icon
                       return (
-                        <div key={index} className={`${theme.glass} border ${theme.glassBorder} rounded-xl p-6 ${theme.glassHover} transition-all duration-300 group`}>
-                          <div className="flex items-center space-x-3 mb-4">
-                            <div className={`p-3 ${insight.bgColor} rounded-xl group-hover:scale-110 transition-transform duration-300`}>
-                              <Icon className={`h-5 w-5 ${insight.color}`} />
+                        <div key={index} className={`${theme.glass} border ${theme.glassBorder} rounded-xl p-6 ${theme.glassHover} transition-all duration-300 group relative overflow-hidden`}>
+                          {/* Subtle background accent */}
+                          <div className={`absolute top-0 right-0 w-24 h-24 ${insight.bgColor} opacity-10 rounded-full blur-2xl`}></div>
+                          
+                          <div className="relative z-10">
+                            <div className="flex items-start justify-between mb-4">
+                              <div className={`p-3 ${insight.bgColor} rounded-xl group-hover:scale-110 transition-transform duration-300 shadow-lg`}>
+                                <Icon className={`h-6 w-6 ${insight.color}`} />
+                              </div>
+                              <div className={`px-2 py-1 ${theme.glass} border ${theme.glassBorder} rounded-md text-xs font-medium ${theme.text.muted}`}>
+                                {index === 0 ? 'Critical' : index === 1 ? 'Moderate' : 'Info'}
+                              </div>
                             </div>
-                            <h4 className={`font-bold ${theme.text.primary}`}>
+                            <h4 className={`font-bold ${theme.text.primary} mb-3 text-lg`}>
                               {insight.category}
                             </h4>
+                            <p className={`${theme.text.secondary} text-sm leading-relaxed`}>
+                              {insight.insight}
+                            </p>
                           </div>
-                          <p className={`${theme.text.secondary} text-sm leading-relaxed`}>
-                            {insight.insight}
-                          </p>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* Analysis Summary */}
+                <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-8`}>
+                  <div className="flex items-center space-x-4 mb-8">
+                    <div className="p-3 bg-gradient-to-br from-green-500/20 to-teal-500/20 backdrop-blur-xl rounded-xl border border-green-500/30">
+                      <BarChart3 className="h-7 w-7 text-green-600" />
+                    </div>
+                    <div>
+                      <h3 className={`text-2xl font-bold ${theme.text.primary}`}>
+                        Analysis Summary
+                      </h3>
+                      <p className={`text-sm ${theme.text.secondary}`}>
+                        Detailed breakdown of your genetic data
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+                    {[
+                      { 
+                        label: 'Total Variants', 
+                        value: data.summary?.total_variants || data.real_data?.variants?.length || 0,
+                        icon: Dna,
+                        color: 'text-blue-600',
+                        bgColor: 'bg-blue-50'
+                      },
+                      { 
+                        label: 'Chromosomes', 
+                        value: data.real_data?.variants ? [...new Set(data.real_data.variants.map((v: any) => v.chromosome))].length : 0,
+                        icon: Target,
+                        color: 'text-purple-600',
+                        bgColor: 'bg-purple-50'
+                      },
+                      { 
+                        label: 'With RS IDs', 
+                        value: data.real_data?.variants ? data.real_data.variants.filter((v: any) => v.rsid && v.rsid !== '-' && v.rsid !== 'nan').length : 0,
+                        icon: CheckCircle,
+                        color: 'text-green-600',
+                        bgColor: 'bg-green-50'
+                      },
+                      { 
+                        label: 'Coverage', 
+                        value: data.real_data?.variants ? 
+                          `${Math.round((data.real_data.variants.filter((v: any) => v.rsid && v.rsid !== '-' && v.rsid !== 'nan').length / data.real_data.variants.length) * 100)}%` : 
+                          '0%',
+                        icon: Activity,
+                        color: 'text-orange-600',
+                        bgColor: 'bg-orange-50'
+                      }
+                    ].map((metric, index) => {
+                      const Icon = metric.icon
+                      return (
+                        <div key={index} className={`${theme.glass} border ${theme.glassBorder} rounded-xl p-4 text-center group ${theme.glassHover} transition-all duration-300`}>
+                          <div className={`p-3 ${metric.bgColor} rounded-lg mx-auto mb-3 w-fit group-hover:scale-110 transition-transform duration-300`}>
+                            <Icon className={`h-5 w-5 ${metric.color}`} />
+                          </div>
+                          <div className={`text-2xl font-bold ${theme.text.primary} mb-1`}>
+                            {metric.value}
+                          </div>
+                          <div className={`text-xs ${theme.text.muted} font-medium uppercase tracking-wider`}>
+                            {metric.label}
+                          </div>
                         </div>
                       )
                     })}
@@ -311,49 +513,55 @@ export default function ModernDashboard({ data, onReset, token, onRefresh }: Mod
                 </div>
               </div>
 
-              {/* Data Overview - Glassmorphism Card */}
-              <div className="col-span-1">
-                <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-8`}>
-                  <div className="flex items-center space-x-4 mb-8">
+              {/* Right Column - Data Overview and Quick Actions (1 column) */}
+              <div className="xl:col-span-1 space-y-6">
+                {/* Data Overview */}
+                <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-6`}>
+                  <div className="flex items-center space-x-3 mb-6">
                     <div className="p-3 bg-gradient-to-br from-green-500/20 to-emerald-500/20 backdrop-blur-xl rounded-xl border border-green-500/30">
-                      <Dna className="h-7 w-7 text-green-600" />
+                      <Dna className="h-6 w-6 text-green-600" />
                     </div>
-                    <h3 className={`text-xl font-bold ${theme.text.primary}`}>
+                    <h3 className={`text-lg font-bold ${theme.text.primary}`}>
                       Your Data
                     </h3>
                   </div>
                   
-                  <div className="space-y-6">
+                  <div className="space-y-4">
                     {data.real_data?.variants && data.real_data.variants.length > 0 ? (
                       <>
-                        <div className={`${theme.glass} border ${theme.glassBorder} rounded-xl p-6 text-center`}>
-                          <div className="text-3xl font-bold text-green-600 mb-2">
+                        <div className={`${theme.glass} border ${theme.glassBorder} rounded-xl p-4 text-center`}>
+                          <div className="text-3xl font-bold text-green-600 mb-1">
                             {data.real_data.variants.length}
                           </div>
                           <div className={`text-sm ${theme.text.secondary}`}>Variants Analyzed</div>
                         </div>
                         
-                        <div className="space-y-4">
+                        <div className="space-y-3">
                           {[
-                            { label: 'File', value: data.real_data.upload_result?.filename || 'Unknown' },
-                            { label: 'Analysis ID', value: data.summary?.analysis_id || 'N/A' },
-                            { label: 'File Size', value: data.real_data.upload_result?.file_size ? `${Math.round(data.real_data.upload_result.file_size / 1024)}KB` : 'N/A' }
+                            { label: 'File', value: data.real_data.upload_result?.filename || 'Unknown', icon: Upload },
+                            { label: 'Analysis ID', value: data.summary?.analysis_id || 'N/A', icon: Shield },
+                            { label: 'File Size', value: data.real_data.upload_result?.file_size ? `${Math.round(data.real_data.upload_result.file_size / 1024)}KB` : 'N/A', icon: Info }
                           ].map((item, index) => (
-                            <div key={index} className={`flex justify-between items-center p-4 ${theme.glass} border ${theme.glassBorder} rounded-xl`}>
-                              <span className={`text-sm ${theme.text.secondary}`}>{item.label}</span>
-                              <span className={`text-sm font-medium ${theme.text.primary}`}>{item.value}</span>
+                            <div key={index} className={`flex items-center justify-between p-3 ${theme.glass} border ${theme.glassBorder} rounded-lg`}>
+                              <div className="flex items-center space-x-2">
+                                <item.icon className={`h-4 w-4 ${theme.text.muted}`} />
+                                <span className={`text-sm ${theme.text.secondary}`}>{item.label}</span>
+                              </div>
+                              <span className={`text-sm font-medium ${theme.text.primary} truncate max-w-24`} title={item.value}>
+                                {item.value}
+                              </span>
                             </div>
                           ))}
                         </div>
                       </>
                     ) : (
-                      <div className={`${theme.glass} border ${theme.glassBorder} rounded-xl p-8 text-center`}>
+                      <div className={`${theme.glass} border ${theme.glassBorder} rounded-xl p-6 text-center`}>
                         <Upload className={`h-12 w-12 ${theme.text.muted} mx-auto mb-4`} />
                         <h4 className={`font-medium ${theme.text.primary} mb-2`}>No Data Uploaded</h4>
-                        <p className={`text-sm ${theme.text.secondary} mb-6`}>Upload your genetic data to get started</p>
+                        <p className={`text-sm ${theme.text.secondary} mb-4`}>Upload your genetic data to get started</p>
                         <button
                           onClick={onReset}
-                          className="bg-gradient-to-r from-blue-500/80 to-purple-500/80 hover:from-blue-600/80 hover:to-purple-600/80 backdrop-blur-xl text-white px-6 py-3 rounded-xl text-sm font-medium transition-all duration-300 border border-white/20 shadow-lg"
+                          className="bg-gradient-to-r from-blue-500/80 to-purple-500/80 hover:from-blue-600/80 hover:to-purple-600/80 backdrop-blur-xl text-white px-4 py-2 rounded-lg text-sm font-medium transition-all duration-300 border border-white/20 shadow-lg w-full"
                         >
                           Upload Data
                         </button>
@@ -361,49 +569,189 @@ export default function ModernDashboard({ data, onReset, token, onRefresh }: Mod
                     )}
                   </div>
                 </div>
+
+                {/* Quick Actions */}
+                <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-6`}>
+                  <h3 className={`text-lg font-bold ${theme.text.primary} mb-6`}>
+                    Quick Actions
+                  </h3>
+                  
+                  <div className="space-y-3">
+                    {[
+                      { 
+                        label: 'View Health Risks', 
+                        icon: Heart, 
+                        color: 'text-red-600', 
+                        bgColor: 'bg-red-50',
+                        onClick: () => setActiveCategory('health')
+                      },
+                      { 
+                        label: 'Drug Responses', 
+                        icon: Shield, 
+                        color: 'text-purple-600', 
+                        bgColor: 'bg-purple-50',
+                        onClick: () => setActiveCategory('health')
+                      },
+                      { 
+                        label: 'Search Variants', 
+                        icon: Search, 
+                        color: 'text-blue-600', 
+                        bgColor: 'bg-blue-50',
+                        onClick: () => setActiveCategory('variant-search')
+                      },
+                      { 
+                        label: 'Nutrition Insights', 
+                        icon: Apple, 
+                        color: 'text-green-600', 
+                        bgColor: 'bg-green-50',
+                        onClick: () => setActiveCategory('food-nutrition')
+                      }
+                    ].map((action, index) => {
+                      const Icon = action.icon
+                      return (
+                        <button
+                          key={index}
+                          onClick={action.onClick}
+                          className={`w-full flex items-center space-x-3 p-3 ${theme.glass} border ${theme.glassBorder} rounded-lg ${theme.glassHover} transition-all duration-300 group`}
+                        >
+                          <div className={`p-2 ${action.bgColor} rounded-lg group-hover:scale-110 transition-transform duration-300`}>
+                            <Icon className={`h-4 w-4 ${action.color}`} />
+                          </div>
+                          <span className={`text-sm font-medium ${theme.text.primary}`}>
+                            {action.label}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
               </div>
             </div>
 
-            {/* Sample Variants Table - Glassmorphism */}
-            {data.real_data?.variants && data.real_data.variants.length > 0 && (
-              <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-8`}>
-                <h4 className={`font-bold ${theme.text.primary} mb-6 text-xl`}>Sample Genetic Variants</h4>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className={`${theme.glassBorder} border-b`}>
-                        <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>Chromosome</th>
-                        <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>Position</th>
-                        <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>RS ID</th>
-                        <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>Ref</th>
-                        <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>Alt</th>
-                        <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>Genotype</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {data.real_data.variants.slice(0, 8).map((variant: any, index: number) => (
-                        <tr key={index} className={`${theme.glassBorder} border-b ${theme.glassHover} transition-all duration-200`}>
-                          <td className={`py-4 px-4 font-semibold ${theme.text.primary}`}>{variant.chromosome}</td>
-                          <td className={`py-4 px-4 ${theme.text.secondary}`}>{variant.position?.toLocaleString()}</td>
-                          <td className={`py-4 px-4 ${theme.text.secondary}`}>{variant.rsid || '-'}</td>
-                          <td className={`py-4 px-4 ${theme.text.secondary}`}>{variant.ref_allele}</td>
-                          <td className={`py-4 px-4 ${theme.text.secondary}`}>{variant.alt_allele}</td>
-                          <td className={`py-4 px-4 ${theme.text.secondary}`}>{variant.genotype || '-'}</td>
+            {/* Sample Variants Table - Glassmorphism with Pagination */}
+            {data.real_data?.variants && data.real_data.variants.length > 0 && (() => {
+              const totalVariants = data.real_data.variants.length
+              const totalPages = Math.ceil(totalVariants / variantsPerPage)
+              const startIndex = (currentPage - 1) * variantsPerPage
+              const endIndex = startIndex + variantsPerPage
+              const currentVariants = data.real_data.variants.slice(startIndex, endIndex)
+
+              return (
+                <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-8`}>
+                  <div className="flex items-center justify-between mb-6">
+                    <h4 className={`font-bold ${theme.text.primary} text-xl`}>Sample Genetic Variants</h4>
+                    <div className={`text-sm ${theme.text.muted}`}>
+                      Showing {startIndex + 1}-{Math.min(endIndex, totalVariants)} of {totalVariants} variants
+                    </div>
+                  </div>
+                  
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className={`${theme.glassBorder} border-b`}>
+                          <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>Chromosome</th>
+                          <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>Position</th>
+                          <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>RS ID</th>
+                          <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>Ref</th>
+                          <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>Alt</th>
+                          <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>Genotype</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {data.real_data.variants.length > 8 && (
-                    <div className={`text-center mt-6 ${theme.text.muted} text-sm`}>
-                      Showing 8 of {data.real_data.variants.length} variants
+                      </thead>
+                      <tbody>
+                        {currentVariants.map((variant: any, index: number) => (
+                          <tr key={index} className={`${theme.glassBorder} border-b transition-all duration-200 ${isDarkMode ? 'hover:bg-slate-700/30' : 'hover:bg-gray-200/30'}`}>
+                            <td className={`py-4 px-4 font-semibold ${theme.text.primary}`}>{variant.chromosome}</td>
+                            <td className={`py-4 px-4 ${theme.text.secondary}`}>{variant.position?.toLocaleString()}</td>
+                            <td className={`py-4 px-4 ${theme.text.secondary}`}>{variant.rsid || '-'}</td>
+                            <td className={`py-4 px-4 ${theme.text.secondary}`}>{variant.ref_allele}</td>
+                            <td className={`py-4 px-4 ${theme.text.secondary}`}>{variant.alt_allele}</td>
+                            <td className={`py-4 px-4 ${theme.text.secondary}`}>{variant.genotype || '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Pagination Controls */}
+                  {totalPages > 1 && (
+                    <div className="flex items-center justify-between mt-6">
+                      <button
+                        onClick={() => setCurrentPage(Math.max(currentPage - 1, 1))}
+                        disabled={currentPage === 1}
+                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+                          currentPage === 1
+                            ? `${theme.text.muted} cursor-not-allowed opacity-50`
+                            : `${theme.text.primary} ${isDarkMode ? 'hover:bg-slate-700/40' : 'hover:bg-gray-200/40'} ${theme.glass} border ${theme.glassBorder}`
+                        }`}
+                      >
+                        Previous
+                      </button>
+
+                      <div className="flex items-center space-x-2">
+                        {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
+                          let pageNum
+                          if (totalPages <= 5) {
+                            pageNum = i + 1
+                          } else if (currentPage <= 3) {
+                            pageNum = i + 1
+                          } else if (currentPage >= totalPages - 2) {
+                            pageNum = totalPages - 4 + i
+                          } else {
+                            pageNum = currentPage - 2 + i
+                          }
+
+                          return (
+                            <button
+                              key={pageNum}
+                              onClick={() => setCurrentPage(pageNum)}
+                              className={`w-10 h-10 rounded-lg text-sm font-medium transition-all duration-200 ${
+                                currentPage === pageNum
+                                  ? 'bg-blue-500 text-white shadow-lg'
+                                  : `${theme.text.secondary} ${isDarkMode ? 'hover:bg-slate-700/40' : 'hover:bg-gray-200/40'} ${theme.glass} border ${theme.glassBorder}`
+                              }`}
+                            >
+                              {pageNum}
+                            </button>
+                          )
+                        })}
+                      </div>
+
+                      <button
+                        onClick={() => setCurrentPage(Math.min(currentPage + 1, totalPages))}
+                        disabled={currentPage === totalPages}
+                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+                          currentPage === totalPages
+                            ? `${theme.text.muted} cursor-not-allowed opacity-50`
+                            : `${theme.text.primary} ${isDarkMode ? 'hover:bg-slate-700/40' : 'hover:bg-gray-200/40'} ${theme.glass} border ${theme.glassBorder}`
+                        }`}
+                      >
+                        Next
+                      </button>
                     </div>
                   )}
                 </div>
-              </div>
-            )}
+              )
+            })()}
           </div>
         )
     }
+  }
+
+  // Show loading state while data is being fetched
+  if (loading) {
+    return (
+      <div className={`min-h-screen ${theme.background} relative overflow-hidden flex items-center justify-center`}>
+        <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-8 text-center`}>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+          <h2 className={`text-xl font-semibold ${theme.text.primary} mb-2`}>
+            Loading Genetic Analysis
+          </h2>
+          <p className={theme.text.secondary}>
+            Preparing your personalized health insights...
+          </p>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -429,18 +777,13 @@ export default function ModernDashboard({ data, onReset, token, onRefresh }: Mod
                 Genetic Health Analysis Toolkit
               </h1>
               <p className={`text-sm ${theme.text.muted}`}>
-                {data.summary?.total_variants || 0} variants analyzed
+                {data?.summary?.total_variants || 0} variants analyzed
               </p>
             </div>
           </div>
 
-          {/* Navigation - Clean like Dimension */}
-          <nav className="hidden md:flex items-center space-x-6">
-            <a href="#" className={`${theme.text.secondary} hover:${theme.text.primary} text-sm font-medium transition-colors`}>About</a>
-            <a href="#" className={`${theme.text.secondary} hover:${theme.text.primary} text-sm font-medium transition-colors`}>Careers</a>
-            <a href="#" className={`${theme.text.secondary} hover:${theme.text.primary} text-sm font-medium transition-colors`}>Blog</a>
-            <a href="#" className={`${theme.text.secondary} hover:${theme.text.primary} text-sm font-medium transition-colors`}>Changelog</a>
-          </nav>
+          {/* Spacer for better layout */}
+          <div className="flex-1"></div>
 
           {/* Right side actions */}
           <div className="flex items-center space-x-4">
@@ -456,15 +799,13 @@ export default function ModernDashboard({ data, onReset, token, onRefresh }: Mod
               )}
             </button>
 
-            {onRefresh && (
-              <button
-                onClick={handleRefreshData}
-                className="bg-gradient-to-r from-green-500/80 to-emerald-500/80 hover:from-green-600/80 hover:to-emerald-600/80 backdrop-blur-xl text-white px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-300 flex items-center space-x-2 border border-white/20 shadow-lg"
-              >
-                <Activity className="h-4 w-4" />
-                <span>Refresh Data</span>
-              </button>
-            )}
+            <button
+              onClick={handleRefreshData}
+              className="bg-gradient-to-r from-green-500/80 to-emerald-500/80 hover:from-green-600/80 hover:to-emerald-600/80 backdrop-blur-xl text-white px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-300 flex items-center space-x-2 border border-white/20 shadow-lg"
+            >
+              <Activity className="h-4 w-4" />
+              <span>Refresh Data</span>
+            </button>
             
             <button
               onClick={onReset}
@@ -483,7 +824,7 @@ export default function ModernDashboard({ data, onReset, token, onRefresh }: Mod
                 <div className="w-7 h-7 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center shadow-lg">
                   <span className="text-white text-sm font-bold">V</span>
                 </div>
-                <span className={theme.text.primary}>Victoria</span>
+                <span className={theme.text.primary}>Victor</span>
                 <ChevronDown className={`h-4 w-4 ${theme.text.secondary}`} />
               </button>
 
@@ -534,10 +875,12 @@ export default function ModernDashboard({ data, onReset, token, onRefresh }: Mod
                     className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-300 ${
                       isActive 
                         ? 'bg-gradient-to-r from-blue-500/80 to-purple-500/80 text-white shadow-lg border border-white/20 backdrop-blur-xl' 
-                        : `${theme.text.secondary} ${theme.glassHover} border border-transparent`
+                        : isDarkMode
+                          ? 'text-gray-300 hover:bg-slate-700/40 hover:text-white border border-transparent hover:border-slate-600/30 backdrop-blur-sm'
+                          : 'text-gray-600 hover:bg-gray-200/30 hover:text-gray-900 border border-transparent hover:border-gray-300/30 backdrop-blur-sm'
                     }`}
                   >
-                    <Icon className={`h-5 w-5 ${isActive ? 'text-white' : theme.text.muted}`} />
+                    <Icon className={`h-5 w-5 ${isActive ? 'text-white' : isDarkMode ? 'text-gray-400' : 'text-gray-500'}`} />
                     <span>{category.title}</span>
                   </button>
                 )

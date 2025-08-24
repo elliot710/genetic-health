@@ -237,10 +237,7 @@ export default function Home() {
         </div>
       ) : (
         <Dashboard 
-          data={analysisData} 
-          onReset={() => setAnalysisData(null)} 
           token={token || undefined}
-          onRefresh={() => token && loadExistingData(token)}
         />
       )}
     </main>
