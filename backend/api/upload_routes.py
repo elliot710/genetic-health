@@ -12,87 +12,21 @@ from ..db.database import get_session
 from ..db.models import GeneticAnalysis, GeneticVariant, HealthRisk, DrugResponse
 from ..utils.vcf_parser import VCFParser
 from ..services.genetic_api_service import GeneticAPIService
+from ..services.analysis_job import AnalysisJob
 from .auth_routes import get_current_user
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
 
-async def process_genetic_analysis(analysis_id: Any, db: AsyncSession):
+async def process_genetic_analysis(analysis_id: Any):
     """Background task to analyze genetic variants using external APIs"""
     try:
-        # Get the actual ID value
+        # Use the comprehensive analysis job service
+        analysis_job = AnalysisJob()
+        # Convert analysis_id to int if needed
         actual_id = analysis_id if isinstance(analysis_id, int) else int(analysis_id)
+        await analysis_job.process_analysis(actual_id, max_variants=100)
         
-        async with GeneticAPIService() as api_service:
-            # Get the analysis and its variants
-            result = await db.execute(
-                select(GeneticAnalysis).where(GeneticAnalysis.id == actual_id)
-            )
-            analysis = result.scalar_one_or_none()
-            
-            if not analysis:
-                return
-            
-            # Get variants for this analysis
-            variants_result = await db.execute(
-                select(GeneticVariant).where(GeneticVariant.analysis_id == actual_id)
-            )
-            variants = variants_result.scalars().all()
-            
-            # Process up to 10 variants to avoid overwhelming APIs
-            sample_variants = variants[:10] if len(variants) > 10 else variants
-            
-            health_risks = []
-            drug_responses = []
-            
-            for variant in sample_variants:
-                if variant.rsid is not None and variant.rsid.strip():
-                    try:
-                        # Get variant information from Ensembl
-                        ensembl_info = await api_service.get_variant_info_from_ensembl(str(variant.rsid))
-                        
-                        # Process health risks from Ensembl
-                        if ensembl_info and 'clinical_significance' in ensembl_info:
-                            for sig in ensembl_info['clinical_significance']:
-                                if sig and sig.lower() in ['pathogenic', 'likely pathogenic', 'risk factor']:
-                                    health_risk = HealthRisk(
-                                        analysis_id=actual_id,
-                                        condition=f"Variant {variant.rsid} associated condition",
-                                        risk_level='moderate' if 'likely' in sig.lower() else 'high',
-                                        risk_score=sig,
-                                        associated_variants=[str(variant.rsid)],
-                                        recommendations=["Consult with healthcare provider", "Consider genetic counseling"]
-                                    )
-                                    health_risks.append(health_risk)
-                        
-                        # Get PharmGKB information
-                        pharmgkb_info = await api_service.get_pharmgkb_variant_info(str(variant.rsid))
-                        
-                        # Process drug responses from PharmGKB
-                        if pharmgkb_info and 'pharmacogenomics' in pharmgkb_info:
-                            for drug_info in pharmgkb_info.get('pharmacogenomics', []):
-                                drug_response = DrugResponse(
-                                    analysis_id=actual_id,
-                                    gene=drug_info.get('gene', 'Unknown'),
-                                    drug=drug_info.get('drug', 'Unknown'),
-                                    response_type=drug_info.get('response', 'normal'),
-                                    recommendations=drug_info.get('recommendation', 'Standard dosing'),
-                                    variants_involved=[str(variant.rsid)]
-                                )
-                                drug_responses.append(drug_response)
-                    
-                    except Exception as e:
-                        print(f"Error processing variant {variant.rsid}: {str(e)}")
-                        continue
-            
-            # Save health risks and drug responses
-            if health_risks:
-                db.add_all(health_risks)
-            if drug_responses:
-                db.add_all(drug_responses)
-            
-            await db.commit()
-            
     except Exception as e:
         print(f"Error in background analysis: {str(e)}")
 
@@ -135,9 +69,9 @@ async def upload_vcf(
         await db.flush()  # Get the analysis ID
         await db.refresh(analysis)  # Refresh to get the actual ID value
         
-        # Save variants to database (limit to first 1000 for performance)
+        # Save variants to database
         db_variants = []
-        for variant in variants[:1000]:
+        for variant in variants:
             db_variant = GeneticVariant(
                 analysis_id=analysis.id,
                 chromosome=variant.get('chromosome', ''),
@@ -157,7 +91,7 @@ async def upload_vcf(
         
         # Start background analysis with APIs
         analysis_id = analysis.id
-        asyncio.create_task(process_genetic_analysis(analysis_id, db))
+        asyncio.create_task(process_genetic_analysis(analysis_id))
         
         return {
             "analysis_id": analysis_id,
@@ -199,12 +133,24 @@ async def upload_csv(
         
         # Parse CSV with flexible approach
         try:
+            # Try reading with pandas, skipping comment lines starting with #
             df = pd.read_csv(io.BytesIO(content), comment='#')
         except Exception:
             try:
+                # Try tab-separated
                 df = pd.read_csv(io.BytesIO(content), sep='\t', comment='#')
             except Exception:
-                df = pd.read_csv(io.BytesIO(content), sep=',', on_bad_lines='skip')
+                try:
+                    # Try comma-separated, skipping bad lines
+                    df = pd.read_csv(io.BytesIO(content), sep=',', on_bad_lines='skip', comment='#')
+                except Exception:
+                    # Last resort - try to manually skip comment lines
+                    lines = content.decode('utf-8').split('\n')
+                    data_lines = [line for line in lines if not line.startswith('#') and line.strip()]
+                    if data_lines:
+                        df = pd.read_csv(io.StringIO('\n'.join(data_lines)))
+                    else:
+                        raise ValueError("Unable to parse CSV file")
         
         # Clean the DataFrame
         df = df.dropna(how='all')
@@ -232,31 +178,32 @@ async def upload_csv(
         
         if has_genetic_data:
             db_variants = []
-            for _, row in df.head(1000).iterrows():  # Limit to 1000 rows
-                # Map common column names
-                chromosome = str(row.get('chromosome', row.get('chr', row.get('CHROM', ''))))
+            for _, row in df.iterrows():  # Process all rows
+                # Map common column names - handle both lowercase and uppercase variants
+                chromosome = str(row.get('chromosome', row.get('chr', row.get('CHROM', row.get('CHROMOSOME', '')))))
                 
                 # Handle position more carefully
-                position_value = row.get('position', row.get('pos', row.get('POS', 0)))
+                position_value = row.get('position', row.get('pos', row.get('POS', row.get('POSITION', 0))))
                 try:
                     position = int(position_value) if position_value and str(position_value).strip() != '' else 0
                 except (ValueError, TypeError):
                     position = 0
                 
-                rsid = str(row.get('rsid', row.get('RS_ID', row.get('ID', ''))))
+                rsid = str(row.get('rsid', row.get('RS_ID', row.get('ID', row.get('RSID', '')))))
                 ref = str(row.get('ref', row.get('reference', row.get('REF', ''))))
                 alt = str(row.get('alt', row.get('alternate', row.get('ALT', ''))))
-                genotype = str(row.get('genotype', row.get('GT', '')))
+                # For MyHeritage format, RESULT contains the genotype
+                genotype = str(row.get('genotype', row.get('GT', row.get('RESULT', ''))))
                 
                 if chromosome and chromosome.strip() and position > 0:
                     db_variant = GeneticVariant(
                         analysis_id=analysis.id,
                         chromosome=chromosome,
                         position=position,
-                        rsid=rsid if rsid and rsid != 'nan' else None,
-                        ref_allele=ref,
-                        alt_allele=alt,
-                        genotype=genotype if genotype and genotype != 'nan' else None,
+                        rsid=rsid if rsid and rsid != 'nan' and rsid.strip() else None,
+                        ref_allele=ref if ref and ref != 'nan' and ref.strip() else '',
+                        alt_allele=alt if alt and alt != 'nan' and alt.strip() else '',
+                        genotype=genotype if genotype and genotype != 'nan' and genotype.strip() else None,
                         info={'source': 'csv_upload'}
                     )
                     db_variants.append(db_variant)
@@ -267,7 +214,7 @@ async def upload_csv(
                 
                 # Start background analysis
                 analysis_id = analysis.id
-                asyncio.create_task(process_genetic_analysis(analysis_id, db))
+                asyncio.create_task(process_genetic_analysis(analysis_id))
                 
                 return {
                     "analysis_id": analysis_id,
@@ -536,9 +483,7 @@ async def trigger_manual_analysis(
         
         # Trigger background analysis with a new database session
         async def trigger_analysis():
-            async for new_db in get_session():
-                await process_genetic_analysis(analysis_id, new_db)
-                break
+            await process_genetic_analysis(analysis_id)
         
         asyncio.create_task(trigger_analysis())
         

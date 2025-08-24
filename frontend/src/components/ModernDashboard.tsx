@@ -22,6 +22,8 @@ import DrugResponsesPanel from './categories/DrugResponsesPanel'
 import AncestryPanel from './categories/AncestryPanel'
 import CarrierStatusPanel from './categories/CarrierStatusPanel'
 import WellnessPanel from './categories/WellnessPanel'
+import MethylationPanel from './categories/MethylationPanel'
+import DetoxPanel from './categories/DetoxPanel'
 import VariantSearch from './VariantSearch'
 import { getThemeClass } from '../utils/theme'
 
@@ -212,6 +214,30 @@ export default function ModernDashboard({ token, analysisData }: ModernDashboard
       title: 'Wellness Reports',
       icon: Activity,
     },
+    // Separator
+    {
+      id: 'separator-1',
+      title: '',
+      icon: null,
+      isSeparator: true
+    },
+    {
+      id: 'methylation',
+      title: 'Methylation',
+      icon: Dna,
+    },
+    {
+      id: 'detox',
+      title: 'Detoxification',
+      icon: Zap,
+    },
+    // Separator
+    {
+      id: 'separator-2',
+      title: '',
+      icon: null,
+      isSeparator: true
+    },
     {
       id: 'variant-search',
       title: 'Variant Search',
@@ -387,6 +413,10 @@ export default function ModernDashboard({ token, analysisData }: ModernDashboard
         return <CarrierStatusPanel data={data} isDarkMode={isDarkMode} />
       case 'wellness':
         return <WellnessPanel data={data} isDarkMode={isDarkMode} />
+      case 'methylation':
+        return <MethylationPanel data={data} isDarkMode={isDarkMode} theme={theme} />
+      case 'detox':
+        return <DetoxPanel data={data} isDarkMode={isDarkMode} theme={theme} />
       case 'variant-search':
         return <VariantSearch token={token} isDarkMode={isDarkMode} theme={theme} />
       default:
@@ -899,6 +929,13 @@ export default function ModernDashboard({ token, analysisData }: ModernDashboard
           <div className="p-6">
             <div className="space-y-2">
               {categories.map((category) => {
+                // Handle separators
+                if (category.isSeparator) {
+                  return (
+                    <div key={category.id} className={`my-4 border-t ${isDarkMode ? 'border-gray-700/50' : 'border-gray-200/50'}`}></div>
+                  )
+                }
+                
                 const Icon = category.icon
                 const isActive = activeCategory === category.id
                 return (
@@ -913,7 +950,7 @@ export default function ModernDashboard({ token, analysisData }: ModernDashboard
                           : 'text-gray-600 hover:bg-gray-200/30 hover:text-gray-900 border border-transparent hover:border-gray-300/30 backdrop-blur-sm'
                     }`}
                   >
-                    <Icon className={`h-5 w-5 ${isActive ? 'text-white' : getThemeClass('text-gray-500', isDarkMode)}`} />
+                    {Icon && <Icon className={`h-5 w-5 ${isActive ? 'text-white' : getThemeClass('text-gray-500', isDarkMode)}`} />}
                     <span>{category.title}</span>
                   </button>
                 )

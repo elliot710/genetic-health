@@ -31,7 +31,7 @@ class VCFParser:
                     data_lines.append(line)
             
             # Parse variants
-            for line_num, line in enumerate(data_lines[:1000]):  # Limit to first 1000 variants
+            for line_num, line in enumerate(data_lines):  # Process all variants
                 if line.strip():
                     variant = self._parse_variant_line(line, line_num)
                     if variant is not None:

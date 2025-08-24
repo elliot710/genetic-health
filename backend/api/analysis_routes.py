@@ -3,13 +3,317 @@ Analysis API routes
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Dict, Any
+from sqlalchemy import select
+from typing import Dict, Any, List
 
 from ..db.database import get_session
+from ..db.models import GeneticAnalysis, GeneticVariant, HealthRisk, DrugResponse
 from ..services.genetic_analyzer import GeneticAnalyzer
 from .auth_routes import get_current_user
 
 router = APIRouter(prefix="/analyze", tags=["analysis"])
+
+@router.get("/dashboard-data")
+async def get_dashboard_data(
+    current_user = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session)
+) -> Dict[str, Any]:
+    """Get comprehensive dashboard data for the current user"""
+    
+    try:
+        user_id = current_user.id
+        
+        # Get all analyses for this user
+        analyses_result = await db.execute(
+            select(GeneticAnalysis).where(GeneticAnalysis.user_id == user_id).order_by(GeneticAnalysis.upload_date.desc())
+        )
+        analyses = analyses_result.scalars().all()
+        
+        if not analyses:
+            return {
+                "summary": {
+                    "total_variants": 0,
+                    "analysis_id": None,
+                    "processed_at": None,
+                    "uploaded_files": 0
+                },
+                "real_data": {
+                    "variants": []
+                },
+                "health_risks": {
+                    "overall_score": 85,
+                    "risk_categories": {}
+                },
+                "drug_interactions": {
+                    "high_risk_genes": []
+                },
+                "insights": [],
+                "analysis_results": {
+                    "insights": []
+                }
+            }
+        
+        # Get the most recent analysis
+        latest_analysis = analyses[0]
+        
+        # Get all variants for all analyses
+        all_variants = []
+        total_variants = 0
+        
+        for analysis in analyses:
+            variants_result = await db.execute(
+                select(GeneticVariant).where(GeneticVariant.analysis_id == analysis.id)
+            )
+            variants = variants_result.scalars().all()
+            total_variants += len(variants)
+            
+            # Add analysis info to variants
+            for variant in variants:
+                all_variants.append({
+                    "rsid": variant.rsid,
+                    "chromosome": variant.chromosome,
+                    "position": variant.position,
+                    "ref_allele": variant.ref_allele,
+                    "alt_allele": variant.alt_allele,
+                    "genotype": variant.genotype,
+                    "quality": variant.quality,
+                    "filter_status": variant.filter_status,
+                    "analysis_id": variant.analysis_id,
+                    "info": variant.info or {}
+                })
+        
+        # Get health risks for all analyses
+        all_health_risks = []
+        for analysis in analyses:
+            health_risks_result = await db.execute(
+                select(HealthRisk).where(HealthRisk.analysis_id == analysis.id)
+            )
+            health_risks = health_risks_result.scalars().all()
+            all_health_risks.extend(health_risks)
+        
+        # Get drug responses for all analyses
+        all_drug_responses = []
+        for analysis in analyses:
+            drug_responses_result = await db.execute(
+                select(DrugResponse).where(DrugResponse.analysis_id == analysis.id)
+            )
+            drug_responses = drug_responses_result.scalars().all()
+            all_drug_responses.extend(drug_responses)
+        
+        # Process health risks into categories
+        risk_categories = {}
+        overall_risk_scores = []
+        
+        for risk in all_health_risks:
+            condition = risk.condition.lower()
+            risk_score = 0
+            
+            # Convert risk levels to numeric scores
+            if risk.risk_level == 'high':
+                risk_score = 85
+            elif risk.risk_level == 'moderate':
+                risk_score = 65
+            elif risk.risk_level == 'low':
+                risk_score = 35
+            
+            # Group by condition type
+            if 'diabetes' in condition or 'glucose' in condition:
+                risk_categories['diabetes'] = {"score": risk_score, "risk_level": risk.risk_level}
+            elif 'cardiovascular' in condition or 'heart' in condition or 'cardiac' in condition:
+                risk_categories['cardiovascular'] = {"score": risk_score, "risk_level": risk.risk_level}
+            elif 'alzheimer' in condition or 'dementia' in condition or 'cognitive' in condition:
+                risk_categories['alzheimer'] = {"score": risk_score, "risk_level": risk.risk_level}
+            elif 'cancer' in condition:
+                risk_categories['cancer'] = {"score": risk_score, "risk_level": risk.risk_level}
+            else:
+                # Generic condition
+                risk_categories[condition.replace(' ', '_')] = {"score": risk_score, "risk_level": risk.risk_level}
+            
+            overall_risk_scores.append(risk_score)
+        
+        # Calculate overall health score (inverse of average risk)
+        if overall_risk_scores:
+            avg_risk = sum(overall_risk_scores) / len(overall_risk_scores)
+            overall_score = max(20, 100 - avg_risk)  # Ensure minimum score of 20
+        else:
+            overall_score = 85  # Default good score when no risks identified
+        
+        # Get high-risk genes from drug responses
+        high_risk_genes = list(set([dr.gene for dr in all_drug_responses if dr.response_type in ['poor', 'ultrarapid']]))
+        
+        # Generate insights
+        insights = []
+        
+        if all_health_risks:
+            high_risk_count = len([r for r in all_health_risks if r.risk_level == 'high'])
+            if high_risk_count > 0:
+                insights.append(f"Found {high_risk_count} high-risk genetic variant(s) requiring attention")
+        
+        if all_drug_responses:
+            poor_metabolizers = len([dr for dr in all_drug_responses if dr.response_type == 'poor'])
+            if poor_metabolizers > 0:
+                insights.append(f"Identified {poor_metabolizers} gene(s) affecting drug metabolism")
+        
+        if total_variants > 0:
+            with_rsid = len([v for v in all_variants if v.get('rsid') and v['rsid'] != '-'])
+            coverage = round((with_rsid / total_variants) * 100)
+            insights.append(f"{coverage}% of variants have reference IDs for clinical analysis")
+        
+        if not insights:
+            insights = ["Analysis complete - check individual categories for detailed results"]
+        
+        return {
+            "summary": {
+                "total_variants": total_variants,
+                "analysis_id": latest_analysis.id,
+                "processed_at": latest_analysis.upload_date.isoformat(),
+                "uploaded_files": len(analyses),
+                "data_sources": [analysis.filename for analysis in analyses],
+                "upload_info": {
+                    "filename": latest_analysis.filename,
+                    "file_type": latest_analysis.file_type
+                }
+            },
+            "real_data": {
+                "variants": all_variants,
+                "upload_result": {
+                    "filename": latest_analysis.filename
+                }
+            },
+            "health_risks": {
+                "overall_score": round(overall_score),
+                "risk_categories": risk_categories,
+                "details": [
+                    {
+                        "condition": risk.condition,
+                        "risk_level": risk.risk_level,
+                        "risk_score": risk.risk_score,
+                        "recommendations": risk.recommendations
+                    }
+                    for risk in all_health_risks
+                ]
+            },
+            "drug_interactions": {
+                "high_risk_genes": high_risk_genes,
+                "details": [
+                    {
+                        "gene": dr.gene,
+                        "drug": dr.drug,
+                        "response_type": dr.response_type,
+                        "recommendations": dr.recommendations,
+                        "variants_involved": dr.variants_involved
+                    }
+                    for dr in all_drug_responses
+                ]
+            },
+            "insights": insights,
+            "analysis_results": {
+                "insights": insights,
+                "total_analyses": len(analyses),
+                "latest_analysis_date": latest_analysis.upload_date.isoformat()
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get dashboard data: {str(e)}"
+        )
+
+@router.get("/latest")
+async def get_latest_analysis(
+    current_user = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session)
+) -> Dict[str, Any]:
+    """Get the latest analysis for the current user"""
+    
+    try:
+        user_id = current_user.id
+        
+        # Get the most recent analysis
+        result = await db.execute(
+            select(GeneticAnalysis)
+            .where(GeneticAnalysis.user_id == user_id)
+            .order_by(GeneticAnalysis.upload_date.desc())
+            .limit(1)
+        )
+        analysis = result.scalar_one_or_none()
+        
+        if not analysis:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No analysis found for user"
+            )
+        
+        # Get variants for this analysis
+        variants_result = await db.execute(
+            select(GeneticVariant).where(GeneticVariant.analysis_id == analysis.id)
+        )
+        variants = variants_result.scalars().all()
+        
+        # Get health risks
+        health_risks_result = await db.execute(
+            select(HealthRisk).where(HealthRisk.analysis_id == analysis.id)
+        )
+        health_risks = health_risks_result.scalars().all()
+        
+        # Get drug responses
+        drug_responses_result = await db.execute(
+            select(DrugResponse).where(DrugResponse.analysis_id == analysis.id)
+        )
+        drug_responses = drug_responses_result.scalars().all()
+        
+        return {
+            "analysis": {
+                "id": analysis.id,
+                "filename": analysis.filename,
+                "file_type": analysis.file_type,
+                "upload_date": analysis.upload_date.isoformat(),
+                "results": analysis.analysis_results
+            },
+            "variants": [
+                {
+                    "rsid": v.rsid,
+                    "chromosome": v.chromosome,
+                    "position": v.position,
+                    "ref_allele": v.ref_allele,
+                    "alt_allele": v.alt_allele,
+                    "genotype": v.genotype,
+                    "quality": v.quality,
+                    "filter_status": v.filter_status,
+                    "info": v.info
+                }
+                for v in variants
+            ],
+            "health_risks": [
+                {
+                    "condition": hr.condition,
+                    "risk_level": hr.risk_level,
+                    "risk_score": hr.risk_score,
+                    "associated_variants": hr.associated_variants,
+                    "recommendations": hr.recommendations
+                }
+                for hr in health_risks
+            ],
+            "drug_responses": [
+                {
+                    "gene": dr.gene,
+                    "drug": dr.drug,
+                    "response_type": dr.response_type,
+                    "recommendations": dr.recommendations,
+                    "variants_involved": dr.variants_involved
+                }
+                for dr in drug_responses
+            ]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get latest analysis: {str(e)}"
+        )
 
 @router.post("/full-report")
 async def generate_full_report(

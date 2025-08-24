@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+raw_dna_data.csv
+Genetic_Genie_Detox_Profile_VI.pdf
+Genetic_Genie_Methylation_Profile_VI.pdf

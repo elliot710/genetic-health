@@ -18,83 +18,64 @@ interface HealthPanelProps {
 export default function HealthPanel({ isDarkMode = false, theme, data }: HealthPanelProps) {
   const currentTheme = getTheme(isDarkMode)
   
-  const healthRisks = [
-    {
-      condition: 'Type 2 Diabetes',
-      risk: 'Moderate',
-      riskScore: 35,
-      gene: 'TCF7L2',
-      description: 'Genetic variants associated with insulin sensitivity',
+  // Use real health risks from data if available, otherwise show processing message
+  const getHealthRisks = () => {
+    if (data?.health_risks?.details && data.health_risks.details.length > 0) {
+      return data.health_risks.details.map((risk: any) => ({
+        condition: risk.condition,
+        risk: risk.risk_level.charAt(0).toUpperCase() + risk.risk_level.slice(1),
+        riskScore: risk.risk_level === 'high' ? 80 : risk.risk_level === 'moderate' ? 55 : 30,
+        gene: risk.associated_variants?.[0] || 'Unknown',
+        description: `Genetic variant analysis shows ${risk.risk_level} risk`,
+        icon: risk.risk_level === 'high' ? AlertTriangle : risk.risk_level === 'moderate' ? Activity : Heart,
+        color: risk.risk_level === 'high' 
+          ? `bg-red-500/20 text-red-600`
+          : risk.risk_level === 'moderate'
+          ? `${currentTheme.warning.bg} ${currentTheme.warning.text}`
+          : `${currentTheme.success.bg} ${currentTheme.success.text}`,
+        prevention: risk.recommendations || ['Consult with healthcare provider', 'Monitor regularly', 'Maintain healthy lifestyle']
+      }))
+    }
+    
+    // Return default message when no real data is available
+    return [{
+      condition: 'Analysis in Progress',
+      risk: 'Processing',
+      riskScore: 0,
+      gene: 'Multiple',
+      description: 'Your genetic health risk analysis is being processed. Background analysis of your uploaded genetic data is running.',
       icon: Activity,
-      color: `${currentTheme.warning.bg} ${currentTheme.warning.text}`,
-      prevention: ['Regular exercise', 'Low glycemic diet', 'Weight management']
-    },
-    {
-      condition: 'Cardiovascular Disease',
-      risk: 'Low-Moderate',
-      riskScore: 25,
-      gene: 'APOE',
-      description: 'Favorable lipid metabolism genetics',
-      icon: Heart,
-      color: `${currentTheme.success.bg} ${currentTheme.success.text}`,
-      prevention: ['Heart-healthy diet', 'Regular cardio', 'Stress management']
-    },
-    {
-      condition: 'Hypertension',
-      risk: 'Moderate',
-      riskScore: 40,
-      gene: 'ACE',
-      description: 'Genetic predisposition to elevated blood pressure',
-      icon: AlertTriangle,
-      color: `${currentTheme.warning.bg} ${currentTheme.warning.text}`,
-      prevention: ['Low sodium diet', 'Regular exercise', 'Meditation']
-    },
-    {
-      condition: 'Osteoporosis',
-      risk: 'Low',
-      riskScore: 20,
-      gene: 'VDR',
-      description: 'Good bone mineral density genetics',
-      icon: Shield,
-      color: `${currentTheme.categories.wellness.bg} ${currentTheme.categories.wellness.text}`,
-      prevention: ['Calcium intake', 'Weight-bearing exercise', 'Vitamin D']
-    }
-  ]
+      color: `${currentTheme.primary.bg} ${currentTheme.primary.text}`,
+      prevention: ['Check back in a few minutes for updated results', 'Analysis includes multiple health conditions', 'Results will show here when processing completes']
+    }]
+  }
 
-  const drugResponses = [
-    {
-      drug: 'Warfarin',
-      gene: 'CYP2C9',
-      response: 'Sensitive',
-      dosage: 'Reduced',
-      description: 'Slower metabolism - requires lower doses',
-      recommendation: 'Start with 25% lower dose, monitor closely'
-    },
-    {
-      drug: 'Statins',
-      gene: 'SLCO1B1',
-      response: 'Normal',
-      dosage: 'Standard',
-      description: 'Normal statin transport and efficacy',
-      recommendation: 'Standard dosing protocols apply'
-    },
-    {
-      drug: 'Clopidogrel',
-      gene: 'CYP2C19',
-      response: 'Enhanced',
-      dosage: 'Standard',
-      description: 'Good metabolizer - effective antiplatelet action',
-      recommendation: 'Standard dose should be effective'
-    },
-    {
-      drug: 'Metformin',
-      gene: 'ATM',
-      response: 'Good',
-      dosage: 'Standard',
-      description: 'Expected good response for diabetes management',
-      recommendation: 'First-line choice for Type 2 diabetes'
+  const getDrugResponses = () => {
+    if (data?.drug_interactions?.details && data.drug_interactions.details.length > 0) {
+      return data.drug_interactions.details.map((dr: any) => ({
+        drug: dr.drug,
+        gene: dr.gene,
+        response: dr.response_type.charAt(0).toUpperCase() + dr.response_type.slice(1).replace('_', ' '),
+        dosage: dr.response_type === 'poor' ? 'Reduced/Alternative' : 
+                dr.response_type === 'ultrarapid' ? 'Increased' : 'Standard',
+        description: `${dr.response_type.replace('_', ' ')} metabolism detected`,
+        recommendation: dr.recommendations || 'Consult healthcare provider for dosing guidance'
+      }))
     }
-  ]
+    
+    // Return default message when no real data is available
+    return [{
+      drug: 'Analysis in Progress',
+      gene: 'Multiple',
+      response: 'Processing',
+      dosage: 'TBD',
+      description: 'Pharmacogenomic analysis is being processed',
+      recommendation: 'Drug response predictions will appear here when analysis completes'
+    }]
+  }
+
+  const healthRisks = getHealthRisks()
+  const drugResponses = getDrugResponses()
 
   const preventiveRecommendations = [
     {
@@ -168,7 +149,7 @@ export default function HealthPanel({ isDarkMode = false, theme, data }: HealthP
       <div className={`${currentTheme.glass} border ${currentTheme.glassBorder} rounded-xl p-6`}>
         <h3 className={`text-lg font-semibold ${currentTheme.text.primary} mb-4`}>Health Risk Assessment</h3>
         <div className="space-y-4">
-          {healthRisks.map((risk, index) => {
+          {healthRisks.map((risk: any, index: number) => {
             const Icon = risk.icon
             return (
               <div key={index} className={`${currentTheme.glassSecondary} border ${currentTheme.glassBorder} rounded-lg p-4`}>
@@ -199,7 +180,7 @@ export default function HealthPanel({ isDarkMode = false, theme, data }: HealthP
                     <div className={`${currentTheme.categories.wellness.bg} p-3 rounded-lg`}>
                       <h5 className={`text-sm font-medium ${currentTheme.categories.wellness.text} mb-1`}>Prevention Strategies:</h5>
                       <ul className={`text-sm ${currentTheme.categories.wellness.text}`}>
-                        {risk.prevention.map((strategy, strategyIndex) => (
+                        {risk.prevention.map((strategy: string, strategyIndex: number) => (
                           <li key={strategyIndex}>• {strategy}</li>
                         ))}
                       </ul>
@@ -216,7 +197,7 @@ export default function HealthPanel({ isDarkMode = false, theme, data }: HealthP
       <div className={`${currentTheme.glass} border ${currentTheme.glassBorder} rounded-xl p-6`}>
         <h3 className={`text-lg font-semibold ${currentTheme.text.primary} mb-4`}>Pharmacogenomics - Drug Response</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {drugResponses.map((drug, index) => (
+          {drugResponses.map((drug: any, index: number) => (
             <div key={index} className={`${currentTheme.glassSecondary} border ${currentTheme.glassBorder} rounded-lg p-4`}>
               <div className="flex justify-between items-start mb-2">
                 <h4 className={`font-medium ${currentTheme.text.primary}`}>{drug.drug}</h4>

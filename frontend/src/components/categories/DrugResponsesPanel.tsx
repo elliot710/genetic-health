@@ -24,54 +24,39 @@ export default function DrugResponsesPanel({ data, isDarkMode = false }: DrugRes
   const tagClass = getTagClass(isDarkMode);
   const progressBarBg = getProgressBarBg(isDarkMode);
 
-  const drugResponses = [
-    {
-      drug: 'Warfarin',
-      gene: 'CYP2C9, VKORC1',
-      response: 'Reduced Metabolism',
-      recommendation: 'Lower starting dose recommended',
-      risk: 'high',
-      genotype: 'CYP2C9*1/*3, VKORC1 A/G'
-    },
-    {
-      drug: 'Clopidogrel',
-      gene: 'CYP2C19',
-      response: 'Normal Metabolism',
-      recommendation: 'Standard dosing',
-      risk: 'low',
-      genotype: 'CYP2C19*1/*1'
-    },
-    {
-      drug: 'Metformin',
-      gene: 'OCT1',
-      response: 'Enhanced Response',
-      recommendation: 'May be more effective',
-      risk: 'low',
-      genotype: 'OCT1 rs622342 A/A'
-    },
-    {
-      drug: 'Simvastatin',
-      gene: 'SLCO1B1',
-      response: 'Increased Risk',
-      recommendation: 'Monitor for muscle toxicity',
-      risk: 'medium',
-      genotype: 'SLCO1B1*5/*15'
-    },
-    {
-      drug: 'Codeine',
-      gene: 'CYP2D6',
-      response: 'Poor Metabolizer',
-      recommendation: 'Alternative analgesic recommended',
-      risk: 'high',
-      genotype: 'CYP2D6*4/*4'
+  // Use real drug response data if available
+  const getDrugResponses = () => {
+    if (data?.drug_interactions?.details && data.drug_interactions.details.length > 0) {
+      return data.drug_interactions.details.map((dr: any) => ({
+        drug: dr.drug,
+        gene: dr.gene,
+        response: dr.response_type.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase()),
+        recommendation: dr.recommendations || 'Consult healthcare provider',
+        risk: dr.response_type.includes('poor') || dr.response_type.includes('ultrarapid') ? 'high' : 
+              dr.response_type.includes('intermediate') ? 'medium' : 'low',
+        genotype: dr.variants_involved?.join(', ') || 'Multiple variants'
+      }))
     }
-  ]
+    
+    // Show processing message when no data available
+    return [{
+      drug: 'Analysis in Progress',
+      gene: 'Multiple Genes',
+      response: 'Processing pharmacogenomic data',
+      recommendation: 'Drug response predictions will appear here when analysis completes',
+      risk: 'pending',
+      genotype: 'Analyzing variants...'
+    }]
+  }
+
+  const drugResponses = getDrugResponses()
 
   const getRiskColor = (risk: string) => {
     switch (risk) {
       case 'high': return 'text-red-500 bg-red-500/10 border-red-500/20'
       case 'medium': return 'text-yellow-500 bg-yellow-500/10 border-yellow-500/20'
       case 'low': return 'text-green-500 bg-green-500/10 border-green-500/20'
+      case 'pending': return 'text-blue-500 bg-blue-500/10 border-blue-500/20'
       default: return 'text-gray-500 bg-gray-500/10 border-gray-500/20'
     }
   }
@@ -112,7 +97,7 @@ export default function DrugResponsesPanel({ data, isDarkMode = false }: DrugRes
       </div>
 
       <div className="grid gap-4">
-        {drugResponses.map((drug, index) => {
+        {drugResponses.map((drug: any, index: number) => {
           const RiskIcon = getRiskIcon(drug.risk)
           return (
             <div key={index} className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>

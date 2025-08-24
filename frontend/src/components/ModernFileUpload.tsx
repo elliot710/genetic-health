@@ -137,10 +137,31 @@ export default function ModernFileUpload({ onAnalysisComplete, token, isDarkMode
       
       setUploadStatus('success')
       
-      // Small delay to show completion
-      setTimeout(() => {
-        onAnalysisComplete(dashboardData)
-      }, 1000)
+      // Wait a moment to let the background analysis begin, then fetch the latest dashboard data
+      setTimeout(async () => {
+        try {
+          // Fetch the updated dashboard data which includes the new upload
+          const dashboardResponse = await fetch('http://localhost:8000/analyze/dashboard-data', {
+            headers: {
+              'Authorization': `Bearer ${token}`
+            }
+          })
+          
+          if (dashboardResponse.ok) {
+            const dashboardData = await dashboardResponse.json()
+            console.log('Fetched updated dashboard data after upload:', dashboardData)
+            onAnalysisComplete(dashboardData)
+          } else {
+            console.error('Failed to fetch updated dashboard data')
+            // Fallback to the constructed data if API fails
+            onAnalysisComplete(dashboardData)
+          }
+        } catch (error) {
+          console.error('Error fetching updated dashboard data:', error)
+          // Fallback to the constructed data if API fails
+          onAnalysisComplete(dashboardData)
+        }
+      }, 2000)
 
     } catch (error) {
       console.error('Error processing file:', error)

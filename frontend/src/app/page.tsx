@@ -61,93 +61,39 @@ export default function Home() {
   const loadExistingData = useCallback(async (authToken: string) => {
     console.log('Loading existing data...')
     try {
-      // Get user's data summary to see if they have uploaded files
-      const summaryResponse = await fetch('http://localhost:8000/upload/data-summary', {
+      // Use the new dashboard data endpoint that aggregates all user data
+      const dashboardResponse = await fetch('http://localhost:8000/analyze/dashboard-data', {
         headers: {
           'Authorization': `Bearer ${authToken}`
         }
       })
       
-      console.log('Summary response status:', summaryResponse.status)
+      console.log('Dashboard response status:', dashboardResponse.status)
       
-      if (summaryResponse.ok) {
-        const summary = await summaryResponse.json()
-        console.log('Summary data:', summary)
+      if (dashboardResponse.ok) {
+        const dashboardData = await dashboardResponse.json()
+        console.log('Dashboard data received:', dashboardData)
         
-        // If user has uploaded files, load the most recent analysis
-        if (summary.analyses && summary.analyses.length > 0) {
-          console.log('Found analyses:', summary.analyses.length)
-          // Sort by upload date to get the most recent
-          const sortedAnalyses = summary.analyses.sort((a: Record<string, unknown>, b: Record<string, unknown>) => 
-            new Date(b.upload_date as string).getTime() - new Date(a.upload_date as string).getTime()
-          )
-          const mostRecentAnalysis = sortedAnalyses[0]
+        // Check if user has any uploaded data
+        if (dashboardData.summary && dashboardData.summary.total_variants > 0) {
+          console.log('Found user data with', dashboardData.summary.total_variants, 'variants')
           
-          console.log('Loading analysis:', mostRecentAnalysis.id, mostRecentAnalysis.filename)
-          
-          // Fetch detailed analysis results
-          const analysisResponse = await fetch(
-            `http://localhost:8000/upload/analysis/${mostRecentAnalysis.id}`,
-            {
-              headers: {
-                'Authorization': `Bearer ${authToken}`
-              }
-            }
-          )
-          
-          if (analysisResponse.ok) {
-            const analysisResult = await analysisResponse.json()
-            
-            // Transform to dashboard format
-            const totalVariants = analysisResult.sample_variants?.length || 0
-            const healthRisks = analysisResult.health_risks || []
-            const highRiskVariants = healthRisks.filter((risk: Record<string, unknown>) => risk.risk_level === 'high').length
-            const moderateRiskVariants = healthRisks.filter((risk: Record<string, unknown>) => risk.risk_level === 'moderate').length
-            
-            const dashboardData: AnalysisData = {
-              summary: {
-                total_variants: totalVariants,
-                data_sources: [mostRecentAnalysis.filename as string],
-                analysis_id: mostRecentAnalysis.id as string,
-                upload_info: mostRecentAnalysis
-              },
-              health_risks: {
-                overall_score: healthRisks.length > 0 ? Math.max(100 - (highRiskVariants * 20) - (moderateRiskVariants * 10), 60) : 85,
-                risk_categories: healthRisks.reduce((acc: Record<string, unknown>, risk: Record<string, unknown>) => {
-                  acc[risk.condition as string] = {
-                    score: risk.risk_level === 'high' ? 90 : risk.risk_level === 'moderate' ? 60 : 30,
-                    variants: risk.associated_variants || []
-                  }
-                  return acc
-                }, {})
-              },
-              drug_interactions: {
-                high_risk_genes: analysisResult.drug_responses?.filter((dr: Record<string, unknown>) => dr.response_type === 'poor_metabolizer').map((dr: Record<string, unknown>) => dr.gene) || [],
-                moderate_risk_genes: analysisResult.drug_responses?.filter((dr: Record<string, unknown>) => dr.response_type === 'intermediate_metabolizer').map((dr: Record<string, unknown>) => dr.gene) || []
-              },
-              recommendations: [
-                `Analysis of ${mostRecentAnalysis.filename} completed`,
-                `${totalVariants} genetic variants analyzed`,
-                `${healthRisks.length} health associations identified`
-              ],
-              real_data: {
-                variants: analysisResult.sample_variants || [],
-                analysis: analysisResult.analysis,
-                upload_result: mostRecentAnalysis
-              }
-            }
-            
-            console.log('Setting analysis data:', dashboardData)
-            setAnalysisData(dashboardData)
-            console.log('Analysis data set successfully')
-          } else {
-            console.error('Failed to load analysis data:', analysisResponse.status)
-          }
+          // The API already returns data in the format expected by the dashboard
+          setAnalysisData(dashboardData)
+          console.log('Analysis data set successfully')
         } else {
-          console.log('No analyses found for user')
+          console.log('No variants found for user - may need to upload data')
+          // Don't set analysis data if no variants exist
+          setAnalysisData(null)
         }
       } else {
-        console.error('Failed to load data summary:', summaryResponse.status)
+        console.error('Failed to load dashboard data:', dashboardResponse.status)
+        // Check if it's an auth error
+        if (dashboardResponse.status === 401) {
+          localStorage.removeItem('token')
+          setToken(null)
+          setUser(null)
+        }
       }
     } catch (error) {
       console.error('Error loading existing data:', error)
