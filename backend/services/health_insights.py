@@ -46,8 +46,16 @@ class HealthInsights:
         """Load disease association data"""
         return {
             "cardiovascular": {
-                "genes": ["APOE", "LDLR", "PCSK9", "ABCG8"],
-                "variants": ["rs429358", "rs7412", "rs11591147"]
+                "genes": ["APOE", "LDLR", "PCSK9", "ABCG8", "MTHFR", "MTR", "MTRR", "CBS", "COMT"],
+                "variants": ["rs429358", "rs7412", "rs11591147", "rs1801133", "rs1801394"]
+            },
+            "methylation": {
+                "genes": ["MTHFR", "MTR", "MTRR", "COMT", "CBS", "AHCY", "BHMT", "GNMT", "MAT1A", "DNMT1", "DNMT3A", "DNMT3B", "PEMT", "CHDH", "SHMT1", "SHMT2", "TYMS", "DHFR", "FOLR1", "FOLR2", "SLC19A1", "SLC46A1"],
+                "variants": ["rs1801133", "rs1801131", "rs1801394", "rs4680", "rs234706"]
+            },
+            "detoxification": {
+                "genes": ["CYP1A1", "CYP1A2", "CYP1B1", "CYP2A6", "CYP2B6", "CYP2C8", "CYP2C9", "CYP2C19", "CYP2D6", "CYP2E1", "CYP3A4", "CYP3A5", "CYP3A7", "GSTM1", "GSTT1", "GSTP1", "GSTA1", "GSTA4", "UGT1A1", "UGT1A3", "UGT1A4", "UGT1A6", "UGT2B7", "UGT2B15", "SULT1A1", "SULT1A3", "NAT1", "NAT2", "ABCB1", "ABCC1", "ABCC2", "ABCG2"],
+                "variants": ["rs1065852", "rs762551", "rs4244285", "rs1801280", "rs3892097"]
             },
             "diabetes": {
                 "genes": ["PPARG", "TCF7L2", "KCNJ11"],

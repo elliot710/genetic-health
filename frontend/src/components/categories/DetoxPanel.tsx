@@ -99,27 +99,41 @@ export default function DetoxPanel({ data, isDarkMode, theme }: DetoxPanelProps)
       phase: 'Phase I',
       name: 'Oxidation',
       capacity: detoxData?.phase1_capacity || 'Unknown',
-      genes: ['CYP1A1', 'CYP1A2', 'CYP2E1', 'CYP3A4'],
-      description: 'Converts toxins into intermediate metabolites using cytochrome P450 enzymes',
-      function: 'Oxidation, reduction, hydrolysis',
+      genes: [
+        'CYP1A1', 'CYP1A2', 'CYP1B1', 'CYP2A6', 'CYP2B6', 'CYP2C8', 
+        'CYP2C9', 'CYP2C19', 'CYP2D6', 'CYP2E1', 'CYP3A4', 'CYP3A5', 
+        'CYP3A7', 'FMO3', 'ALDH1A1', 'ALDH2', 'ADH1B', 'ADH1C'
+      ],
+      description: 'Converts toxins into intermediate metabolites using cytochrome P450 enzymes and other oxidative enzymes',
+      function: 'Oxidation, reduction, hydrolysis, dealkylation',
       risk: detoxData?.phase1_capacity === 'Fast' ? 'moderate' : 'low'
     },
     {
       phase: 'Phase II',
       name: 'Conjugation',
       capacity: detoxData?.phase2_capacity || 'Unknown',
-      genes: ['GSTM1', 'GSTT1', 'GSTP1', 'UGT1A1', 'SULT1A1'],
-      description: 'Neutralizes Phase I metabolites through conjugation reactions',
-      function: 'Glucuronidation, sulfation, glutathione conjugation',
+      genes: [
+        'GSTM1', 'GSTT1', 'GSTP1', 'GSTA1', 'GSTA4', 'GSTM3', 'GSTT2',
+        'UGT1A1', 'UGT1A3', 'UGT1A4', 'UGT1A6', 'UGT1A7', 'UGT1A8', 'UGT1A9',
+        'UGT2B4', 'UGT2B7', 'UGT2B10', 'UGT2B15', 'UGT2B17',
+        'SULT1A1', 'SULT1A2', 'SULT1A3', 'SULT1E1', 'SULT2A1',
+        'NAT1', 'NAT2', 'TPMT', 'COMT', 'HNMT'
+      ],
+      description: 'Neutralizes Phase I metabolites through conjugation reactions with glutathione, glucuronic acid, sulfate, and other molecules',
+      function: 'Glucuronidation, sulfation, glutathione conjugation, acetylation, methylation',
       risk: detoxData?.phase2_capacity === 'Slow' ? 'high' : 'low'
     },
     {
       phase: 'Phase III',
       name: 'Elimination',
       capacity: detoxData?.phase3_capacity || 'Unknown',
-      genes: ['ABCB1', 'ABCC2', 'ABCG2'],
-      description: 'Transports conjugated toxins out of cells for elimination',
-      function: 'Active transport, elimination',
+      genes: [
+        'ABCB1', 'ABCC1', 'ABCC2', 'ABCC3', 'ABCC4', 'ABCG2',
+        'SLC22A1', 'SLC22A2', 'SLC22A6', 'SLC22A8', 'SLCO1A2',
+        'SLCO1B1', 'SLCO1B3', 'SLCO2B1'
+      ],
+      description: 'Transports conjugated toxins out of cells and tissues for final elimination from the body via bile, urine, and feces',
+      function: 'Active transport, efflux pumps, elimination',
       risk: 'low'
     }
   ]

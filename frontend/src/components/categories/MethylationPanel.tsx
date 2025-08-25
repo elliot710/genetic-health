@@ -77,13 +77,46 @@ export default function MethylationPanel({ data, isDarkMode, theme }: Methylatio
               </p>
             </div>
             <div>
-              <h4 className={`text-lg font-semibold ${textPrimary} mb-4`}>Key Genes Analyzed</h4>
-              <ul className={`${textSecondary} space-y-2`}>
-                <li>• <strong>MTHFR:</strong> Folate metabolism and methylfolate production</li>
-                <li>• <strong>COMT:</strong> Dopamine breakdown and stress response</li>
-                <li>• <strong>MTR/MTRR:</strong> B12 metabolism and recycling</li>
-                <li>• <strong>CBS:</strong> Homocysteine metabolism</li>
-              </ul>
+              <h4 className={`text-lg font-semibold ${textPrimary} mb-4`}>Key Methylation Genes Analyzed</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <h5 className={`font-semibold ${textPrimary} mb-2`}>Core Methylation Cycle</h5>
+                  <ul className={`${textSecondary} space-y-1 text-sm`}>
+                    <li>• <strong>MTHFR:</strong> Folate metabolism and methylfolate production</li>
+                    <li>• <strong>MTR/MTRR:</strong> B12 metabolism and recycling</li>
+                    <li>• <strong>CBS:</strong> Homocysteine metabolism</li>
+                    <li>• <strong>AHCY:</strong> S-adenosylhomocysteine hydrolase</li>
+                    <li>• <strong>MAT1A:</strong> Methionine adenosyltransferase</li>
+                  </ul>
+                </div>
+                <div>
+                  <h5 className={`font-semibold ${textPrimary} mb-2`}>Methylation Regulation</h5>
+                  <ul className={`${textSecondary} space-y-1 text-sm`}>
+                    <li>• <strong>COMT:</strong> Dopamine breakdown and stress response</li>
+                    <li>• <strong>DNMT1/3A/3B:</strong> DNA methyltransferases</li>
+                    <li>• <strong>BHMT:</strong> Betaine-homocysteine methyltransferase</li>
+                    <li>• <strong>GNMT:</strong> Glycine N-methyltransferase</li>
+                    <li>• <strong>PEMT:</strong> Phosphatidylethanolamine methyltransferase</li>
+                  </ul>
+                </div>
+                <div>
+                  <h5 className={`font-semibold ${textPrimary} mb-2`}>Folate Transport & Metabolism</h5>
+                  <ul className={`${textSecondary} space-y-1 text-sm`}>
+                    <li>• <strong>FOLR1/FOLR2:</strong> Folate receptors</li>
+                    <li>• <strong>SLC19A1:</strong> Reduced folate carrier</li>
+                    <li>• <strong>SLC46A1:</strong> Proton-coupled folate transporter</li>
+                    <li>• <strong>SHMT1/SHMT2:</strong> Serine hydroxymethyltransferase</li>
+                    <li>• <strong>DHFR:</strong> Dihydrofolate reductase</li>
+                  </ul>
+                </div>
+                <div>
+                  <h5 className={`font-semibold ${textPrimary} mb-2`}>Choline & Support Pathways</h5>
+                  <ul className={`${textSecondary} space-y-1 text-sm`}>
+                    <li>• <strong>CHDH:</strong> Choline dehydrogenase</li>
+                    <li>• <strong>TYMS:</strong> Thymidylate synthase</li>
+                  </ul>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -98,7 +131,8 @@ export default function MethylationPanel({ data, isDarkMode, theme }: Methylatio
       status: methylationData?.mthfr_status || 'Unknown',
       impact: 'Folate metabolism',
       description: 'Affects conversion of folate to active methylfolate',
-      risk: methylationData?.mthfr_status === 'Variant' ? 'high' : 'low'
+      risk: methylationData?.mthfr_status === 'Variant' ? 'high' : 'low',
+      category: 'Core Cycle'
     },
     {
       gene: 'COMT',
@@ -106,7 +140,8 @@ export default function MethylationPanel({ data, isDarkMode, theme }: Methylatio
       status: methylationData?.comt_status || 'Unknown',
       impact: 'Dopamine metabolism',
       description: 'Affects breakdown of dopamine and stress response',
-      risk: methylationData?.comt_status === 'Slow' ? 'moderate' : 'low'
+      risk: methylationData?.comt_status === 'Slow' ? 'moderate' : 'low',
+      category: 'Regulation'
     },
     {
       gene: 'MTR',
@@ -114,7 +149,8 @@ export default function MethylationPanel({ data, isDarkMode, theme }: Methylatio
       status: methylationData?.mtr_status || 'Unknown',
       impact: 'B12 metabolism',
       description: 'Affects methionine synthase activity',
-      risk: 'low'
+      risk: 'low',
+      category: 'Core Cycle'
     },
     {
       gene: 'MTRR',
@@ -122,7 +158,80 @@ export default function MethylationPanel({ data, isDarkMode, theme }: Methylatio
       status: methylationData?.mtrr_status || 'Unknown',
       impact: 'B12 recycling',
       description: 'Affects methionine synthase reductase activity',
-      risk: 'low'
+      risk: 'low',
+      category: 'Core Cycle'
+    },
+    {
+      gene: 'CBS',
+      variant: 'C699T',
+      status: methylationData?.cbs_status || 'Unknown',
+      impact: 'Homocysteine metabolism',
+      description: 'Affects conversion of homocysteine to cysteine',
+      risk: 'low',
+      category: 'Core Cycle'
+    },
+    {
+      gene: 'AHCY',
+      variant: 'Various',
+      status: methylationData?.ahcy_status || 'Unknown',
+      impact: 'SAH hydrolysis',
+      description: 'Affects S-adenosylhomocysteine breakdown',
+      risk: 'low',
+      category: 'Core Cycle'
+    },
+    {
+      gene: 'BHMT',
+      variant: 'G742A',
+      status: methylationData?.bhmt_status || 'Unknown',
+      impact: 'Alternative methylation',
+      description: 'Provides alternative pathway for homocysteine metabolism',
+      risk: 'low',
+      category: 'Alternative Pathway'
+    },
+    {
+      gene: 'GNMT',
+      variant: 'Various',
+      status: methylationData?.gnmt_status || 'Unknown',
+      impact: 'Methyl regulation',
+      description: 'Regulates methyl group availability',
+      risk: 'low',
+      category: 'Regulation'
+    },
+    {
+      gene: 'PEMT',
+      variant: 'Various',
+      status: methylationData?.pemt_status || 'Unknown',
+      impact: 'Phospholipid methylation',
+      description: 'Affects phosphatidylcholine synthesis',
+      risk: 'low',
+      category: 'Choline Pathway'
+    },
+    {
+      gene: 'DNMT1',
+      variant: 'Various',
+      status: methylationData?.dnmt1_status || 'Unknown',
+      impact: 'DNA methylation',
+      description: 'Maintains DNA methylation patterns',
+      risk: 'low',
+      category: 'Epigenetic'
+    },
+    {
+      gene: 'SLC19A1',
+      variant: 'A80G',
+      status: methylationData?.slc19a1_status || 'Unknown',
+      impact: 'Folate transport',
+      description: 'Affects cellular folate uptake',
+      risk: 'low',
+      category: 'Transport'
+    },
+    {
+      gene: 'SHMT1',
+      variant: 'C1420T',
+      status: methylationData?.shmt1_status || 'Unknown',
+      impact: 'Folate metabolism',
+      description: 'Affects serine to glycine conversion and folate cycle',
+      risk: 'low',
+      category: 'Folate Cycle'
     }
   ]
 

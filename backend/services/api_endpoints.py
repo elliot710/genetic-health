@@ -3,6 +3,7 @@ API endpoint configurations for genetic variant annotation services
 Contains all endpoint URLs, parameters, and configurations for external APIs
 """
 
+import os
 from typing import Dict, Optional
 from dataclasses import dataclass
 
@@ -12,7 +13,7 @@ class APIEndpoint:
     url: str
     method: str = "GET"
     headers: Optional[Dict[str, str]] = None
-    rate_limit: float = 3.0  # requests per second
+    rate_limit: float = 10.0  # requests per second
     timeout: int = 30
     retries: int = 3
     description: str = ""
@@ -20,32 +21,33 @@ class APIEndpoint:
 class APIEndpoints:
     """Centralized API endpoint configurations"""
     
-    # NCBI E-utilities
+    # NCBI E-utilities with API key from environment variable
+    NCBI_API_KEY = os.getenv("NCBI_API_KEY", "")  # Load from environment variable
     NCBI_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
     NCBI_ENDPOINTS = {
         "esearch": APIEndpoint(
             url=f"{NCBI_BASE_URL}/esearch.fcgi",
-            rate_limit=3.0,
+            rate_limit=10.0,  # Increased from 3.0 to 10.0 with API key
             description="Search NCBI databases for UIDs"
         ),
         "efetch": APIEndpoint(
             url=f"{NCBI_BASE_URL}/efetch.fcgi",
-            rate_limit=3.0,
+            rate_limit=10.0,  # Increased from 3.0 to 10.0 with API key
             description="Fetch full records from NCBI databases"
         ),
         "einfo": APIEndpoint(
             url=f"{NCBI_BASE_URL}/einfo.fcgi",
-            rate_limit=3.0,
+            rate_limit=10.0,  # Increased from 3.0 to 10.0 with API key
             description="Get information about NCBI databases"
         ),
         "elink": APIEndpoint(
             url=f"{NCBI_BASE_URL}/elink.fcgi",
-            rate_limit=3.0,
+            rate_limit=10.0,  # Increased from 3.0 to 10.0 with API key
             description="Find related records in NCBI databases"
         ),
         "esummary": APIEndpoint(
             url=f"{NCBI_BASE_URL}/esummary.fcgi",
-            rate_limit=3.0,
+            rate_limit=10.0,  # Increased from 3.0 to 10.0 with API key
             description="Get document summaries from NCBI databases"
         )
     }
@@ -341,37 +343,37 @@ DATABASE_CONFIGS = {
         "name": "ClinVar",
         "description": "Clinical variant interpretations",
         "ncbi_db": "clinvar",
-        "rate_limit": 3.0
+        "rate_limit": 10.0  # Increased from 3.0 to 10.0 with API key
     },
     "pubmed": {
         "name": "PubMed",
         "description": "Biomedical literature database",
         "ncbi_db": "pubmed",
-        "rate_limit": 3.0
+        "rate_limit": 10.0  # Increased from 3.0 to 10.0 with API key
     },
     "pmc": {
         "name": "PubMed Central",
         "description": "Free full-text biomedical literature",
         "ncbi_db": "pmc",
-        "rate_limit": 3.0
+        "rate_limit": 10.0  # Increased from 3.0 to 10.0 with API key
     },
     "snp": {
         "name": "dbSNP",
         "description": "Single nucleotide polymorphism database",
         "ncbi_db": "snp",
-        "rate_limit": 3.0
+        "rate_limit": 10.0  # Increased from 3.0 to 10.0 with API key
     },
     "gene": {
         "name": "Gene",
         "description": "Gene-specific information",
         "ncbi_db": "gene",
-        "rate_limit": 3.0
+        "rate_limit": 10.0  # Increased from 3.0 to 10.0 with API key
     },
     "omim": {
         "name": "OMIM",
         "description": "Online Mendelian Inheritance in Man",
         "ncbi_db": "omim",
-        "rate_limit": 3.0
+        "rate_limit": 10.0  # Increased from 3.0 to 10.0 with API key
     }
 }
 

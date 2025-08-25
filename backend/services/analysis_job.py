@@ -15,6 +15,7 @@ from ..db.models import GeneticAnalysis, GeneticVariant, HealthRisk, DrugRespons
 from .genetic_api_service import GeneticAPIService
 from .health_insights import HealthInsights
 from .drug_response import DrugResponseAnalyzer
+from .specialized_analyzers import SpecializedAnalyzerManager
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -31,25 +32,57 @@ class AnalysisJob:
         self.api_service = GeneticAPIService()
         self.health_analyzer = HealthInsights()
         self.drug_analyzer = DrugResponseAnalyzer()
+        self.specialized_analyzer_manager = SpecializedAnalyzerManager()
         
         # Per-job rate limiting and state to prevent cross-user interference
         self._job_start_time = None
         self._api_calls_made = 0
         
         # High-priority pharmacogenes for focused analysis
+        # Comprehensive priority genes with expanded methylation and detox coverage
         self.priority_genes = [
+            # Pharmacogenomics - Critical drug metabolism
             'CYP2D6', 'CYP2C19', 'CYP2C9', 'CYP3A4', 'CYP3A5',
             'DPYD', 'TPMT', 'UGT1A1', 'SLCO1B1', 'VKORC1',
-            'APOE', 'BRCA1', 'BRCA2', 'F5', 'MTHFR'
+            
+            # Methylation pathway genes - comprehensive coverage
+            'MTHFR', 'MTR', 'MTRR', 'COMT', 'CBS', 'AHCY', 'BHMT', 'GNMT',
+            'MAT1A', 'DNMT1', 'DNMT3A', 'DNMT3B', 'PEMT', 'CHDH', 'SHMT1',
+            'SHMT2', 'TYMS', 'DHFR', 'FOLR1', 'FOLR2', 'SLC19A1', 'SLC46A1',
+            
+            # Phase I detoxification - expanded CYP enzymes
+            'CYP1A1', 'CYP1A2', 'CYP1B1', 'CYP2A6', 'CYP2B6', 'CYP2C8',
+            'CYP2E1', 'CYP3A7', 'CYP2J2', 'FMO3', 'ALDH1A1', 'ALDH2',
+            'ADH1B', 'ADH1C', 'MAOA', 'MAOB',
+            
+            # Phase II detoxification - comprehensive conjugation enzymes
+            'GSTM1', 'GSTT1', 'GSTP1', 'GSTA1', 'GSTA4', 'GSTM3', 'GSTT2',
+            'UGT1A3', 'UGT1A4', 'UGT1A6', 'UGT1A7', 'UGT1A8', 'UGT1A9',
+            'UGT2B4', 'UGT2B7', 'UGT2B10', 'UGT2B15', 'UGT2B17',
+            'SULT1A1', 'SULT1A2', 'SULT1A3', 'SULT1E1', 'SULT2A1',
+            'NAT1', 'NAT2', 'TPMT', 'COMT', 'HNMT',
+            
+            # Phase III transport - efflux pumps and transporters
+            'ABCB1', 'ABCC1', 'ABCC2', 'ABCC3', 'ABCC4', 'ABCG2',
+            'SLC22A1', 'SLC22A2', 'SLC22A6', 'SLC22A8', 'SLCO1A2',
+            'SLCO1B3', 'SLCO2B1',
+            
+            # High-priority health genes
+            'APOE', 'BRCA1', 'BRCA2', 'F5', 'TP53'
         ]
         
-        # Disease-associated genes for health risk analysis
+        # Disease-associated genes for health risk analysis - expanded categories
         self.disease_genes = {
-            'cardiovascular': ['APOE', 'LDLR', 'PCSK9', 'ABCG8', 'F5', 'MTHFR'],
-            'diabetes': ['PPARG', 'TCF7L2', 'KCNJ11', 'SLC30A8', 'IGF2BP2'],
-            'cancer': ['BRCA1', 'BRCA2', 'TP53', 'MLH1', 'MSH2', 'MSH6'],
-            'neurological': ['APOE', 'MAPT', 'PSEN1', 'PSEN2', 'APP'],
-            'metabolism': ['CYP2D6', 'CYP2C19', 'CYP2C9', 'DPYD', 'TPMT']
+            'cardiovascular': ['APOE', 'LDLR', 'PCSK9', 'ABCG8', 'F5', 'MTHFR', 'MTR', 'MTRR', 'CBS', 'COMT', 'ACE', 'AGT', 'AGTR1', 'NOS3'],
+            'diabetes': ['PPARG', 'TCF7L2', 'KCNJ11', 'SLC30A8', 'IGF2BP2', 'CDKAL1', 'CDKN2A', 'CDKN2B', 'FTO', 'MC4R'],
+            'cancer': ['BRCA1', 'BRCA2', 'TP53', 'MLH1', 'MSH2', 'MSH6', 'APC', 'CDKN2A', 'VHL', 'RB1', 'PALB2', 'ATM', 'CHEK2'],
+            'neurological': ['APOE', 'MAPT', 'PSEN1', 'PSEN2', 'APP', 'COMT', 'MAOA', 'MAOB', 'SLC6A4', 'HTR2A', 'DRD2', 'DRD4'],
+            'metabolism': ['CYP2D6', 'CYP2C19', 'CYP2C9', 'DPYD', 'TPMT', 'MTHFR', 'COMT', 'FTO', 'MC4R', 'ADIPOQ'],
+            'methylation': ['MTHFR', 'MTR', 'MTRR', 'COMT', 'CBS', 'AHCY', 'BHMT', 'GNMT', 'MAT1A', 'DNMT1', 'DNMT3A', 'DNMT3B', 'PEMT', 'CHDH', 'SHMT1', 'SHMT2'],
+            'detoxification_phase1': ['CYP1A1', 'CYP1A2', 'CYP1B1', 'CYP2A6', 'CYP2B6', 'CYP2C8', 'CYP2C9', 'CYP2C19', 'CYP2D6', 'CYP2E1', 'CYP3A4', 'CYP3A5', 'CYP3A7'],
+            'detoxification_phase2': ['GSTM1', 'GSTT1', 'GSTP1', 'GSTA1', 'GSTA4', 'UGT1A1', 'UGT1A3', 'UGT1A4', 'UGT1A6', 'UGT2B7', 'UGT2B15', 'SULT1A1', 'SULT1A3', 'NAT1', 'NAT2'],
+            'detoxification_phase3': ['ABCB1', 'ABCC1', 'ABCC2', 'ABCC3', 'ABCG2', 'SLC22A1', 'SLC22A2', 'SLCO1B1', 'SLCO1B3', 'SLCO1A2'],
+            'mental_health': ['COMT', 'MAOA', 'MAOB', 'SLC6A4', 'HTR1A', 'HTR2A', 'DRD2', 'DRD3', 'DRD4', 'CACNA1C', 'ANK3', 'DISC1']
         }
 
     async def process_analysis(self, analysis_id: int, max_variants: Optional[int] = None) -> Dict[str, Any]:
@@ -148,6 +181,7 @@ class AnalysisJob:
                             "trait_categories_generated": {
                                 "health_risks": len(results.get("health_risks", [])),
                                 "drug_responses": len(results.get("drug_responses", [])),
+                                "specialized_profiles": results.get("specialized_profiles", {}),
                             },
                             "user_id": self.user_id  # Track which user this belongs to
                         }
@@ -280,6 +314,12 @@ class AnalysisJob:
         # Initialize result containers
         health_risks = []
         drug_responses = []
+        specialized_profiles_count = {
+            'methylation': 0,
+            'detox': 0,
+            'sports': 0,
+            'nutrition': 0
+        }
         
         api_calls_made = 0
         
@@ -412,6 +452,25 @@ class AnalysisJob:
                             except Exception as drug_error:
                                 logger.error(f"❌ Drug response generation failed for {variant.rsid}: {drug_error}")
                             
+                            # Generate specialized category profiles (methylation, detox, sports, nutrition)
+                            try:
+                                specialized_results = await self.specialized_analyzer_manager.generate_all_specialized_profiles(
+                                    variant, annotation, analysis_id, session
+                                )
+                                if any(specialized_results.values()):  # If any profiles were generated
+                                    # Track profile counts
+                                    specialized_profiles_count['methylation'] += len(specialized_results.get('methylation_profiles', []))
+                                    specialized_profiles_count['detox'] += len(specialized_results.get('detox_profiles', []))
+                                    specialized_profiles_count['sports'] += len(specialized_results.get('sports_profiles', []))
+                                    specialized_profiles_count['nutrition'] += len(specialized_results.get('nutrition_profiles', []))
+                                    
+                                    profile_count = sum(len(profiles) for profiles in specialized_results.values())
+                                    logger.info(f"🧬 Generated {profile_count} specialized profiles for {variant.rsid}")
+                                else:
+                                    logger.debug(f"ℹ️  No specialized profiles generated for {variant.rsid}")
+                            except Exception as specialized_error:
+                                logger.error(f"❌ Specialized analysis failed for {variant.rsid}: {specialized_error}")
+                            
                             insights_time = time.time() - insights_start
                             logger.info(f"⚡ Insights generation completed for {variant.rsid} in {insights_time:.2f}s")
                         else:
@@ -484,6 +543,7 @@ class AnalysisJob:
         return {
             "health_risks": [hr.__dict__ for hr in health_risks],
             "drug_responses": [dr.__dict__ for dr in drug_responses],
+            "specialized_profiles": specialized_profiles_count,
             "api_calls_made": api_calls_made,
             "processing_time": processing_time,
             "variants_processed": processed_count,
@@ -586,9 +646,9 @@ class AnalysisJob:
         return processing_plan
 
     async def _variant_already_processed(self, session: AsyncSession, variant: GeneticVariant, analysis_id: int) -> bool:
-        """Check if variant has already been processed to avoid duplicate API calls"""
+        """Check if variant has already been processed to avoid duplicate API calls - simplified to avoid JSON query issues"""
         try:
-            # First check if we have saved annotation data (most reliable)
+            # Check if we have saved annotation data (most reliable)
             annotation_result = await session.execute(
                 select(VariantAnnotation).where(
                     VariantAnnotation.analysis_id == analysis_id,
@@ -601,37 +661,13 @@ class AnalysisJob:
                 logger.info(f"Variant {variant.rsid} already has saved annotation data - skipping API calls")
                 return True
             
-            # Fallback: Check if this variant has associated health risks or drug responses
-            # Check for health risks
-            health_risk_result = await session.execute(
-                select(HealthRisk).where(
-                    HealthRisk.analysis_id == analysis_id,
-                    HealthRisk.associated_variants.contains([str(variant.rsid)])
-                ).limit(1)
-            )
-            health_risk = health_risk_result.scalar_one_or_none()
-            
-            # Check for drug responses
-            drug_response_result = await session.execute(
-                select(DrugResponse).where(
-                    DrugResponse.analysis_id == analysis_id,
-                    DrugResponse.variants_involved.contains([str(variant.rsid)])
-                ).limit(1)
-            )
-            drug_response = drug_response_result.scalar_one_or_none()
-            
-            # If either health risk or drug response exists, variant was processed
-            already_processed = health_risk is not None or drug_response is not None
-            
-            if already_processed:
-                logger.info(f"Variant {variant.rsid} already processed (found health/drug records) - skipping API calls")
-                return True
-            else:
-                return False
+            # For now, just rely on annotation data check to avoid complex JSON queries
+            # This is safer and avoids transaction errors
+            return False
             
         except Exception as e:
             logger.warning(f"Error checking if variant {variant.rsid} was processed: {e}")
-            # If we can't determine, assume not processed to be safe
+            # If we can't check, assume it's not processed to avoid missing variants
             return False
 
     async def _save_variant_annotation(self, session: AsyncSession, variant: GeneticVariant, 

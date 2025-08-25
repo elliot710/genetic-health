@@ -81,6 +81,10 @@ class GeneticAPIService:
             'usehistory': 'y'
         }
         
+        # Add API key if available (for increased rate limits: 3 -> 10 requests/second)
+        if self.endpoints.NCBI_API_KEY:
+            params['api_key'] = self.endpoints.NCBI_API_KEY
+        
         result = await self._make_api_request('ncbi', 'esearch', params=params)
         
         if 'error' not in result:
@@ -107,6 +111,10 @@ class GeneticAPIService:
             'rettype': rettype,
             'retmode': 'xml' if rettype == 'xml' else 'text'
         }
+        
+        # Add API key if available (for increased rate limits: 3 -> 10 requests/second)
+        if self.endpoints.NCBI_API_KEY:
+            params['api_key'] = self.endpoints.NCBI_API_KEY
         
         result = await self._make_api_request('ncbi', 'efetch', params=params)
         

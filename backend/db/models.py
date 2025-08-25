@@ -1,7 +1,7 @@
 """
 Database models for user authentication and genetic data storage
 """
-from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey, JSON, Float
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .database import Base
@@ -222,4 +222,51 @@ class VariantAnnotation(Base):
     
     # Relationships
     variant = relationship("GeneticVariant")
+    analysis = relationship("GeneticAnalysis")
+
+
+class RareMutation(Base):
+    __tablename__ = "rare_mutations"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    analysis_id = Column(Integer, ForeignKey("genetic_analyses.id", ondelete="CASCADE"), nullable=False)
+    mutation_type = Column(String, nullable=False)  # 'pathogenic', 'likely_pathogenic', 'vus_high_impact'
+    gene = Column(String, nullable=False)
+    mutation_name = Column(String)  # Common name or clinical designation
+    clinical_significance = Column(String)  # 'high', 'very_high', 'uncertain_high'
+    disease_association = Column(String)  # Associated disease/condition
+    penetrance = Column(String)  # 'high', 'moderate', 'low', 'variable'
+    inheritance_pattern = Column(String)  # 'autosomal_dominant', 'autosomal_recessive', 'x_linked'
+    population_frequency = Column(Float)  # Allele frequency in general population
+    clinical_actions = Column(JSON)  # Recommended clinical actions
+    specialist_referral = Column(Boolean, default=False)
+    genetic_counseling_urgent = Column(Boolean, default=False)
+    monitoring_recommendations = Column(JSON)
+    family_screening_recommended = Column(Boolean, default=False)
+    associated_variants = Column(JSON)
+    
+    # Relationship
+    analysis = relationship("GeneticAnalysis")
+
+
+class UncommonMutation(Base):
+    __tablename__ = "uncommon_mutations"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    analysis_id = Column(Integer, ForeignKey("genetic_analyses.id", ondelete="CASCADE"), nullable=False)
+    mutation_type = Column(String, nullable=False)  # 'vus_moderate', 'benign_uncommon', 'protective_rare'
+    gene = Column(String, nullable=False)
+    mutation_name = Column(String)
+    clinical_significance = Column(String)  # 'moderate', 'low', 'unclear', 'protective'
+    trait_association = Column(String)  # Associated trait or condition
+    effect_size = Column(String)  # 'small', 'moderate', 'large'
+    population_frequency = Column(Float)  # Allele frequency (typically 0.1% - 5%)
+    research_status = Column(String)  # 'well_studied', 'emerging', 'preliminary'
+    lifestyle_implications = Column(JSON)  # Lifestyle recommendations
+    monitoring_suggestions = Column(JSON)  # Optional monitoring
+    research_participation = Column(String)  # 'recommended', 'optional', 'not_applicable'
+    follow_up_timeline = Column(String)  # 'annual', 'biannual', 'as_needed'
+    associated_variants = Column(JSON)
+    
+    # Relationship
     analysis = relationship("GeneticAnalysis")

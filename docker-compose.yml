@@ -24,9 +24,11 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/genetic_health_db
-      - SECRET_KEY=your-secret-key-change-this-in-production-please
+      - NCBI_API_KEY=${NCBI_API_KEY}
     volumes:
       - .:/app
       - /app/.venv  # Exclude virtual environment from volume mount

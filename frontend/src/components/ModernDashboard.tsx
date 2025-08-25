@@ -24,6 +24,8 @@ import CarrierStatusPanel from './categories/CarrierStatusPanel'
 import WellnessPanel from './categories/WellnessPanel'
 import MethylationPanel from './categories/MethylationPanel'
 import DetoxPanel from './categories/DetoxPanel'
+import RareMutationsPanel from './categories/RareMutationsPanel'
+import UncommonMutationsPanel from './categories/UncommonMutationsPanel'
 import VariantSearch from './VariantSearch'
 import AnalysisProgressLoader from './AnalysisProgressLoader'
 import { getThemeClass } from '../utils/theme'
@@ -315,6 +317,16 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
       id: 'detox',
       title: 'Detoxification',
       icon: Zap,
+    },
+    {
+      id: 'rare-mutations',
+      title: 'Rare Mutations',
+      icon: AlertTriangle,
+    },
+    {
+      id: 'uncommon-mutations',
+      title: 'Uncommon Mutations', 
+      icon: Dna,
     },
     // Separator
     {
@@ -762,6 +774,10 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
         return <MethylationPanel data={data} isDarkMode={isDarkMode} theme={theme} />
       case 'detox':
         return <DetoxPanel data={data} isDarkMode={isDarkMode} theme={theme} />
+      case 'rare-mutations':
+        return <RareMutationsPanel data={data} isDarkMode={isDarkMode} theme={theme} />
+      case 'uncommon-mutations':
+        return <UncommonMutationsPanel data={data} isDarkMode={isDarkMode} theme={theme} />
       case 'variant-search':
         return <VariantSearch token={token} isDarkMode={isDarkMode} theme={theme} />
       default:
