@@ -318,7 +318,15 @@ class AnalysisJob:
             'methylation': 0,
             'detox': 0,
             'sports': 0,
-            'nutrition': 0
+            'nutrition': 0,
+            'physical_traits': 0,
+            'cognitive': 0,
+            'personality': 0,
+            'ancestry': 0,
+            'carrier_status': 0,
+            'wellness': 0,
+            'rare_mutations': 0,
+            'uncommon_mutations': 0
         }
         
         api_calls_made = 0
@@ -463,6 +471,14 @@ class AnalysisJob:
                                     specialized_profiles_count['detox'] += len(specialized_results.get('detox_profiles', []))
                                     specialized_profiles_count['sports'] += len(specialized_results.get('sports_profiles', []))
                                     specialized_profiles_count['nutrition'] += len(specialized_results.get('nutrition_profiles', []))
+                                    specialized_profiles_count['physical_traits'] += len(specialized_results.get('physical_traits', []))
+                                    specialized_profiles_count['cognitive'] += len(specialized_results.get('cognitive_profiles', []))
+                                    specialized_profiles_count['personality'] += len(specialized_results.get('personality_traits', []))
+                                    specialized_profiles_count['ancestry'] += len(specialized_results.get('ancestry_results', []))
+                                    specialized_profiles_count['carrier_status'] += len(specialized_results.get('carrier_status', []))
+                                    specialized_profiles_count['wellness'] += len(specialized_results.get('wellness_profiles', []))
+                                    specialized_profiles_count['rare_mutations'] += len(specialized_results.get('rare_mutations', []))
+                                    specialized_profiles_count['uncommon_mutations'] += len(specialized_results.get('uncommon_mutations', []))
                                     
                                     profile_count = sum(len(profiles) for profiles in specialized_results.values())
                                     logger.info(f"🧬 Generated {profile_count} specialized profiles for {variant.rsid}")

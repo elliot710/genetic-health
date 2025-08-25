@@ -1,342 +1,276 @@
 'use client'
 
 import { useState } from 'react'
-import { Microscope, TrendingUp, BookOpen, Activity, Clock, ChevronRight, Info } from 'lucide-react'
+import { Search, TrendingUp, BookOpen, Activity, Clock, ChevronRight, Info } from 'lucide-react'
 import { getGlassBackground, getTextPrimary, getTextSecondary } from '../../utils/theme'
 
+interface UncommonMutation {
+  rsid: string
+  gene: string
+  effect: string
+  population_frequency: number
+  effect_size: string
+  research_status: string
+  clinical_relevance: string
+  literature_count: number
+  variant_id?: string
+  chromosome?: string
+  position?: number
+  ref_allele?: string
+  alt_allele?: string
+  mutation_name?: string
+  research_findings?: string[]
+  clinical_studies?: string[]
+  biomarker_potential?: string
+}
+
+interface UncommonMutationData {
+  uncommon_mutations: UncommonMutation[]
+  analysis_summary?: {
+    total_count: number
+    moderate_effect_count: number
+    research_priority_count: number
+  }
+}
+
 interface UncommonMutationsPanelProps {
-  data: any
+  data: UncommonMutationData | Record<string, unknown>
   isDarkMode: boolean
-  theme?: any
+  theme?: Record<string, unknown>
 }
 
 export default function UncommonMutationsPanel({ data, isDarkMode, theme }: UncommonMutationsPanelProps) {
   const [selectedMutation, setSelectedMutation] = useState<string | null>(null)
 
+  // Type guard to check if data has uncommon_mutations
+  const isUncommonMutationData = (data: unknown): data is UncommonMutationData => {
+    return typeof data === 'object' && data !== null && 'uncommon_mutations' in data
+  }
+
   // Check if uncommon mutation data is available from the database
-  const hasRealData = data?.uncommon_mutations && data.uncommon_mutations.length > 0
-  const uncommonMutationData = hasRealData ? data.uncommon_mutations : []
+  const hasRealData = isUncommonMutationData(data) && Array.isArray(data.uncommon_mutations) && data.uncommon_mutations.length > 0
+  const uncommonMutationData: UncommonMutation[] = hasRealData ? data.uncommon_mutations : []
 
   const glassBackground = getGlassBackground(isDarkMode)
   const textPrimary = getTextPrimary(isDarkMode)
   const textSecondary = getTextSecondary(isDarkMode)
   const borderColor = isDarkMode ? 'border-gray-700/50' : 'border-gray-200/50'
 
-  const getSignificanceColor = (significance: string) => {
-    switch (significance.toLowerCase()) {
-      case 'moderate':
-        return isDarkMode ? 'text-yellow-400 bg-yellow-500/20 border-yellow-500/30' : 'text-yellow-700 bg-yellow-100/80 border-yellow-200'
-      case 'low':
-        return isDarkMode ? 'text-blue-400 bg-blue-500/20 border-blue-500/30' : 'text-blue-700 bg-blue-100/80 border-blue-200'
-      case 'very_low':
-        return isDarkMode ? 'text-gray-400 bg-gray-500/20 border-gray-500/30' : 'text-gray-700 bg-gray-100/80 border-gray-200'
-      default:
-        return isDarkMode ? 'text-gray-400 bg-gray-500/20 border-gray-500/30' : 'text-gray-700 bg-gray-100/80 border-gray-200'
-    }
-  }
-
   const getEffectSizeColor = (effectSize: string) => {
     switch (effectSize.toLowerCase()) {
       case 'large':
-        return isDarkMode ? 'text-red-300' : 'text-red-600'
+        return isDarkMode ? 'text-red-400 bg-red-500/20 border-red-500/30' : 'text-red-700 bg-red-100/80 border-red-200'
       case 'moderate':
-        return isDarkMode ? 'text-orange-300' : 'text-orange-600'
+        return isDarkMode ? 'text-orange-400 bg-orange-500/20 border-orange-500/30' : 'text-orange-700 bg-orange-100/80 border-orange-200'
       case 'small':
-        return isDarkMode ? 'text-yellow-300' : 'text-yellow-600'
+        return isDarkMode ? 'text-yellow-400 bg-yellow-500/20 border-yellow-500/30' : 'text-yellow-700 bg-yellow-100/80 border-yellow-200'
       default:
-        return isDarkMode ? 'text-gray-300' : 'text-gray-600'
+        return isDarkMode ? 'text-gray-400 bg-gray-500/20 border-gray-500/30' : 'text-gray-700 bg-gray-100/80 border-gray-200'
     }
   }
 
   const getResearchStatusColor = (status: string) => {
     switch (status.toLowerCase()) {
-      case 'well_studied':
-        return isDarkMode ? 'text-green-300' : 'text-green-600'
+      case 'well_established':
+        return isDarkMode ? 'text-green-400 bg-green-500/20' : 'text-green-700 bg-green-100/80'
       case 'emerging':
-        return isDarkMode ? 'text-blue-300' : 'text-blue-600'
-      case 'limited':
-        return isDarkMode ? 'text-gray-300' : 'text-gray-600'
+        return isDarkMode ? 'text-blue-400 bg-blue-500/20' : 'text-blue-700 bg-blue-100/80'
+      case 'preliminary':
+        return isDarkMode ? 'text-purple-400 bg-purple-500/20' : 'text-purple-700 bg-purple-100/80'
+      case 'conflicting':
+        return isDarkMode ? 'text-orange-400 bg-orange-500/20' : 'text-orange-700 bg-orange-100/80'
       default:
-        return isDarkMode ? 'text-gray-300' : 'text-gray-600'
+        return isDarkMode ? 'text-gray-400 bg-gray-500/20' : 'text-gray-700 bg-gray-100/80'
     }
   }
 
-  // If no real data is available, show message
   if (!hasRealData) {
     return (
-      <div className="space-y-6">
-        {/* Header */}
-        <div className={`${glassBackground} border ${borderColor} rounded-2xl p-8`}>
-          <div className="flex items-center space-x-4 mb-6">
-            <div className="p-3 bg-gradient-to-br from-blue-500/20 to-purple-500/20 backdrop-blur-xl rounded-xl border border-blue-500/30">
-              <Microscope className="h-7 w-7 text-blue-400" />
-            </div>
-            <div>
-              <h2 className={`text-2xl font-bold ${textPrimary}`}>
-                Uncommon Mutations Analysis
-              </h2>
-              <p className={`text-sm ${textSecondary}`}>
-                Moderately rare genetic variants with research implications
-              </p>
-            </div>
-          </div>
+      <div className={`p-6 rounded-xl ${glassBackground} ${borderColor} border`}>
+        <div className="flex items-center gap-3 mb-4">
+          <Search className={`w-6 h-6 ${textPrimary}`} />
+          <h3 className={`text-xl font-semibold ${textPrimary}`}>Uncommon Genetic Variants</h3>
         </div>
-
-        {/* No Data Available */}
-        <div className={`${glassBackground} border ${borderColor} rounded-2xl p-8 text-center`}>
-          <div className="flex flex-col items-center space-y-4">
-            <div className="p-4 bg-gradient-to-br from-green-500/20 to-teal-500/20 backdrop-blur-xl rounded-xl border border-green-500/30">
-              <Activity className="h-8 w-8 text-green-400" />
-            </div>
-            <div>
-              <h3 className={`text-xl font-bold ${textPrimary} mb-2`}>
-                No Uncommon Mutations Detected
-              </h3>
-              <p className={`${textSecondary} max-w-md mx-auto`}>
-                Our analysis did not identify any uncommon genetic mutations with moderate clinical 
-                significance in your genetic data. This indicates typical genetic variation patterns.
-              </p>
-            </div>
+        
+        <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-blue-500/10 border-blue-500/20' : 'bg-blue-50/80 border-blue-200/50'} border`}>
+          <div className="flex items-center gap-2 mb-2">
+            <Info className={`w-5 h-5 ${isDarkMode ? 'text-blue-400' : 'text-blue-600'}`} />
+            <span className={`font-medium ${isDarkMode ? 'text-blue-400' : 'text-blue-600'}`}>
+              Analysis in Progress
+            </span>
           </div>
-        </div>
-
-        {/* Information Panel */}
-        <div className={`${glassBackground} border ${borderColor} rounded-2xl p-8`}>
-          <h3 className={`text-xl font-bold ${textPrimary} mb-6`}>
-            About Uncommon Mutations Analysis
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <h4 className={`text-lg font-semibold ${textPrimary} mb-4`}>What are Uncommon Mutations?</h4>
-              <p className={`${textSecondary} leading-relaxed`}>
-                Uncommon mutations are genetic variants found in 0.1% to 5% of the population 
-                that may have moderate health implications or research significance. These variants 
-                often contribute to complex traits and may influence disease susceptibility or drug responses.
-              </p>
-            </div>
-            <div>
-              <h4 className={`text-lg font-semibold ${textPrimary} mb-4`}>Research Applications</h4>
-              <p className={`${textSecondary} leading-relaxed`}>
-                Our analysis identifies variants of uncertain significance (VUS) and research variants 
-                that may be relevant for personalized medicine, pharmacogenomics, and participation 
-                in genetic research studies or clinical trials.
-              </p>
-            </div>
-          </div>
+          <p className={`${textSecondary} text-sm`}>
+            Uncommon genetic variants (1-5% population frequency) are being analyzed. These variants may have moderate 
+            effects and represent emerging research opportunities for personalized medicine.
+          </p>
         </div>
       </div>
     )
   }
 
-  // Show uncommon mutations data
   return (
-    <div className="space-y-6">
+    <div className={`p-6 rounded-xl ${glassBackground} ${borderColor} border`}>
       {/* Header */}
-      <div className={`${glassBackground} border ${borderColor} rounded-2xl p-8`}>
-        <div className="flex items-center space-x-4 mb-6">
-          <div className="p-3 bg-gradient-to-br from-blue-500/20 to-purple-500/20 backdrop-blur-xl rounded-xl border border-blue-500/30">
-            <Microscope className="h-7 w-7 text-blue-400" />
+      <div className="flex items-center gap-3 mb-6">
+        <Search className={`w-6 h-6 ${textPrimary}`} />
+        <h3 className={`text-xl font-semibold ${textPrimary}`}>Uncommon Genetic Variants</h3>
+        <span className={`ml-auto px-3 py-1 rounded-full text-sm font-medium ${isDarkMode ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100/80 text-blue-700'}`}>
+          {uncommonMutationData.length} variants (1-5% frequency)
+        </span>
+      </div>
+
+      {/* Summary Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-blue-500/10 border-blue-500/20' : 'bg-blue-50/80 border-blue-200/50'} border`}>
+          <div className="flex items-center gap-2 mb-2">
+            <TrendingUp className={`w-5 h-5 ${isDarkMode ? 'text-blue-400' : 'text-blue-600'}`} />
+            <span className={`font-medium ${isDarkMode ? 'text-blue-400' : 'text-blue-600'}`}>Research Interest</span>
           </div>
-          <div>
-            <h2 className={`text-2xl font-bold ${textPrimary}`}>
-              Uncommon Mutations Analysis
-            </h2>
-            <p className={`text-sm ${textSecondary}`}>
-              {uncommonMutationData.length} uncommon mutation{uncommonMutationData.length !== 1 ? 's' : ''} with research significance
-            </p>
+          <div className={`text-2xl font-bold ${textPrimary} mb-1`}>
+            {uncommonMutationData.filter((m: UncommonMutation) => m.research_status === 'emerging' || m.research_status === 'well_established').length}
           </div>
+          <p className={`text-sm ${textSecondary}`}>
+            variants with active research
+          </p>
         </div>
 
-        {/* Summary Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className={`${glassBackground} border ${borderColor} rounded-xl p-4`}>
-            <div className="flex items-center space-x-3">
-              <TrendingUp className="h-5 w-5 text-yellow-400" />
-              <div>
-                <p className={`text-sm ${textSecondary}`}>Moderate Effect</p>
-                <p className={`text-lg font-bold ${textPrimary}`}>
-                  {uncommonMutationData.filter((m: any) => m.effect_size === 'moderate').length}
-                </p>
-              </div>
-            </div>
+        <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-purple-500/10 border-purple-500/20' : 'bg-purple-50/80 border-purple-200/50'} border`}>
+          <div className="flex items-center gap-2 mb-2">
+            <BookOpen className={`w-5 h-5 ${isDarkMode ? 'text-purple-400' : 'text-purple-600'}`} />
+            <span className={`font-medium ${isDarkMode ? 'text-purple-400' : 'text-purple-600'}`}>Literature Support</span>
           </div>
-          <div className={`${glassBackground} border ${borderColor} rounded-xl p-4`}>
-            <div className="flex items-center space-x-3">
-              <BookOpen className="h-5 w-5 text-green-400" />
-              <div>
-                <p className={`text-sm ${textSecondary}`}>Well Studied</p>
-                <p className={`text-lg font-bold ${textPrimary}`}>
-                  {uncommonMutationData.filter((m: any) => m.research_status === 'well_studied').length}
-                </p>
-              </div>
-            </div>
+          <div className={`text-2xl font-bold ${textPrimary} mb-1`}>
+            {Math.round(uncommonMutationData.reduce((sum, m) => sum + (m.literature_count || 0), 0) / uncommonMutationData.length)}
           </div>
-          <div className={`${glassBackground} border ${borderColor} rounded-xl p-4`}>
-            <div className="flex items-center space-x-3">
-              <Activity className="h-5 w-5 text-blue-400" />
-              <div>
-                <p className={`text-sm ${textSecondary}`}>Research Eligible</p>
-                <p className={`text-lg font-bold ${textPrimary}`}>
-                  {uncommonMutationData.filter((m: any) => m.research_participation === 'recommended').length}
-                </p>
-              </div>
-            </div>
+          <p className={`text-sm ${textSecondary}`}>
+            average studies per variant
+          </p>
+        </div>
+
+        <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-green-500/10 border-green-500/20' : 'bg-green-50/80 border-green-200/50'} border`}>
+          <div className="flex items-center gap-2 mb-2">
+            <Activity className={`w-5 h-5 ${isDarkMode ? 'text-green-400' : 'text-green-600'}`} />
+            <span className={`font-medium ${isDarkMode ? 'text-green-400' : 'text-green-600'}`}>Biomarker Potential</span>
           </div>
-          <div className={`${glassBackground} border ${borderColor} rounded-xl p-4`}>
-            <div className="flex items-center space-x-3">
-              <Clock className="h-5 w-5 text-purple-400" />
-              <div>
-                <p className={`text-sm ${textSecondary}`}>Annual Follow-up</p>
-                <p className={`text-lg font-bold ${textPrimary}`}>
-                  {uncommonMutationData.filter((m: any) => m.follow_up_timeline === 'annual').length}
-                </p>
-              </div>
-            </div>
+          <div className={`text-2xl font-bold ${textPrimary} mb-1`}>
+            {uncommonMutationData.filter((m: UncommonMutation) => m.biomarker_potential === 'high' || m.biomarker_potential === 'moderate').length}
           </div>
+          <p className={`text-sm ${textSecondary}`}>
+            variants with biomarker value
+          </p>
         </div>
       </div>
 
       {/* Mutations List */}
-      <div className={`${glassBackground} border ${borderColor} rounded-2xl p-8`}>
-        <h3 className={`text-xl font-bold ${textPrimary} mb-6`}>
-          Detected Uncommon Mutations
-        </h3>
-        <div className="space-y-4">
-          {uncommonMutationData.map((mutation: any, index: number) => (
-            <div
-              key={index}
-              className={`${glassBackground} border ${borderColor} rounded-xl p-6 cursor-pointer transition-all duration-200 hover:scale-[1.02]`}
-              onClick={() => setSelectedMutation(selectedMutation === mutation.mutation_name ? null : mutation.mutation_name)}
+      <div className="space-y-3">
+        <h4 className={`font-semibold ${textPrimary} mb-3`}>Detected Variants</h4>
+        
+        {uncommonMutationData.map((mutation: UncommonMutation, index: number) => (
+          <div key={mutation.rsid || index} className={`border rounded-lg ${borderColor} overflow-hidden`}>
+            <div 
+              className={`p-4 cursor-pointer hover:${isDarkMode ? 'bg-white/5' : 'bg-gray-50/80'} transition-colors`}
+              onClick={() => setSelectedMutation(selectedMutation === (mutation.mutation_name || mutation.rsid) ? null : mutation.mutation_name || mutation.rsid)}
             >
               <div className="flex items-center justify-between">
                 <div className="flex-1">
-                  <div className="flex items-center space-x-4 mb-3">
-                    <h4 className={`text-lg font-bold ${textPrimary}`}>
-                      {mutation.gene} - {mutation.mutation_name}
-                    </h4>
-                    <span className={`px-3 py-1 rounded-full text-xs font-semibold border ${getSignificanceColor(mutation.clinical_significance)}`}>
-                      {mutation.clinical_significance.replace('_', ' ').toUpperCase()}
+                  <div className="flex items-center gap-3 mb-2">
+                    <h5 className={`font-semibold ${textPrimary}`}>
+                      {mutation.gene} - {mutation.mutation_name || mutation.rsid}
+                    </h5>
+                    <span className={`px-2 py-1 rounded text-xs font-medium border ${getEffectSizeColor(mutation.effect_size)}`}>
+                      {mutation.effect_size} effect
+                    </span>
+                    <span className={`px-2 py-1 rounded text-xs font-medium ${getResearchStatusColor(mutation.research_status)}`}>
+                      {mutation.research_status?.replace('_', ' ')}
                     </span>
                   </div>
-                  <p className={`${textSecondary} mb-2`}>
-                    <strong>Trait Association:</strong> {mutation.trait_association}
-                  </p>
-                  <div className="flex items-center space-x-6 text-sm">
-                    <span className={`${getEffectSizeColor(mutation.effect_size)}`}>
-                      <strong>Effect Size:</strong> {mutation.effect_size}
-                    </span>
-                    <span className={`${getResearchStatusColor(mutation.research_status)}`}>
-                      <strong>Research Status:</strong> {mutation.research_status.replace('_', ' ')}
-                    </span>
-                    <span className={textSecondary}>
-                      <strong>Frequency:</strong> {(mutation.population_frequency * 100).toFixed(1)}%
-                    </span>
+                  <div className={`text-sm ${textSecondary} grid grid-cols-2 gap-4`}>
+                    <span><strong>Effect:</strong> {mutation.effect}</span>
+                    <span><strong>Frequency:</strong> {(mutation.population_frequency * 100).toFixed(1)}%</span>
                   </div>
                 </div>
                 <ChevronRight 
-                  className={`h-5 w-5 ${textSecondary} transition-transform duration-200 ${
-                    selectedMutation === mutation.mutation_name ? 'rotate-90' : ''
+                  className={`w-5 h-5 ${textSecondary} transition-transform ${
+                    selectedMutation === (mutation.mutation_name || mutation.rsid) ? 'rotate-90' : ''
                   }`} 
                 />
               </div>
+            </div>
 
-              {selectedMutation === mutation.mutation_name && (
-                <div className="mt-6 pt-6 border-t border-gray-300/20">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {/* Lifestyle Implications */}
-                    <div>
-                      <h5 className={`text-md font-semibold ${textPrimary} mb-3 flex items-center`}>
-                        <Activity className="h-4 w-4 mr-2 text-green-400" />
-                        Lifestyle Implications
-                      </h5>
-                      <ul className="space-y-2">
-                        {mutation.lifestyle_implications.map((implication: string, idx: number) => (
-                          <li key={idx} className={`text-sm ${textSecondary} flex items-start`}>
-                            <span className="text-green-400 mr-2">•</span>
-                            {implication}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-
-                    {/* Monitoring Suggestions */}
-                    <div>
-                      <h5 className={`text-md font-semibold ${textPrimary} mb-3 flex items-center`}>
-                        <Clock className="h-4 w-4 mr-2 text-blue-400" />
-                        Monitoring Suggestions
-                      </h5>
-                      <ul className="space-y-2">
-                        {mutation.monitoring_suggestions.map((suggestion: string, idx: number) => (
-                          <li key={idx} className={`text-sm ${textSecondary} flex items-start`}>
-                            <span className="text-blue-400 mr-2">•</span>
-                            {suggestion}
-                          </li>
-                        ))}
-                      </ul>
+            {selectedMutation === (mutation.mutation_name || mutation.rsid) && (
+              <div className={`px-4 pb-4 border-t ${borderColor}`}>
+                <div className="mt-4 space-y-4">
+                  {/* Research Findings */}
+                  <div>
+                    <h6 className={`font-semibold ${textPrimary} mb-2 flex items-center gap-2`}>
+                      <BookOpen className="w-4 h-4" />
+                      Research Findings
+                    </h6>
+                    <div className="space-y-2">
+                      {mutation.research_findings?.map((finding: string, idx: number) => (
+                        <div key={idx} className={`p-3 rounded ${isDarkMode ? 'bg-gray-800/50' : 'bg-gray-50/80'}`}>
+                          <p className={`text-sm ${textSecondary}`}>{finding}</p>
+                        </div>
+                      )) || (
+                        <p className={`text-sm ${textSecondary} italic`}>Research findings are being compiled.</p>
+                      )}
                     </div>
                   </div>
 
-                  {/* Research Information */}
-                  <div className="mt-6 p-4 bg-gradient-to-r from-blue-500/10 to-purple-500/10 rounded-xl border border-blue-500/20">
-                    <div className="flex items-start space-x-3">
-                      <BookOpen className="h-5 w-5 text-blue-400 mt-0.5" />
-                      <div>
-                        <h6 className={`font-semibold ${textPrimary} mb-2`}>
-                          Research & Follow-up Information
-                        </h6>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                          <div className={textSecondary}>
-                            <strong className="text-purple-400">Research Status:</strong><br />
-                            {mutation.research_status.replace('_', ' ').charAt(0).toUpperCase() + mutation.research_status.replace('_', ' ').slice(1)}
-                          </div>
-                          <div className={textSecondary}>
-                            <strong className="text-blue-400">Research Participation:</strong><br />
-                            {mutation.research_participation.charAt(0).toUpperCase() + mutation.research_participation.slice(1)}
-                          </div>
-                          <div className={textSecondary}>
-                            <strong className="text-green-400">Follow-up Timeline:</strong><br />
-                            {mutation.follow_up_timeline.charAt(0).toUpperCase() + mutation.follow_up_timeline.slice(1)} monitoring
-                          </div>
+                  {/* Clinical Studies */}
+                  <div>
+                    <h6 className={`font-semibold ${textPrimary} mb-2 flex items-center gap-2`}>
+                      <Activity className="w-4 h-4" />
+                      Clinical Studies
+                    </h6>
+                    <div className="space-y-2">
+                      {mutation.clinical_studies?.map((study: string, idx: number) => (
+                        <div key={idx} className={`p-3 rounded ${isDarkMode ? 'bg-gray-800/50' : 'bg-gray-50/80'}`}>
+                          <p className={`text-sm ${textSecondary}`}>{study}</p>
                         </div>
+                      )) || (
+                        <p className={`text-sm ${textSecondary} italic`}>Clinical study data is being gathered.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Additional Details */}
+                  <div className={`p-3 rounded ${isDarkMode ? 'bg-blue-500/10' : 'bg-blue-50/80'}`}>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <span className={`text-sm font-medium ${textPrimary}`}>Clinical Relevance:</span>
+                        <p className={`text-sm ${textSecondary}`}>{mutation.clinical_relevance}</p>
                       </div>
+                      <div>
+                        <span className={`text-sm font-medium ${textPrimary}`}>Literature Count:</span>
+                        <p className={`text-sm ${textSecondary}`}>{mutation.literature_count} studies</p>
+                      </div>
+                      {mutation.biomarker_potential && (
+                        <div>
+                          <span className={`text-sm font-medium ${textPrimary}`}>Biomarker Potential:</span>
+                          <p className={`text-sm ${textSecondary}`}>{mutation.biomarker_potential}</p>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
-              )}
-            </div>
-          ))}
-        </div>
+              </div>
+            )}
+          </div>
+        ))}
       </div>
 
-      {/* Research & Clinical Information */}
-      <div className={`${glassBackground} border ${borderColor} rounded-2xl p-6`}>
-        <div className="flex items-start space-x-3">
-          <Info className="h-6 w-6 text-blue-400 mt-1" />
+      {/* Footer Info */}
+      <div className={`mt-6 p-4 rounded-lg ${isDarkMode ? 'bg-gray-800/50' : 'bg-gray-50/80'}`}>
+        <div className="flex items-start gap-2">
+          <Info className={`w-5 h-5 ${textSecondary} mt-0.5 flex-shrink-0`} />
           <div>
-            <h4 className={`text-lg font-semibold ${textPrimary} mb-2`}>
-              Research & Clinical Context
-            </h4>
-            <p className={`${textSecondary} text-sm leading-relaxed mb-4`}>
-              These uncommon mutations represent variants of uncertain significance (VUS) or research variants 
-              that may contribute to complex traits. While not immediately clinically actionable, they may be 
-              relevant for personalized medicine, research participation, or future medical developments.
+            <p className={`text-sm font-medium ${textPrimary} mb-1`}>About Uncommon Variants</p>
+            <p className={`text-xs ${textSecondary}`}>
+              These variants occur in 1-5% of the population and may have moderate effects on health and traits. 
+              While less common than typical variants, they represent important research opportunities and may become 
+              clinically actionable as our understanding develops.
             </p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-              <div>
-                <h5 className={`font-semibold ${textPrimary} mb-2`}>Research Opportunities</h5>
-                <p className={textSecondary}>
-                  Consider participating in genetic research studies to advance understanding of these variants 
-                  and contribute to precision medicine developments.
-                </p>
-              </div>
-              <div>
-                <h5 className={`font-semibold ${textPrimary} mb-2`}>Medical Consultation</h5>
-                <p className={textSecondary}>
-                  Discuss these findings with your healthcare provider to understand their relevance to your 
-                  personal and family medical history.
-                </p>
-              </div>
-            </div>
           </div>
         </div>
       </div>

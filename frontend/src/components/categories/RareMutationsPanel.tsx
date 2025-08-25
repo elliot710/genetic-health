@@ -4,18 +4,56 @@ import { useState } from 'react'
 import { AlertTriangle, Shield, FileText, Users, Clock, ChevronRight, Info } from 'lucide-react'
 import { getGlassBackground, getTextPrimary, getTextSecondary } from '../../utils/theme'
 
+interface RareMutation {
+  rsid: string
+  gene: string
+  effect: string
+  clinical_significance: string
+  population_frequency: number
+  family_screening_recommended: boolean
+  genetic_counseling_urgent: boolean
+  medical_follow_up: string
+  literature_support: string
+  variant_id?: string
+  chromosome?: string
+  position?: number
+  ref_allele?: string
+  alt_allele?: string
+  mutation_name?: string
+  disease_association?: string
+  penetrance?: string
+  inheritance_pattern?: string
+  clinical_actions?: string[]
+  monitoring_recommendations?: string[]
+  specialist_referral?: string
+}
+
+interface RareMutationData {
+  rare_mutations: RareMutation[]
+  analysis_summary?: {
+    total_count: number
+    high_impact_count: number
+    counseling_urgent_count: number
+  }
+}
+
 interface RareMutationsPanelProps {
-  data: any
+  data: RareMutationData | Record<string, unknown>
   isDarkMode: boolean
-  theme?: any
+  theme?: Record<string, unknown>
 }
 
 export default function RareMutationsPanel({ data, isDarkMode, theme }: RareMutationsPanelProps) {
   const [selectedMutation, setSelectedMutation] = useState<string | null>(null)
 
+  // Type guard to check if data has rare_mutations
+  const isRareMutationData = (data: unknown): data is RareMutationData => {
+    return typeof data === 'object' && data !== null && 'rare_mutations' in data
+  }
+
   // Check if rare mutation data is available from the database
-  const hasRealData = data?.rare_mutations && data.rare_mutations.length > 0
-  const rareMutationData = hasRealData ? data.rare_mutations : []
+  const hasRealData = isRareMutationData(data) && Array.isArray(data.rare_mutations) && data.rare_mutations.length > 0
+  const rareMutationData: RareMutation[] = hasRealData ? data.rare_mutations : []
 
   const glassBackground = getGlassBackground(isDarkMode)
   const textPrimary = getTextPrimary(isDarkMode)
@@ -63,7 +101,7 @@ export default function RareMutationsPanel({ data, isDarkMode, theme }: RareMuta
                 Rare Mutations Analysis
               </h2>
               <p className={`text-sm ${textSecondary}`}>
-                High-impact genetic variants requiring clinical attention
+                High-impact genetic variants requiring clinical attention (frequency &lt; 1%)
               </p>
             </div>
           </div>
@@ -96,7 +134,7 @@ export default function RareMutationsPanel({ data, isDarkMode, theme }: RareMuta
             <div>
               <h4 className={`text-lg font-semibold ${textPrimary} mb-4`}>What are Rare Mutations?</h4>
               <p className={`${textSecondary} leading-relaxed`}>
-                Rare mutations are genetic variants found in less than 0.1% of the population 
+                Rare mutations are genetic variants found in less than 1% of the population 
                 that can have significant health implications. These mutations often affect 
                 critical genes and may predispose individuals to hereditary diseases or syndromes.
               </p>
@@ -142,7 +180,7 @@ export default function RareMutationsPanel({ data, isDarkMode, theme }: RareMuta
               <div>
                 <p className={`text-sm ${textSecondary}`}>Very High Significance</p>
                 <p className={`text-lg font-bold ${textPrimary}`}>
-                  {rareMutationData.filter(m => m.clinical_significance === 'very_high').length}
+                  {rareMutationData.filter((m: RareMutation) => m.clinical_significance === 'very_high').length}
                 </p>
               </div>
             </div>
@@ -153,7 +191,7 @@ export default function RareMutationsPanel({ data, isDarkMode, theme }: RareMuta
               <div>
                 <p className={`text-sm ${textSecondary}`}>Family Screening</p>
                 <p className={`text-lg font-bold ${textPrimary}`}>
-                  {rareMutationData.filter(m => m.family_screening_recommended).length}
+                  {rareMutationData.filter((m: RareMutation) => m.family_screening_recommended).length}
                 </p>
               </div>
             </div>
@@ -164,7 +202,7 @@ export default function RareMutationsPanel({ data, isDarkMode, theme }: RareMuta
               <div>
                 <p className={`text-sm ${textSecondary}`}>Counseling Needed</p>
                 <p className={`text-lg font-bold ${textPrimary}`}>
-                  {rareMutationData.filter(m => m.genetic_counseling_urgent).length}
+                  {rareMutationData.filter((m: RareMutation) => m.genetic_counseling_urgent).length}
                 </p>
               </div>
             </div>
@@ -178,31 +216,31 @@ export default function RareMutationsPanel({ data, isDarkMode, theme }: RareMuta
           Detected Rare Mutations
         </h3>
         <div className="space-y-4">
-          {rareMutationData.map((mutation: any, index: number) => (
+          {rareMutationData.map((mutation: RareMutation, index: number) => (
             <div
               key={index}
               className={`${glassBackground} border ${borderColor} rounded-xl p-6 cursor-pointer transition-all duration-200 hover:scale-[1.02]`}
-              onClick={() => setSelectedMutation(selectedMutation === mutation.mutation_name ? null : mutation.mutation_name)}
+              onClick={() => setSelectedMutation(selectedMutation === mutation.mutation_name ? null : mutation.mutation_name || mutation.rsid)}
             >
               <div className="flex items-center justify-between">
                 <div className="flex-1">
                   <div className="flex items-center space-x-4 mb-3">
                     <h4 className={`text-lg font-bold ${textPrimary}`}>
-                      {mutation.gene} - {mutation.mutation_name}
+                      {mutation.gene} - {mutation.mutation_name || mutation.rsid}
                     </h4>
                     <span className={`px-3 py-1 rounded-full text-xs font-semibold border ${getSignificanceColor(mutation.clinical_significance)}`}>
                       {mutation.clinical_significance.replace('_', ' ').toUpperCase()}
                     </span>
                   </div>
                   <p className={`${textSecondary} mb-2`}>
-                    <strong>Disease Association:</strong> {mutation.disease_association}
+                    <strong>Disease Association:</strong> {mutation.disease_association || 'Not specified'}
                   </p>
                   <div className="flex items-center space-x-6 text-sm">
-                    <span className={`${getPenetranceColor(mutation.penetrance)}`}>
-                      <strong>Penetrance:</strong> {mutation.penetrance.replace('_', ' ')}
+                    <span className={`${getPenetranceColor(mutation.penetrance || 'unknown')}`}>
+                      <strong>Penetrance:</strong> {mutation.penetrance?.replace('_', ' ') || 'Unknown'}
                     </span>
                     <span className={textSecondary}>
-                      <strong>Inheritance:</strong> {mutation.inheritance_pattern.replace('_', ' ')}
+                      <strong>Inheritance:</strong> {mutation.inheritance_pattern?.replace('_', ' ') || 'Unknown'}
                     </span>
                     <span className={textSecondary}>
                       <strong>Frequency:</strong> {(mutation.population_frequency * 100).toFixed(3)}%
@@ -211,12 +249,12 @@ export default function RareMutationsPanel({ data, isDarkMode, theme }: RareMuta
                 </div>
                 <ChevronRight 
                   className={`h-5 w-5 ${textSecondary} transition-transform duration-200 ${
-                    selectedMutation === mutation.mutation_name ? 'rotate-90' : ''
+                    selectedMutation === (mutation.mutation_name || mutation.rsid) ? 'rotate-90' : ''
                   }`} 
                 />
               </div>
 
-              {selectedMutation === mutation.mutation_name && (
+              {selectedMutation === (mutation.mutation_name || mutation.rsid) && (
                 <div className="mt-6 pt-6 border-t border-gray-300/20">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {/* Clinical Actions */}
@@ -226,7 +264,7 @@ export default function RareMutationsPanel({ data, isDarkMode, theme }: RareMuta
                         Clinical Actions Required
                       </h5>
                       <ul className="space-y-2">
-                        {mutation.clinical_actions.map((action: string, idx: number) => (
+                        {mutation.clinical_actions?.map((action: string, idx: number) => (
                           <li key={idx} className={`text-sm ${textSecondary} flex items-start`}>
                             <span className="text-blue-400 mr-2">•</span>
                             {action}
@@ -242,7 +280,7 @@ export default function RareMutationsPanel({ data, isDarkMode, theme }: RareMuta
                         Monitoring Recommendations
                       </h5>
                       <ul className="space-y-2">
-                        {mutation.monitoring_recommendations.map((rec: string, idx: number) => (
+                        {mutation.monitoring_recommendations?.map((rec: string, idx: number) => (
                           <li key={idx} className={`text-sm ${textSecondary} flex items-start`}>
                             <span className="text-orange-400 mr-2">•</span>
                             {rec}
