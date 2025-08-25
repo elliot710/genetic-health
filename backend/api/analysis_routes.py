@@ -14,7 +14,11 @@ from .auth_routes import get_current_user
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+# Legacy router (keeping for compatibility)
 router = APIRouter(prefix="/analyze", tags=["analysis"])
+
+# New API router with proper REST structure
+api_router = APIRouter(prefix="/api/analysis", tags=["analysis-api"])
 
 # Background task executor
 executor = ThreadPoolExecutor(max_workers=2)
@@ -43,14 +47,31 @@ async def start_analysis(
                 detail="Analysis not found or access denied"
             )
         
-        # Check if analysis is already completed or in progress
-        if analysis.analysis_status in ['completed', 'processing']:
+        # Check if analysis is already in progress (but allow restarting completed ones)
+        current_status = getattr(analysis, 'analysis_status', None)
+        if current_status == 'processing':
             return {
-                "message": f"Analysis is already {analysis.analysis_status}",
+                "message": f"Analysis is already {current_status}",
                 "analysis_id": analysis_id,
-                "status": analysis.analysis_status,
-                "progress_percentage": analysis.progress_percentage or 0
+                "status": current_status,
+                "progress_percentage": getattr(analysis, 'progress_percentage', 0) or 0
             }
+        
+        # Reset progress for restart if it was completed
+        if current_status == 'completed':
+            await db.execute(
+                update(GeneticAnalysis)
+                .where(GeneticAnalysis.id == analysis_id)
+                .values(
+                    analysis_status="processing",
+                    progress_percentage=0,
+                    current_step="Restarting analysis...",
+                    processed_variants=0
+                )
+            )
+            await db.commit()
+            # Refresh the analysis object after update
+            await db.refresh(analysis)
         
         # Start the analysis job in background
         analysis_job = AnalysisJob()
@@ -794,4 +815,628 @@ async def generate_full_report(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Analysis failed: {str(e)}"
+        )
+
+
+# NEW API ENDPOINTS WITH PROPER REST STRUCTURE AND PAUSE/RESUME
+
+@api_router.post("/{analysis_id}/start")
+async def start_analysis_v2(
+    analysis_id: int,
+    current_user = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session)
+) -> Dict[str, Any]:
+    """Start or restart background analysis job for a specific analysis (API v2)"""
+    
+    try:
+        # Verify the analysis exists and belongs to the user
+        result = await db.execute(
+            select(GeneticAnalysis).where(
+                GeneticAnalysis.id == analysis_id,
+                GeneticAnalysis.user_id == current_user.id
+            )
+        )
+        analysis = result.scalar_one_or_none()
+        
+        if not analysis:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Analysis not found or access denied"
+            )
+        
+        # Check current status
+        current_status = getattr(analysis, 'analysis_status', None)
+        
+        # If already processing, return current state
+        if current_status == 'processing':
+            return {
+                "message": f"Analysis is already {current_status}",
+                "analysis_id": analysis_id,
+                "status": current_status,
+                "progress_percentage": getattr(analysis, 'progress_percentage', 0) or 0
+            }
+        
+        # Reset progress for restart if it was completed
+        if current_status == 'completed':
+            await db.execute(
+                update(GeneticAnalysis)
+                .where(GeneticAnalysis.id == analysis_id)
+                .values(
+                    analysis_status="processing",
+                    progress_percentage=0,
+                    current_step="Restarting analysis...",
+                    processed_variants=0
+                )
+            )
+            await db.commit()
+            # Refresh the analysis object after update
+            await db.refresh(analysis)
+            
+            return {
+                "message": "Analysis restarted successfully",
+                "analysis_id": analysis_id,
+                "status": "processing",
+                "progress_percentage": 0
+            }
+        
+        # Start from current position if paused/stopped
+        await db.execute(
+            update(GeneticAnalysis)
+            .where(GeneticAnalysis.id == analysis_id)
+            .values(
+                analysis_status="processing",
+                current_step="Starting analysis..."
+            )
+        )
+        await db.commit()
+        
+        # Start the analysis job in background
+        analysis_job = AnalysisJob()
+        
+        async def run_analysis():
+            """Background task to run the analysis"""
+            try:
+                result = await analysis_job.process_analysis(analysis_id)
+                return result
+            except Exception as e:
+                # Update analysis status to failed
+                async for session in get_session():
+                    await session.execute(
+                        update(GeneticAnalysis)
+                        .where(GeneticAnalysis.id == analysis_id)
+                        .values(analysis_status="failed", current_step=f"Error: {str(e)}")
+                    )
+                    await session.commit()
+                raise e
+        
+        # Submit the task to the executor (fire and forget)
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(executor, asyncio.run, run_analysis())
+        
+        return {
+            "message": "Analysis started successfully",
+            "analysis_id": analysis_id,
+            "status": "processing",
+            "progress_percentage": getattr(analysis, 'progress_percentage', 0) or 0
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start analysis: {str(e)}"
+        )
+
+@api_router.post("/{analysis_id}/pause")
+async def pause_analysis(
+    analysis_id: int,
+    current_user = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session)
+) -> Dict[str, Any]:
+    """Pause a running analysis"""
+    
+    try:
+        # Verify the analysis exists and belongs to the user
+        result = await db.execute(
+            select(GeneticAnalysis).where(
+                GeneticAnalysis.id == analysis_id,
+                GeneticAnalysis.user_id == current_user.id
+            )
+        )
+        analysis = result.scalar_one_or_none()
+        
+        if not analysis:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Analysis not found or access denied"
+            )
+        
+        # Check if analysis can be paused
+        current_status = getattr(analysis, 'analysis_status', None)
+        if current_status != 'processing':
+            return {
+                "message": f"Analysis is not running (status: {current_status})",
+                "analysis_id": analysis_id,
+                "status": current_status
+            }
+        
+        # Update analysis status to paused
+        await db.execute(
+            update(GeneticAnalysis)
+            .where(GeneticAnalysis.id == analysis_id)
+            .values(
+                analysis_status="paused",
+                current_step="Analysis paused by user"
+            )
+        )
+        await db.commit()
+        
+        return {
+            "message": "Analysis paused successfully",
+            "analysis_id": analysis_id,
+            "status": "paused",
+            "progress_percentage": analysis.progress_percentage or 0
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to pause analysis: {str(e)}"
+        )
+
+@api_router.post("/{analysis_id}/resume")
+async def resume_analysis_v2(
+    analysis_id: int,
+    current_user = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session)
+) -> Dict[str, Any]:
+    """Resume a paused analysis"""
+    
+    try:
+        # Verify the analysis exists and belongs to the user
+        result = await db.execute(
+            select(GeneticAnalysis).where(
+                GeneticAnalysis.id == analysis_id,
+                GeneticAnalysis.user_id == current_user.id
+            )
+        )
+        analysis = result.scalar_one_or_none()
+        
+        if not analysis:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Analysis not found or access denied"
+            )
+        
+        # Check if analysis can be resumed
+        current_status = getattr(analysis, 'analysis_status', None)
+        if current_status not in ['paused', 'stopped', 'failed']:
+            return {
+                "message": f"Analysis cannot be resumed from status: {current_status}",
+                "analysis_id": analysis_id,
+                "status": current_status
+            }
+        
+        # Resume the analysis job in background
+        analysis_job = AnalysisJob()
+        
+        async def run_analysis():
+            """Background task to resume the analysis"""
+            try:
+                result = await analysis_job.process_analysis(analysis_id)
+                return result
+            except Exception as e:
+                # Update analysis status to failed
+                async for session in get_session():
+                    await session.execute(
+                        update(GeneticAnalysis)
+                        .where(GeneticAnalysis.id == analysis_id)
+                        .values(analysis_status="failed", current_step=f"Error: {str(e)}")
+                    )
+                    await session.commit()
+                raise e
+        
+        # Submit the task to the executor (fire and forget)
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(executor, asyncio.run, run_analysis())
+        
+        return {
+            "message": "Analysis resumed successfully",
+            "analysis_id": analysis_id,
+            "status": "processing",
+            "progress_percentage": analysis.progress_percentage or 0
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to resume analysis: {str(e)}"
+        )
+
+@api_router.post("/{analysis_id}/stop")
+async def stop_analysis_v2(
+    analysis_id: int,
+    current_user = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session)
+) -> Dict[str, Any]:
+    """Stop a running analysis"""
+    
+    try:
+        # Verify the analysis exists and belongs to the user
+        result = await db.execute(
+            select(GeneticAnalysis).where(
+                GeneticAnalysis.id == analysis_id,
+                GeneticAnalysis.user_id == current_user.id
+            )
+        )
+        analysis = result.scalar_one_or_none()
+        
+        if not analysis:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Analysis not found or access denied"
+            )
+        
+        # Update analysis status to stopped
+        await db.execute(
+            update(GeneticAnalysis)
+            .where(GeneticAnalysis.id == analysis_id)
+            .values(
+                analysis_status="stopped",
+                current_step="Analysis stopped by user"
+            )
+        )
+        await db.commit()
+        
+        return {
+            "message": "Analysis stopped successfully",
+            "analysis_id": analysis_id,
+            "status": "stopped",
+            "progress_percentage": analysis.progress_percentage or 0
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to stop analysis: {str(e)}"
+        )
+
+@api_router.get("/dashboard-data")
+async def get_dashboard_data_v2(
+    current_user = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session)
+) -> Dict[str, Any]:
+    """Get comprehensive dashboard data for the current user (API v2)"""
+    
+    # Use the same logic as the original function
+    try:
+        user_id = current_user.id
+        
+        # Get all analyses for this user
+        analyses_result = await db.execute(
+            select(GeneticAnalysis).where(GeneticAnalysis.user_id == user_id).order_by(GeneticAnalysis.upload_date.desc())
+        )
+        analyses = analyses_result.scalars().all()
+        
+        if not analyses:
+            return {
+                "summary": {
+                    "total_variants": 0,
+                    "analysis_id": None,
+                    "processed_at": None,
+                    "uploaded_files": 0
+                },
+                "real_data": {
+                    "variants": []
+                },
+                "health_risks": {
+                    "overall_score": 85,
+                    "risk_categories": {}
+                },
+                "drug_interactions": {
+                    "high_risk_genes": []
+                },
+                "insights": [],
+                "analysis_results": {
+                    "insights": []
+                }
+            }
+        
+        # Get the most recent analysis
+        latest_analysis = analyses[0]
+        
+        # Get all variants for all analyses
+        all_variants = []
+        total_variants = 0
+        
+        for analysis in analyses:
+            variants_result = await db.execute(
+                select(GeneticVariant).where(GeneticVariant.analysis_id == analysis.id)
+            )
+            variants = variants_result.scalars().all()
+            total_variants += len(variants)
+            
+            # Add analysis info to variants
+            for variant in variants:
+                all_variants.append({
+                    "rsid": variant.rsid,
+                    "chromosome": variant.chromosome,
+                    "position": variant.position,
+                    "ref_allele": variant.ref_allele,
+                    "alt_allele": variant.alt_allele,
+                    "genotype": variant.genotype,
+                    "quality": variant.quality,
+                    "filter_status": variant.filter_status,
+                    "analysis_id": variant.analysis_id,
+                    "info": variant.info or {}
+                })
+        
+        # Get health risks for all analyses
+        all_health_risks = []
+        for analysis in analyses:
+            health_risks_result = await db.execute(
+                select(HealthRisk).where(HealthRisk.analysis_id == analysis.id)
+            )
+            health_risks = health_risks_result.scalars().all()
+            all_health_risks.extend(health_risks)
+        
+        # Get drug responses for all analyses
+        all_drug_responses = []
+        for analysis in analyses:
+            drug_responses_result = await db.execute(
+                select(DrugResponse).where(DrugResponse.analysis_id == analysis.id)
+            )
+            drug_responses = drug_responses_result.scalars().all()
+            all_drug_responses.extend(drug_responses)
+        
+        # Process health risks into categories
+        risk_categories = {}
+        overall_risk_scores = []
+        
+        for risk in all_health_risks:
+            condition = risk.condition.lower()
+            risk_score = 0
+            
+            # Convert risk levels to numeric scores
+            if risk.risk_level == 'high':
+                risk_score = 85
+            elif risk.risk_level == 'moderate':
+                risk_score = 65
+            elif risk.risk_level == 'low':
+                risk_score = 35
+            
+            # Group by condition type
+            if 'diabetes' in condition or 'glucose' in condition:
+                risk_categories['diabetes'] = {"score": risk_score, "risk_level": risk.risk_level}
+            elif 'cardiovascular' in condition or 'heart' in condition or 'cardiac' in condition:
+                risk_categories['cardiovascular'] = {"score": risk_score, "risk_level": risk.risk_level}
+            elif 'alzheimer' in condition or 'dementia' in condition or 'cognitive' in condition:
+                risk_categories['alzheimer'] = {"score": risk_score, "risk_level": risk.risk_level}
+            elif 'cancer' in condition:
+                risk_categories['cancer'] = {"score": risk_score, "risk_level": risk.risk_level}
+            else:
+                # Generic condition
+                risk_categories[condition.replace(' ', '_')] = {"score": risk_score, "risk_level": risk.risk_level}
+            
+            overall_risk_scores.append(risk_score)
+        
+        # Calculate overall health score (inverse of average risk)
+        if overall_risk_scores:
+            avg_risk = sum(overall_risk_scores) / len(overall_risk_scores)
+            overall_score = max(20, 100 - avg_risk)  # Ensure minimum score of 20
+        else:
+            overall_score = 85  # Default good score when no risks identified
+        
+        # Get high-risk genes from drug responses
+        high_risk_genes = list(set([dr.gene for dr in all_drug_responses if dr.response_type in ['poor', 'ultrarapid']]))
+        
+        # Generate insights
+        insights = []
+        
+        if all_health_risks:
+            high_risk_count = len([r for r in all_health_risks if r.risk_level == 'high'])
+            if high_risk_count > 0:
+                insights.append(f"Found {high_risk_count} high-risk genetic variant(s) requiring attention")
+        
+        if all_drug_responses:
+            poor_metabolizers = len([dr for dr in all_drug_responses if dr.response_type == 'poor'])
+            if poor_metabolizers > 0:
+                insights.append(f"Identified {poor_metabolizers} gene(s) affecting drug metabolism")
+        
+        if total_variants > 0:
+            with_rsid = len([v for v in all_variants if v.get('rsid') and v['rsid'] != '-'])
+            coverage = round((with_rsid / total_variants) * 100)
+            insights.append(f"{coverage}% of variants have reference IDs for clinical analysis")
+        
+        if not insights:
+            insights = ["Analysis complete - check individual categories for detailed results"]
+        
+        return {
+            "summary": {
+                "total_variants": total_variants,
+                "analysis_id": latest_analysis.id,
+                "processed_at": latest_analysis.upload_date.isoformat(),
+                "uploaded_files": len(analyses),
+                "data_sources": [analysis.filename for analysis in analyses],
+                "upload_info": {
+                    "filename": latest_analysis.filename,
+                    "file_type": latest_analysis.file_type
+                }
+            },
+            "real_data": {
+                "variants": all_variants,
+                "upload_result": {
+                    "filename": latest_analysis.filename
+                }
+            },
+            "health_risks": {
+                "overall_score": round(overall_score),
+                "risk_categories": risk_categories,
+                "details": [
+                    {
+                        "condition": risk.condition,
+                        "risk_level": risk.risk_level,
+                        "risk_score": risk.risk_score,
+                        "recommendations": risk.recommendations
+                    }
+                    for risk in all_health_risks
+                ]
+            },
+            "drug_interactions": {
+                "high_risk_genes": high_risk_genes,
+                "details": [
+                    {
+                        "gene": dr.gene,
+                        "drug": dr.drug,
+                        "response_type": dr.response_type,
+                        "recommendations": dr.recommendations,
+                        "variants_involved": dr.variants_involved
+                    }
+                    for dr in all_drug_responses
+                ]
+            },
+            "insights": insights,
+            "analysis_results": {
+                "insights": insights,
+                "total_analyses": len(analyses),
+                "latest_analysis_date": latest_analysis.upload_date.isoformat()
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get dashboard data: {str(e)}"
+        )
+@api_router.get("/{analysis_id}/progress")
+async def get_analysis_progress_v2(
+    analysis_id: int,
+    current_user = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session)
+) -> Dict[str, Any]:
+    """Get real-time analysis progress for a specific analysis (API v2)"""
+    
+    try:
+        # Get the analysis record with progress tracking
+        result = await db.execute(
+            select(GeneticAnalysis).where(
+                GeneticAnalysis.id == analysis_id,
+                GeneticAnalysis.user_id == current_user.id
+            )
+        )
+        analysis = result.scalar_one_or_none()
+        
+        if not analysis:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Analysis not found or access denied"
+            )
+        
+        return {
+            "analysis_id": analysis.id,
+            "status": analysis.analysis_status or 'pending',
+            "progress_percentage": analysis.progress_percentage or 0,
+            "current_step": analysis.current_step or 'Initializing...',
+            "total_variants": analysis.total_variants or 0,
+            "processed_variants": analysis.processed_variants or 0,
+            "estimated_completion": analysis.estimated_completion.isoformat() if analysis.estimated_completion is not None else None,
+            "upload_date": analysis.upload_date.isoformat(),
+            "filename": analysis.filename,
+            "file_type": analysis.file_type,
+            "analysis_results": analysis.analysis_results
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get analysis progress: {str(e)}"
+        )
+
+@api_router.post("/{analysis_id}/reset-status")
+async def reset_analysis_status_v2(
+    analysis_id: int,
+    current_user = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session)
+) -> Dict[str, Any]:
+    """Reset analysis status based on actual completion state (API v2)"""
+    
+    try:
+        # Verify the analysis exists and belongs to the user
+        result = await db.execute(
+            select(GeneticAnalysis).where(
+                GeneticAnalysis.id == analysis_id,
+                GeneticAnalysis.user_id == current_user.id
+            )
+        )
+        analysis = result.scalar_one_or_none()
+        
+        if not analysis:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Analysis not found or access denied"
+            )
+        
+        # Check if analysis has results and should be marked as completed
+        has_results = bool(
+            analysis.analysis_results and 
+            isinstance(analysis.analysis_results, dict) and
+            analysis.analysis_results.get('status') == 'completed'
+        )
+        
+        # Check if progress is 100% (should be completed regardless of results)
+        progress_complete = bool((analysis.progress_percentage or 0) >= 100)
+        
+        if has_results or progress_complete:
+            # Analysis is actually completed, update status
+            await db.execute(
+                update(GeneticAnalysis)
+                .where(GeneticAnalysis.id == analysis_id)
+                .values(
+                    analysis_status="completed",
+                    progress_percentage=100,
+                    current_step="Analysis completed"
+                )
+            )
+            await db.commit()
+            
+            return {
+                "message": "Analysis status corrected to completed",
+                "analysis_id": analysis_id,
+                "status": "completed",
+                "progress_percentage": 100
+            }
+        else:
+            # Analysis is incomplete, can be resumed
+            await db.execute(
+                update(GeneticAnalysis)
+                .where(GeneticAnalysis.id == analysis_id)
+                .values(
+                    analysis_status="stopped",
+                    current_step="Ready to resume"
+                )
+            )
+            await db.commit()
+            
+            return {
+                "message": "Analysis status reset to stopped - ready to resume",
+                "analysis_id": analysis_id,
+                "status": "stopped",
+                "progress_percentage": analysis.progress_percentage or 0
+            }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to reset analysis status: {str(e)}"
         )

@@ -65,7 +65,7 @@ export default function Home() {
     console.log('Loading existing data...')
     try {
       // Use the new dashboard data endpoint that aggregates all user data
-      const dashboardResponse = await fetch('http://localhost:8000/analyze/dashboard-data', {
+      const dashboardResponse = await fetch('http://localhost:8000/api/analysis/dashboard-data', {
         headers: {
           'Authorization': `Bearer ${authToken}`
         }

@@ -25,7 +25,8 @@ app.add_middleware(
 
 # Include routers
 app.include_router(auth_routes.router)
-app.include_router(analysis_routes.router)
+app.include_router(analysis_routes.router)  # Legacy endpoints
+app.include_router(analysis_routes.api_router)  # New API endpoints
 app.include_router(upload_routes.router)
 app.include_router(annotation_routes.router)
 

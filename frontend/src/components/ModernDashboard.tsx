@@ -4,10 +4,9 @@ import { useState, useEffect } from 'react'
 import { 
   Apple, Brain, Dumbbell, Heart, Zap, Palette, 
   ChevronDown, TrendingUp, AlertTriangle, CheckCircle, 
-  Settings, Download, Trash2, Info, Shield, Search,
+  Settings, Trash2, Info, Shield, Search,
   Upload, Dna, Activity, BarChart3, Sparkles, Target,
-  Award, Lightbulb, Star, Flame, Sun, Moon, Users,
-  MessageSquare, Bell, Menu, X, LogOut, Plus, Home,
+  Sun, Moon, Users, X, LogOut, Home,
   Square, Play, Pause
 } from 'lucide-react'
 import { getTheme } from '../utils/theme'
@@ -40,6 +39,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
   console.log('Dashboard component props:', { token: !!token, analysisData, analysisId })
   console.log('Analysis ID in dashboard:', analysisId)
   
+  // ALL STATE HOOKS MUST BE AT THE TOP
   const [data, setData] = useState<any>(analysisData || null)
   const [loading, setLoading] = useState(!analysisData)
   const [showProgress, setShowProgress] = useState(false)
@@ -48,6 +48,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [variantsPerPage] = useState(25)
+  const [searchRsid, setSearchRsid] = useState('')
+  const [goToPage, setGoToPage] = useState('')
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   
   // Notification system
@@ -56,14 +58,6 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
     message: string
     type: 'success' | 'error' | 'info'
   }>({ show: false, message: '', type: 'info' })
-
-  // Show notification helper
-  const showNotification = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
-    setNotification({ show: true, message, type })
-    setTimeout(() => {
-      setNotification(prev => ({ ...prev, show: false }))
-    }, 3000) // Hide after 3 seconds
-  }
   
   // Initialize theme from localStorage or default to false
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -74,12 +68,69 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
     return false
   })
 
+  // Analysis control state - MOVED TO TOP
+  const [analysisStatus, setAnalysisStatus] = useState<string>('pending')
+  const [analysisProgress, setAnalysisProgress] = useState<number>(0)
+  const [isAnalysisRunning, setIsAnalysisRunning] = useState(false)
+
+  // Show notification helper
+  const showNotification = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setNotification({ show: true, message, type })
+    setTimeout(() => {
+      setNotification(prev => ({ ...prev, show: false }))
+    }, 3000) // Hide after 3 seconds
+  }
+
   // Save theme preference to localStorage whenever it changes
   useEffect(() => {
     if (typeof window !== 'undefined') {
       localStorage.setItem('darkMode', JSON.stringify(isDarkMode))
     }
   }, [isDarkMode])
+
+  // Reset pagination when changing categories
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [activeCategory])
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (progressInterval) {
+        clearInterval(progressInterval)
+        setProgressInterval(null)
+      }
+    }
+  }, [progressInterval])
+
+  // Check initial status and start polling if needed
+  useEffect(() => {
+    const checkStatus = async () => {
+      if (!token || !analysisId) return
+
+      try {
+        const response = await fetch(`http://localhost:8000/api/analysis/${analysisId}/progress`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        })
+        if (response.ok) {
+          const progress = await response.json()
+          setAnalysisStatus(progress.status)
+          setAnalysisProgress(progress.progress_percentage || 0)
+          setIsAnalysisRunning(['processing', 'running'].includes(progress.status))
+        }
+      } catch (error) {
+        console.error('Error checking analysis status:', error)
+      }
+    }
+
+    checkStatus()
+    
+    // Start polling if analysis is running
+    if (analysisId && token && isAnalysisRunning && !progressInterval) {
+      const interval = setInterval(checkStatus, 2000)
+      setProgressInterval(interval)
+    }
+  }, [analysisId, token, isAnalysisRunning, progressInterval])
 
   // Load real data from backend on component mount only if no analysisData provided
   useEffect(() => {
@@ -163,15 +214,13 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
   console.log('Dashboard about to render with data:', data)
 
-  // Reset pagination when changing categories
-  useEffect(() => {
-    setCurrentPage(1)
-  }, [activeCategory])
-
   // Reset function for clearing data
   const onReset = () => {
     setData(null)
     setActiveCategory('overview')
+    setCurrentPage(1)
+    setSearchRsid('')
+    setGoToPage('')
   }
 
   // Progress handlers
@@ -300,17 +349,12 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
     }
   }
 
-  // Analysis control state
-  const [analysisStatus, setAnalysisStatus] = useState<string>('pending')
-  const [analysisProgress, setAnalysisProgress] = useState<number>(0)
-  const [isAnalysisRunning, setIsAnalysisRunning] = useState(false)
-
   // Check analysis status
   const checkAnalysisStatus = async () => {
     if (!token || !analysisId) return
 
     try {
-      const response = await fetch(`http://localhost:8000/analyze/progress/${analysisId}`, {
+      const response = await fetch(`http://localhost:8000/api/analysis/${analysisId}/progress`, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       if (response.ok) {
@@ -332,7 +376,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
         if (hasCompletedResults || shouldBeCompleted) {
           // Auto-fix status mismatch
           console.log('Status mismatch detected, auto-correcting...')
-          const resetResponse = await fetch(`http://localhost:8000/analyze/reset-status/${analysisId}`, {
+          const resetResponse = await fetch(`http://localhost:8000/api/analysis/${analysisId}/reset-status`, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${token}` }
           })
@@ -377,23 +421,6 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
     }
   }
 
-  // Cleanup polling on unmount
-  useEffect(() => {
-    return () => {
-      stopProgressPolling()
-    }
-  }, [])
-
-  // Check initial status and start polling if needed
-  useEffect(() => {
-    checkAnalysisStatus()
-    
-    // Start polling if analysis is running
-    if (analysisId && token && isAnalysisRunning) {
-      startProgressPolling()
-    }
-  }, [analysisId, token, isAnalysisRunning])
-
   // Start analysis
   const handleStartAnalysis = async () => {
     console.log('Start analysis clicked. Token:', !!token, 'Analysis ID:', analysisId)
@@ -406,7 +433,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
     try {
       setIsAnalysisRunning(true)
       console.log(`Starting analysis for ID: ${analysisId}`)
-      const response = await fetch(`http://localhost:8000/analyze/start/${analysisId}`, {
+      const response = await fetch(`http://localhost:8000/api/analysis/${analysisId}/start`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       })
@@ -416,10 +443,34 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
       if (response.ok) {
         const result = await response.json()
         console.log('Start analysis result:', result)
-        setAnalysisStatus('processing')
-        setShowProgress(true)
-        startProgressPolling() // Use our new polling method
-        showNotification('Analysis started successfully', 'success')
+        
+        // Check if backend says analysis is already completed/processing
+        if (result.message && result.message.includes('already')) {
+          // Backend prevented restart - sync with actual status
+          setAnalysisStatus(result.status)
+          setAnalysisProgress(result.progress_percentage || 0)
+          setIsAnalysisRunning(result.status === 'processing')
+          
+          if (result.status === 'completed') {
+            showNotification('Analysis is already completed', 'info')
+          } else {
+            showNotification(`Analysis is already ${result.status}`, 'info')
+          }
+        } else {
+          // Analysis actually started or restarted
+          const isRestart = result.status === 'processing' && result.progress_percentage === 0
+          
+          setAnalysisStatus(result.status)
+          setAnalysisProgress(result.progress_percentage || 0)
+          setShowProgress(true)
+          startProgressPolling()
+          
+          if (isRestart) {
+            showNotification('Analysis restarted successfully', 'success')
+          } else {
+            showNotification('Analysis started successfully', 'success')
+          }
+        }
       } else {
         const errorText = await response.text()
         console.error('Start analysis failed:', response.status, errorText)
@@ -443,7 +494,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
     try {
       console.log(`Stopping analysis for ID: ${analysisId}`)
-      const response = await fetch(`http://localhost:8000/analyze/stop/${analysisId}`, {
+      const response = await fetch(`http://localhost:8000/api/analysis/${analysisId}/stop`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       })
@@ -469,6 +520,42 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
     }
   }
 
+  const handlePauseAnalysis = async () => {
+    console.log('Pause analysis clicked. Token:', !!token, 'Analysis ID:', analysisId)
+    if (!token || !analysisId) {
+      console.error('Missing token or analysisId:', { token: !!token, analysisId })
+      showNotification('Missing authentication or analysis ID. Please refresh the page.', 'error')
+      return
+    }
+
+    try {
+      console.log(`Pausing analysis for ID: ${analysisId}`)
+      const response = await fetch(`http://localhost:8000/api/analysis/${analysisId}/pause`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      
+      console.log('Pause analysis response status:', response.status)
+      
+      if (response.ok) {
+        const result = await response.json()
+        console.log('Pause analysis result:', result)
+        setAnalysisStatus('paused')
+        setIsAnalysisRunning(false)
+        stopProgressPolling()
+        await checkAnalysisStatus() // Refresh status
+        showNotification('Analysis paused successfully', 'success')
+      } else {
+        const errorText = await response.text()
+        console.error('Pause analysis failed:', response.status, errorText)
+        showNotification(`Failed to pause analysis: ${response.status} - ${errorText}`, 'error')
+      }
+    } catch (error) {
+      console.error('Error pausing analysis:', error)
+      showNotification(`Error pausing analysis: ${error}`, 'error')
+    }
+  }
+
   const handleResumeAnalysis = async () => {
     console.log('Resume analysis clicked. Token:', !!token, 'Analysis ID:', analysisId)
     if (!token || !analysisId) {
@@ -480,7 +567,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
     try {
       setIsAnalysisRunning(true)
       console.log(`Resuming analysis for ID: ${analysisId}`)
-      const response = await fetch(`http://localhost:8000/analyze/resume/${analysisId}`, {
+      const response = await fetch(`http://localhost:8000/api/analysis/${analysisId}/resume`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       })
@@ -518,11 +605,6 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
       showNotification('Error refreshing data', 'error')
     }
   }
-
-  // Check analysis status on mount
-  useEffect(() => {
-    checkAnalysisStatus()
-  }, [analysisId, token])
 
   const stats = [
     {
@@ -900,7 +982,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                           <div className="text-3xl font-bold text-green-600 mb-1">
                             {data?.real_data?.variants?.length || 0}
                           </div>
-                          <div className={`text-sm ${theme.text.secondary}`}>Variants Analyzed</div>
+                          <div className={`text-sm ${theme.text.secondary}`}>DNA Variants</div>
                         </div>
                         
                         <div className="space-y-3">
@@ -948,50 +1030,181 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
             {/* Sample Variants Table - Glassmorphism with Pagination */}
             {data.real_data?.variants && data.real_data.variants.length > 0 && (() => {
-              const totalVariants = data.real_data.variants.length
+              // Filter variants by search term
+              const filteredVariants = searchRsid 
+                ? data.real_data.variants.filter((variant: { rsid?: string }) => 
+                    variant.rsid && variant.rsid.toLowerCase().includes(searchRsid.toLowerCase())
+                  )
+                : data.real_data.variants
+
+              const totalVariants = filteredVariants.length
               const totalPages = Math.ceil(totalVariants / variantsPerPage)
               const startIndex = (currentPage - 1) * variantsPerPage
               const endIndex = startIndex + variantsPerPage
-              const currentVariants = data.real_data.variants.slice(startIndex, endIndex)
+              const currentVariants = filteredVariants.slice(startIndex, endIndex)
+
+              // Handler for search
+              const handleSearch = (value: string) => {
+                setSearchRsid(value)
+                setCurrentPage(1) // Reset to first page when searching
+              }
+
+              // Handler for go to page
+              const handleGoToPage = (pageStr: string) => {
+                const pageNum = parseInt(pageStr)
+                if (pageNum >= 1 && pageNum <= totalPages) {
+                  setCurrentPage(pageNum)
+                  setGoToPage('')
+                }
+              }
 
               return (
                 <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-8`}>
                   <div className="flex items-center justify-between mb-6">
                     <h4 className={`font-bold ${theme.text.primary} text-xl`}>Sample Genetic Variants</h4>
                     <div className={`text-sm ${theme.text.muted}`}>
+                      {searchRsid && (
+                        <span className="mr-4">
+                          Filtered: {totalVariants} of {data.real_data.variants.length} variants
+                        </span>
+                      )}
                       Showing {startIndex + 1}-{Math.min(endIndex, totalVariants)} of {totalVariants} variants
+                    </div>
+                  </div>
+
+                  {/* Search and Navigation Controls */}
+                  <div className="flex flex-col sm:flex-row gap-4 mb-6">
+                    {/* Search by RS ID */}
+                    <div className="flex-1 relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <Search className={`h-4 w-4 ${theme.text.muted}`} />
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="Search by RS ID (e.g., rs1234567)"
+                        value={searchRsid}
+                        onChange={(e) => handleSearch(e.target.value)}
+                        className={`
+                          w-full pl-10 pr-4 py-2 text-sm
+                          ${theme.glass} border ${theme.glassBorder} 
+                          rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/50
+                          ${theme.text.primary} placeholder:${theme.text.muted}
+                          ${isDarkMode ? 'focus:bg-white/10' : 'focus:bg-white/80'}
+                        `}
+                      />
+                      {searchRsid && (
+                        <button
+                          onClick={() => handleSearch('')}
+                          className={`absolute inset-y-0 right-0 pr-3 flex items-center ${theme.text.muted} hover:${theme.text.primary}`}
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Go to Page */}
+                    <div className="flex items-center space-x-2">
+                      <span className={`text-sm ${theme.text.secondary} whitespace-nowrap`}>Go to page:</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max={totalPages}
+                        placeholder="Page"
+                        value={goToPage}
+                        onChange={(e) => setGoToPage(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            handleGoToPage(goToPage)
+                          }
+                        }}
+                        className={`
+                          w-20 px-3 py-2 text-sm text-center
+                          ${theme.glass} border ${theme.glassBorder} 
+                          rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/50
+                          ${theme.text.primary}
+                          ${isDarkMode ? 'focus:bg-white/10' : 'focus:bg-white/80'}
+                        `}
+                      />
+                      <button
+                        onClick={() => handleGoToPage(goToPage)}
+                        disabled={!goToPage || parseInt(goToPage) < 1 || parseInt(goToPage) > totalPages}
+                        className={`
+                          px-3 py-2 text-sm font-medium rounded-lg transition-all duration-200
+                          ${theme.glass} border ${theme.glassBorder}
+                          ${!goToPage || parseInt(goToPage) < 1 || parseInt(goToPage) > totalPages
+                            ? `${theme.text.muted} cursor-not-allowed opacity-50`
+                            : `${theme.text.primary} ${isDarkMode ? 'hover:bg-slate-700/40' : 'hover:bg-gray-200/40'}`
+                          }
+                        `}
+                      >
+                        Go
+                      </button>
+                      <span className={`text-sm ${theme.text.muted}`}>of {totalPages}</span>
                     </div>
                   </div>
                   
                   <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className={`${theme.glassBorder} border-b`}>
-                          <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>Chromosome</th>
-                          <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>Position</th>
-                          <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>RS ID</th>
-                          <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>Ref</th>
-                          <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>Alt</th>
-                          <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>Genotype</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {currentVariants.map((variant: any, index: number) => (
-                          <tr key={index} className={`${theme.glassBorder} border-b transition-all duration-200 ${isDarkMode ? 'hover:bg-slate-700/30' : 'hover:bg-gray-200/30'}`}>
-                            <td className={`py-4 px-4 font-semibold ${theme.text.primary}`}>{variant.chromosome}</td>
-                            <td className={`py-4 px-4 ${theme.text.secondary}`}>{variant.position?.toLocaleString()}</td>
-                            <td className={`py-4 px-4 ${theme.text.secondary}`}>{variant.rsid || '-'}</td>
-                            <td className={`py-4 px-4 ${theme.text.secondary}`}>{variant.ref_allele}</td>
-                            <td className={`py-4 px-4 ${theme.text.secondary}`}>{variant.alt_allele}</td>
-                            <td className={`py-4 px-4 ${theme.text.secondary}`}>{variant.genotype || '-'}</td>
+                    {totalVariants === 0 && searchRsid ? (
+                      <div className="text-center py-12">
+                        <Search className={`h-12 w-12 ${theme.text.muted} mx-auto mb-4`} />
+                        <h3 className={`text-lg font-medium ${theme.text.primary} mb-2`}>No variants found</h3>
+                        <p className={`${theme.text.secondary} mb-4`}>
+                          No variants match the search term &quot;{searchRsid}&quot;
+                        </p>
+                        <button
+                          onClick={() => handleSearch('')}
+                          className={`
+                            px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200
+                            ${theme.glass} border ${theme.glassBorder}
+                            ${theme.text.primary} ${isDarkMode ? 'hover:bg-slate-700/40' : 'hover:bg-gray-200/40'}
+                          `}
+                        >
+                          Clear search
+                        </button>
+                      </div>
+                    ) : (
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className={`${theme.glassBorder} border-b`}>
+                            <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>Chromosome</th>
+                            <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>Position</th>
+                            <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>RS ID</th>
+                            <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>Ref</th>
+                            <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>Alt</th>
+                            <th className={`text-left py-4 px-4 ${theme.text.secondary} font-semibold`}>Genotype</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {currentVariants.map((variant: { 
+                            chromosome: string | number;
+                            position?: number;
+                            rsid?: string;
+                            ref_allele: string;
+                            alt_allele: string;
+                            genotype?: string;
+                          }, index: number) => (
+                            <tr key={index} className={`${theme.glassBorder} border-b transition-all duration-200 ${isDarkMode ? 'hover:bg-slate-700/30' : 'hover:bg-gray-200/30'}`}>
+                              <td className={`py-4 px-4 font-semibold font-mono ${theme.text.primary}`}>{variant.chromosome}</td>
+                              <td className={`py-4 px-4 font-mono ${theme.text.secondary}`}>{variant.position?.toLocaleString()}</td>
+                              <td className={`py-4 px-4 font-mono ${theme.text.secondary}`}>
+                                {variant.rsid ? (
+                                  <span className={`${searchRsid && variant.rsid.toLowerCase().includes(searchRsid.toLowerCase()) ? 'bg-yellow-200 dark:bg-yellow-800 px-1 rounded' : ''}`}>
+                                    {variant.rsid}
+                                  </span>
+                                ) : '-'}
+                              </td>
+                              <td className={`py-4 px-4 font-mono ${theme.text.secondary}`}>{variant.ref_allele}</td>
+                              <td className={`py-4 px-4 font-mono ${theme.text.secondary}`}>{variant.alt_allele}</td>
+                              <td className={`py-4 px-4 font-mono ${theme.text.secondary}`}>{variant.genotype || '-'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
                   </div>
 
                   {/* Pagination Controls */}
-                  {totalPages > 1 && (
+                  {totalPages > 1 && totalVariants > 0 && (
                     <div className="flex items-center justify-between mt-6">
                       <button
                         onClick={() => setCurrentPage(Math.max(currentPage - 1, 1))}
@@ -1095,7 +1308,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                 Genetic Health Analysis Toolkit
               </h1>
               <p className={`text-sm ${theme.text.muted}`}>
-                {data?.summary?.total_variants || 0} variants analyzed
+                {data?.summary?.total_variants || 0} DNA variants
               </p>
             </div>
           </div>
@@ -1128,6 +1341,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                     ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800'
                     : analysisStatus === 'stopped'
                     ? 'bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400 dark:border-yellow-800'
+                    : analysisStatus === 'paused'
+                    ? 'bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-400 dark:border-orange-800'
                     : analysisStatus === 'failed'
                     ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800'
                     : 'bg-gray-50 text-gray-700 border-gray-200 dark:bg-gray-900/30 dark:text-gray-400 dark:border-gray-800'
@@ -1141,10 +1356,15 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                     </div>
                   ) : analysisStatus === 'stopped' ? (
                     <div className="flex items-center space-x-2">
-                      <Pause className="w-2 h-2" />
+                      <Square className="w-2 h-2" />
                       <span>
                         {analysisProgress >= 100 ? 'Completed' : `Stopped at ${analysisProgress}%`}
                       </span>
+                    </div>
+                  ) : analysisStatus === 'paused' ? (
+                    <div className="flex items-center space-x-2">
+                      <Pause className="w-2 h-2" />
+                      <span>Paused at {analysisProgress}%</span>
                     </div>
                   ) : analysisStatus === 'completed' ? (
                     <span>Completed</span>
@@ -1158,23 +1378,37 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                   ? 'border-white/20 bg-white/10' 
                   : 'border-gray-300 bg-white/90 shadow-sm'
               }`}>
-                {/* Start/Resume/Stop Analysis */}
+                {/* Start/Resume/Pause/Stop Analysis */}
                 {analysisStatus === 'processing' || isAnalysisRunning ? (
-                  // Stop button when analysis is running
-                  <button
-                    onClick={handleStopAnalysis}
-                    className={`px-3 py-2 text-xs font-medium transition-all duration-200 flex items-center space-x-1 rounded-l-lg ${
-                      isDarkMode 
-                        ? 'text-red-400 hover:bg-red-500/10' 
-                        : 'text-red-600 hover:bg-red-50'
-                    }`}
-                    title="Stop Analysis"
-                  >
-                    <Square className="h-3 w-3" />
-                    <span className="hidden sm:inline">Stop</span>
-                  </button>
-                ) : analysisStatus === 'stopped' ? (
-                  // Resume button when analysis is stopped
+                  // Pause and Stop buttons when analysis is running
+                  <>
+                    <button
+                      onClick={handlePauseAnalysis}
+                      className={`px-3 py-2 text-xs font-medium transition-all duration-200 flex items-center space-x-1 ${
+                        isDarkMode 
+                          ? 'text-orange-400 hover:bg-orange-500/10' 
+                          : 'text-orange-600 hover:bg-orange-50'
+                      }`}
+                      title="Pause Analysis"
+                    >
+                      <Pause className="h-3 w-3" />
+                      <span className="hidden sm:inline">Pause</span>
+                    </button>
+                    <button
+                      onClick={handleStopAnalysis}
+                      className={`px-3 py-2 text-xs font-medium transition-all duration-200 flex items-center space-x-1 rounded-r-lg border-l ${
+                        isDarkMode 
+                          ? 'text-red-400 hover:bg-red-500/10 border-white/10' 
+                          : 'text-red-600 hover:bg-red-50 border-gray-200'
+                      }`}
+                      title="Stop Analysis"
+                    >
+                      <Square className="h-3 w-3" />
+                      <span className="hidden sm:inline">Stop</span>
+                    </button>
+                  </>
+                ) : analysisStatus === 'stopped' || analysisStatus === 'paused' ? (
+                  // Resume button when analysis is stopped or paused
                   <button
                     onClick={handleResumeAnalysis}
                     disabled={!analysisId}
@@ -1229,9 +1463,9 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                       ? 'text-white hover:bg-white/10 border-white/20' 
                       : 'text-gray-700 hover:bg-gray-100 border-gray-300'
                   }`}
-                  title="Upload New Data"
+                  title="Upload New File"
                 >
-                  <Plus className="h-3 w-3" />
+                  <Upload className="h-3 w-3" />
                   <span className="hidden sm:inline">Upload</span>
                 </button>
               </div>
