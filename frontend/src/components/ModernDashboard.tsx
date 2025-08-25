@@ -918,7 +918,11 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
               <div className="xl:col-span-1 space-y-6">
                 {/* Analysis Progress (if running) */}
                 {(analysisStatus === 'processing' || isAnalysisRunning) && (
-                  <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-6`}>
+                  <div 
+                    className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-6 cursor-pointer hover:shadow-lg transition-all duration-300 hover:scale-[1.02]`}
+                    onClick={() => setShowProgress(true)}
+                    title="Click to view detailed analysis progress"
+                  >
                     <div className="flex items-center space-x-3 mb-6">
                       <div className="p-3 bg-gradient-to-br from-blue-500/20 to-cyan-500/20 backdrop-blur-xl rounded-xl border border-blue-500/30">
                         <Activity className={`h-6 w-6 ${getThemeClass('text-blue-600', isDarkMode)} animate-pulse`} />
@@ -926,6 +930,11 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                       <h3 className={`text-lg font-bold ${theme.text.primary}`}>
                         Analysis in Progress
                       </h3>
+                      <div className="ml-auto">
+                        <svg className={`w-5 h-5 ${theme.text.secondary}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                      </div>
                     </div>
                     
                     <div className="space-y-4">
@@ -1577,6 +1586,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                 analysisId={analysisId}
                 onComplete={handleAnalysisComplete}
                 onError={handleAnalysisError}
+                onBack={() => setShowProgress(false)}
               />
             ) : (
               renderCategoryContent()

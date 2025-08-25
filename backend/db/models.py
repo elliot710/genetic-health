@@ -197,3 +197,29 @@ class DetoxificationProfile(Base):
     toxin_sensitivity = Column(String)
     support_recommendations = Column(JSON)
     associated_variants = Column(JSON)
+
+class VariantAnnotation(Base):
+    __tablename__ = "variant_annotations"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    analysis_id = Column(Integer, ForeignKey("genetic_analyses.id", ondelete="CASCADE"), nullable=False)
+    variant_id = Column(Integer, ForeignKey("genetic_variants.id", ondelete="CASCADE"), nullable=False)
+    rsid = Column(String, nullable=False, index=True)
+    
+    # Raw API responses stored as JSON for future analysis
+    ensembl_data = Column(JSON)  # Complete Ensembl API response
+    clinvar_data = Column(JSON)  # Complete ClinVar API response
+    pharmgkb_data = Column(JSON)  # Complete PharmGKB API response
+    snpedia_data = Column(JSON)  # Complete SNPedia API response
+    litvar_data = Column(JSON)  # Complete LitVar/PubMed API response
+    
+    # Processed timestamp for tracking when API calls were made
+    annotated_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Status fields
+    annotation_status = Column(String, default='completed')  # 'pending', 'completed', 'failed', 'partial'
+    api_calls_made = Column(Integer, default=0)  # Track number of API calls for this variant
+    
+    # Relationships
+    variant = relationship("GeneticVariant")
+    analysis = relationship("GeneticAnalysis")

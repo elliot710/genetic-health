@@ -15,12 +15,14 @@ interface AnalysisProgressLoaderProps {
   analysisId: number;
   onComplete?: (results: any) => void;
   onError?: (error: string) => void;
+  onBack?: () => void;
 }
 
 export default function AnalysisProgressLoader({ 
   analysisId, 
   onComplete, 
-  onError 
+  onError,
+  onBack
 }: AnalysisProgressLoaderProps) {
   const [progress, setProgress] = useState<AnalysisProgress | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -156,13 +158,26 @@ export default function AnalysisProgressLoader({
         <div className="p-6">
           {/* Header */}
           <div className="flex items-center justify-between mb-6">
-            <div>
-              <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
-                Analyzing Genetic Data
-              </h2>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                {progress.filename}
-              </p>
+            <div className="flex items-center space-x-3">
+              {onBack && (
+                <button
+                  onClick={onBack}
+                  className="flex items-center justify-center w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 transition-colors duration-200"
+                  title="Back to dashboard"
+                >
+                  <svg className="w-4 h-4 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                </button>
+              )}
+              <div>
+                <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
+                  Analyzing Genetic Data
+                </h2>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                  {progress.filename}
+                </p>
+              </div>
             </div>
             <div className="flex items-center">
               {progress.status === 'processing' && (
@@ -238,11 +253,21 @@ export default function AnalysisProgressLoader({
             </div>
             
             {[
-              { step: 'Variant Classification', status: progressPercentage > 10 ? 'completed' : progressPercentage > 0 ? 'current' : 'pending' },
-              { step: 'API Annotation', status: progressPercentage > 30 ? 'completed' : progressPercentage > 10 ? 'current' : 'pending' },
-              { step: 'Health Risk Analysis', status: progressPercentage > 60 ? 'completed' : progressPercentage > 30 ? 'current' : 'pending' },
-              { step: 'Drug Response Prediction', status: progressPercentage > 80 ? 'completed' : progressPercentage > 60 ? 'current' : 'pending' },
-              { step: 'Report Generation', status: progressPercentage >= 100 ? 'completed' : progressPercentage > 80 ? 'current' : 'pending' },
+              { step: 'Variant Classification', status: progressPercentage > 5 ? 'completed' : progressPercentage > 0 ? 'current' : 'pending' },
+              { step: 'API Annotation', status: progressPercentage > 15 ? 'completed' : progressPercentage > 5 ? 'current' : 'pending' },
+              { step: 'Health & Wellness Analysis', status: progressPercentage > 25 ? 'completed' : progressPercentage > 15 ? 'current' : 'pending' },
+              { step: 'Food & Nutrition Insights', status: progressPercentage > 35 ? 'completed' : progressPercentage > 25 ? 'current' : 'pending' },
+              { step: 'Drug Response Prediction', status: progressPercentage > 45 ? 'completed' : progressPercentage > 35 ? 'current' : 'pending' },
+              { step: 'Physical Traits Analysis', status: progressPercentage > 55 ? 'completed' : progressPercentage > 45 ? 'current' : 'pending' },
+              { step: 'Sports & Fitness Insights', status: progressPercentage > 65 ? 'completed' : progressPercentage > 55 ? 'current' : 'pending' },
+              { step: 'Intelligence Analysis', status: progressPercentage > 70 ? 'completed' : progressPercentage > 65 ? 'current' : 'pending' },
+              { step: 'Personality Traits', status: progressPercentage > 75 ? 'completed' : progressPercentage > 70 ? 'current' : 'pending' },
+              { step: 'Ancestry & Origins', status: progressPercentage > 80 ? 'completed' : progressPercentage > 75 ? 'current' : 'pending' },
+              { step: 'Carrier Status Assessment', status: progressPercentage > 85 ? 'completed' : progressPercentage > 80 ? 'current' : 'pending' },
+              { step: 'Wellness Reports', status: progressPercentage > 90 ? 'completed' : progressPercentage > 85 ? 'current' : 'pending' },
+              { step: 'Methylation Pathways', status: progressPercentage > 95 ? 'completed' : progressPercentage > 90 ? 'current' : 'pending' },
+              { step: 'Detoxification Analysis', status: progressPercentage > 98 ? 'completed' : progressPercentage > 95 ? 'current' : 'pending' },
+              { step: 'Report Generation', status: progressPercentage >= 100 ? 'completed' : progressPercentage > 98 ? 'current' : 'pending' },
             ].map((item, index) => (
               <div key={index} className="flex items-center">
                 <div className={`w-4 h-4 rounded-full mr-3 flex items-center justify-center ${
@@ -279,7 +304,8 @@ export default function AnalysisProgressLoader({
               </svg>
               <div className="text-sm text-blue-800 dark:text-blue-200">
                 <strong>Processing your genetic data...</strong> We're analyzing {progress.total_variants.toLocaleString()} variants 
-                to provide comprehensive health insights and drug response predictions.
+                across 14 comprehensive categories including health, nutrition, drug responses, physical traits, sports performance, 
+                intelligence, personality, ancestry, wellness, methylation, and detoxification pathways.
               </div>
             </div>
           </div>

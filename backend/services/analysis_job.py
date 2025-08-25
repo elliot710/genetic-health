@@ -8,9 +8,10 @@ from typing import Dict, List, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from datetime import datetime, timedelta
+import time
 
 from ..db.database import get_session
-from ..db.models import GeneticAnalysis, GeneticVariant, HealthRisk, DrugResponse
+from ..db.models import GeneticAnalysis, GeneticVariant, HealthRisk, DrugResponse, VariantAnnotation
 from .genetic_api_service import GeneticAPIService
 from .health_insights import HealthInsights
 from .drug_response import DrugResponseAnalyzer
@@ -164,17 +165,42 @@ class AnalysisJob:
                 await self.api_service.close()
                     
         except Exception as e:
-            logger.error(f"Analysis job failed for analysis_id {analysis_id} (user: {self.user_id}): {str(e)}")
+            analysis_duration = (datetime.utcnow() - self._job_start_time).total_seconds() if hasattr(self, '_job_start_time') else 0
+            logger.error(f"💥 ANALYSIS JOB FAILED for analysis_id {analysis_id} (user: {self.user_id})")
+            logger.error(f"🕐 Analysis duration: {analysis_duration:.2f} seconds")
+            logger.error(f"🔍 Error type: {type(e).__name__}")
+            logger.error(f"📝 Error message: {str(e)}")
+            logger.error("📍 Error occurred in analysis job processing")
+            
+            # Try to update analysis status to failed
+            try:
+                await self._update_analysis_status(
+                    analysis_id, 'failed', 0, 
+                    f'Analysis failed: {type(e).__name__}', 0
+                )
+                logger.info(f"✅ Updated analysis {analysis_id} status to 'failed'")
+            except Exception as status_error:
+                logger.error(f"❌ Failed to update analysis status: {status_error}")
+            
             # Ensure API service is cleaned up even on error
             try:
                 await self.api_service.close()
-            except Exception:
-                pass
-            return {"error": f"Analysis job failed: {str(e)}", "user_id": self.user_id}
+                logger.info("🧹 API service cleaned up after error")
+            except Exception as cleanup_error:
+                logger.error(f"❌ Failed to cleanup API service: {cleanup_error}")
+            
+            return {
+                "error": f"Analysis job failed: {str(e)}", 
+                "user_id": self.user_id,
+                "error_type": type(e).__name__,
+                "duration_seconds": analysis_duration
+            }
 
     async def _update_analysis_status(self, analysis_id: int, status: str, 
                                     progress: int, current_step: str, processed_variants: int = 0):
-        """Update analysis progress in database using a new session"""
+        """Update analysis progress in database using a new session with enhanced monitoring"""
+        update_start_time = time.time()
+        
         try:
             async for session in get_session():
                 # Ensure we only update analyses owned by this user
@@ -194,10 +220,30 @@ class AnalysisJob:
                 
                 await session.execute(update_query)
                 await session.commit()
-                logger.info(f"Analysis {analysis_id}: {status} - {progress}% - {processed_variants} variants - {current_step}")
+                
+                update_time = time.time() - update_start_time
+                
+                # Log heartbeat every 10% progress or every 100 variants
+                if progress % 10 == 0 or processed_variants % 100 == 0:
+                    logger.info(f"💓 HEARTBEAT - Analysis {analysis_id}: {status} - {progress}% - {processed_variants} variants - {current_step}")
+                    logger.info(f"🕐 Status update took {update_time:.2f}s")
+                    
+                    # Check for potential stalls (if update takes too long)
+                    if update_time > 5.0:
+                        logger.warning(f"⚠️  SLOW DATABASE UPDATE: Status update took {update_time:.2f}s - potential performance issue")
+                else:
+                    logger.debug(f"📊 Analysis {analysis_id}: {status} - {progress}% - {processed_variants} variants - {current_step}")
+                
                 break
+                
         except Exception as e:
-            logger.error(f"Failed to update analysis status: {e}")
+            update_time = time.time() - update_start_time
+            logger.error(f"💥 CRITICAL: Failed to update analysis status after {update_time:.2f}s")
+            logger.error(f"🔍 Status update error: {type(e).__name__}: {str(e)}")
+            logger.error(f"📍 Analysis: {analysis_id}, Status: {status}, Progress: {progress}%")
+            
+            # This is critical - if we can't update status, the frontend won't know what's happening
+            logger.error("❌ Analysis progress tracking is broken - frontend may show stale data")
 
     async def _validate_user_ownership(self, session: AsyncSession, analysis_id: int) -> bool:
         """Validate that the current user owns the specified analysis"""
@@ -269,7 +315,9 @@ class AnalysisJob:
             if not group_variants:
                 continue
                 
-            logger.info(f"Processing {len(group_variants)} variants in group: {group_name}")
+            group_start_time = time.time()
+            logger.info(f"🔄 Starting processing group: {group_name} with {len(group_variants)} variants")
+            
             await self._update_analysis_status(
                 analysis_id, 'processing', 
                 int(processed_count / max(total_to_process, 1) * 100),
@@ -281,19 +329,32 @@ class AnalysisJob:
                 batch = group_variants[i:i+batch_size]
                 batch_num = i // batch_size + 1
                 total_batches = (len(group_variants) - 1) // batch_size + 1
+                batch_start_time = time.time()
                 
-                logger.info(f"Processing batch {batch_num}/{total_batches} for group {group_name}")
+                logger.info(f"📦 Processing batch {batch_num}/{total_batches} for group {group_name} ({len(batch)} variants)")
                 
-                for variant in batch:
+                for variant_idx, variant in enumerate(batch, 1):
+                    variant_start_time = time.time()
+                    
                     try:
+                        logger.info(f"🧬 Processing variant {processed_count + 1}/{total_to_process}: {variant.rsid} (batch {batch_num}, variant {variant_idx}/{len(batch)})")
+                        
                         # Skip if this variant already has annotations
                         if await self._variant_already_processed(session, variant, analysis_id):
                             processed_count += 1
+                            logger.info(f"⏭️  Skipped {variant.rsid} - already processed")
                             continue
                         
                         # Update progress every 5 variants
                         if processed_count % 5 == 0 and total_to_process > 0:
                             progress = min(int(processed_count / total_to_process * 100), 99)
+                            elapsed_time = (datetime.utcnow() - start_time).total_seconds()
+                            estimated_total_time = elapsed_time * total_to_process / max(processed_count, 1)
+                            remaining_time = estimated_total_time - elapsed_time
+                            
+                            logger.info(f"📊 Progress update: {processed_count}/{total_to_process} ({progress}%) - "
+                                      f"Elapsed: {elapsed_time:.1f}s, ETA: {remaining_time:.1f}s")
+                            
                             await self._update_analysis_status(
                                 analysis_id, 'processing', progress,
                                 f'Processing {group_name} - {processed_count}/{total_to_process} variants',
@@ -301,43 +362,91 @@ class AnalysisJob:
                             )
                         
                         # Get comprehensive annotation for this variant
-                        logger.info(f"Annotating variant {variant.rsid}")
-                        annotation = await self.api_service.annotate_variant(str(variant.rsid))
-                        api_calls_made += 1
+                        logger.info(f"🔍 Fetching annotations for {variant.rsid}")
+                        annotation_start = time.time()
                         
-                        logger.info(f"Annotation result for {variant.rsid}: {annotation}")
+                        try:
+                            annotation = await self.api_service.annotate_variant(str(variant.rsid))
+                            api_calls_made += 1
+                            annotation_time = time.time() - annotation_start
+                            
+                            logger.info(f"✅ Annotation completed for {variant.rsid} in {annotation_time:.2f}s (API call #{api_calls_made})")
+                        except Exception as api_error:
+                            annotation_time = time.time() - annotation_start
+                            logger.error(f"❌ API call failed for {variant.rsid} after {annotation_time:.2f}s: {api_error}")
+                            processed_count += 1
+                            continue
+                        
+                        # Save raw annotation data regardless of whether we generate insights
+                        # This preserves all API responses for future analysis
+                        try:
+                            logger.info(f"💾 Saving annotation data for {variant.rsid}")
+                            await self._save_variant_annotation(session, variant, annotation, analysis_id, api_calls_made)
+                            logger.info(f"✅ Annotation data saved for {variant.rsid}")
+                        except Exception as save_error:
+                            logger.error(f"❌ Failed to save annotation data for {variant.rsid}: {save_error}")
                         
                         if annotation and 'annotations' in annotation:
-                            logger.info(f"Valid annotation found for {variant.rsid}, generating insights...")
+                            logger.info(f"🔬 Generating insights for {variant.rsid}")
+                            insights_start = time.time()
+                            
                             # Generate health risk assessment
-                            health_risk = await self._generate_health_risk(variant, annotation, analysis_id)
-                            if health_risk:
-                                health_risks.append(health_risk)
-                                logger.info(f"Generated health risk for {variant.rsid}: {health_risk.condition}")
+                            try:
+                                health_risk = await self._generate_health_risk(variant, annotation, analysis_id)
+                                if health_risk:
+                                    health_risks.append(health_risk)
+                                    logger.info(f"🏥 Generated health risk for {variant.rsid}: {health_risk.condition}")
+                                else:
+                                    logger.info(f"ℹ️  No health risk generated for {variant.rsid}")
+                            except Exception as health_error:
+                                logger.error(f"❌ Health risk generation failed for {variant.rsid}: {health_error}")
                             
                             # Generate drug response prediction
-                            drug_response = await self._generate_drug_response(variant, annotation, analysis_id)
-                            if drug_response:
-                                drug_responses.append(drug_response)
-                                logger.info(f"Generated drug response for {variant.rsid}: {drug_response.drug}")
+                            try:
+                                drug_response = await self._generate_drug_response(variant, annotation, analysis_id)
+                                if drug_response:
+                                    drug_responses.append(drug_response)
+                                    logger.info(f"💊 Generated drug response for {variant.rsid}: {drug_response.drug}")
+                                else:
+                                    logger.info(f"ℹ️  No drug response generated for {variant.rsid}")
+                            except Exception as drug_error:
+                                logger.error(f"❌ Drug response generation failed for {variant.rsid}: {drug_error}")
+                            
+                            insights_time = time.time() - insights_start
+                            logger.info(f"⚡ Insights generation completed for {variant.rsid} in {insights_time:.2f}s")
                         else:
-                            logger.warning(f"No valid annotation data for {variant.rsid}: {annotation}")
+                            logger.warning(f"⚠️  No valid annotation data for {variant.rsid}: {annotation}")
                         
                         processed_count += 1
+                        variant_time = time.time() - variant_start_time
+                        
+                        # Log processing time for this variant
+                        logger.info(f"✨ Completed {variant.rsid} in {variant_time:.2f}s (total: {processed_count}/{total_to_process})")
                         
                         # Respect API rate limits with delay
-                        await asyncio.sleep(api_delay)
+                        if api_delay > 0:
+                            logger.debug(f"⏱️  Rate limit delay: {api_delay}s")
+                            await asyncio.sleep(api_delay)
                         
-                        # Log progress every 25 variants
+                        # Log progress every 25 variants with performance metrics
                         if api_calls_made % 25 == 0:
-                            logger.info(f"Processed {processed_count}/{total_to_process} variants, "
-                                      f"generated {len(health_risks)} health insights, "
-                                      f"{len(drug_responses)} drug responses")
+                            elapsed_time = (datetime.utcnow() - start_time).total_seconds()
+                            avg_time_per_variant = elapsed_time / max(processed_count, 1)
+                            
+                            logger.info(f"🚀 Performance milestone: {processed_count}/{total_to_process} variants, "
+                                      f"{len(health_risks)} health insights, {len(drug_responses)} drug responses, "
+                                      f"avg {avg_time_per_variant:.2f}s/variant")
                         
-                    except Exception as e:
-                        logger.warning(f"Failed to process variant {variant.rsid}: {str(e)}")
+                    except Exception as variant_error:
+                        variant_time = time.time() - variant_start_time
+                        logger.error(f"💥 CRITICAL ERROR processing variant {variant.rsid} after {variant_time:.2f}s: {variant_error}")
+                        logger.error(f"🔍 Error details: {type(variant_error).__name__}: {str(variant_error)}")
                         processed_count += 1
                         continue
+                
+                # Log batch completion with timing
+                batch_time = time.time() - batch_start_time
+                logger.info(f"📦 Batch {batch_num}/{total_batches} completed in {batch_time:.2f}s ({len(batch)} variants)")
                 
                 # Update progress after each batch
                 if total_to_process > 0:
@@ -347,6 +456,12 @@ class AnalysisJob:
                         f'Completed batch {batch_num}/{total_batches} for {group_name}',
                         processed_count
                     )
+            
+            # Log group completion with timing
+            group_time = time.time() - group_start_time
+            logger.info(f"🎯 Group '{group_name}' completed in {group_time:.2f}s ({len(group_variants)} variants)")
+            logger.info(f"🏆 Group '{group_name}' results: {len([hr for hr in health_risks if any(variant.rsid in str(hr.associated_variants) for variant in group_variants)])} health risks, "
+                       f"{len([dr for dr in drug_responses if any(variant.rsid in str(dr.variants_involved) for variant in group_variants)])} drug responses")
         
         # Store all results in database with progress update
         await self._update_analysis_status(
@@ -472,9 +587,107 @@ class AnalysisJob:
 
     async def _variant_already_processed(self, session: AsyncSession, variant: GeneticVariant, analysis_id: int) -> bool:
         """Check if variant has already been processed to avoid duplicate API calls"""
-        # For now, always process variants to ensure fresh analysis
-        # TODO: Implement proper duplicate checking logic
-        return False
+        try:
+            # First check if we have saved annotation data (most reliable)
+            annotation_result = await session.execute(
+                select(VariantAnnotation).where(
+                    VariantAnnotation.analysis_id == analysis_id,
+                    VariantAnnotation.variant_id == variant.id
+                ).limit(1)
+            )
+            saved_annotation = annotation_result.scalar_one_or_none()
+            
+            if saved_annotation:
+                logger.info(f"Variant {variant.rsid} already has saved annotation data - skipping API calls")
+                return True
+            
+            # Fallback: Check if this variant has associated health risks or drug responses
+            # Check for health risks
+            health_risk_result = await session.execute(
+                select(HealthRisk).where(
+                    HealthRisk.analysis_id == analysis_id,
+                    HealthRisk.associated_variants.contains([str(variant.rsid)])
+                ).limit(1)
+            )
+            health_risk = health_risk_result.scalar_one_or_none()
+            
+            # Check for drug responses
+            drug_response_result = await session.execute(
+                select(DrugResponse).where(
+                    DrugResponse.analysis_id == analysis_id,
+                    DrugResponse.variants_involved.contains([str(variant.rsid)])
+                ).limit(1)
+            )
+            drug_response = drug_response_result.scalar_one_or_none()
+            
+            # If either health risk or drug response exists, variant was processed
+            already_processed = health_risk is not None or drug_response is not None
+            
+            if already_processed:
+                logger.info(f"Variant {variant.rsid} already processed (found health/drug records) - skipping API calls")
+                return True
+            else:
+                return False
+            
+        except Exception as e:
+            logger.warning(f"Error checking if variant {variant.rsid} was processed: {e}")
+            # If we can't determine, assume not processed to be safe
+            return False
+
+    async def _save_variant_annotation(self, session: AsyncSession, variant: GeneticVariant, 
+                                     annotation: Dict[str, Any], analysis_id: int, api_calls_count: int):
+        """Save comprehensive annotation data from all external APIs"""
+        try:
+            save_start_time = time.time()
+            annotations_data = annotation.get('annotations', {})
+            
+            logger.debug(f"💾 Saving annotation data for {variant.rsid} with {len(annotations_data)} API sources")
+            
+            # Create annotation record with all raw API responses
+            variant_annotation = VariantAnnotation(
+                analysis_id=analysis_id,
+                variant_id=variant.id,
+                rsid=str(variant.rsid),
+                ensembl_data=annotations_data.get('ensembl', {}),
+                clinvar_data=annotations_data.get('clinvar', {}),
+                pharmgkb_data=annotations_data.get('pharmgkb_variant', {}),
+                snpedia_data=annotations_data.get('snpedia', {}),
+                litvar_data=annotations_data.get('literature', {}),
+                annotation_status='completed' if annotation and 'annotations' in annotation else 'partial',
+                api_calls_made=api_calls_count
+            )
+            
+            session.add(variant_annotation)
+            await session.commit()
+            
+            save_time = time.time() - save_start_time
+            logger.debug(f"✅ Saved comprehensive annotation data for {variant.rsid} in {save_time:.2f}s")
+            
+            # Log data sizes for monitoring
+            total_data_size = sum(len(str(data)) for data in [
+                annotations_data.get('ensembl', {}),
+                annotations_data.get('clinvar', {}),
+                annotations_data.get('pharmgkb_variant', {}),
+                annotations_data.get('snpedia', {}),
+                annotations_data.get('literature', {})
+            ])
+            logger.debug(f"📊 Saved {total_data_size} characters of annotation data for {variant.rsid}")
+            
+        except Exception as e:
+            save_time = time.time() - save_start_time if 'save_start_time' in locals() else 0
+            logger.error(f"❌ CRITICAL: Failed to save annotation data for {variant.rsid} after {save_time:.2f}s")
+            logger.error(f"🔍 Save error type: {type(e).__name__}")
+            logger.error(f"📝 Save error message: {str(e)}")
+            
+            # Try to rollback to prevent database corruption
+            try:
+                await session.rollback()
+                logger.info(f"🔄 Successfully rolled back transaction for {variant.rsid}")
+            except Exception as rollback_error:
+                logger.error(f"💥 CRITICAL: Rollback failed for {variant.rsid}: {rollback_error}")
+            
+            # Don't fail the analysis if annotation saving fails, but log it prominently
+            logger.warning(f"⚠️  Continuing analysis despite annotation save failure for {variant.rsid}")
 
     async def _generate_health_risk(self, variant: GeneticVariant, annotation: Dict[str, Any], analysis_id: int) -> Optional[HealthRisk]:
         """Generate health risk assessment from variant annotation"""
@@ -535,7 +748,25 @@ class AnalysisJob:
                     research_info = self._create_research_variant_info(variant, annotations, analysis_id)
                     if research_info:
                         return research_info
-                    logger.info(f"No valid clinical significance for {variant.rsid}, skipping health risk generation")
+                    
+                    # If no research info either, create a basic "unconfirmed" health risk record
+                    # This ensures we have a database record for this processed variant
+                    condition = self._determine_condition(variant, annotations) or f"Variant {variant.rsid} analysis"
+                    
+                    health_risk = HealthRisk(
+                        analysis_id=analysis_id,
+                        condition=condition,
+                        risk_level='unconfirmed',  # New risk level for unknown significance
+                        risk_score='unknown',
+                        associated_variants=[str(variant.rsid)],
+                        recommendations=[
+                            "No known clinical significance at this time",
+                            "Consider consulting genetic counselor for interpretation",
+                            f"Monitor research updates for {variant.rsid}"
+                        ]
+                    )
+                    logger.info(f"Created unconfirmed HealthRisk record for {variant.rsid} to track processing")
+                    return health_risk
                 
         except Exception as e:
             logger.warning(f"Failed to generate health risk for {variant.rsid}: {str(e)}")
@@ -638,6 +869,20 @@ class AnalysisJob:
                     recommendations="\n".join(recommendations) if isinstance(recommendations, list) else recommendations,
                     variants_involved=[str(variant.rsid)]
                 )
+            
+            # If no specific drug response found, create an "unconfirmed" record for tracking
+            else:
+                # Create a basic drug response record to track that this variant was processed
+                drug_response = DrugResponse(
+                    analysis_id=analysis_id,
+                    gene='Unknown',
+                    drug='General medications',
+                    response_type='unconfirmed',
+                    recommendations="No known drug interactions at this time. Consult healthcare provider before medication changes.",
+                    variants_involved=[str(variant.rsid)]
+                )
+                logger.info(f"Created unconfirmed DrugResponse record for {variant.rsid} to track processing")
+                return drug_response
                         
         except Exception as e:
             logger.warning(f"Failed to generate drug response for {variant.rsid}: {str(e)}")
