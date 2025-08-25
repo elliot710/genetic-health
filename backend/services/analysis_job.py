@@ -26,7 +26,7 @@ class GeneticAnalysisJob:
         self.drug_analyzer = DrugResponseAnalyzer()
         self._job_start_time = None
         
-    async def process_genetic_analysis(self, analysis_id: int, max_variants: Optional[int] = None):
+    async def process_genetic_analysis(self, analysis_id: int):
         """Process genetic analysis with FAST optimizations for better performance"""
         self._job_start_time = datetime.utcnow()
         start_time = time.time()
@@ -70,8 +70,8 @@ class GeneticAnalysisJob:
                     await self._update_analysis_status(analysis_id, 'completed', 100, 'No variants to process', 0)
                     return {"message": "No variants to process", "user_id": self.user_id}
                 
-                # FAST OPTIMIZATION: Smart variant selection and limits
-                variants_to_process = self._select_important_variants(variants, max_variants)
+                # PROCESS ALL VARIANTS: No filtering, process everything!
+                variants_to_process = variants  # Process ALL variants
                 total_to_process = len(variants_to_process)
                 
                 # FAST OPTIMIZATION: Determine API delay based on dataset size
@@ -101,9 +101,13 @@ class GeneticAnalysisJob:
                             logger.info(f"⏭️ Skipped {variant.rsid} - already processed")
                             continue
                         
-                        # Fast annotation call
+                        # Fast annotation call with timing
+                        start_time = time.time()
                         annotation = await self.api_service.annotate_variant(str(variant.rsid))
+                        api_time = time.time() - start_time
                         api_calls_made += 1
+                        
+                        logger.info(f"⚡ Variant {variant.rsid} annotated in {api_time:.2f}s")
                         
                         if annotation:
                             # Save annotation data
@@ -183,71 +187,41 @@ class GeneticAnalysisJob:
             except Exception:
                 pass
 
-    def _select_important_variants(self, variants: List, max_variants: Optional[int]) -> List:
-        """FAST: Select most important variants for processing"""
-        if max_variants is None:
-            # When no limit, still prioritize for better user experience
-            max_variants = min(len(variants), 500)  # Reasonable limit for speed
-        
-        # Prioritize variants by importance
-        pharmacogenes = []
-        pathogenic = []
-        other_clinical = []
-        common = []
-        
-        for variant in variants:
-            rsid = str(variant.rsid).lower()
-            # Get clinical significance from info field (JSON) if available
-            clinical_sig = ''
-            if variant.info and isinstance(variant.info, dict):
-                clinical_sig = str(variant.info.get('clinical_significance', '')).lower()
-            
-            # Top priority: Pharmacogenes (drug response)
-            if any(gene in rsid for gene in ['cyp', 'adh', 'aldh', 'comt', 'mthfr', 'apoe']):
-                pharmacogenes.append(variant)
-            # High priority: Disease variants
-            elif 'pathogenic' in clinical_sig and 'likely' not in clinical_sig:
-                pathogenic.append(variant)
-            # Medium priority: Other clinical variants
-            elif clinical_sig and clinical_sig not in ['uncertain significance', 'benign', 'likely benign']:
-                other_clinical.append(variant)
-            else:
-                common.append(variant)
-        
-        # Smart allocation of processing budget
-        selected = []
-        remaining = max_variants
-        
-        # Always include ALL pharmacogenes (they're critical)
-        selected.extend(pharmacogenes)
-        remaining -= len(pharmacogenes)
-        
-        if remaining > 0:
-            # Allocate 60% to pathogenic
-            pathogenic_limit = min(len(pathogenic), int(remaining * 0.6))
-            selected.extend(pathogenic[:pathogenic_limit])
-            remaining -= pathogenic_limit
-            
-            # Allocate 30% to other clinical
-            clinical_limit = min(len(other_clinical), int(remaining * 0.3))
-            selected.extend(other_clinical[:clinical_limit])
-            remaining -= clinical_limit
-            
-            # Allocate remaining to common variants
-            selected.extend(common[:remaining])
-        
-        logger.info(f"🎯 Selected {len(selected)} important variants:")
-        logger.info(f"  - Pharmacogenes: {len(pharmacogenes)}")
-        logger.info(f"  - Pathogenic: {min(len(pathogenic), int(max_variants * 0.6))}")
-        logger.info(f"  - Other clinical: {min(len(other_clinical), int(max_variants * 0.3))}")
-        logger.info(f"  - Common: {len(selected) - len(pharmacogenes) - min(len(pathogenic), int(max_variants * 0.6)) - min(len(other_clinical), int(max_variants * 0.3))}")
-        
-        return selected
-
     def _is_pharmacogene_variant(self, variant) -> bool:
         """Check if variant is in a pharmacogene"""
         rsid = str(variant.rsid).lower()
         return any(gene in rsid for gene in ['cyp', 'adh', 'aldh', 'comt', 'mthfr', 'apoe'])
+
+    async def _process_single_variant(self, variant, analysis_id: int, session: AsyncSession) -> Dict:
+        """Process a single variant asynchronously"""
+        try:
+            # Fast annotation call with timing
+            start_time = time.time()
+            annotation = await self.api_service.annotate_variant(str(variant.rsid))
+            api_time = time.time() - start_time
+            
+            if annotation:
+                # Save annotation data
+                await self._save_variant_annotation(session, variant, annotation, analysis_id, 1)
+                
+                # Generate essential insights only (for speed)
+                drug_response = None
+                if self._is_pharmacogene_variant(variant):
+                    drug_response = await self._generate_drug_response(variant, annotation)
+                    
+                return {
+                    'success': True,
+                    'variant': variant,
+                    'annotation': annotation,
+                    'drug_response': drug_response,
+                    'api_time': api_time
+                }
+            else:
+                return {'success': False, 'variant': variant, 'error': 'No annotation'}
+                
+        except Exception as e:
+            logger.error(f"❌ Error processing variant {variant.rsid}: {e}")
+            return {'success': False, 'variant': variant, 'error': str(e)}
 
     async def _variant_already_processed(self, session: AsyncSession, variant, analysis_id: int) -> bool:
         """Check if variant already has annotation data"""
@@ -352,7 +326,7 @@ class GeneticAnalysisJob:
     # Backward compatibility method
     async def process_analysis(self, analysis_id: int, max_variants: Optional[int] = None):
         """Alias for backward compatibility with existing API routes"""
-        return await self.process_genetic_analysis(analysis_id, max_variants)
+        return await self.process_genetic_analysis(analysis_id)
 
 # Alias for backward compatibility with existing imports
 AnalysisJob = GeneticAnalysisJob

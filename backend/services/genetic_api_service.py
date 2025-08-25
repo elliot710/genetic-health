@@ -1200,8 +1200,8 @@ class GeneticAPIService:
                 batch_results = await asyncio.gather(*tasks, return_exceptions=True)
                 annotated_variants.extend(batch_results)
             
-            # Enhanced rate limiting - pause between batches
-            await asyncio.sleep(1.0)  # Increased delay for API compliance
+            # Enhanced rate limiting - pause between batches (optimized for speed)
+            await asyncio.sleep(0.05)  # Reduced from 1.0s to 0.05s for faster processing
         
         return annotated_variants
 
