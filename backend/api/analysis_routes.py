@@ -9,7 +9,8 @@ from typing import Dict, Any
 from ..db.database import get_session
 from ..db.models import GeneticAnalysis, GeneticVariant, HealthRisk, DrugResponse
 from ..services.genetic_analyzer import GeneticAnalyzer
-from ..services.analysis_job import AnalysisJob
+from ..services.analysis_queue import queue_analysis, get_queue_status
+from ..services.analysis_job import AnalysisJob  # Keep for legacy functions
 from .auth_routes import get_current_user
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -73,28 +74,26 @@ async def start_analysis(
             # Refresh the analysis object after update
             await db.refresh(analysis)
         
-        # Start the analysis job in background
-        analysis_job = AnalysisJob()
+        # Queue the analysis job for background processing
+        success = await queue_analysis(analysis_id, current_user.id, priority=1)
         
-        async def run_analysis():
-            """Background task to run the analysis"""
-            try:
-                result = await analysis_job.process_analysis(analysis_id)
-                return result
-            except Exception as e:
-                # Update analysis status to failed
-                async for session in get_session():
-                    await session.execute(
-                        update(GeneticAnalysis)
-                        .where(GeneticAnalysis.id == analysis_id)
-                        .values(analysis_status="failed", current_step=f"Error: {str(e)}")
-                    )
-                    await session.commit()
-                raise e
-        
-        # Submit the task to the executor (fire and forget)
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(executor, asyncio.run, run_analysis())
+        if not success:
+            # Analysis is already running or user has reached limit
+            result = await db.execute(
+                select(GeneticAnalysis).where(
+                    GeneticAnalysis.id == analysis_id,
+                    GeneticAnalysis.user_id == current_user.id
+                )
+            )
+            analysis = result.scalar_one_or_none()
+            current_status = analysis.analysis_status if analysis else 'unknown'
+            
+            return {
+                "message": "Analysis could not be queued - may already be running or user limit reached",
+                "analysis_id": analysis_id,
+                "status": current_status,
+                "note": "Check queue status for more details"
+            }
         
         return {
             "message": "Analysis started successfully",
@@ -110,6 +109,36 @@ async def start_analysis(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to start analysis: {str(e)}"
+        )
+
+@router.get("/queue-status")
+async def get_analysis_queue_status(
+    current_user = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Get current analysis queue status"""
+    
+    try:
+        queue_status = get_queue_status()
+        
+        # Filter running analyses to only show user's own analyses
+        user_running_analyses = [
+            analysis for analysis in queue_status.get("running_analyses", [])
+            if analysis["user_id"] == current_user.id
+        ]
+        
+        return {
+            "queue_size": queue_status.get("queue_size", 0),
+            "total_running_jobs": queue_status.get("running_jobs", 0),
+            "max_concurrent": queue_status.get("max_concurrent", 3),
+            "user_running_analyses": user_running_analyses,
+            "user_running_count": queue_status.get("user_running_counts", {}).get(current_user.id, 0),
+            "user_limit": 2  # Max concurrent analyses per user
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get queue status: {str(e)}"
         )
 
 @router.get("/progress/{analysis_id}")
@@ -661,7 +690,7 @@ async def resume_analysis(
             }
         
         # Resume the analysis job in background
-        analysis_job = AnalysisJob()
+        analysis_job = AnalysisJob(user_id=current_user.id)
         
         async def run_analysis():
             """Background task to resume the analysis"""
@@ -673,15 +702,16 @@ async def resume_analysis(
                 async for session in get_session():
                     await session.execute(
                         update(GeneticAnalysis)
-                        .where(GeneticAnalysis.id == analysis_id)
+                        .where(
+                            GeneticAnalysis.id == analysis_id,
+                            GeneticAnalysis.user_id == current_user.id  # Ensure user ownership
+                        )
                         .values(analysis_status="failed", current_step=f"Error: {str(e)}")
                     )
                     await session.commit()
                 raise e
         
-        # Submit the task to the executor (fire and forget)
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(executor, asyncio.run, run_analysis())
+        asyncio.create_task(run_analysis())
         
         return {
             "message": "Analysis resumed successfully",
@@ -890,28 +920,26 @@ async def start_analysis_v2(
         )
         await db.commit()
         
-        # Start the analysis job in background
-        analysis_job = AnalysisJob()
+        # Queue the analysis job for background processing
+        success = await queue_analysis(analysis_id, current_user.id, priority=1)
         
-        async def run_analysis():
-            """Background task to run the analysis"""
-            try:
-                result = await analysis_job.process_analysis(analysis_id)
-                return result
-            except Exception as e:
-                # Update analysis status to failed
-                async for session in get_session():
-                    await session.execute(
-                        update(GeneticAnalysis)
-                        .where(GeneticAnalysis.id == analysis_id)
-                        .values(analysis_status="failed", current_step=f"Error: {str(e)}")
-                    )
-                    await session.commit()
-                raise e
-        
-        # Submit the task to the executor (fire and forget)
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(executor, asyncio.run, run_analysis())
+        if not success:
+            # Analysis is already running or user has reached limit
+            result = await db.execute(
+                select(GeneticAnalysis).where(
+                    GeneticAnalysis.id == analysis_id,
+                    GeneticAnalysis.user_id == current_user.id
+                )
+            )
+            analysis = result.scalar_one_or_none()
+            current_status = analysis.analysis_status if analysis else 'unknown'
+            
+            return {
+                "message": "Analysis could not be queued - may already be running or user limit reached",
+                "analysis_id": analysis_id,
+                "status": current_status,
+                "note": "Check queue status for more details"
+            }
         
         return {
             "message": "Analysis started successfully",
@@ -1021,7 +1049,7 @@ async def resume_analysis_v2(
             }
         
         # Resume the analysis job in background
-        analysis_job = AnalysisJob()
+        analysis_job = AnalysisJob(user_id=current_user.id)
         
         async def run_analysis():
             """Background task to resume the analysis"""
@@ -1033,15 +1061,16 @@ async def resume_analysis_v2(
                 async for session in get_session():
                     await session.execute(
                         update(GeneticAnalysis)
-                        .where(GeneticAnalysis.id == analysis_id)
+                        .where(
+                            GeneticAnalysis.id == analysis_id,
+                            GeneticAnalysis.user_id == current_user.id  # Ensure user ownership
+                        )
                         .values(analysis_status="failed", current_step=f"Error: {str(e)}")
                     )
                     await session.commit()
                 raise e
         
-        # Submit the task to the executor (fire and forget)
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(executor, asyncio.run, run_analysis())
+        asyncio.create_task(run_analysis())
         
         return {
             "message": "Analysis resumed successfully",

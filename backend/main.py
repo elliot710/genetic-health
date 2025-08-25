@@ -4,7 +4,7 @@ Genetic Health Analysis Toolkit - FastAPI Backend
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import auth_routes, analysis_routes, upload_routes, annotation_routes
+from .api import auth_routes, analysis_routes, upload_routes, annotation_routes, variant_routes
 from .db.database import init_db  # Re-enabled
 
 # Create FastAPI app
@@ -29,6 +29,7 @@ app.include_router(analysis_routes.router)  # Legacy endpoints
 app.include_router(analysis_routes.api_router)  # New API endpoints
 app.include_router(upload_routes.router)
 app.include_router(annotation_routes.router)
+app.include_router(variant_routes.router)
 
 @app.get("/")
 async def root():

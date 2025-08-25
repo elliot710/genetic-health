@@ -71,6 +71,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
   // Analysis control state - MOVED TO TOP
   const [analysisStatus, setAnalysisStatus] = useState<string>('pending')
   const [analysisProgress, setAnalysisProgress] = useState<number>(0)
+  const [totalVariants, setTotalVariants] = useState<number>(0)
+  const [processedVariants, setProcessedVariants] = useState<number>(0)
   const [isAnalysisRunning, setIsAnalysisRunning] = useState(false)
 
   // Show notification helper
@@ -116,6 +118,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
           const progress = await response.json()
           setAnalysisStatus(progress.status)
           setAnalysisProgress(progress.progress_percentage || 0)
+          setTotalVariants(progress.total_variants || 0)
+          setProcessedVariants(progress.processed_variants || 0)
           setIsAnalysisRunning(['processing', 'running'].includes(progress.status))
         }
       } catch (error) {
@@ -384,11 +388,15 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
             const resetResult = await resetResponse.json()
             setAnalysisStatus(resetResult.status)
             setAnalysisProgress(resetResult.progress_percentage || 0)
+            setTotalVariants(resetResult.total_variants || 0)
+            setProcessedVariants(resetResult.processed_variants || 0)
             setIsAnalysisRunning(false)
           }
         } else {
           setAnalysisStatus(progress.status)
           setAnalysisProgress(progress.progress_percentage || 0)
+          setTotalVariants(progress.total_variants || 0)
+          setProcessedVariants(progress.processed_variants || 0)
           setIsAnalysisRunning(progress.status === 'processing')
         }
         
@@ -449,6 +457,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
           // Backend prevented restart - sync with actual status
           setAnalysisStatus(result.status)
           setAnalysisProgress(result.progress_percentage || 0)
+          setTotalVariants(result.total_variants || 0)
+          setProcessedVariants(result.processed_variants || 0)
           setIsAnalysisRunning(result.status === 'processing')
           
           if (result.status === 'completed') {
@@ -462,6 +472,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
           
           setAnalysisStatus(result.status)
           setAnalysisProgress(result.progress_percentage || 0)
+          setTotalVariants(result.total_variants || 0)
+          setProcessedVariants(result.processed_variants || 0)
           setShowProgress(true)
           startProgressPolling()
           
@@ -921,7 +933,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                       <div>
                         <div className="flex justify-between items-center mb-2">
                           <span className={`text-sm font-medium ${theme.text.secondary}`}>
-                            Processing variants...
+                            {totalVariants > 0 ? `Processing ${processedVariants.toLocaleString()}/${totalVariants.toLocaleString()} variants` : 'Processing variants...'}
                           </span>
                           <span className={`text-sm font-bold ${theme.text.primary}`}>
                             {analysisProgress}%
@@ -939,15 +951,15 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                       <div className="grid grid-cols-2 gap-3">
                         <div className={`${theme.glass} border ${theme.glassBorder} rounded-lg p-3 text-center`}>
                           <div className={`text-lg font-bold ${theme.text.primary}`}>
-                            {analysisProgress}%
+                            {totalVariants > 0 ? processedVariants.toLocaleString() : '0'}
                           </div>
-                          <div className={`text-xs ${theme.text.secondary}`}>Complete</div>
+                          <div className={`text-xs ${theme.text.secondary}`}>Processed</div>
                         </div>
                         <div className={`${theme.glass} border ${theme.glassBorder} rounded-lg p-3 text-center`}>
                           <div className={`text-lg font-bold ${theme.text.primary}`}>
-                            {analysisStatus === 'processing' ? 'Running' : 'Pending'}
+                            {totalVariants > 0 ? totalVariants.toLocaleString() : '0'}
                           </div>
-                          <div className={`text-xs ${theme.text.secondary}`}>Status</div>
+                          <div className={`text-xs ${theme.text.secondary}`}>Total</div>
                         </div>
                       </div>
                       
@@ -956,7 +968,12 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                         <div className={`text-sm ${getThemeClass('text-blue-800', isDarkMode)}`}>
                           <div className="flex items-center space-x-2">
                             <div className={`w-2 h-2 rounded-full ${getThemeClass('bg-blue-500', isDarkMode)} animate-pulse`}></div>
-                            <span>Analyzing your genetic variants for health insights...</span>
+                            <span>
+                              {totalVariants > 0 
+                                ? `Analyzing ${processedVariants.toLocaleString()} of ${totalVariants.toLocaleString()} variants for health insights...`
+                                : 'Analyzing your genetic variants for health insights...'
+                              }
+                            </span>
                           </div>
                         </div>
                       </div>

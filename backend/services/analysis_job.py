@@ -22,10 +22,18 @@ logger = logging.getLogger(__name__)
 class AnalysisJob:
     """Background job for analyzing genetic variants and generating insights with progress tracking"""
     
-    def __init__(self):
+    def __init__(self, user_id: Optional[int] = None):
+        # User context for isolation and validation
+        self.user_id = user_id
+        
+        # API services - each job gets its own instance to avoid shared state
         self.api_service = GeneticAPIService()
         self.health_analyzer = HealthInsights()
         self.drug_analyzer = DrugResponseAnalyzer()
+        
+        # Per-job rate limiting and state to prevent cross-user interference
+        self._job_start_time = None
+        self._api_calls_made = 0
         
         # High-priority pharmacogenes for focused analysis
         self.priority_genes = [
@@ -51,19 +59,29 @@ class AnalysisJob:
             analysis_id: ID of the genetic analysis to process
             max_variants: Maximum number of variants to analyze (None = process ALL variants)
         """
-        logger.info(f"Starting analysis job for analysis_id: {analysis_id}")
-        start_time = datetime.utcnow()
+        logger.info(f"Starting analysis job for analysis_id: {analysis_id} (user: {self.user_id})")
+        self._job_start_time = datetime.utcnow()
+        start_time = self._job_start_time
         
         try:
             session_generator = get_session()
             session = await session_generator.__anext__()
             
             try:
+                # CRITICAL: Validate user ownership of this analysis
+                if not await self._validate_user_ownership(session, analysis_id):
+                    logger.error(f"User {self.user_id} attempted to access analysis {analysis_id} without permission")
+                    raise ValueError(f"Access denied: Analysis {analysis_id} not owned by user {self.user_id}")
+                
                 # Initialize progress tracking
-                await self._update_analysis_status(analysis_id, 'processing', 0, 'Initializing analysis...')
+                await self._update_analysis_status(analysis_id, 'processing', 0, 'Initializing analysis...', 0)
                 
                 # Get ALL variants for this analysis (no limit unless specified)
-                query = select(GeneticVariant).where(GeneticVariant.analysis_id == analysis_id)
+                # Additional safety: ensure we only get variants for THIS user's analysis
+                query = select(GeneticVariant).join(GeneticAnalysis).where(
+                    GeneticVariant.analysis_id == analysis_id,
+                    GeneticAnalysis.user_id == self.user_id
+                )
                 if max_variants:
                     query = query.limit(max_variants)
                 
@@ -71,23 +89,27 @@ class AnalysisJob:
                 variants = list(variants_result.scalars().all())
                 
                 if not variants:
-                    logger.warning(f"No variants found for analysis {analysis_id}")
-                    await self._update_analysis_status(analysis_id, 'completed', 100, 'No variants to analyze')
+                    logger.warning(f"No variants found for analysis {analysis_id} (user: {self.user_id})")
+                    await self._update_analysis_status(analysis_id, 'completed', 100, 'No variants to analyze', 0)
                     return {
                         "message": "No variants to analyze",
                         "analysis_id": analysis_id,
                         "status": "completed",
-                        "variants_analyzed": 0
+                        "variants_analyzed": 0,
+                        "user_id": self.user_id
                     }
                 
                 total_variants = len(variants)
-                logger.info(f"Processing {total_variants} variants for analysis {analysis_id}")
+                logger.info(f"Processing {total_variants} variants for analysis {analysis_id} (user: {self.user_id})")
                 
                 # Update total variants count and estimated completion
                 estimated_completion = datetime.utcnow() + timedelta(minutes=max(total_variants//100, 10))
                 await session.execute(
                     update(GeneticAnalysis)
-                    .where(GeneticAnalysis.id == analysis_id)
+                    .where(
+                        GeneticAnalysis.id == analysis_id,
+                        GeneticAnalysis.user_id == self.user_id  # Double-check user ownership
+                    )
                     .values(
                         total_variants=total_variants,
                         estimated_completion=estimated_completion
@@ -100,14 +122,18 @@ class AnalysisJob:
                 
                 # Update final analysis status
                 await self._update_analysis_status(
-                    analysis_id, 'completed', 100, 'Analysis completed successfully'
+                    analysis_id, 'completed', 100, 'Analysis completed successfully', 
+                    results.get("variants_processed", 0)
                 )
                 
-                # Store final results
+                # Store final results with user validation
                 processing_time = (datetime.utcnow() - start_time).total_seconds()
                 await session.execute(
                     update(GeneticAnalysis)
-                    .where(GeneticAnalysis.id == analysis_id)
+                    .where(
+                        GeneticAnalysis.id == analysis_id,
+                        GeneticAnalysis.user_id == self.user_id  # Ensure user ownership
+                    )
                     .values(
                         analysis_results={
                             "status": "completed",
@@ -121,52 +147,84 @@ class AnalysisJob:
                             "trait_categories_generated": {
                                 "health_risks": len(results.get("health_risks", [])),
                                 "drug_responses": len(results.get("drug_responses", [])),
-                            }
+                            },
+                            "user_id": self.user_id  # Track which user this belongs to
                         }
                     )
                 )
                 await session.commit()
                 
-                logger.info(f"Analysis job completed for analysis_id: {analysis_id}")
+                logger.info(f"Analysis job completed for analysis_id: {analysis_id} (user: {self.user_id})")
+                results["user_id"] = self.user_id
                 return results
                 
             finally:
                 await session.close()
+                # Clean up API service resources
+                await self.api_service.close()
                     
         except Exception as e:
-            logger.error(f"Analysis job failed for analysis_id {analysis_id}: {str(e)}")
-            return {"error": f"Analysis job failed: {str(e)}"}
+            logger.error(f"Analysis job failed for analysis_id {analysis_id} (user: {self.user_id}): {str(e)}")
+            # Ensure API service is cleaned up even on error
+            try:
+                await self.api_service.close()
+            except Exception:
+                pass
+            return {"error": f"Analysis job failed: {str(e)}", "user_id": self.user_id}
 
     async def _update_analysis_status(self, analysis_id: int, status: str, 
-                                    progress: int, current_step: str):
+                                    progress: int, current_step: str, processed_variants: int = 0):
         """Update analysis progress in database using a new session"""
         try:
             async for session in get_session():
-                # Calculate processed variants based on progress
-                analysis_result = await session.execute(
-                    select(GeneticAnalysis).where(GeneticAnalysis.id == analysis_id)
+                # Ensure we only update analyses owned by this user
+                update_query = update(GeneticAnalysis).where(
+                    GeneticAnalysis.id == analysis_id
                 )
-                analysis = analysis_result.scalar_one_or_none()
+                # Add user validation if user_id is set
+                if self.user_id is not None:
+                    update_query = update_query.where(GeneticAnalysis.user_id == self.user_id)
                 
-                processed_variants = 0
-                if analysis and analysis.total_variants is not None and status == 'processing':
-                    processed_variants = progress * analysis.total_variants // 100
-                
-                await session.execute(
-                    update(GeneticAnalysis)
-                    .where(GeneticAnalysis.id == analysis_id)
-                    .values(
-                        analysis_status=status,
-                        progress_percentage=progress,
-                        current_step=current_step,
-                        processed_variants=processed_variants
-                    )
+                update_query = update_query.values(
+                    analysis_status=status,
+                    progress_percentage=progress,
+                    current_step=current_step,
+                    processed_variants=processed_variants
                 )
+                
+                await session.execute(update_query)
                 await session.commit()
-                logger.info(f"Analysis {analysis_id}: {status} - {progress}% - {current_step}")
+                logger.info(f"Analysis {analysis_id}: {status} - {progress}% - {processed_variants} variants - {current_step}")
                 break
         except Exception as e:
             logger.error(f"Failed to update analysis status: {e}")
+
+    async def _validate_user_ownership(self, session: AsyncSession, analysis_id: int) -> bool:
+        """Validate that the current user owns the specified analysis"""
+        if self.user_id is None:
+            # If no user_id is set, we can't validate ownership (legacy mode)
+            logger.warning(f"No user_id set for analysis job - skipping ownership validation for analysis {analysis_id}")
+            return True
+        
+        try:
+            result = await session.execute(
+                select(GeneticAnalysis).where(
+                    GeneticAnalysis.id == analysis_id,
+                    GeneticAnalysis.user_id == self.user_id
+                )
+            )
+            analysis = result.scalar_one_or_none()
+            
+            if analysis is None:
+                logger.error(f"Analysis {analysis_id} not found or not owned by user {self.user_id}")
+                return False
+            
+            logger.info(f"Validated user {self.user_id} ownership of analysis {analysis_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error validating user ownership: {e}")
+            return False
 
     async def _process_variants_with_progress(self, session: AsyncSession, variants: List[GeneticVariant], 
                                            analysis_id: int, max_variants: Optional[int] = None) -> Dict[str, Any]:
@@ -195,10 +253,13 @@ class AnalysisJob:
         
         # API rate limiting configuration (respects third-party limits)
         # NCBI: 3 req/sec, PharmGKB: 10 req/sec, Ensembl: 15 req/sec
-        # For large-scale processing, be more conservative
-        if total_to_process > 1000:
-            api_delay = 0.5  # More conservative delay for large datasets
-            batch_size = 50  # Larger batches for efficiency
+        # For large-scale processing, balance speed with API limits
+        if total_to_process > 50000:
+            api_delay = 0.15  # Faster processing for massive datasets (6-7 req/sec)
+            batch_size = 100  # Larger batches for efficiency
+        elif total_to_process > 5000:
+            api_delay = 0.2   # Medium delay for large datasets (5 req/sec)
+            batch_size = 75   # Medium batches
         else:
             api_delay = 0.35  # Standard delay for smaller datasets  
             batch_size = 25   # Smaller batches for better progress tracking
@@ -212,7 +273,7 @@ class AnalysisJob:
             await self._update_analysis_status(
                 analysis_id, 'processing', 
                 int(processed_count / max(total_to_process, 1) * 100),
-                f'Processing {group_name} variants...'
+                f'Processing {group_name} variants...', processed_count
             )
             
             # Process variants in small batches
@@ -235,7 +296,8 @@ class AnalysisJob:
                             progress = min(int(processed_count / total_to_process * 100), 99)
                             await self._update_analysis_status(
                                 analysis_id, 'processing', progress,
-                                f'Processing {group_name} - {processed_count}/{total_to_process} variants'
+                                f'Processing {group_name} - {processed_count}/{total_to_process} variants',
+                                processed_count
                             )
                         
                         # Get comprehensive annotation for this variant
@@ -282,12 +344,13 @@ class AnalysisJob:
                     progress = min(int(processed_count / total_to_process * 100), 99)
                     await self._update_analysis_status(
                         analysis_id, 'processing', progress,
-                        f'Completed batch {batch_num}/{total_batches} for {group_name}'
+                        f'Completed batch {batch_num}/{total_batches} for {group_name}',
+                        processed_count
                     )
         
         # Store all results in database with progress update
         await self._update_analysis_status(
-            analysis_id, 'processing', 95, 'Saving results to database...'
+            analysis_id, 'processing', 95, 'Saving results to database...', processed_count
         )
         
         if health_risks:
@@ -367,23 +430,13 @@ class AnalysisJob:
         processing_plan = {}
         
         if max_variants is None:
-            # No limit - process significant portions intelligently based on total variant count
-            if total_variants > 100000:  # For large datasets like 609K variants
-                # Process a meaningful sample with clinical priority
-                processing_plan = {
-                    "pharmacogenes": variant_groups.get("pharmacogenes", []),  # Process ALL pharmacogenes (highest priority)
-                    "disease_variants": variant_groups.get("disease_variants", [])[:1000],  # Up to 1000 disease variants
-                    "common_variants": variant_groups.get("common_variants", [])[:2000],  # Up to 2000 common variants  
-                    "other_variants": variant_groups.get("other_variants", [])[:1000]   # Up to 1000 other variants
-                }
-            else:
-                # For smaller datasets, process more comprehensively
-                processing_plan = {
-                    "pharmacogenes": variant_groups.get("pharmacogenes", []),  # Process ALL pharmacogenes
-                    "disease_variants": variant_groups.get("disease_variants", [])[:5000],  # Up to 5000 disease variants
-                    "common_variants": variant_groups.get("common_variants", [])[:10000],  # Up to 10000 common variants
-                    "other_variants": variant_groups.get("other_variants", [])[:2000]   # Up to 2000 other variants
-                }
+            # No limit - process ALL variants with prioritized ordering
+            processing_plan = {
+                "pharmacogenes": variant_groups.get("pharmacogenes", []),  # Process ALL pharmacogenes (highest priority)
+                "disease_variants": variant_groups.get("disease_variants", []),  # Process ALL disease variants
+                "common_variants": variant_groups.get("common_variants", []),  # Process ALL common variants  
+                "other_variants": variant_groups.get("other_variants", [])   # Process ALL other variants
+            }
         else:
             # Limited processing - distribute quota intelligently
             remaining_quota = max_variants
@@ -493,6 +546,59 @@ class AnalysisJob:
         """Generate drug response prediction from variant annotation"""
         try:
             annotations = annotation.get('annotations', {})
+            clinical_significance = self._extract_clinical_significance(annotations)
+            
+            # Check for known pharmacogenomic variants first
+            pharmacogenomic_variants = {
+                'rs1799853': ('CYP2C9', 'Warfarin', '*2 allele - reduced function'),
+                'rs1057910': ('CYP2C9', 'Warfarin', '*3 allele - reduced function'),
+                'rs4244285': ('CYP2C19', 'Clopidogrel', '*2 allele - poor metabolizer'),
+                'rs28399504': ('CYP2C19', 'Clopidogrel', '*4 allele - poor metabolizer'),
+                'rs56337013': ('CYP2C19', 'Clopidogrel', '*5 allele - poor metabolizer'),
+                'rs72552267': ('CYP2C19', 'Clopidogrel', '*6 allele - poor metabolizer'),
+                'rs72558186': ('CYP2C19', 'Clopidogrel', '*7 allele - poor metabolizer'),
+                'rs1065852': ('CYP2D6', 'Codeine', '*10 allele - reduced function'),
+                'rs3892097': ('CYP2D6', 'Codeine', '*4 allele - poor metabolizer'),
+                'rs5030655': ('CYP2D6', 'Codeine', '*6 allele - poor metabolizer'),
+            }
+            
+            if str(variant.rsid) in pharmacogenomic_variants:
+                gene, drug, allele_info = pharmacogenomic_variants[str(variant.rsid)]
+                
+                # Determine response type based on allele function
+                if 'poor metabolizer' in allele_info:
+                    response_type = 'poor_metabolizer'
+                elif 'reduced function' in allele_info:
+                    response_type = 'intermediate'
+                else:
+                    response_type = 'altered_response'
+                
+                recommendations = self._generate_drug_recommendations(gene, drug, response_type)
+                
+                return DrugResponse(
+                    analysis_id=analysis_id,
+                    gene=gene,
+                    drug=drug,
+                    response_type=response_type,
+                    recommendations="\n".join(recommendations) if isinstance(recommendations, list) else recommendations,
+                    variants_involved=[str(variant.rsid)]
+                )
+            
+            # Check if variant has drug response clinical significance
+            elif 'drug response' in clinical_significance.lower():
+                # Use known gene mappings for drug response variants
+                gene, drug, response_type = self._generate_demo_drug_response(variant)
+                if gene and drug:
+                    recommendations = self._generate_drug_recommendations(gene, drug, response_type)
+                    
+                    return DrugResponse(
+                        analysis_id=analysis_id,
+                        gene=gene,
+                        drug=drug,
+                        response_type=response_type,
+                        recommendations="\n".join(recommendations) if isinstance(recommendations, list) else recommendations,
+                        variants_involved=[str(variant.rsid)]
+                    )
             
             # Check PharmGKB data for drug responses
             pharmgkb_data = annotations.get('pharmgkb_variant', {})
@@ -540,18 +646,36 @@ class AnalysisJob:
 
     def _extract_clinical_significance(self, annotations: Dict[str, Any]) -> str:
         """Extract clinical significance from multiple annotation sources"""
-        # Check ClinVar first (most authoritative)
+        
+        # Check Ensembl first - it has the most comprehensive clinical significance data
+        ensembl = annotations.get('ensembl', {})
+        if ensembl and ensembl.get('clinical_significance'):
+            clin_sigs = ensembl['clinical_significance']
+            if clin_sigs:
+                # Prioritize pathogenic/protective findings
+                priority_order = ['pathogenic', 'likely pathogenic', 'protective', 'established risk allele', 
+                                'risk factor', 'drug response', 'association', 'likely benign', 'benign']
+                
+                for priority_sig in priority_order:
+                    for sig in clin_sigs:
+                        if priority_sig.lower() in sig.lower():
+                            return sig
+                
+                # If no priority match, return first non-unknown significance
+                for sig in clin_sigs:
+                    if sig.lower() not in ['unknown', 'not provided', 'uncertain significance']:
+                        return sig
+                
+                # Return first significance if all are uncertain
+                return clin_sigs[0]
+        
+        # Check ClinVar second (most authoritative when it has entries)
         clinvar = annotations.get('clinvar', {})
         if clinvar.get('found') and clinvar.get('entries'):
             for entry in clinvar['entries']:
                 clin_sigs = entry.get('clinical_significance', [])
                 if clin_sigs:
                     return clin_sigs[0]  # Take first significance
-        
-        # Check Ensembl
-        ensembl = annotations.get('ensembl', {})
-        if ensembl and ensembl.get('clinical_significance'):
-            return ensembl['clinical_significance'][0] if ensembl['clinical_significance'] else 'Unknown'
         
         # Check PharmGKB
         pharmgkb = annotations.get('pharmgkb_variant', {})
@@ -562,7 +686,11 @@ class AnalysisJob:
 
     def _determine_condition(self, variant: GeneticVariant, annotations: Dict[str, Any]) -> str:
         """Determine the health condition associated with a variant"""
-        # Check ClinVar conditions
+        
+        # Extract clinical significance for better condition mapping
+        clinical_significance = self._extract_clinical_significance(annotations)
+        
+        # Check ClinVar conditions first
         clinvar = annotations.get('clinvar', {})
         if clinvar.get('found') and clinvar.get('entries'):
             for entry in clinvar['entries']:
@@ -570,38 +698,96 @@ class AnalysisJob:
                 if conditions:
                     return conditions[0]  # Take first condition
         
+        # Use Ensembl gene information if available
+        ensembl = annotations.get('ensembl', {})
+        gene_context = ""
+        if ensembl and ensembl.get('most_severe_consequence'):
+            consequence = ensembl['most_severe_consequence']
+            if consequence in ['missense_variant', 'nonsense_variant', 'frameshift_variant']:
+                gene_context = " (Protein-affecting)"
+            elif consequence in ['synonymous_variant']:
+                gene_context = " (Silent)"
+            elif consequence in ['intron_variant']:
+                gene_context = " (Non-coding)"
+        
+        # Map based on clinical significance and known patterns
+        if 'pathogenic' in clinical_significance.lower() or 'likely pathogenic' in clinical_significance.lower():
+            if variant.rsid in ['rs429358', 'rs7412']:  # APOE variants
+                return "Alzheimer's Disease Risk"
+            elif variant.rsid in ['rs1799853', 'rs1057910']:  # CYP2C9 variants
+                return "Warfarin Sensitivity"
+            elif variant.rsid in ['rs4244285']:  # CYP2C19 variants
+                return "Clopidogrel Metabolism"
+            else:
+                return f"Pathogenic Variant Risk{gene_context}"
+        
+        elif 'protective' in clinical_significance.lower() or 'established risk allele' in clinical_significance.lower():
+            return f"Protective/Risk Allele{gene_context}"
+        
+        elif 'drug response' in clinical_significance.lower():
+            return f"Drug Response Variant{gene_context}"
+        
+        elif 'risk factor' in clinical_significance.lower():
+            return f"Disease Risk Factor{gene_context}"
+        
+        elif 'association' in clinical_significance.lower():
+            return f"Disease Association{gene_context}"
+        
         # Fall back to gene-based condition mapping
         gene_info = variant.info or {}
         gene = gene_info.get('gene', '').upper()
         
         for condition_type, genes in self.disease_genes.items():
             if gene in genes:
-                return f"{condition_type.title()} Risk"
+                return f"{condition_type.title()} Risk{gene_context}"
         
-        # Default based on variant ID patterns
-        if 'APOE' in gene:
+        # Default based on variant ID patterns or gene names
+        rsid = variant.rsid.lower()
+        if any(apoe_variant in rsid for apoe_variant in ['rs429358', 'rs7412']):
             return "Alzheimer's Disease Risk"
-        elif any(cyp in gene for cyp in ['CYP2D6', 'CYP2C19', 'CYP2C9']):
+        elif any(cyp_variant in rsid for cyp_variant in ['rs1799853', 'rs1057910', 'rs4244285']):
             return "Drug Metabolism Variant"
-        elif 'BRCA' in gene:
+        elif 'brca' in gene:
             return "Hereditary Cancer Risk"
         
-        return f"Genetic Variant ({variant.rsid})"
+        return f"Genetic Variant ({variant.rsid}){gene_context}"
 
     def _calculate_risk_score(self, clinical_significance: str, annotations: Dict[str, Any]) -> tuple[str, float]:
-        """Calculate risk level and numeric score"""
+        """Calculate risk level and numeric score based on clinical significance"""
         clin_sig_lower = clinical_significance.lower()
         
+        # High risk variants
         if any(term in clin_sig_lower for term in ['pathogenic', 'likely pathogenic']):
+            return 'high', 0.85
+        elif 'established risk allele' in clin_sig_lower:
             return 'high', 0.8
+        
+        # Moderate risk variants  
         elif any(term in clin_sig_lower for term in ['risk factor', 'association']):
+            return 'moderate', 0.65
+        elif 'drug response' in clin_sig_lower:
             return 'moderate', 0.6
-        elif any(term in clin_sig_lower for term in ['benign', 'likely benign']):
-            return 'low', 0.2
-        elif 'uncertain' in clin_sig_lower or 'vus' in clin_sig_lower:
+        elif any(term in clin_sig_lower for term in ['uncertain significance', 'vus']):
             return 'moderate', 0.5
+        
+        # Low risk variants
+        elif any(term in clin_sig_lower for term in ['likely benign', 'benign']):
+            return 'low', 0.2
+        elif 'protective' in clin_sig_lower:
+            return 'low', 0.15  # Protective is actually good
+        
+        # Unknown/other
         else:
-            return 'moderate', 0.4
+            # Check if we have literature support to help determine significance
+            literature = annotations.get('literature', {})
+            pub_count = literature.get('total_publications', 0)
+            
+            if pub_count > 100:  # Well-studied variant
+                return 'moderate', 0.4
+            elif pub_count > 10:
+                return 'low', 0.3
+            else:
+                return 'low', 0.25
 
     def _generate_health_recommendations(self, condition: str, risk_level: str, variant: GeneticVariant) -> List[str]:
         """Generate health recommendations based on condition and risk level"""
@@ -834,7 +1020,7 @@ class AnalysisJob:
 
 
 # Background task wrapper
-async def run_analysis_job(analysis_id: int, max_variants: Optional[int] = None):
-    """Run analysis job as background task"""
-    job = AnalysisJob()
+async def run_analysis_job(analysis_id: int, user_id: Optional[int] = None, max_variants: Optional[int] = None):
+    """Run analysis job as background task with user isolation"""
+    job = AnalysisJob(user_id=user_id)
     return await job.process_analysis(analysis_id, max_variants)

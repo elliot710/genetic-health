@@ -12,7 +12,7 @@ class APIEndpoint:
     url: str
     method: str = "GET"
     headers: Optional[Dict[str, str]] = None
-    rate_limit: float = 1.0  # requests per second
+    rate_limit: float = 2.0  # requests per second
     timeout: int = 30
     retries: int = 3
     description: str = ""

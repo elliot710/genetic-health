@@ -12,24 +12,24 @@ from ..db.database import get_session
 from ..db.models import GeneticAnalysis, GeneticVariant, HealthRisk, DrugResponse
 from ..utils.vcf_parser import VCFParser
 from ..services.genetic_api_service import GeneticAPIService
-from ..services.analysis_job import AnalysisJob
+from ..services.analysis_queue import queue_analysis
 from .auth_routes import get_current_user
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
 
-async def process_genetic_analysis(analysis_id: Any):
-    """Background task to analyze genetic variants using external APIs"""
+async def process_genetic_analysis(analysis_id: Any, user_id: int):
+    """Background task to analyze genetic variants using external APIs via queue"""
     try:
-        # Use the comprehensive analysis job service
-        analysis_job = AnalysisJob()
-        # Convert analysis_id to int if needed
-        actual_id = analysis_id if isinstance(analysis_id, int) else int(analysis_id)
-        # Remove max_variants limit to process ALL variants
-        await analysis_job.process_analysis(actual_id, max_variants=None)
+        # Queue the analysis instead of running it directly
+        success = await queue_analysis(analysis_id, user_id, priority=1)
+        if not success:
+            print(f"Failed to queue analysis {analysis_id} for user {user_id} - may already be running or user limit reached")
+        else:
+            print(f"Successfully queued analysis {analysis_id} for user {user_id}")
         
     except Exception as e:
-        print(f"Error in background analysis: {str(e)}")
+        print(f"Error queueing analysis for user {user_id}: {str(e)}")
 
 
 @router.post("/vcf")
@@ -92,7 +92,7 @@ async def upload_vcf(
         
         # Start background analysis with APIs
         analysis_id = analysis.id
-        asyncio.create_task(process_genetic_analysis(analysis_id))
+        asyncio.create_task(process_genetic_analysis(analysis_id, current_user.id))
         
         return {
             "analysis_id": analysis_id,
@@ -215,7 +215,7 @@ async def upload_csv(
                 
                 # Start background analysis
                 analysis_id = analysis.id
-                asyncio.create_task(process_genetic_analysis(analysis_id))
+                asyncio.create_task(process_genetic_analysis(analysis_id, current_user.id))
                 
                 return {
                     "analysis_id": analysis_id,
@@ -484,7 +484,7 @@ async def trigger_manual_analysis(
         
         # Trigger background analysis with a new database session
         async def trigger_analysis():
-            await process_genetic_analysis(analysis_id)
+            await process_genetic_analysis(analysis_id, current_user.id)
         
         asyncio.create_task(trigger_analysis())
         
@@ -507,7 +507,7 @@ async def search_variant(
     data: Dict[str, str],
     current_user = Depends(get_current_user)
 ) -> Dict[str, Any]:
-    """Search for variant information using external APIs"""
+    """Search for variant information using comprehensive external APIs"""
     
     variant_id = data.get("variant_id", "").strip()
     if not variant_id:
@@ -518,32 +518,67 @@ async def search_variant(
     
     try:
         async with GeneticAPIService() as api_service:
-            # Get variant information from Ensembl
-            ensembl_result = await api_service.get_variant_info_from_ensembl(variant_id)
+            # Get comprehensive annotation
+            annotation_result = await api_service.annotate_variant(variant_id)
             
-            # Get PharmGKB information
-            pharmgkb_result = await api_service.get_pharmgkb_variant_info(variant_id)
+            if 'error' in annotation_result:
+                return {
+                    "rsid": variant_id,
+                    "source": "Multiple databases",
+                    "error": annotation_result['error'],
+                    "found": False
+                }
             
-            # Combine results
-            combined_result = {
-                "rsid": variant_id,
-                "ensembl": ensembl_result,
-                "pharmgkb": pharmgkb_result,
-                "search_timestamp": datetime.now().isoformat()
-            }
+            annotations = annotation_result.get('annotations', {})
             
             # Extract key information for display
             display_result = {
                 "rsid": variant_id,
                 "source": "Multiple databases",
-                "name": ensembl_result.get("name") if ensembl_result and not ensembl_result.get("error") else None,
-                "most_severe_consequence": ensembl_result.get("most_severe_consequence") if ensembl_result and not ensembl_result.get("error") else None,
-                "clinical_significance": ensembl_result.get("clinical_significance", []) if ensembl_result and not ensembl_result.get("error") else [],
-                "minor_allele": ensembl_result.get("minor_allele") if ensembl_result and not ensembl_result.get("error") else None,
-                "minor_allele_freq": ensembl_result.get("minor_allele_freq") if ensembl_result and not ensembl_result.get("error") else None,
-                "pharmgkb_found": pharmgkb_result.get("found", False) if pharmgkb_result else False,
-                "raw_data": combined_result
+                "found": True,
+                "search_timestamp": datetime.now().isoformat()
             }
+            
+            # Extract Ensembl data
+            ensembl_data = annotations.get('ensembl', {})
+            if ensembl_data and not ensembl_data.get('error'):
+                display_result.update({
+                    "name": ensembl_data.get("name"),
+                    "most_severe_consequence": ensembl_data.get("most_severe_consequence"),
+                    "minor_allele": ensembl_data.get("minor_allele"),
+                    "minor_allele_freq": ensembl_data.get("minor_allele_freq"),
+                    "synonyms": ensembl_data.get("synonyms", [])
+                })
+            
+            # Extract ClinVar clinical significance
+            clinvar_data = annotations.get('clinvar', {})
+            if clinvar_data and clinvar_data.get('found'):
+                clinical_sigs = []
+                for entry in clinvar_data.get('entries', []):
+                    clinical_sigs.extend(entry.get('clinical_significance', []))
+                display_result["clinical_significance"] = list(set(clinical_sigs))
+            else:
+                display_result["clinical_significance"] = []
+            
+            # Extract PharmGKB information
+            pharmgkb_data = annotations.get('pharmgkb_variant', {})
+            display_result["pharmgkb_found"] = pharmgkb_data.get('found', False)
+            if pharmgkb_data.get('found'):
+                display_result["pharmgkb_gene"] = pharmgkb_data.get('gene')
+                display_result["pharmgkb_clinical_significance"] = pharmgkb_data.get('clinical_significance')
+            
+            # Extract literature count
+            literature_data = annotations.get('literature', {})
+            display_result["literature_count"] = literature_data.get('total_publications', 0)
+            
+            # Extract SNPedia information
+            snpedia_data = annotations.get('snpedia', {})
+            if snpedia_data and snpedia_data.get('found'):
+                display_result["snpedia_magnitude"] = snpedia_data.get('magnitude')
+                display_result["snpedia_summary"] = snpedia_data.get('extract', '')[:200]
+            
+            # Include raw annotation data for advanced users
+            display_result["annotations"] = annotations
             
             return display_result
             

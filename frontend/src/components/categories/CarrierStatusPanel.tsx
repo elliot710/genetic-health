@@ -23,58 +23,97 @@ export default function CarrierStatusPanel({ data, isDarkMode = false }: Carrier
   const tagClass = getTagClass(isDarkMode);
   const progressBarBg = getProgressBarBg(isDarkMode);
 
-  const carrierConditions = [
-    {
-      condition: 'Cystic Fibrosis',
-      gene: 'CFTR',
-      status: 'Not a Carrier',
-      inheritance: 'Autosomal Recessive',
-      frequency: '1 in 25 carriers',
-      risk: 'low',
-      description: 'A genetic disorder affecting the lungs and digestive system'
-    },
-    {
-      condition: 'Sickle Cell Disease',
-      gene: 'HBB',
-      status: 'Not a Carrier',
-      inheritance: 'Autosomal Recessive',
-      frequency: '1 in 13 African Americans',
-      risk: 'low',
-      description: 'A blood disorder causing misshapen red blood cells'
-    },
-    {
-      condition: 'Tay-Sachs Disease',
-      gene: 'HEXA',
-      status: 'Not a Carrier',
-      inheritance: 'Autosomal Recessive',
-      frequency: '1 in 30 Ashkenazi Jews',
-      risk: 'low',
-      description: 'A rare disorder affecting nerve cells in the brain and spinal cord'
-    },
-    {
-      condition: 'Spinal Muscular Atrophy',
-      gene: 'SMN1',
-      status: 'Carrier',
-      inheritance: 'Autosomal Recessive',
-      frequency: '1 in 40-60 carriers',
-      risk: 'medium',
-      description: 'A genetic disorder affecting motor neurons and muscle strength'
-    },
-    {
-      condition: 'Hemochromatosis',
-      gene: 'HFE',
-      status: 'Carrier',
-      inheritance: 'Autosomal Recessive',
-      frequency: '1 in 9 Northern Europeans',
-      risk: 'medium',
-      description: 'A condition causing excess iron absorption'
-    }
-  ]
+  // Check if carrier status data is available from the database
+  const hasRealData = data?.carrier_status && data.carrier_status.length > 0
+  const carrierData = hasRealData ? data.carrier_status : []
+
+  // If no real data is available, show message
+  if (!hasRealData) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className={`text-2xl font-bold ${textPrimary} mb-2`}>
+              Carrier Status
+            </h2>
+            <p className={textSecondary}>
+              Genetic carrier status for inherited conditions
+            </p>
+          </div>
+          <div className={`${glassBackground} border ${glassBorder} rounded-xl p-4`}>
+            <div className="flex items-center space-x-3">
+              <User className={`h-8 w-8 ${getThemeClass('text-green-500', isDarkMode)}`} />
+              <div>
+                <div className={`text-2xl font-bold ${textPrimary}`}>
+                  0
+                </div>
+                <div className={`text-sm ${getThemeClass("text-gray-500", isDarkMode)}`}>
+                  Conditions
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* No Data Available */}
+        <div className={`${glassBackground} border ${glassBorder} rounded-xl p-8 text-center`}>
+          <div className="flex flex-col items-center space-y-4">
+            <div className="p-4 bg-gradient-to-br from-green-500/20 to-blue-500/20 backdrop-blur-xl rounded-xl border border-green-500/30">
+              <User className="h-8 w-8 text-green-400" />
+            </div>
+            <div>
+              <h3 className={`text-xl font-bold ${textPrimary} mb-2`}>
+                Carrier Status Analysis in Progress
+              </h3>
+              <p className={`${textSecondary} max-w-md mx-auto`}>
+                Carrier status analysis is not yet available for your genetic data. 
+                This analysis requires specific disease-associated variants that may be added in future updates.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Information Panel */}
+        <div className={`${glassBackground} border ${glassBorder} rounded-xl p-8`}>
+          <h3 className={`text-xl font-bold ${textPrimary} mb-6`}>
+            About Carrier Status
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <h4 className={`text-lg font-semibold ${textPrimary} mb-4`}>What is Carrier Status?</h4>
+              <p className={`${textSecondary} leading-relaxed`}>
+                Carriers have one copy of a genetic variant associated with a recessive condition. 
+                Carriers typically don't show symptoms but can pass the variant to their children.
+              </p>
+            </div>
+            <div>
+              <h4 className={`text-lg font-semibold ${textPrimary} mb-4`}>Inheritance Patterns</h4>
+              <p className={`${textSecondary} leading-relaxed`}>
+                For autosomal recessive conditions, both parents must be carriers for a child 
+                to be affected. X-linked conditions follow different inheritance patterns.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Use real carrier data when available
+  const carrierConditions = carrierData.map((carrier: any) => ({
+    condition: carrier.condition,
+    gene: carrier.gene,
+    status: carrier.carrier_status,
+    inheritance: carrier.inheritance_pattern || 'Unknown',
+    frequency: carrier.population_frequency || 'Unknown',
+    risk: carrier.risk_level || 'low',
+    description: carrier.description || 'No description available'
+  }))
 
   const summary = {
     totalTested: carrierConditions.length,
-    carrier: carrierConditions.filter(c => c.status === 'Carrier').length,
-    notCarrier: carrierConditions.filter(c => c.status === 'Not a Carrier').length
+    carrier: carrierConditions.filter((c: any) => c.status === 'Carrier').length,
+    notCarrier: carrierConditions.filter((c: any) => c.status === 'Not a Carrier').length
   }
 
   const getStatusColor = (status: string) => {
@@ -158,7 +197,7 @@ export default function CarrierStatusPanel({ data, isDarkMode = false }: Carrier
 
       {/* Conditions List */}
       <div className="space-y-4">
-        {carrierConditions.map((condition, index) => {
+        {carrierConditions.map((condition: any, index: number) => {
           const StatusIcon = getStatusIcon(condition.status)
           return (
             <div key={index} className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
