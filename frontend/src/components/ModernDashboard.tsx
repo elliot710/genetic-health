@@ -757,7 +757,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
       case 'physical-traits':
         return <PhysicalTraitsPanel data={data} isDarkMode={isDarkMode} theme={theme} />
       case 'personality':
-        return <PersonalityPanel data={data} isDarkMode={isDarkMode} theme={theme} />
+        return <PersonalityPanel data={data} isDarkMode={isDarkMode} theme={theme} token={token} />
       case 'sports':
         return <SportsPanel data={data} isDarkMode={isDarkMode} theme={theme} />
       case 'health':
@@ -769,7 +769,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
       case 'carrier-status':
         return <CarrierStatusPanel data={data} isDarkMode={isDarkMode} />
       case 'wellness':
-        return <WellnessPanel data={data} isDarkMode={isDarkMode} />
+        return <WellnessPanel data={data} isDarkMode={isDarkMode} token={token} />
       case 'methylation':
         return <MethylationPanel data={data} isDarkMode={isDarkMode} theme={theme} />
       case 'detox':

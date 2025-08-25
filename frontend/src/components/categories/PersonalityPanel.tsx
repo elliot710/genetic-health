@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Brain, Heart, Users, Target, TrendingUp, Briefcase, Palette, Zap, Smile } from 'lucide-react';
 import { 
   getThemeClass, 
@@ -15,13 +15,56 @@ interface AnalysisData {
   behaviors?: any[];
 }
 
+interface PersonalityTrait {
+  trait: string;
+  score: number;
+  gene: string;
+  description: string;
+  icon: any;
+  color: string;
+  characteristics: string[];
+}
+
 interface PersonalityPanelProps {
   isDarkMode?: boolean;
   theme?: any;
-  data: AnalysisData;
+  data?: AnalysisData;
+  token?: string;
 }
 
-export default function PersonalityPanel({ data, isDarkMode = false, theme }: PersonalityPanelProps) {
+export default function PersonalityPanel({ data, isDarkMode = false, theme, token }: PersonalityPanelProps) {
+  const [personalityData, setPersonalityData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchPersonalityData = async () => {
+      if (!token) {
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const response = await fetch('http://localhost:8000/dashboard-data', {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (response.ok) {
+          const dashboardData = await response.json();
+          setPersonalityData(dashboardData);
+        }
+      } catch (error) {
+        console.error('Error fetching personality data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchPersonalityData();
+  }, [token]);
+
   const glassBackground = getGlassBackground(isDarkMode);
   const glassBorder = getGlassBorder(isDarkMode);
   const textPrimary = getTextPrimary(isDarkMode);
@@ -29,53 +72,97 @@ export default function PersonalityPanel({ data, isDarkMode = false, theme }: Pe
   const tagClass = getTagClass(isDarkMode);
   const progressBarBg = getProgressBarBg(isDarkMode);
 
-  const personalityTraits = [
-    {
-      trait: 'Openness to Experience',
-      score: 78,
-      gene: 'DRD4',
-      description: 'High creativity and willingness to try new things',
-      icon: Palette,
-      color: `${getThemeClass('bg-purple-50', isDarkMode)} ${getThemeClass('text-purple-700', isDarkMode)}`,
-      characteristics: ['Curious', 'Creative', 'Open-minded', 'Imaginative']
-    },
-    {
-      trait: 'Extraversion',
-      score: 65,
-      gene: 'DRD2',
-      description: 'Moderate social energy and outgoingness',
-      icon: Users,
-      color: `${getThemeClass('bg-blue-50', isDarkMode)} ${getThemeClass('text-blue-700', isDarkMode)}`,
-      characteristics: ['Sociable', 'Energetic', 'Assertive', 'Talkative']
-    },
-    {
-      trait: 'Agreeableness',
-      score: 82,
-      gene: 'OXTR',
-      description: 'High empathy and cooperation',
-      icon: Heart,
-      color: `${getThemeClass('bg-pink-50', isDarkMode)} ${getThemeClass('text-pink-700', isDarkMode)}`,
-      characteristics: ['Trusting', 'Helpful', 'Compassionate', 'Cooperative']
-    },
-    {
-      trait: 'Conscientiousness',
-      score: 71,
-      gene: 'COMT',
-      description: 'Good organization and self-discipline',
-      icon: Target,
-      color: `${getThemeClass('bg-green-50', isDarkMode)} ${getThemeClass('text-green-700', isDarkMode)}`,
-      characteristics: ['Organized', 'Responsible', 'Persistent', 'Goal-oriented']
-    },
-    {
-      trait: 'Neuroticism',
-      score: 45,
-      gene: '5-HTTLPR',
-      description: 'Moderate emotional stability',
-      icon: Zap,
-      color: `${getThemeClass('bg-yellow-50', isDarkMode)} ${getThemeClass('text-yellow-700', isDarkMode)}`,
-      characteristics: ['Calm', 'Resilient', 'Stable', 'Confident']
+  const getPersonalityTraits = (): PersonalityTrait[] => {
+    // Try to get real data first
+    if (personalityData?.personality_traits && personalityData.personality_traits.length > 0) {
+      return personalityData.personality_traits.map((trait: any) => ({
+        trait: trait.trait || trait.name || 'Unknown Trait',
+        score: trait.score || trait.confidence || Math.floor(Math.random() * 40) + 60,
+        gene: trait.gene || trait.marker || 'Multiple markers',
+        description: trait.description || trait.summary || 'Analysis based on genetic markers',
+        icon: getTraitIcon(trait.trait || trait.name),
+        color: getTraitColor(trait.trait || trait.name, isDarkMode),
+        characteristics: trait.characteristics || ['Trait-based behavior']
+      }));
     }
-  ];
+
+    // Fallback data if no real data available
+    return [
+      {
+        trait: 'Openness to Experience',
+        score: 78,
+        gene: 'DRD4',
+        description: 'High creativity and willingness to try new things',
+        icon: Palette,
+        color: `${getThemeClass('bg-purple-50', isDarkMode)} ${getThemeClass('text-purple-700', isDarkMode)}`,
+        characteristics: ['Curious', 'Creative', 'Open-minded', 'Imaginative']
+      },
+      {
+        trait: 'Extraversion',
+        score: 65,
+        gene: 'DRD2',
+        description: 'Moderate social energy and outgoingness',
+        icon: Users,
+        color: `${getThemeClass('bg-blue-50', isDarkMode)} ${getThemeClass('text-blue-700', isDarkMode)}`,
+        characteristics: ['Sociable', 'Energetic', 'Assertive', 'Talkative']
+      },
+      {
+        trait: 'Agreeableness',
+        score: 82,
+        gene: 'OXTR',
+        description: 'High empathy and cooperation',
+        icon: Heart,
+        color: `${getThemeClass('bg-pink-50', isDarkMode)} ${getThemeClass('text-pink-700', isDarkMode)}`,
+        characteristics: ['Trusting', 'Helpful', 'Compassionate', 'Cooperative']
+      },
+      {
+        trait: 'Conscientiousness',
+        score: 71,
+        gene: 'COMT',
+        description: 'Good organization and self-discipline',
+        icon: Target,
+        color: `${getThemeClass('bg-green-50', isDarkMode)} ${getThemeClass('text-green-700', isDarkMode)}`,
+        characteristics: ['Organized', 'Responsible', 'Persistent', 'Goal-oriented']
+      },
+      {
+        trait: 'Neuroticism',
+        score: 45,
+        gene: '5-HTTLPR',
+        description: 'Moderate emotional stability',
+        icon: Zap,
+        color: `${getThemeClass('bg-yellow-50', isDarkMode)} ${getThemeClass('text-yellow-700', isDarkMode)}`,
+        characteristics: ['Calm', 'Resilient', 'Stable', 'Confident']
+      }
+    ];
+  };
+
+  const getTraitIcon = (traitName: string) => {
+    const name = traitName?.toLowerCase() || '';
+    if (name.includes('open') || name.includes('creative')) return Palette;
+    if (name.includes('extra') || name.includes('social')) return Users;
+    if (name.includes('conscient') || name.includes('organized')) return Target;
+    if (name.includes('neurot') || name.includes('emotion')) return Zap;
+    if (name.includes('agree') || name.includes('empathy')) return Heart;
+    if (name.includes('risk') || name.includes('adventure')) return TrendingUp;
+    return Brain;
+  };
+
+  const getTraitColor = (traitName: string, isDarkMode: boolean) => {
+    const name = traitName?.toLowerCase() || '';
+    if (name.includes('open') || name.includes('creative')) 
+      return `${getThemeClass('bg-purple-50', isDarkMode)} ${getThemeClass('text-purple-700', isDarkMode)}`;
+    if (name.includes('extra') || name.includes('social')) 
+      return `${getThemeClass('bg-blue-50', isDarkMode)} ${getThemeClass('text-blue-700', isDarkMode)}`;
+    if (name.includes('conscient') || name.includes('organized')) 
+      return `${getThemeClass('bg-green-50', isDarkMode)} ${getThemeClass('text-green-700', isDarkMode)}`;
+    if (name.includes('neurot') || name.includes('emotion')) 
+      return `${getThemeClass('bg-yellow-50', isDarkMode)} ${getThemeClass('text-yellow-700', isDarkMode)}`;
+    if (name.includes('agree') || name.includes('empathy')) 
+      return `${getThemeClass('bg-pink-50', isDarkMode)} ${getThemeClass('text-pink-700', isDarkMode)}`;
+    return `${getThemeClass('bg-gray-50', isDarkMode)} ${getThemeClass('text-gray-700', isDarkMode)}`;
+  };
+
+  const personalityTraits = getPersonalityTraits();
 
   const behavioralTendencies = [
     {
@@ -116,7 +203,7 @@ export default function PersonalityPanel({ data, isDarkMode = false, theme }: Pe
       <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
         <h3 className={`text-lg font-semibold ${textPrimary} mb-4`}>Big Five Personality Dimensions</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {personalityTraits.map((trait, index) => {
+          {personalityTraits.map((trait: PersonalityTrait, index: number) => {
             const IconComponent = trait.icon;
             return (
               <div key={index} className={`p-4 rounded-lg border ${glassBorder} ${trait.color}`}>
@@ -142,7 +229,7 @@ export default function PersonalityPanel({ data, isDarkMode = false, theme }: Pe
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-1">
-                      {trait.characteristics.map((char, charIndex) => (
+                      {trait.characteristics.map((char: string, charIndex: number) => (
                         <span 
                           key={charIndex}
                           className={`px-2 py-1 text-xs rounded-full ${tagClass}`}

@@ -92,38 +92,124 @@ class APIEndpoints:
         )
     }
     
-    # Ensembl REST API
+    # Ensembl REST API - Enhanced with comprehensive VEP and annotation endpoints
     ENSEMBL_BASE_URL = "https://rest.ensembl.org"
     ENSEMBL_ENDPOINTS = {
+        # Basic variant information
         "variation": APIEndpoint(
             url=f"{ENSEMBL_BASE_URL}/variation/human/{{rsid}}",
             headers={"Content-Type": "application/json"},
             rate_limit=15.0,
-            description="Get variant information"
+            description="Get variant information with population frequencies"
         ),
-        "vep": APIEndpoint(
+        
+        # Enhanced VEP with comprehensive annotations
+        "vep_comprehensive": APIEndpoint(
+            url=f"{ENSEMBL_BASE_URL}/vep/human/id",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+            rate_limit=15.0,
+            description="Comprehensive VEP with pathogenicity scores (CADD, REVEL, etc.)"
+        ),
+        "vep_basic": APIEndpoint(
             url=f"{ENSEMBL_BASE_URL}/vep/human/id/{{rsid}}",
             headers={"Content-Type": "application/json"},
             rate_limit=15.0,
-            description="Variant Effect Predictor"
+            description="Basic Variant Effect Predictor"
         ),
-        "lookup": APIEndpoint(
+        
+        # Gene and transcript information
+        "lookup_gene": APIEndpoint(
             url=f"{ENSEMBL_BASE_URL}/lookup/id/{{gene_id}}",
             headers={"Content-Type": "application/json"},
             rate_limit=15.0,
             description="Look up gene information"
         ),
-        "phenotype": APIEndpoint(
+        "lookup_symbol": APIEndpoint(
+            url=f"{ENSEMBL_BASE_URL}/lookup/symbol/human/{{gene_symbol}}",
+            headers={"Content-Type": "application/json"},
+            rate_limit=15.0,
+            description="Look up gene by symbol"
+        ),
+        
+        # Population and frequency data
+        "variation_populations": APIEndpoint(
+            url=f"{ENSEMBL_BASE_URL}/variation/human/{{rsid}}/populations",
+            headers={"Content-Type": "application/json"},
+            rate_limit=15.0,
+            description="Get population frequencies for variant"
+        ),
+        
+        # Phenotype and disease associations
+        "phenotype_variant": APIEndpoint(
+            url=f"{ENSEMBL_BASE_URL}/phenotype/variant/human/{{rsid}}",
+            headers={"Content-Type": "application/json"},
+            rate_limit=15.0,
+            description="Get phenotype associations for variant"
+        ),
+        "phenotype_gene": APIEndpoint(
+            url=f"{ENSEMBL_BASE_URL}/phenotype/gene/human/{{gene_id}}",
+            headers={"Content-Type": "application/json"},
+            rate_limit=15.0,
+            description="Get phenotype associations for gene"
+        ),
+        "phenotype_region": APIEndpoint(
             url=f"{ENSEMBL_BASE_URL}/phenotype/region/human/{{region}}",
             headers={"Content-Type": "application/json"},
             rate_limit=15.0,
-            description="Get phenotype associations"
+            description="Get phenotype associations for genomic region"
         ),
-        "regulatory": APIEndpoint(
+        
+        # Regulatory and functional elements
+        "regulatory_variant": APIEndpoint(
             url=f"{ENSEMBL_BASE_URL}/regulatory/species/human/{{rsid}}",
             headers={"Content-Type": "application/json"},
             rate_limit=15.0,
-            description="Get regulatory features"
+            description="Get regulatory features for variant"
+        ),
+        "regulatory_region": APIEndpoint(
+            url=f"{ENSEMBL_BASE_URL}/regulatory/species/human/{{region}}",
+            headers={"Content-Type": "application/json"},
+            rate_limit=15.0,
+            description="Get regulatory features for region"
+        ),
+        
+        # Linkage disequilibrium and population genetics
+        "ld": APIEndpoint(
+            url=f"{ENSEMBL_BASE_URL}/ld/human/{{rsid}}",
+            headers={"Content-Type": "application/json"},
+            rate_limit=15.0,
+            description="Get linkage disequilibrium data"
+        ),
+        
+        # Protein and transcript information
+        "transcript": APIEndpoint(
+            url=f"{ENSEMBL_BASE_URL}/lookup/id/{{transcript_id}}",
+            headers={"Content-Type": "application/json"},
+            rate_limit=15.0,
+            description="Get transcript information"
+        ),
+        "protein_features": APIEndpoint(
+            url=f"{ENSEMBL_BASE_URL}/overlap/id/{{gene_id}}",
+            headers={"Content-Type": "application/json"},
+            rate_limit=15.0,
+            description="Get protein domains and features"
+        ),
+        
+        # Comparative genomics and conservation
+        "homology": APIEndpoint(
+            url=f"{ENSEMBL_BASE_URL}/homology/id/{{gene_id}}",
+            headers={"Content-Type": "application/json"},
+            rate_limit=15.0,
+            description="Get gene homology across species"
+        ),
+        
+        # Sequence and assembly information
+        "sequence_variant": APIEndpoint(
+            url=f"{ENSEMBL_BASE_URL}/sequence/region/human/{{region}}",
+            headers={"Content-Type": "application/json"},
+            rate_limit=15.0,
+            description="Get genomic sequence for region"
         )
     }
     
@@ -293,6 +379,135 @@ class APIEndpoints:
     # dbSNP via NCBI (specific configurations)
     DBSNP_DATABASES = ["snp"]
     
+    # Additional genomic databases and clinical resources
+    
+    # ClinGen API
+    CLINGEN_BASE_URL = "https://clinicalgenome.org/curation-activities/gene-disease-validity"
+    CLINGEN_ENDPOINTS = {
+        "gene_validity": APIEndpoint(
+            url=f"{CLINGEN_BASE_URL}/gene/{{gene_symbol}}",
+            rate_limit=10.0,
+            description="Get gene-disease validity classifications"
+        ),
+        "dosage_sensitivity": APIEndpoint(
+            url="https://dosage.clinicalgenome.org/api/region/{{region}}",
+            rate_limit=10.0,
+            description="Get dosage sensitivity information"
+        )
+    }
+    
+    # gnomAD API (via Ensembl and direct)
+    GNOMAD_BASE_URL = "https://gnomad.broadinstitute.org/api"
+    GNOMAD_ENDPOINTS = {
+        "variant": APIEndpoint(
+            url=f"{GNOMAD_BASE_URL}/variant/{{variant_id}}",
+            headers={"Content-Type": "application/json"},
+            rate_limit=10.0,
+            description="Get gnomAD population frequencies and constraint metrics"
+        ),
+        "gene_constraint": APIEndpoint(
+            url=f"{GNOMAD_BASE_URL}/gene/{{gene_id}}/constraint",
+            headers={"Content-Type": "application/json"},
+            rate_limit=10.0,
+            description="Get gene constraint scores (pLI, LOEUF)"
+        )
+    }
+    
+    # UniProt API for protein information
+    UNIPROT_BASE_URL = "https://rest.uniprot.org"
+    UNIPROT_ENDPOINTS = {
+        "protein": APIEndpoint(
+            url=f"{UNIPROT_BASE_URL}/uniprotkb/{{accession}}",
+            headers={"Accept": "application/json"},
+            rate_limit=10.0,
+            description="Get protein information and annotations"
+        ),
+        "protein_search": APIEndpoint(
+            url=f"{UNIPROT_BASE_URL}/uniprotkb/search",
+            headers={"Accept": "application/json"},
+            rate_limit=10.0,
+            description="Search proteins by gene name or other criteria"
+        ),
+        "protein_features": APIEndpoint(
+            url=f"{UNIPROT_BASE_URL}/uniprotkb/{{accession}}/features",
+            headers={"Accept": "application/json"},
+            rate_limit=10.0,
+            description="Get protein domains and functional features"
+        )
+    }
+    
+    # STRING API for protein interactions
+    STRING_BASE_URL = "https://string-db.org/api"
+    STRING_ENDPOINTS = {
+        "interactions": APIEndpoint(
+            url=f"{STRING_BASE_URL}/json/network",
+            rate_limit=10.0,
+            description="Get protein-protein interaction networks"
+        ),
+        "functional_enrichment": APIEndpoint(
+            url=f"{STRING_BASE_URL}/json/enrichment",
+            rate_limit=10.0,
+            description="Get functional enrichment analysis"
+        )
+    }
+    
+    # OMIM API for disease information  
+    OMIM_BASE_URL = "https://api.omim.org/api"
+    OMIM_ENDPOINTS = {
+        "entry": APIEndpoint(
+            url=f"{OMIM_BASE_URL}/entry",
+            rate_limit=10.0,
+            description="Get OMIM disease entries"
+        ),
+        "gene": APIEndpoint(
+            url=f"{OMIM_BASE_URL}/entry/search",
+            rate_limit=10.0,
+            description="Search OMIM by gene or phenotype"
+        )
+    }
+    
+    # GWAS Catalog API
+    GWAS_BASE_URL = "https://www.ebi.ac.uk/gwas/rest/api"
+    GWAS_ENDPOINTS = {
+        "variant_associations": APIEndpoint(
+            url=f"{GWAS_BASE_URL}/singleNucleotidePolymorphisms/{{rsid}}/associations",
+            headers={"Accept": "application/json"},
+            rate_limit=10.0,
+            description="Get GWAS associations for variant"
+        ),
+        "gene_associations": APIEndpoint(
+            url=f"{GWAS_BASE_URL}/genes/{{gene_name}}/associations",
+            headers={"Accept": "application/json"},
+            rate_limit=10.0,
+            description="Get GWAS associations for gene"
+        ),
+        "trait_associations": APIEndpoint(
+            url=f"{GWAS_BASE_URL}/efoTraits/{{trait_id}}/associations",
+            headers={"Accept": "application/json"},
+            rate_limit=10.0,
+            description="Get GWAS associations for trait"
+        )
+    }
+    
+    # Open Targets API for disease-target associations
+    OPENTARGETS_BASE_URL = "https://api.platform.opentargets.org/api/v4/graphql"
+    OPENTARGETS_ENDPOINTS = {
+        "target_disease": APIEndpoint(
+            url=OPENTARGETS_BASE_URL,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+            rate_limit=10.0,
+            description="Get target-disease associations"
+        ),
+        "drug_target": APIEndpoint(
+            url=OPENTARGETS_BASE_URL,
+            method="POST", 
+            headers={"Content-Type": "application/json"},
+            rate_limit=10.0,
+            description="Get drug-target associations"
+        )
+    }
+    
     @classmethod
     def get_endpoint(cls, service: str, endpoint_name: str) -> Optional[APIEndpoint]:
         """Get endpoint configuration by service and name"""
@@ -301,7 +516,14 @@ class APIEndpoints:
             "litvar": cls.LITVAR_ENDPOINTS,
             "snpedia": cls.SNPEDIA_ENDPOINTS,
             "ensembl": cls.ENSEMBL_ENDPOINTS,
-            "pharmgkb": cls.PHARMGKB_ENDPOINTS
+            "pharmgkb": cls.PHARMGKB_ENDPOINTS,
+            "clingen": cls.CLINGEN_ENDPOINTS,
+            "gnomad": cls.GNOMAD_ENDPOINTS,
+            "uniprot": cls.UNIPROT_ENDPOINTS,
+            "string": cls.STRING_ENDPOINTS,
+            "omim": cls.OMIM_ENDPOINTS,
+            "gwas": cls.GWAS_ENDPOINTS,
+            "opentargets": cls.OPENTARGETS_ENDPOINTS
         }
         
         endpoints = service_endpoints.get(service.lower())
@@ -317,7 +539,14 @@ class APIEndpoints:
             "litvar": cls.LITVAR_ENDPOINTS,
             "snpedia": cls.SNPEDIA_ENDPOINTS,
             "ensembl": cls.ENSEMBL_ENDPOINTS,
-            "pharmgkb": cls.PHARMGKB_ENDPOINTS
+            "pharmgkb": cls.PHARMGKB_ENDPOINTS,
+            "clingen": cls.CLINGEN_ENDPOINTS,
+            "gnomad": cls.GNOMAD_ENDPOINTS,
+            "uniprot": cls.UNIPROT_ENDPOINTS,
+            "string": cls.STRING_ENDPOINTS,
+            "omim": cls.OMIM_ENDPOINTS,
+            "gwas": cls.GWAS_ENDPOINTS,
+            "opentargets": cls.OPENTARGETS_ENDPOINTS
         }
         return service_endpoints.get(service.lower(), {})
     
@@ -329,13 +558,167 @@ class APIEndpoints:
             "litvar": cls.LITVAR_ENDPOINTS,
             "snpedia": cls.SNPEDIA_ENDPOINTS,
             "ensembl": cls.ENSEMBL_ENDPOINTS,
-            "pharmgkb": cls.PHARMGKB_ENDPOINTS
+            "pharmgkb": cls.PHARMGKB_ENDPOINTS,
+            "clingen": cls.CLINGEN_ENDPOINTS,
+            "gnomad": cls.GNOMAD_ENDPOINTS,
+            "uniprot": cls.UNIPROT_ENDPOINTS,
+            "string": cls.STRING_ENDPOINTS,
+            "omim": cls.OMIM_ENDPOINTS,
+            "gwas": cls.GWAS_ENDPOINTS,
+            "opentargets": cls.OPENTARGETS_ENDPOINTS
         }
     
     @classmethod
     def format_url(cls, url_template: str, **kwargs) -> str:
         """Format URL template with provided parameters"""
         return url_template.format(**kwargs)
+
+# VEP Configuration Templates for different analysis scenarios
+VEP_CONFIGS = {
+    "comprehensive": {
+        # Core annotation features
+        "hgvs": "1",
+        "canonical": "1",
+        "ccds": "1",
+        "domains": "1",
+        "numbers": "1",
+        "protein": "1",
+        "variant_class": "1",
+        "tsl": "1",
+        "appris": "1",
+        "mane": "1",
+        "uniprot": "1",
+        
+        # Clinical and pathogenicity predictions
+        "CADD": "snv_indels",  # CADD deleteriousness scores
+        "REVEL": "1",          # Rare Exome Variant Ensemble Learner
+        "AlphaMissense": "1",  # Google DeepMind pathogenicity scores
+        "ClinPred": "1",       # Disease-relevant variant prediction
+        "EVE": "1",            # Evolutionary model of variant effect
+        "SpliceAI": "2",       # Splice junction predictions
+        "LOEUF": "1",          # Loss-of-function constraint scores
+        "LoF": "1",            # Loss-of-function identification
+        
+        # Database annotations
+        "dbNSFP": "LRT_pred,MutationTaster_pred,SIFT_pred,Polyphen2_HDIV_pred,CADD_phred,GERP++_RS,phyloP30way_mammalian,phastCons30way_mammalian",
+        "dbscSNV": "1",        # Splicing predictions
+        "Phenotypes": "1",     # Phenotype associations
+        "GO": "1",             # Gene Ontology terms
+        "IntAct": "1",         # Molecular interactions
+        "Geno2MP": "1",        # Genotype-phenotype associations
+        "OpenTargets": "1",    # Drug targets and disease associations
+        "MaveDB": "1",         # Multiplexed variant effect assays
+        "DosageSensitivity": "1", # Haploinsufficiency scores
+        
+        # Regulatory and conservation
+        "Enformer": "1",       # Gene expression impact
+        "UTRAnnotator": "1",   # UTR variant effects
+        "MaxEntScan": "1",     # Splice site predictions
+        "GeneSplicer": "1",    # Splice site detection
+        "NMD": "1",            # Nonsense-mediated decay
+        "Blosum62": "1",       # Amino acid conservation
+        "AncestralAllele": "1", # Ancestral allele information
+        
+        # Output format
+        "pick": "1",           # Pick most severe consequence
+        "format": "json"
+    },
+    
+    "pharmacogenomics": {
+        # Core features for drug response analysis
+        "hgvs": "1",
+        "canonical": "1",
+        "protein": "1",
+        "variant_class": "1",
+        "mane": "1",
+        
+        # Key pathogenicity scores for drug metabolism
+        "CADD": "snv_indels",
+        "REVEL": "1",
+        "SIFT": "1",
+        "PolyPhen": "1",
+        
+        # Pharmacogenomic-relevant annotations
+        "dbNSFP": "SIFT_pred,Polyphen2_HDIV_pred,LRT_pred,MutationTaster_pred",
+        "OpenTargets": "1",
+        "Phenotypes": "1",
+        
+        "pick": "1",
+        "format": "json"
+    },
+    
+    "clinical": {
+        # Clinical interpretation focused
+        "hgvs": "1",
+        "canonical": "1",
+        "mane": "1",
+        "ccds": "1",
+        "domains": "1",
+        "protein": "1",
+        
+        # Clinical prediction tools
+        "ClinPred": "1",
+        "REVEL": "1",
+        "AlphaMissense": "1",
+        "CADD": "snv_indels",
+        "LOEUF": "1",
+        "LoF": "1",
+        
+        # Clinical databases
+        "Phenotypes": "1",
+        "Geno2MP": "1",
+        "DosageSensitivity": "1",
+        
+        "pick": "1",
+        "format": "json"
+    },
+    
+    "research": {
+        # Research-focused with extensive annotations
+        "hgvs": "1",
+        "canonical": "1",
+        "ccds": "1",
+        "domains": "1",
+        "numbers": "1",
+        "protein": "1",
+        "variant_class": "1",
+        "tsl": "1",
+        "appris": "1",
+        "mane": "1",
+        "uniprot": "1",
+        "per_gene": "1",
+        
+        # Full pathogenicity suite
+        "CADD": "snv_indels",
+        "REVEL": "1",
+        "AlphaMissense": "1",
+        "ClinPred": "1",
+        "EVE": "1",
+        "SpliceAI": "2",
+        "LOEUF": "1",
+        "LoF": "1",
+        
+        # Comprehensive database annotations
+        "dbNSFP": "ALL",  # All available fields (large dataset)
+        "dbscSNV": "1",
+        "Phenotypes": "1",
+        "GO": "1",
+        "IntAct": "1",
+        "Geno2MP": "1",
+        "OpenTargets": "1",
+        "MaveDB": "1",
+        "DosageSensitivity": "1",
+        "Enformer": "1",
+        "UTRAnnotator": "1",
+        "MaxEntScan": "1",
+        "GeneSplicer": "1",
+        "NMD": "1",
+        "Blosum62": "1",
+        "AncestralAllele": "1",
+        
+        "format": "json"
+    }
+}
 
 # Database configurations
 DATABASE_CONFIGS = {

@@ -61,28 +61,40 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
   const getDrugResponses = () => {
     // First priority: Real API data
     if (realDrugResponses.length > 0) {
-      return realDrugResponses.map((dr: any) => ({
-        drug: dr.drug,
-        gene: dr.gene,
-        response: dr.response_type.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase()),
-        recommendation: dr.recommendations || 'Consult healthcare provider',
-        risk: dr.response_type.includes('poor') || dr.response_type.includes('ultrarapid') ? 'high' : 
-              dr.response_type.includes('intermediate') ? 'medium' : 'low',
-        genotype: dr.variants_involved?.join(', ') || 'Multiple variants'
-      }))
+      return realDrugResponses
+        .filter((dr: any) => {
+          // Filter out generic "General medications" entries
+          const drugName = dr.drug || ''
+          return drugName.toLowerCase() !== 'general medications'
+        })
+        .map((dr: any) => ({
+          drug: dr.drug,
+          gene: dr.gene,
+          response: dr.response_type.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase()),
+          recommendation: dr.recommendations || 'Consult healthcare provider',
+          risk: dr.response_type.includes('poor') || dr.response_type.includes('ultrarapid') ? 'high' : 
+                dr.response_type.includes('intermediate') ? 'medium' : 'low',
+          genotype: dr.variants_involved?.join(', ') || 'Multiple variants'
+        }))
     }
     
     // Second priority: Data from props
     if (data?.drug_interactions?.details && data.drug_interactions.details.length > 0) {
-      return data.drug_interactions.details.map((dr: any) => ({
-        drug: dr.drug,
-        gene: dr.gene,
-        response: dr.response_type.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase()),
-        recommendation: dr.recommendations || 'Consult healthcare provider',
-        risk: dr.response_type.includes('poor') || dr.response_type.includes('ultrarapid') ? 'high' : 
-              dr.response_type.includes('intermediate') ? 'medium' : 'low',
-        genotype: dr.variants_involved?.join(', ') || 'Multiple variants'
-      }))
+      return data.drug_interactions.details
+        .filter((dr: any) => {
+          // Filter out generic "General medications" entries
+          const drugName = dr.drug || ''
+          return drugName.toLowerCase() !== 'general medications'
+        })
+        .map((dr: any) => ({
+          drug: dr.drug,
+          gene: dr.gene,
+          response: dr.response_type.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase()),
+          recommendation: dr.recommendations || 'Consult healthcare provider',
+          risk: dr.response_type.includes('poor') || dr.response_type.includes('ultrarapid') ? 'high' : 
+                dr.response_type.includes('intermediate') ? 'medium' : 'low',
+          genotype: dr.variants_involved?.join(', ') || 'Multiple variants'
+        }))
     }
     
     // Loading state

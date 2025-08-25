@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import { Brain, BookOpen, Lightbulb, Target, Puzzle } from 'lucide-react'
 import { 
   getThemeClass, 
@@ -20,10 +20,11 @@ interface AnalysisData {
 interface IntelligencePanelProps {
   isDarkMode?: boolean
   theme?: any
-  data: AnalysisData
+  data?: AnalysisData
+  token?: string
 }
 
-export default function IntelligencePanel({ isDarkMode = false, theme, data }: IntelligencePanelProps) {
+export default function IntelligencePanel({ isDarkMode = false, theme, data, token }: IntelligencePanelProps) {
   const glassBackground = getGlassBackground(isDarkMode);
   const glassBorder = getGlassBorder(isDarkMode);
   const textPrimary = getTextPrimary(isDarkMode);
@@ -32,48 +33,138 @@ export default function IntelligencePanel({ isDarkMode = false, theme, data }: I
   const progressBarBg = getProgressBarBg(isDarkMode);
   const cardBackground = getThemeClass('bg-gray-50', isDarkMode);
   
-  const cognitiveTraits = [
-    {
-      trait: 'Working Memory',
-      gene: 'COMT',
-      score: 82,
-      description: 'Strong ability to hold and manipulate information',
-      icon: Brain,
-      color: `${getThemeClass('bg-purple-50', isDarkMode)} ${getThemeClass('text-purple-700', isDarkMode)}`
-    },
-    {
-      trait: 'Processing Speed',
-      gene: 'SNAP25',
-      score: 75,
-      description: 'Good mental processing efficiency',
-      icon: Lightbulb,
-      color: `${getThemeClass('bg-yellow-50', isDarkMode)} ${getThemeClass('text-yellow-700', isDarkMode)}`
-    },
-    {
-      trait: 'Learning Ability',
-      gene: 'BDNF',
-      score: 88,
-      description: 'Enhanced capacity for acquiring new skills',
-      icon: BookOpen,
-      color: `${getThemeClass('bg-blue-50', isDarkMode)} ${getThemeClass('text-blue-700', isDarkMode)}`
-    },
-    {
-      trait: 'Focus & Attention',
-      gene: 'DRD4',
-      score: 70,
-      description: 'Moderate sustained attention capacity',
-      icon: Target,
-      color: `${getThemeClass('bg-green-50', isDarkMode)} ${getThemeClass('text-green-700', isDarkMode)}`
-    },
-    {
-      trait: 'Pattern Recognition',
-      gene: 'CACNA1C',
-      score: 85,
-      description: 'Strong ability to identify patterns and relationships',
-      icon: Puzzle,
-      color: `${getThemeClass('bg-indigo-50', isDarkMode)} ${getThemeClass('text-indigo-700', isDarkMode)}`
+  const [realIntelligenceData, setRealIntelligenceData] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  
+  // Load real intelligence data from dashboard API
+  useEffect(() => {
+    const loadIntelligenceData = async () => {
+      if (!token) return
+      
+      setLoading(true)
+      try {
+        const response = await fetch('http://localhost:8000/analyze/dashboard-data', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        })
+        
+        if (response.ok) {
+          const dashboardData = await response.json()
+          console.log('Loaded dashboard data for intelligence:', dashboardData)
+          const intelligence = dashboardData.intelligence || dashboardData.analysis_results?.intelligence || []
+          setRealIntelligenceData(intelligence)
+        }
+      } catch (error) {
+        console.error('Error loading intelligence data:', error)
+      } finally {
+        setLoading(false)
+      }
     }
-  ]
+    
+    loadIntelligenceData()
+  }, [token])
+  
+  // Use real intelligence data if available
+  const getCognitiveTraits = () => {
+    // First priority: Real API data
+    if (realIntelligenceData.length > 0) {
+      return realIntelligenceData.map((trait: any) => ({
+        trait: trait.cognitive_ability || trait.trait_name,
+        gene: trait.associated_variants?.[0] || 'Multiple',
+        score: trait.genetic_advantage === 'high' ? 85 : trait.genetic_advantage === 'moderate' ? 65 : 45,
+        description: trait.description || `Genetic analysis for ${trait.cognitive_ability || trait.trait_name}`,
+        icon: getTraitIcon(trait.cognitive_ability || trait.trait_name),
+        color: getTraitColor(trait.genetic_advantage || trait.genetic_result, isDarkMode)
+      }))
+    }
+    
+    // Loading state
+    if (loading) {
+      return [{
+        trait: 'Loading Intelligence Analysis...',
+        gene: 'Multiple',
+        score: 0,
+        description: 'Loading your genetic intelligence analysis...',
+        icon: Brain,
+        color: getThemeClass('bg-blue-50', isDarkMode) + ' ' + getThemeClass('text-blue-700', isDarkMode)
+      }]
+    }
+    
+    // No data available
+    return []
+  }
+
+  const getTraitIcon = (trait: string) => {
+    const traitLower = trait.toLowerCase()
+    if (traitLower.includes('memory')) return Brain
+    if (traitLower.includes('processing') || traitLower.includes('speed')) return Lightbulb
+    if (traitLower.includes('learning') || traitLower.includes('education')) return BookOpen
+    if (traitLower.includes('focus') || traitLower.includes('attention')) return Target
+    if (traitLower.includes('problem') || traitLower.includes('reasoning')) return Puzzle
+    return Brain
+  }
+
+  const getTraitColor = (result: string, isDarkMode: boolean) => {
+    const resultLower = result.toLowerCase()
+    if (resultLower.includes('high') || resultLower.includes('excellent')) {
+      return getThemeClass('bg-green-50', isDarkMode) + ' ' + getThemeClass('text-green-700', isDarkMode)
+    }
+    if (resultLower.includes('moderate') || resultLower.includes('average')) {
+      return getThemeClass('bg-yellow-50', isDarkMode) + ' ' + getThemeClass('text-yellow-700', isDarkMode)
+    }
+    if (resultLower.includes('low') || resultLower.includes('poor')) {
+      return getThemeClass('bg-red-50', isDarkMode) + ' ' + getThemeClass('text-red-700', isDarkMode)
+    }
+    return getThemeClass('bg-purple-50', isDarkMode) + ' ' + getThemeClass('text-purple-700', isDarkMode)
+  }
+  
+  const cognitiveTraits = getCognitiveTraits()
+  
+  // If no real data is available, show message
+  if (cognitiveTraits.length === 0 && !loading) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className={`text-2xl font-bold ${textPrimary} mb-2`}>
+              Intelligence & Cognition
+            </h2>
+            <p className={textSecondary}>
+              Genetic insights into cognitive abilities
+            </p>
+          </div>
+          <div className={`${glassBackground} border ${glassBorder} rounded-xl p-4`}>
+            <div className="flex items-center space-x-3">
+              <Brain className={`h-8 w-8 ${getThemeClass('text-purple-500', isDarkMode)}`} />
+              <div>
+                <div className={`text-2xl font-bold ${textPrimary}`}>0</div>
+                <div className={`text-sm ${getThemeClass("text-gray-500", isDarkMode)}`}>Traits</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className={`${glassBackground} border ${glassBorder} rounded-xl p-8 text-center`}>
+          <div className="flex flex-col items-center space-y-4">
+            <div className="p-4 bg-gradient-to-br from-purple-500/20 to-blue-500/20 backdrop-blur-xl rounded-xl border border-purple-500/30">
+              <Brain className="h-8 w-8 text-purple-400" />
+            </div>
+            <div>
+              <h3 className={`text-xl font-bold ${textPrimary} mb-2`}>
+                Intelligence Analysis in Progress
+              </h3>
+              <p className={`${textSecondary} max-w-md mx-auto`}>
+                Cognitive trait analysis is not yet available for your genetic data. 
+                This analysis requires specific intelligence-related variants that may be added in future updates.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   const learningStyles = [
     {

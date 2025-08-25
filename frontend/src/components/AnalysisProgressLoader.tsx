@@ -38,15 +38,25 @@ export default function AnalysisProgressLoader({
           throw new Error('No authentication token found');
         }
 
+        console.log('🔍 Making request to:', `http://localhost:8000/analyze/progress/${analysisId}`);
+        console.log('🔑 Using token:', token.substring(0, 20) + '...');
+
         const response = await fetch(`http://localhost:8000/analyze/progress/${analysisId}`, {
+          method: 'GET',
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
+          mode: 'cors',  // Explicitly set CORS mode
         });
 
+        console.log('📡 Response status:', response.status);
+        console.log('📡 Response ok:', response.ok);
+
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+          const errorText = await response.text();
+          console.error('❌ Response error:', errorText);
+          throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
         }
 
         const data: AnalysisProgress = await response.json();

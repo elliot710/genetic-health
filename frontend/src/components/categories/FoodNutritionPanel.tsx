@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import { Apple, Coffee, Utensils, Wheat, ChefHat } from 'lucide-react'
 import { 
   getThemeClass, 
@@ -21,9 +21,10 @@ interface FoodNutritionPanelProps {
   isDarkMode?: boolean
   theme?: any
   data: AnalysisData
+  token?: string
 }
 
-export default function FoodNutritionPanel({ isDarkMode = false, theme, data }: FoodNutritionPanelProps) {
+export default function FoodNutritionPanel({ isDarkMode = false, theme, data, token }: FoodNutritionPanelProps) {
   const glassBackground = getGlassBackground(isDarkMode);
   const glassBorder = getGlassBorder(isDarkMode);
   const textPrimary = getTextPrimary(isDarkMode);
@@ -32,54 +33,168 @@ export default function FoodNutritionPanel({ isDarkMode = false, theme, data }: 
   const progressBarBg = getProgressBarBg(isDarkMode);
   const cardBackground = getThemeClass('bg-gray-50', isDarkMode);
   
-  // Mock data for food and nutrition traits
-  const nutritionTraits = [
-    {
-      trait: 'Caffeine Metabolism',
-      gene: 'CYP1A2',
-      status: 'Fast Metabolizer',
-      description: 'Can handle higher caffeine intake without side effects',
-      icon: Coffee,
-      color: getThemeClass('bg-brown-50', isDarkMode) + ' ' + getThemeClass('text-brown-700', isDarkMode),
-      recommendation: 'Up to 400mg caffeine daily is likely well-tolerated'
-    },
-    {
-      trait: 'Lactose Tolerance',
-      gene: 'LCT',
-      status: 'Tolerant',
-      description: 'Continues to produce lactase enzyme into adulthood',
-      icon: Apple,
-      color: getThemeClass('bg-blue-50', isDarkMode) + ' ' + getThemeClass('text-blue-700', isDarkMode),
-      recommendation: 'Dairy products are well-tolerated'
-    },
-    {
-      trait: 'Alcohol Metabolism',
-      gene: 'ALDH2',
-      status: 'Normal',
-      description: 'Standard alcohol processing capability',
-      icon: Utensils,
-      color: getThemeClass('bg-green-50', isDarkMode) + ' ' + getThemeClass('text-green-700', isDarkMode),
-      recommendation: 'Moderate alcohol consumption guidelines apply'
-    },
-    {
-      trait: 'Gluten Sensitivity',
-      gene: 'HLA-DQ',
-      status: 'Low Risk',
-      description: 'Low genetic predisposition to celiac disease',
-      icon: Wheat,
-      color: getThemeClass('bg-yellow-50', isDarkMode) + ' ' + getThemeClass('text-yellow-700', isDarkMode),
-      recommendation: 'Gluten-containing foods are likely well-tolerated'
-    },
-    {
-      trait: 'Vitamin D Absorption',
-      gene: 'VDR',
-      status: 'Enhanced',
-      description: 'Efficient vitamin D receptor function',
-      icon: ChefHat,
-      color: getThemeClass('bg-orange-50', isDarkMode) + ' ' + getThemeClass('text-orange-700', isDarkMode),
-      recommendation: 'Standard vitamin D supplementation sufficient'
+  const [realNutritionTraits, setRealNutritionTraits] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  
+  // Load real nutrition traits from dashboard API
+  useEffect(() => {
+    const loadNutritionTraits = async () => {
+      if (!token) return
+      
+      setLoading(true)
+      try {
+        const response = await fetch('http://localhost:8000/analyze/dashboard-data', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        })
+        
+        if (response.ok) {
+          const dashboardData = await response.json()
+          console.log('Loaded dashboard data for nutrition:', dashboardData)
+          // Nutrition traits might be in the analysis results or a specific section
+          const traits = dashboardData.nutrition_traits || dashboardData.analysis_results?.nutrition_traits || []
+          setRealNutritionTraits(traits)
+        }
+      } catch (error) {
+        console.error('Error loading nutrition traits:', error)
+      } finally {
+        setLoading(false)
+      }
     }
-  ]
+    
+    loadNutritionTraits()
+  }, [token])
+  
+  // Use real nutrition data if available
+  const getNutritionTraits = () => {
+    // First priority: Real API data
+    if (realNutritionTraits.length > 0) {
+      return realNutritionTraits.map((trait: any) => ({
+        trait: trait.nutrient || trait.trait_name,
+        gene: trait.associated_variants?.[0] || 'Multiple',
+        status: trait.metabolism_type || trait.genetic_result,
+        description: trait.description || `Genetic analysis for ${trait.nutrient || trait.trait_name}`,
+        recommendation: Array.isArray(trait.dietary_recommendations) 
+          ? trait.dietary_recommendations.join(', ') 
+          : trait.dietary_recommendations || 'Consult with nutritionist',
+        icon: getTraitIcon(trait.nutrient || trait.trait_name),
+        color: getTraitColor(trait.metabolism_type || trait.genetic_result, isDarkMode)
+      }))
+    }
+    
+    // Loading state
+    if (loading) {
+      return [{
+        trait: 'Loading Nutrition Analysis...',
+        gene: 'Multiple',
+        status: 'Processing',
+        description: 'Loading your genetic nutrition analysis...',
+        recommendation: 'Analysis in progress...',
+        icon: ChefHat,
+        color: getThemeClass('bg-blue-50', isDarkMode) + ' ' + getThemeClass('text-blue-700', isDarkMode)
+      }]
+    }
+    
+    // No data available
+    return []
+  }
+
+  const getTraitIcon = (trait: string) => {
+    const traitLower = trait.toLowerCase()
+    if (traitLower.includes('caffeine')) return Coffee
+    if (traitLower.includes('lactose') || traitLower.includes('dairy')) return Apple
+    if (traitLower.includes('alcohol')) return Utensils
+    if (traitLower.includes('gluten') || traitLower.includes('wheat')) return Wheat
+    return ChefHat
+  }
+
+  const getTraitColor = (status: string, isDarkMode: boolean) => {
+    const statusLower = status.toLowerCase()
+    if (statusLower.includes('fast') || statusLower.includes('enhanced')) {
+      return getThemeClass('bg-green-50', isDarkMode) + ' ' + getThemeClass('text-green-700', isDarkMode)
+    }
+    if (statusLower.includes('slow') || statusLower.includes('poor')) {
+      return getThemeClass('bg-red-50', isDarkMode) + ' ' + getThemeClass('text-red-700', isDarkMode)
+    }
+    if (statusLower.includes('normal') || statusLower.includes('tolerant')) {
+      return getThemeClass('bg-blue-50', isDarkMode) + ' ' + getThemeClass('text-blue-700', isDarkMode)
+    }
+    return getThemeClass('bg-gray-50', isDarkMode) + ' ' + getThemeClass('text-gray-700', isDarkMode)
+  }
+  
+  const nutritionTraits = getNutritionTraits()
+
+  // If no real data is available, show message
+  if (nutritionTraits.length === 0 && !loading) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className={`text-2xl font-bold ${textPrimary} mb-2`}>
+              Food & Nutrition
+            </h2>
+            <p className={textSecondary}>
+              Genetic insights for personalized nutrition
+            </p>
+          </div>
+          <div className={`${glassBackground} border ${glassBorder} rounded-xl p-4`}>
+            <div className="flex items-center space-x-3">
+              <Apple className={`h-8 w-8 ${getThemeClass('text-green-500', isDarkMode)}`} />
+              <div>
+                <div className={`text-2xl font-bold ${textPrimary}`}>0</div>
+                <div className={`text-sm ${getThemeClass("text-gray-500", isDarkMode)}`}>Traits</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* No Data Available */}
+        <div className={`${glassBackground} border ${glassBorder} rounded-xl p-8 text-center`}>
+          <div className="flex flex-col items-center space-y-4">
+            <div className="p-4 bg-gradient-to-br from-green-500/20 to-blue-500/20 backdrop-blur-xl rounded-xl border border-green-500/30">
+              <Apple className="h-8 w-8 text-green-400" />
+            </div>
+            <div>
+              <h3 className={`text-xl font-bold ${textPrimary} mb-2`}>
+                Nutrition Analysis in Progress
+              </h3>
+              <p className={`${textSecondary} max-w-md mx-auto`}>
+                Nutrition trait analysis is not yet available for your genetic data. 
+                This analysis requires specific nutrition-related variants that may be added in future updates.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Information Panel */}
+        <div className={`${glassBackground} border ${glassBorder} rounded-xl p-8`}>
+          <h3 className={`text-xl font-bold ${textPrimary} mb-6`}>
+            About Nutrition Genetics
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <h4 className={`text-lg font-semibold ${textPrimary} mb-4`}>Analyzed Traits</h4>
+              <ul className={`${textSecondary} space-y-2`}>
+                <li>• <strong>Caffeine Metabolism:</strong> How quickly you process caffeine</li>
+                <li>• <strong>Lactose Tolerance:</strong> Ability to digest dairy products</li>
+                <li>• <strong>Alcohol Processing:</strong> Genetic alcohol metabolism efficiency</li>
+                <li>• <strong>Nutrient Absorption:</strong> Vitamin and mineral processing</li>
+              </ul>
+            </div>
+            <div>
+              <h4 className={`text-lg font-semibold ${textPrimary} mb-4`}>Personalized Insights</h4>
+              <p className={`${textSecondary} leading-relaxed`}>
+                Nutrition genetics helps optimize your diet based on genetic variants that affect 
+                how your body processes different foods, nutrients, and compounds.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   const dietaryRecommendations = [
     {

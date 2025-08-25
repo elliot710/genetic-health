@@ -1701,3 +1701,6 @@ class SpecializedAnalyzerManager:
             await session.rollback()
         
         return results
+
+# Alias for backward compatibility
+SpecializedAnalyzerService = SpecializedAnalyzerManager

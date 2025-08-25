@@ -392,6 +392,404 @@ class GeneticAPIService:
         except Exception as e:
             return {'error': f'SNPedia API error: {str(e)}'}
 
+    async def get_comprehensive_vep_annotation(self, rsid: str) -> Dict[str, Any]:
+        """
+        Get comprehensive VEP annotation with advanced pathogenicity scores and clinical predictions
+        """
+        try:
+            await self._ensure_session()
+            if self.session is None:
+                return {'error': 'Failed to initialize HTTP session'}
+            
+            # POST request to comprehensive VEP endpoint
+            payload = {"ids": [rsid]}
+            
+            # VEP parameters for comprehensive annotation
+            params = {
+                # Core annotation features
+                "hgvs": "1",
+                "canonical": "1",
+                "ccds": "1",
+                "domains": "1",
+                "numbers": "1",
+                "protein": "1",
+                "variant_class": "1",
+                "tsl": "1",
+                "appris": "1",
+                "mane": "1",
+                "uniprot": "1",
+                
+                # Clinical and pathogenicity predictions
+                "CADD": "snv_indels",  # CADD deleteriousness scores
+                "REVEL": "1",            # Rare Exome Variant Ensemble Learner
+                "AlphaMissense": "1",    # Google DeepMind pathogenicity scores
+                "ClinPred": "1",         # Disease-relevant variant prediction
+                "EVE": "1",              # Evolutionary model of variant effect
+                "SpliceAI": "2",         # Splice junction predictions
+                "LOEUF": "1",            # Loss-of-function constraint scores
+                "LoF": "1",              # Loss-of-function identification
+                
+                # Database annotations
+                "dbNSFP": "LRT_pred,MutationTaster_pred,SIFT_pred,Polyphen2_HDIV_pred,CADD_phred,GERP++_RS,phyloP30way_mammalian,phastCons30way_mammalian",
+                "dbscSNV": "1",          # Splicing predictions
+                "Phenotypes": "1",       # Phenotype associations
+                "GO": "1",               # Gene Ontology terms
+                "IntAct": "1",           # Molecular interactions
+                "Geno2MP": "1",          # Genotype-phenotype associations
+                "OpenTargets": "1",      # Drug targets and disease associations
+                "MaveDB": "1",           # Multiplexed variant effect assays
+                "DosageSensitivity": "1",# Haploinsufficiency scores
+                
+                # Regulatory and conservation
+                "Enformer": "1",         # Gene expression impact
+                "UTRAnnotator": "1",     # UTR variant effects
+                "MaxEntScan": "1",       # Splice site predictions
+                "GeneSplicer": "1",      # Splice site detection
+                "NMD": "1",              # Nonsense-mediated decay
+                "Blosum62": "1",         # Amino acid conservation
+                "AncestralAllele": "1",  # Ancestral allele information
+                
+                # Output format
+                "pick": "1",             # Pick most severe consequence
+                "format": "json"
+            }
+            
+            # Make POST request with both payload and params
+            endpoint = self.endpoints.get_endpoint('ensembl', 'vep_comprehensive')
+            if not endpoint:
+                return {'error': 'VEP endpoint not configured'}
+            
+            timeout = aiohttp.ClientTimeout(total=endpoint.timeout)
+            headers = endpoint.headers or {}
+            
+            async with self.session.post(
+                endpoint.url, 
+                json=payload, 
+                params=params, 
+                headers=headers, 
+                timeout=timeout
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    
+                    vep_result = {
+                        'source': 'Ensembl VEP (Comprehensive)',
+                        'rsid': rsid,
+                        'annotations': result,
+                        'pathogenicity_scores': {},
+                        'clinical_predictions': {},
+                        'conservation_scores': {},
+                        'functional_impact': {}
+                    }
+                    
+                    # Extract and organize the comprehensive annotations
+                    if isinstance(result, list) and len(result) > 0:
+                        annotation = result[0]
+                        
+                        # Extract pathogenicity scores
+                        if 'cadd_phred' in annotation:
+                            vep_result['pathogenicity_scores']['CADD'] = annotation['cadd_phred']
+                        if 'revel_score' in annotation:
+                            vep_result['pathogenicity_scores']['REVEL'] = annotation['revel_score']
+                        if 'alphamissense_score' in annotation:
+                            vep_result['pathogenicity_scores']['AlphaMissense'] = annotation['alphamissense_score']
+                        if 'clinpred_score' in annotation:
+                            vep_result['pathogenicity_scores']['ClinPred'] = annotation['clinpred_score']
+                        if 'eve_score' in annotation:
+                            vep_result['pathogenicity_scores']['EVE'] = annotation['eve_score']
+                        
+                        # Extract clinical predictions
+                        if 'sift_prediction' in annotation:
+                            vep_result['clinical_predictions']['SIFT'] = annotation['sift_prediction']
+                        if 'polyphen_prediction' in annotation:
+                            vep_result['clinical_predictions']['PolyPhen'] = annotation['polyphen_prediction']
+                        if 'lrt_pred' in annotation:
+                            vep_result['clinical_predictions']['LRT'] = annotation['lrt_pred']
+                        
+                        # Extract conservation scores
+                        if 'gerp_rs' in annotation:
+                            vep_result['conservation_scores']['GERP++'] = annotation['gerp_rs']
+                        if 'phylop_score' in annotation:
+                            vep_result['conservation_scores']['phyloP'] = annotation['phylop_score']
+                        if 'phastcons_score' in annotation:
+                            vep_result['conservation_scores']['phastCons'] = annotation['phastcons_score']
+                        
+                        # Extract functional impact
+                        vep_result['functional_impact'] = {
+                            'most_severe_consequence': annotation.get('most_severe_consequence'),
+                            'impact': annotation.get('impact'),
+                            'gene_symbol': annotation.get('gene_symbol'),
+                            'gene_id': annotation.get('gene_id'),
+                            'feature_type': annotation.get('feature_type'),
+                            'biotype': annotation.get('biotype'),
+                            'canonical': annotation.get('canonical'),
+                            'mane_select': annotation.get('mane_select'),
+                            'domains': annotation.get('domains', [])
+                        }
+                    
+                    return vep_result
+                else:
+                    return {'error': f'VEP API failed with status {response.status}'}
+                
+        except Exception as e:
+            return {'error': f'Comprehensive VEP annotation error: {str(e)}'}
+
+    async def get_variant_population_frequencies(self, rsid: str) -> Dict[str, Any]:
+        """
+        Get comprehensive population frequency data from multiple sources
+        """
+        try:
+            # Get population frequencies from Ensembl
+            result = await self._make_api_request('ensembl', 'variation_populations', rsid=rsid)
+            
+            population_data = {
+                'source': 'Population Frequencies',
+                'rsid': rsid,
+                'global_maf': None,
+                'populations': {},
+                'ancestry_specific': {}
+            }
+            
+            if 'error' not in result:
+                populations = result.get('populations', [])
+                
+                for pop in populations:
+                    pop_name = pop.get('population')
+                    if pop_name:
+                        population_data['populations'][pop_name] = {
+                            'frequency': pop.get('frequency'),
+                            'allele': pop.get('allele'),
+                            'allele_count': pop.get('allele_count'),
+                            'total_count': pop.get('total_count')
+                        }
+                        
+                        # Extract ancestry-specific frequencies
+                        if any(ancestry in pop_name.lower() for ancestry in ['afr', 'african']):
+                            population_data['ancestry_specific']['African'] = pop.get('frequency')
+                        elif any(ancestry in pop_name.lower() for ancestry in ['eas', 'east_asian', 'asian']):
+                            population_data['ancestry_specific']['East Asian'] = pop.get('frequency')
+                        elif any(ancestry in pop_name.lower() for ancestry in ['eur', 'european']):
+                            population_data['ancestry_specific']['European'] = pop.get('frequency')
+                        elif any(ancestry in pop_name.lower() for ancestry in ['amr', 'american']):
+                            population_data['ancestry_specific']['American'] = pop.get('frequency')
+                        elif any(ancestry in pop_name.lower() for ancestry in ['sas', 'south_asian']):
+                            population_data['ancestry_specific']['South Asian'] = pop.get('frequency')
+                
+                # Set global MAF from 1000 Genomes if available
+                if '1000GENOMES:phase_3:ALL' in population_data['populations']:
+                    population_data['global_maf'] = population_data['populations']['1000GENOMES:phase_3:ALL']['frequency']
+            
+            return population_data
+            
+        except Exception as e:
+            return {'error': f'Population frequency error: {str(e)}'}
+
+    async def get_gwas_associations(self, rsid: str) -> Dict[str, Any]:
+        """
+        Get GWAS associations for a variant
+        """
+        try:
+            result = await self._make_api_request('gwas', 'variant_associations', rsid=rsid)
+            
+            if 'error' not in result:
+                gwas_data = {
+                    'source': 'GWAS Catalog',
+                    'rsid': rsid,
+                    'associations': [],
+                    'trait_count': 0,
+                    'study_count': 0
+                }
+                
+                # Process GWAS associations
+                associations = result.get('_embedded', {}).get('associations', [])
+                for assoc in associations[:20]:  # Limit to top 20
+                    trait_info = assoc.get('efoTraits', [{}])[0] if assoc.get('efoTraits') else {}
+                    study_info = assoc.get('study', {})
+                    
+                    gwas_data['associations'].append({
+                        'trait': trait_info.get('trait'),
+                        'trait_uri': trait_info.get('uri'),
+                        'p_value': assoc.get('pvalue'),
+                        'beta': assoc.get('betaNum'),
+                        'odds_ratio': assoc.get('orPerCopyNum'),
+                        'risk_allele': assoc.get('strongestAllele'),
+                        'study_title': study_info.get('title'),
+                        'pubmed_id': study_info.get('pubmedId'),
+                        'sample_size': study_info.get('initialSampleSize')
+                    })
+                
+                gwas_data['trait_count'] = len(set(a['trait'] for a in gwas_data['associations'] if a['trait']))
+                gwas_data['study_count'] = len(set(a['pubmed_id'] for a in gwas_data['associations'] if a['pubmed_id']))
+                
+                return gwas_data
+            else:
+                return {
+                    'source': 'GWAS Catalog',
+                    'rsid': rsid,
+                    'associations': [],
+                    'trait_count': 0,
+                    'study_count': 0,
+                    'message': 'No GWAS associations found'
+                }
+                
+        except Exception as e:
+            return {'error': f'GWAS associations error: {str(e)}'}
+
+    async def get_protein_information(self, gene_symbol: str) -> Dict[str, Any]:
+        """
+        Get comprehensive protein information from UniProt
+        """
+        try:
+            # Search for protein by gene name
+            search_params = {
+                'query': f'gene:{gene_symbol} AND organism_id:9606',  # Human proteins only
+                'format': 'json',
+                'size': '5'
+            }
+            
+            search_result = await self._make_api_request('uniprot', 'protein_search', params=search_params)
+            
+            if 'error' not in search_result and 'results' in search_result:
+                results = search_result['results']
+                if not results:
+                    return {
+                        'source': 'UniProt',
+                        'gene_symbol': gene_symbol,
+                        'found': False,
+                        'message': 'No protein entries found'
+                    }
+                
+                # Get detailed information for the primary protein
+                protein = results[0]
+                protein_data = {
+                    'source': 'UniProt',
+                    'gene_symbol': gene_symbol,
+                    'found': True,
+                    'accession': protein.get('primaryAccession'),
+                    'name': protein.get('proteinDescription', {}).get('recommendedName', {}).get('fullName', {}).get('value'),
+                    'gene_names': [gene.get('value') for gene in protein.get('genes', [])],
+                    'length': protein.get('sequence', {}).get('length'),
+                    'function': [],
+                    'domains': [],
+                    'pathways': [],
+                    'subcellular_location': [],
+                    'disease_associations': []
+                }
+                
+                # Extract functional annotations
+                comments = protein.get('comments', [])
+                for comment in comments:
+                    comment_type = comment.get('commentType')
+                    if comment_type == 'FUNCTION':
+                        for text in comment.get('texts', []):
+                            protein_data['function'].append(text.get('value', ''))
+                    elif comment_type == 'PATHWAY':
+                        for text in comment.get('texts', []):
+                            protein_data['pathways'].append(text.get('value', ''))
+                    elif comment_type == 'SUBCELLULAR LOCATION':
+                        for location in comment.get('subcellularLocations', []):
+                            loc_name = location.get('location', {}).get('value')
+                            if loc_name:
+                                protein_data['subcellular_location'].append(loc_name)
+                    elif comment_type == 'DISEASE':
+                        for disease in comment.get('disease', []):
+                            protein_data['disease_associations'].append({
+                                'name': disease.get('diseaseId'),
+                                'description': disease.get('description')
+                            })
+                
+                # Extract protein features (domains, etc.)
+                features = protein.get('features', [])
+                for feature in features:
+                    if feature.get('type') == 'DOMAIN':
+                        protein_data['domains'].append({
+                            'name': feature.get('description'),
+                            'start': feature.get('location', {}).get('start', {}).get('value'),
+                            'end': feature.get('location', {}).get('end', {}).get('value')
+                        })
+                
+                return protein_data
+            else:
+                return {
+                    'source': 'UniProt',
+                    'gene_symbol': gene_symbol,
+                    'found': False,
+                    'message': 'Protein search failed'
+                }
+                
+        except Exception as e:
+            return {'error': f'UniProt protein information error: {str(e)}'}
+
+    async def get_protein_interactions(self, gene_symbol: str) -> Dict[str, Any]:
+        """
+        Get protein-protein interactions from STRING database
+        """
+        try:
+            await self._ensure_session()
+            if self.session is None:
+                return {'error': 'Failed to initialize HTTP session'}
+            
+            # STRING API parameters
+            params = {
+                'identifiers': gene_symbol,
+                'species': '9606',  # Human
+                'required_score': '400',  # Medium confidence
+                'network_type': 'functional',
+                'caller_identity': 'genetic_analysis_toolkit'
+            }
+            
+            result = await self._make_api_request('string', 'interactions', params=params)
+            
+            if 'error' not in result:
+                interaction_data = {
+                    'source': 'STRING',
+                    'gene_symbol': gene_symbol,
+                    'interactions': [],
+                    'interaction_count': 0,
+                    'functional_partners': []
+                }
+                
+                # Process interaction data
+                if isinstance(result, list):
+                    for i, interaction in enumerate(result):
+                        if i >= 20:  # Limit to top 20 interactions
+                            break
+                        
+                        if isinstance(interaction, dict):
+                            interaction_data['interactions'].append({
+                                'partner_a': interaction.get('preferredName_A'),
+                                'partner_b': interaction.get('preferredName_B'),
+                                'combined_score': interaction.get('score'),
+                                'experimental_score': interaction.get('experimentally_determined_interaction'),
+                                'database_score': interaction.get('database_annotated'),
+                                'coexpression_score': interaction.get('coexpression'),
+                                'neighborhood_score': interaction.get('neighborhood_on_chromosome')
+                            })
+                            
+                            # Add unique functional partners
+                            partner_a = interaction.get('preferredName_A')
+                            partner_b = interaction.get('preferredName_B')
+                            if partner_a != gene_symbol and partner_a not in interaction_data['functional_partners']:
+                                interaction_data['functional_partners'].append(partner_a)
+                            if partner_b != gene_symbol and partner_b not in interaction_data['functional_partners']:
+                                interaction_data['functional_partners'].append(partner_b)
+                    
+                    interaction_data['interaction_count'] = len(interaction_data['interactions'])
+                
+                return interaction_data
+            else:
+                return {
+                    'source': 'STRING',
+                    'gene_symbol': gene_symbol,
+                    'interactions': [],
+                    'interaction_count': 0,
+                    'functional_partners': [],
+                    'message': 'No protein interactions found'
+                }
+                
+        except Exception as e:
+            return {'error': f'STRING protein interactions error: {str(e)}'}
+
     async def get_variant_info_from_ensembl(self, rsid: str) -> Dict[str, Any]:
         """
         Get variant information from Ensembl REST API with enhanced data extraction
@@ -731,7 +1129,7 @@ class GeneticAPIService:
     
     async def annotate_variant(self, rsid: str, gene: Optional[str] = None) -> Dict[str, Any]:
         """
-        Comprehensive variant annotation using multiple sources including real PharmGKB API
+        Comprehensive variant annotation using multiple sources including advanced VEP and new databases
         """
         results = {
             'rsid': rsid,
@@ -742,29 +1140,41 @@ class GeneticAPIService:
         # Gather data from multiple sources concurrently
         tasks = [
             self.get_variant_info_from_ensembl(rsid),
+            self.get_comprehensive_vep_annotation(rsid),
+            self.get_variant_population_frequencies(rsid),
             self.get_variant_info_from_clinvar(rsid),
             self.get_snpedia_info(rsid),
             self.get_litvar_publications(rsid),
-            self.get_pharmgkb_variant_info(rsid)
+            self.get_pharmgkb_variant_info(rsid),
+            self.get_gwas_associations(rsid)
         ]
         
         if gene:
-            tasks.append(self.get_pharmgkb_drug_info(gene))
+            tasks.extend([
+                self.get_pharmgkb_drug_info(gene),
+                self.get_protein_information(gene),
+                self.get_protein_interactions(gene)
+            ])
         
         try:
             annotations = await asyncio.gather(*tasks, return_exceptions=True)
             
             results['annotations']['ensembl'] = annotations[0] if len(annotations) > 0 else {}
-            results['annotations']['clinvar'] = annotations[1] if len(annotations) > 1 else {}
-            results['annotations']['snpedia'] = annotations[2] if len(annotations) > 2 else {}
-            results['annotations']['literature'] = annotations[3] if len(annotations) > 3 else {}
-            results['annotations']['pharmgkb_variant'] = annotations[4] if len(annotations) > 4 else {}
+            results['annotations']['vep_comprehensive'] = annotations[1] if len(annotations) > 1 else {}
+            results['annotations']['population_frequencies'] = annotations[2] if len(annotations) > 2 else {}
+            results['annotations']['clinvar'] = annotations[3] if len(annotations) > 3 else {}
+            results['annotations']['snpedia'] = annotations[4] if len(annotations) > 4 else {}
+            results['annotations']['literature'] = annotations[5] if len(annotations) > 5 else {}
+            results['annotations']['pharmgkb_variant'] = annotations[6] if len(annotations) > 6 else {}
+            results['annotations']['gwas'] = annotations[7] if len(annotations) > 7 else {}
             
-            if gene and len(annotations) > 5:
-                results['annotations']['pharmgkb_gene'] = annotations[5]
+            if gene and len(annotations) > 8:
+                results['annotations']['pharmgkb_gene'] = annotations[8]
+                results['annotations']['protein_info'] = annotations[9] if len(annotations) > 9 else {}
+                results['annotations']['protein_interactions'] = annotations[10] if len(annotations) > 10 else {}
                 
         except Exception as e:
-            results['error'] = f'Annotation error: {str(e)}'
+            results['error'] = f'Comprehensive annotation error: {str(e)}'
         
         return results
     

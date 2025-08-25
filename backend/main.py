@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api import auth_routes, analysis_routes, upload_routes, annotation_routes, variant_routes
 from .db.database import init_db  # Re-enabled
+from .services.analysis_queue import get_analysis_queue
 
 # Create FastAPI app
 app = FastAPI(
@@ -17,9 +18,9 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -38,8 +39,20 @@ async def root():
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database on startup"""
+    """Initialize database and analysis queue on startup"""
     await init_db()
+    
+    # Start the analysis queue processor
+    analysis_queue = get_analysis_queue()
+    await analysis_queue.start()
+    print("🚀 Analysis queue processor started")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean shutdown of analysis queue"""
+    analysis_queue = get_analysis_queue()
+    await analysis_queue.stop()
+    print("🛑 Analysis queue processor stopped")
 
 if __name__ == "__main__":
     import uvicorn

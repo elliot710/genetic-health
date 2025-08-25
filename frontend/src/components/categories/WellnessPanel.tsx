@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import { Activity, Heart, Moon, Droplets, Thermometer, Zap, Shield } from 'lucide-react'
 import { 
   getThemeClass, 
@@ -10,12 +10,60 @@ import {
   getProgressBarBg 
 } from '../../utils/theme'
 
+interface WellnessTrait {
+  name: string;
+  value: string;
+  gene: string;
+  confidence: string;
+}
+
+interface WellnessCategory {
+  category: string;
+  icon: any;
+  color: string;
+  bgColor: string;
+  traits: WellnessTrait[];
+}
+
 interface WellnessPanelProps {
   data: any
   isDarkMode?: boolean
+  token?: string
 }
 
-export default function WellnessPanel({ data, isDarkMode = false }: WellnessPanelProps) {
+export default function WellnessPanel({ data, isDarkMode = false, token }: WellnessPanelProps) {
+  const [wellnessData, setWellnessData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchWellnessData = async () => {
+      if (!token) {
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const response = await fetch('http://localhost:8000/dashboard-data', {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (response.ok) {
+          const dashboardData = await response.json();
+          setWellnessData(dashboardData);
+        }
+      } catch (error) {
+        console.error('Error fetching wellness data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchWellnessData();
+  }, [token]);
+
   const glassBackground = getGlassBackground(isDarkMode);
   const glassBorder = getGlassBorder(isDarkMode);
   const textPrimary = getTextPrimary(isDarkMode);
@@ -23,74 +71,140 @@ export default function WellnessPanel({ data, isDarkMode = false }: WellnessPane
   const tagClass = getTagClass(isDarkMode);
   const progressBarBg = getProgressBarBg(isDarkMode);
 
-  const wellnessTraits = [
-    {
-      category: 'Sleep & Circadian Rhythm',
-      icon: Moon,
-      color: 'text-purple-500',
-      bgColor: 'bg-purple-500/10',
-      traits: [
-        { name: 'Deep Sleep', value: 'Typical', gene: 'DEC2', confidence: 'High' },
-        { name: 'Morning Person', value: 'Yes', gene: 'PER2', confidence: 'High' },
-        { name: 'Sleep Duration Need', value: '7-8 hours', gene: 'CLOCK', confidence: 'Medium' }
-      ]
-    },
-    {
-      category: 'Cardiovascular Health',
-      icon: Heart,
-      color: 'text-red-500',
-      bgColor: 'bg-red-500/10',
-      traits: [
-        { name: 'HDL Cholesterol Response', value: 'Good Response', gene: 'CETP', confidence: 'High' },
-        { name: 'Blood Pressure', value: 'Normal Tendency', gene: 'ACE', confidence: 'Medium' },
-        { name: 'Heart Rate Recovery', value: 'Fast', gene: 'ADRB1', confidence: 'High' }
-      ]
-    },
-    {
-      category: 'Inflammation & Immunity',
-      icon: Shield,
-      color: 'text-green-500',
-      bgColor: 'bg-green-500/10',
-      traits: [
-        { name: 'C-Reactive Protein', value: 'Low Levels', gene: 'CRP', confidence: 'High' },
-        { name: 'Immune Response', value: 'Strong', gene: 'HLA-B', confidence: 'Medium' },
-        { name: 'Inflammatory Response', value: 'Moderate', gene: 'TNF-α', confidence: 'High' }
-      ]
-    },
-    {
-      category: 'Metabolic Health',
-      icon: Zap,
-      color: 'text-yellow-500',
-      bgColor: 'bg-yellow-500/10',
-      traits: [
-        { name: 'Insulin Sensitivity', value: 'High', gene: 'TCF7L2', confidence: 'High' },
-        { name: 'Metabolic Rate', value: 'Fast', gene: 'UCP1', confidence: 'Medium' },
-        { name: 'Blood Sugar Response', value: 'Normal', gene: 'PPARG', confidence: 'High' }
-      ]
-    },
-    {
-      category: 'Hydration & Electrolytes',
-      icon: Droplets,
-      color: 'text-blue-500',
-      bgColor: 'bg-blue-500/10',
-      traits: [
-        { name: 'Sodium Sensitivity', value: 'Low', gene: 'ACE', confidence: 'Medium' },
-        { name: 'Hydration Needs', value: 'Standard', gene: 'AQP2', confidence: 'Low' },
-        { name: 'Electrolyte Balance', value: 'Good', gene: 'SCNN1A', confidence: 'Medium' }
-      ]
-    },
-    {
-      category: 'Stress Response',
-      icon: Activity,
-      color: 'text-orange-500',
-      bgColor: 'bg-orange-500/10',
-      traits: [
-        { name: 'Cortisol Response', value: 'Normal', gene: 'FKBP5', confidence: 'High' },
-        { name: 'Stress Resilience', value: 'High', gene: 'COMT', confidence: 'High' },
-        { name: 'Recovery Time', value: 'Fast', gene: 'BDNF', confidence: 'Medium' }
-      ]
+  const getWellnessTraits = (): WellnessCategory[] => {
+    // Try to get real data first
+    if (wellnessData?.wellness_traits && wellnessData.wellness_traits.length > 0) {
+      // Group wellness traits by category
+      const grouped = wellnessData.wellness_traits.reduce((acc: any, trait: any) => {
+        const category = trait.category || 'General Wellness';
+        if (!acc[category]) {
+          acc[category] = [];
+        }
+        acc[category].push({
+          name: trait.trait || trait.name || 'Unknown Trait',
+          value: trait.value || trait.result || 'Normal',
+          gene: trait.gene || trait.marker || 'Multiple genes',
+          confidence: trait.confidence || 'Medium'
+        });
+        return acc;
+      }, {});
+
+      // Convert to expected format
+      return Object.keys(grouped).map(categoryName => ({
+        category: categoryName,
+        icon: getCategoryIcon(categoryName),
+        color: getCategoryColor(categoryName),
+        bgColor: getCategoryBgColor(categoryName),
+        traits: grouped[categoryName]
+      }));
     }
-  ]
+
+    // Fallback data if no real data available
+    return [
+      {
+        category: 'Sleep & Circadian Rhythm',
+        icon: Moon,
+        color: 'text-purple-500',
+        bgColor: 'bg-purple-500/10',
+        traits: [
+          { name: 'Deep Sleep', value: 'Typical', gene: 'DEC2', confidence: 'High' },
+          { name: 'Morning Person', value: 'Yes', gene: 'PER2', confidence: 'High' },
+          { name: 'Sleep Duration Need', value: '7-8 hours', gene: 'CLOCK', confidence: 'Medium' }
+        ]
+      },
+      {
+        category: 'Cardiovascular Health',
+        icon: Heart,
+        color: 'text-red-500',
+        bgColor: 'bg-red-500/10',
+        traits: [
+          { name: 'HDL Cholesterol Response', value: 'Good Response', gene: 'CETP', confidence: 'High' },
+          { name: 'Blood Pressure', value: 'Normal Tendency', gene: 'ACE', confidence: 'Medium' },
+          { name: 'Heart Rate Recovery', value: 'Fast', gene: 'ADRB1', confidence: 'High' }
+        ]
+      },
+      {
+        category: 'Inflammation & Immunity',
+        icon: Shield,
+        color: 'text-green-500',
+        bgColor: 'bg-green-500/10',
+        traits: [
+          { name: 'C-Reactive Protein', value: 'Low Levels', gene: 'CRP', confidence: 'High' },
+          { name: 'Immune Response', value: 'Strong', gene: 'HLA-B', confidence: 'Medium' },
+          { name: 'Inflammatory Response', value: 'Moderate', gene: 'TNF-α', confidence: 'High' }
+        ]
+      },
+      {
+        category: 'Metabolic Health',
+        icon: Zap,
+        color: 'text-yellow-500',
+        bgColor: 'bg-yellow-500/10',
+        traits: [
+          { name: 'Insulin Sensitivity', value: 'High', gene: 'TCF7L2', confidence: 'High' },
+          { name: 'Metabolic Rate', value: 'Fast', gene: 'UCP1', confidence: 'Medium' },
+          { name: 'Blood Sugar Response', value: 'Normal', gene: 'PPARG', confidence: 'High' }
+        ]
+      },
+      {
+        category: 'Hydration & Electrolytes',
+        icon: Droplets,
+        color: 'text-blue-500',
+        bgColor: 'bg-blue-500/10',
+        traits: [
+          { name: 'Sodium Sensitivity', value: 'Low', gene: 'ACE', confidence: 'Medium' },
+          { name: 'Hydration Needs', value: 'Standard', gene: 'AQP2', confidence: 'Low' },
+          { name: 'Electrolyte Balance', value: 'Good', gene: 'SCNN1A', confidence: 'Medium' }
+        ]
+      },
+      {
+        category: 'Stress Response',
+        icon: Activity,
+        color: 'text-orange-500',
+        bgColor: 'bg-orange-500/10',
+        traits: [
+          { name: 'Cortisol Response', value: 'Normal', gene: 'FKBP5', confidence: 'High' },
+          { name: 'Stress Resilience', value: 'High', gene: 'COMT', confidence: 'High' },
+          { name: 'Recovery Time', value: 'Fast', gene: 'BDNF', confidence: 'Medium' }
+        ]
+      }
+    ];
+  };
+
+  const getCategoryIcon = (categoryName: string) => {
+    const name = categoryName.toLowerCase();
+    if (name.includes('sleep') || name.includes('circadian')) return Moon;
+    if (name.includes('cardio') || name.includes('heart')) return Heart;
+    if (name.includes('inflam') || name.includes('immun')) return Shield;
+    if (name.includes('metabol') || name.includes('energy')) return Zap;
+    if (name.includes('hydrat') || name.includes('electrolyte')) return Droplets;
+    if (name.includes('stress') || name.includes('recovery')) return Activity;
+    if (name.includes('temperature') || name.includes('thermal')) return Thermometer;
+    return Activity;
+  };
+
+  const getCategoryColor = (categoryName: string) => {
+    const name = categoryName.toLowerCase();
+    if (name.includes('sleep') || name.includes('circadian')) return 'text-purple-500';
+    if (name.includes('cardio') || name.includes('heart')) return 'text-red-500';
+    if (name.includes('inflam') || name.includes('immun')) return 'text-green-500';
+    if (name.includes('metabol') || name.includes('energy')) return 'text-yellow-500';
+    if (name.includes('hydrat') || name.includes('electrolyte')) return 'text-blue-500';
+    if (name.includes('stress') || name.includes('recovery')) return 'text-orange-500';
+    return 'text-gray-500';
+  };
+
+  const getCategoryBgColor = (categoryName: string) => {
+    const name = categoryName.toLowerCase();
+    if (name.includes('sleep') || name.includes('circadian')) return 'bg-purple-500/10';
+    if (name.includes('cardio') || name.includes('heart')) return 'bg-red-500/10';
+    if (name.includes('inflam') || name.includes('immun')) return 'bg-green-500/10';
+    if (name.includes('metabol') || name.includes('energy')) return 'bg-yellow-500/10';
+    if (name.includes('hydrat') || name.includes('electrolyte')) return 'bg-blue-500/10';
+    if (name.includes('stress') || name.includes('recovery')) return 'bg-orange-500/10';
+    return 'bg-gray-500/10';
+  };
+
+  const wellnessTraits = getWellnessTraits();
 
   const overallScore = 78
   const improvementAreas = [
@@ -183,7 +297,7 @@ export default function WellnessPanel({ data, isDarkMode = false }: WellnessPane
 
       {/* Wellness Categories */}
       <div className="grid gap-6">
-        {wellnessTraits.map((category, categoryIndex) => {
+        {wellnessTraits.map((category: WellnessCategory, categoryIndex: number) => {
           const Icon = category.icon
           return (
             <div key={categoryIndex} className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
@@ -197,7 +311,7 @@ export default function WellnessPanel({ data, isDarkMode = false }: WellnessPane
               </div>
               
               <div className="grid gap-3">
-                {category.traits.map((trait, traitIndex) => (
+                {category.traits.map((trait: WellnessTrait, traitIndex: number) => (
                   <div key={traitIndex} className="flex items-center justify-between p-3 bg-black/10 rounded-lg">
                     <div>
                       <h4 className={`text-sm font-medium ${textPrimary} mb-1`}>
@@ -229,7 +343,7 @@ export default function WellnessPanel({ data, isDarkMode = false }: WellnessPane
           Personalized Recommendations
         </h3>
         <div className="space-y-3">
-          {improvementAreas.map((recommendation, index) => (
+          {improvementAreas.map((recommendation: string, index: number) => (
             <div key={index} className="flex items-start space-x-3">
               <div className="w-2 h-2 bg-green-500 rounded-full mt-2 flex-shrink-0" />
               <p className={`text-sm ${textSecondary}`}>

@@ -5,15 +5,16 @@ import asyncio
 import time
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy import select, update
 
 from ..db.database import get_session
-from ..db.models import GeneticAnalysis, VariantAnnotation, DrugResponse
+from ..db.models import GeneticAnalysis, VariantAnnotation, GeneticVariant, HealthRisk, DrugResponse
 from .genetic_api_service import GeneticAPIService
 from .drug_response import DrugResponseAnalyzer
+from .specialized_analyzers import SpecializedAnalyzerService
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ class GeneticAnalysisJob:
         self.user_id = user_id
         self.api_service = GeneticAPIService()
         self.drug_analyzer = DrugResponseAnalyzer()
+        self.specialized_analyzer = SpecializedAnalyzerService()
         self._job_start_time = None
         
     async def process_genetic_analysis(self, analysis_id: int, max_variants: Optional[int] = None):
@@ -33,13 +35,9 @@ class GeneticAnalysisJob:
         
         logger.info(f"🚀 FAST ANALYSIS STARTED for analysis_id {analysis_id} (user: {self.user_id})")
         
-        # Update status to show we've started
-        await self._update_analysis_status(analysis_id, 'processing', 1, 'Loading analysis data', 0)
-        
         try:
             async for session in get_session():
                 # Load analysis efficiently
-                logger.info(f"🔍 Loading analysis {analysis_id} for user {self.user_id}")
                 analysis_query = select(GeneticAnalysis).options(
                     selectinload(GeneticAnalysis.variants)
                 ).where(GeneticAnalysis.id == analysis_id)
@@ -54,17 +52,7 @@ class GeneticAnalysisJob:
                     logger.error(f"❌ Analysis {analysis_id} not found for user {self.user_id}")
                     return {"error": "Analysis not found", "user_id": self.user_id}
                 
-                logger.info(f"📊 Analysis found: {analysis.filename}, status: {analysis.analysis_status}")
-                
                 variants = analysis.variants
-                logger.info(f"🧬 Found {len(variants) if variants else 0} variants in analysis")
-                
-                # Update total_variants count if it's not set correctly
-                total_variants_count = len(variants) if variants else 0
-                if total_variants_count > 0:
-                    logger.info(f"🔧 Found {total_variants_count} variants, updating status")
-                    await self._update_analysis_status(analysis_id, 'processing', 5, 'Loading variants', 0, total_variants_count)
-                
                 if not variants:
                     logger.warning(f"⚠️ No variants found for analysis {analysis_id}")
                     await self._update_analysis_status(analysis_id, 'completed', 100, 'No variants to process', 0)
@@ -102,8 +90,10 @@ class GeneticAnalysisJob:
                             continue
                         
                         # Fast annotation call
+                        annotation_start = time.time()
                         annotation = await self.api_service.annotate_variant(str(variant.rsid))
                         api_calls_made += 1
+                        annotation_time = time.time() - annotation_start
                         
                         if annotation:
                             # Save annotation data
@@ -197,10 +187,7 @@ class GeneticAnalysisJob:
         
         for variant in variants:
             rsid = str(variant.rsid).lower()
-            # Get clinical significance from info field (JSON) if available
-            clinical_sig = ''
-            if variant.info and isinstance(variant.info, dict):
-                clinical_sig = str(variant.info.get('clinical_significance', '')).lower()
+            clinical_sig = str(variant.clinical_significance or '').lower()
             
             # Top priority: Pharmacogenes (drug response)
             if any(gene in rsid for gene in ['cyp', 'adh', 'aldh', 'comt', 'mthfr', 'apoe']):
@@ -268,14 +255,12 @@ class GeneticAnalysisJob:
             variant_annotation = VariantAnnotation(
                 variant_id=variant.id,
                 analysis_id=analysis_id,
-                rsid=variant.rsid or f"chr{variant.chromosome}:{variant.position}",
-                ensembl_data=annotation.get('ensembl', {}),
-                clinvar_data=annotation.get('clinvar', {}),
-                pharmgkb_data=annotation.get('pharmgkb', {}),
-                api_calls_made=api_call_number
+                annotation_data=annotation,
+                api_call_number=api_call_number,
+                created_at=datetime.utcnow()
             )
             session.add(variant_annotation)
-            # Don't commit here - let the main process handle commits
+            await session.commit()
         except Exception as e:
             logger.error(f"❌ Failed to save annotation for variant {variant.id}: {e}")
             await session.rollback()
@@ -298,7 +283,7 @@ class GeneticAnalysisJob:
         return None
 
     async def _update_analysis_status(self, analysis_id: int, status: str, 
-                                    progress: int, current_step: str, processed_variants: int = 0, total_variants: Optional[int] = None):
+                                    progress: int, current_step: str, processed_variants: int = 0):
         """Update analysis progress in database"""
         try:
             async for session in get_session():
@@ -308,18 +293,13 @@ class GeneticAnalysisJob:
                 if self.user_id is not None:
                     update_query = update_query.where(GeneticAnalysis.user_id == self.user_id)
                 
-                update_values = {
-                    'analysis_status': status,
-                    'progress_percentage': progress,
-                    'current_step': current_step,
-                    'processed_variants': processed_variants
-                }
-                
-                # Update total_variants if provided
-                if total_variants is not None:
-                    update_values['total_variants'] = total_variants
-                
-                update_query = update_query.values(**update_values)
+                update_query = update_query.values(
+                    analysis_status=status,
+                    progress_percentage=progress,
+                    current_step=current_step,
+                    processed_variants=processed_variants,
+                    updated_at=datetime.utcnow()
+                )
                 
                 await session.execute(update_query)
                 await session.commit()
@@ -348,11 +328,3 @@ class GeneticAnalysisJob:
         except Exception as e:
             logger.error(f"❌ Failed to finalize analysis: {e}")
             await session.rollback()
-
-    # Backward compatibility method
-    async def process_analysis(self, analysis_id: int, max_variants: Optional[int] = None):
-        """Alias for backward compatibility with existing API routes"""
-        return await self.process_genetic_analysis(analysis_id, max_variants)
-
-# Alias for backward compatibility with existing imports
-AnalysisJob = GeneticAnalysisJob

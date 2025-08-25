@@ -7,7 +7,12 @@ from sqlalchemy import select, update
 from typing import Dict, Any
 
 from ..db.database import get_session
-from ..db.models import GeneticAnalysis, GeneticVariant, HealthRisk, DrugResponse
+from ..db.models import (
+    GeneticAnalysis, GeneticVariant, HealthRisk, DrugResponse,
+    PersonalityTrait, WellnessMetric, PhysicalTrait, NutritionTrait,
+    SportsPerformance, CognitiveProfile, AncestryResult, CarrierStatus,
+    MethylationProfile, DetoxificationProfile
+)
 from ..services.genetic_analyzer import GeneticAnalyzer
 from ..services.analysis_queue import queue_analysis, get_queue_status
 from ..services.analysis_job import AnalysisJob  # Keep for legacy functions
