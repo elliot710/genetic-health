@@ -32,6 +32,14 @@ class GeneticAnalysis(Base):
     analysis_results = Column(JSON)  # Store the complete analysis results
     upload_date = Column(DateTime(timezone=True), server_default=func.now())
     
+    # Progress tracking fields
+    analysis_status = Column(String, default='pending')  # 'pending', 'processing', 'completed', 'failed'
+    progress_percentage = Column(Integer, default=0)  # 0-100
+    total_variants = Column(Integer, default=0)
+    processed_variants = Column(Integer, default=0)
+    current_step = Column(String, default='initializing')  # Current processing step
+    estimated_completion = Column(DateTime(timezone=True))  # Estimated completion time
+    
     # Relationship to user
     user = relationship("User", back_populates="genetic_analyses")
     

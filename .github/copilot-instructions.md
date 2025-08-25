@@ -20,6 +20,8 @@ A full-stack genetic data analysis platform providing personalized health insigh
 - **Models**: User, GeneticAnalysis, GeneticVariant, HealthRisk, DrugResponse in `db/models.py`
 - **Migrations**: Alembic configured for schema versioning
 
+Everything is running in docker with hot reload.
+
 ## Development Workflow
 
 ### Essential Commands
@@ -116,3 +118,8 @@ SELECT * FROM drug_responses;    -- Pharmacogenomic data
 - **Frontend**: http://localhost:3000
 - **Backend API**: http://localhost:8000/docs (Swagger UI)
 - **Database**: PostgreSQL on default port 5432
+
+### User credentials
+
+email: elliotalderson710@gmail.com
+password: Victor123!

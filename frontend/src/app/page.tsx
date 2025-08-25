@@ -5,6 +5,7 @@ import { Dna, LogOut, Upload } from 'lucide-react'
 import Dashboard from '@/components/ModernDashboard'
 import FileUpload from '@/components/ModernFileUpload'
 import AuthForm from '@/components/AuthForm'
+import AnalysisProgressLoader from '@/components/AnalysisProgressLoader'
 import { getTheme } from '@/utils/theme'
 
 interface AnalysisData {
@@ -29,6 +30,8 @@ interface User {
 
 export default function Home() {
   const [analysisData, setAnalysisData] = useState<AnalysisData | null>(null)
+  const [analysisId, setAnalysisId] = useState<number | null>(null)
+  const [showProgressLoader, setShowProgressLoader] = useState(false)
   const [token, setToken] = useState<string | null>(null)
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
@@ -77,6 +80,12 @@ export default function Home() {
         // Check if user has any uploaded data
         if (dashboardData.summary && dashboardData.summary.total_variants > 0) {
           console.log('Found user data with', dashboardData.summary.total_variants, 'variants')
+          
+          // Extract analysisId from the dashboard data
+          if (dashboardData.summary.analysis_id) {
+            setAnalysisId(dashboardData.summary.analysis_id)
+            console.log('Set analysis ID:', dashboardData.summary.analysis_id)
+          }
           
           // The API already returns data in the format expected by the dashboard
           setAnalysisData(dashboardData)
@@ -141,11 +150,65 @@ export default function Home() {
     verifyToken(newToken)
   }
 
+  const handleAnalysisComplete = useCallback(async (data: AnalysisData, newAnalysisId?: number) => {
+    console.log('Analysis complete with data:', data, 'analysisId:', newAnalysisId)
+    
+    if (newAnalysisId) {
+      setAnalysisId(newAnalysisId)
+      
+      // Start the background analysis job
+      try {
+        const startResponse = await fetch(`http://localhost:8000/analyze/start/${newAnalysisId}`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        })
+        
+        if (startResponse.ok) {
+          console.log('Analysis job started successfully')
+          setShowProgressLoader(true)
+          setAnalysisData(null) // Clear any existing data to show progress
+        } else {
+          console.error('Failed to start analysis job')
+          setAnalysisData(data) // Show the upload data immediately if analysis start fails
+        }
+      } catch (error) {
+        console.error('Error starting analysis job:', error)
+        setAnalysisData(data) // Show the upload data immediately if analysis start fails
+      }
+    } else {
+      setAnalysisData(data)
+    }
+  }, [token])
+
+  const handleProgressComplete = useCallback(async (results: any) => {
+    console.log('Analysis progress completed:', results)
+    setShowProgressLoader(false)
+    
+    // Reload the dashboard data with complete analysis
+    if (token) {
+      await loadExistingData(token)
+    }
+  }, [token, loadExistingData])
+
+  const handleProgressError = useCallback((error: string) => {
+    console.error('Analysis progress error:', error)
+    setShowProgressLoader(false)
+    
+    // Try to load any existing data
+    if (token) {
+      loadExistingData(token)
+    }
+  }, [token, loadExistingData])
+
   const handleLogout = () => {
     localStorage.removeItem('token')
     setToken(null)
     setUser(null)
     setAnalysisData(null)
+    setShowProgressLoader(false)
+    setAnalysisId(null)
   }
 
   if (loading || !isHydrated) {
@@ -171,11 +234,49 @@ export default function Home() {
   }
 
   console.log('Render - analysisData:', analysisData)
-  console.log('Render - will show upload screen?', !analysisData)
+  console.log('Render - showProgressLoader:', showProgressLoader) 
+  console.log('Render - will show upload screen?', !analysisData && !showProgressLoader)
 
   return (
     <main className="min-h-screen bg-white">
-      {!analysisData ? (
+      {showProgressLoader && analysisId ? (
+        <div className={`min-h-screen ${theme.background}`}>
+          {/* Header */}
+          <div className={`relative z-10 backdrop-blur-sm border-b ${theme.glass} ${theme.glassBorder}`}>
+            <div className="container mx-auto px-4 py-4 flex justify-between items-center">
+              <div className="flex items-center space-x-3">
+                <div className={`p-2 ${theme.primary.gradient} rounded-xl`}>
+                  <Dna className="h-8 w-8 text-white" />
+                </div>
+                <h1 className={`text-2xl font-bold ${theme.text.primary}`}>
+                  Genetic Health Analysis Toolkit
+                </h1>
+              </div>
+              <div className="flex items-center space-x-4">
+                <span className={`text-sm ${theme.text.secondary}`}>
+                  Welcome, {user?.full_name || user?.username}
+                </span>
+                <button
+                  onClick={handleLogout}
+                  className={`px-4 py-2 backdrop-blur-sm border rounded-xl font-medium transition-all duration-200 flex items-center space-x-2 ${theme.glass} ${theme.glassBorder} ${theme.text.primary}`}
+                >
+                  <LogOut className="h-4 w-4" />
+                  <span>Logout</span>
+                </button>
+              </div>
+            </div>
+          </div>
+          
+          {/* Progress Loader */}
+          <div className="container mx-auto px-4 py-8">
+            <AnalysisProgressLoader 
+              analysisId={analysisId}
+              onComplete={handleProgressComplete}
+              onError={handleProgressError}
+            />
+          </div>
+        </div>
+      ) : !analysisData ? (
         <div className={`min-h-screen ${theme.background}`}>
           {/* Background Elements */}
           <div className="absolute inset-0 overflow-hidden">
@@ -243,13 +344,15 @@ export default function Home() {
               </div>
             </div>
             
-            <FileUpload onAnalysisComplete={setAnalysisData} token={token || ''} isDarkMode={isHydrated ? isDarkMode : false} />
+            <FileUpload onAnalysisComplete={handleAnalysisComplete} token={token || ''} isDarkMode={isHydrated ? isDarkMode : false} />
           </div>
         </div>
       ) : (
         <Dashboard 
           token={token || undefined}
           analysisData={analysisData}
+          analysisId={analysisId}
+          onRefresh={loadExistingData}
         />
       )}
     </main>

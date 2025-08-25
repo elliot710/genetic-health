@@ -9,7 +9,7 @@ import {
 import { getTheme } from '@/utils/theme'
 
 interface FileUploadProps {
-  onAnalysisComplete: (data: any) => void
+  onAnalysisComplete: (data: any, analysisId?: number) => void
   token: string
   isDarkMode: boolean
 }
@@ -137,6 +137,9 @@ export default function ModernFileUpload({ onAnalysisComplete, token, isDarkMode
       
       setUploadStatus('success')
       
+      // Pass the analysis ID to trigger progress tracking
+      onAnalysisComplete(dashboardData, analysisId)
+      
       // Wait a moment to let the background analysis begin, then fetch the latest dashboard data
       setTimeout(async () => {
         try {
@@ -150,16 +153,14 @@ export default function ModernFileUpload({ onAnalysisComplete, token, isDarkMode
           if (dashboardResponse.ok) {
             const dashboardData = await dashboardResponse.json()
             console.log('Fetched updated dashboard data after upload:', dashboardData)
-            onAnalysisComplete(dashboardData)
+            onAnalysisComplete(dashboardData, analysisId)
           } else {
             console.error('Failed to fetch updated dashboard data')
-            // Fallback to the constructed data if API fails
-            onAnalysisComplete(dashboardData)
+            // Continue with progress tracking using the analysis ID
           }
         } catch (error) {
           console.error('Error fetching updated dashboard data:', error)
-          // Fallback to the constructed data if API fails
-          onAnalysisComplete(dashboardData)
+          // Continue with progress tracking using the analysis ID
         }
       }, 2000)
 

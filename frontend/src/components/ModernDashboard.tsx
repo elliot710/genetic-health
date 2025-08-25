@@ -7,7 +7,8 @@ import {
   Settings, Download, Trash2, Info, Shield, Search,
   Upload, Dna, Activity, BarChart3, Sparkles, Target,
   Award, Lightbulb, Star, Flame, Sun, Moon, Users,
-  MessageSquare, Bell, Menu, X, LogOut, Plus, Home
+  MessageSquare, Bell, Menu, X, LogOut, Plus, Home,
+  Square, Play, Pause
 } from 'lucide-react'
 import { getTheme } from '../utils/theme'
 
@@ -25,23 +26,44 @@ import WellnessPanel from './categories/WellnessPanel'
 import MethylationPanel from './categories/MethylationPanel'
 import DetoxPanel from './categories/DetoxPanel'
 import VariantSearch from './VariantSearch'
+import AnalysisProgressLoader from './AnalysisProgressLoader'
 import { getThemeClass } from '../utils/theme'
 
 interface ModernDashboardProps {
   token?: string
   analysisData?: any
+  analysisId?: number | null
+  onRefresh?: (token: string) => Promise<void>
 }
 
-export default function ModernDashboard({ token, analysisData }: ModernDashboardProps) {
-  console.log('Dashboard component props:', { token: !!token, analysisData })
+export default function ModernDashboard({ token, analysisData, analysisId, onRefresh }: ModernDashboardProps) {
+  console.log('Dashboard component props:', { token: !!token, analysisData, analysisId })
+  console.log('Analysis ID in dashboard:', analysisId)
   
   const [data, setData] = useState<any>(analysisData || null)
   const [loading, setLoading] = useState(!analysisData)
+  const [showProgress, setShowProgress] = useState(false)
+  const [progressInterval, setProgressInterval] = useState<NodeJS.Timeout | null>(null)
   const [activeCategory, setActiveCategory] = useState('overview')
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
-  const [variantsPerPage] = useState(10)
+  const [variantsPerPage] = useState(25)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  
+  // Notification system
+  const [notification, setNotification] = useState<{
+    show: boolean
+    message: string
+    type: 'success' | 'error' | 'info'
+  }>({ show: false, message: '', type: 'info' })
+
+  // Show notification helper
+  const showNotification = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setNotification({ show: true, message, type })
+    setTimeout(() => {
+      setNotification(prev => ({ ...prev, show: false }))
+    }, 3000) // Hide after 3 seconds
+  }
   
   // Initialize theme from localStorage or default to false
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -59,50 +81,56 @@ export default function ModernDashboard({ token, analysisData }: ModernDashboard
     }
   }, [isDarkMode])
 
-  // Load sample data on component mount only if no analysisData provided
+  // Load real data from backend on component mount only if no analysisData provided
   useEffect(() => {
-    if (!analysisData) {
-      const loadSampleData = () => {
+    if (!analysisData && token) {
+      const loadRealData = async () => {
         setLoading(true)
         
-        // Simulate API call with sample data
-        setTimeout(() => {
-        setData({
-          summary: {
-            total_variants: 847,
-            analysis_id: 'ANA-2025-001',
-            processed_at: new Date().toISOString()
-          },
-          real_data: {
-            variants: Array.from({ length: 847 }, (_, i) => ({
-              rsid: i % 5 === 0 ? `rs${1000000 + i}` : '-',
-              chromosome: Math.floor(Math.random() * 22) + 1,
-              position: Math.floor(Math.random() * 1000000) + 10000000,
-              ref_allele: ['A', 'T', 'G', 'C'][Math.floor(Math.random() * 4)],
-              alt_allele: ['A', 'T', 'G', 'C'][Math.floor(Math.random() * 4)],
-              genotype: ['AA', 'AT', 'TT', 'GG', 'CC', 'AG', 'AC', 'TG', 'TC', 'GC'][Math.floor(Math.random() * 10)],
-              allele: ['A', 'T', 'G', 'C'][Math.floor(Math.random() * 4)]
-            }))
-          },
-          health_risks: {
-            overall_score: 78,
-            risk_categories: {
-              diabetes: { score: 65, risk_level: 'moderate' },
-              cardiovascular: { score: 45, risk_level: 'low' },
-              alzheimer: { score: 85, risk_level: 'high' }
-            }
-          },
-          drug_interactions: {
-            high_risk_genes: ['CYP2D6', 'CYP2C19', 'VKORC1']
-          }
-        })
-        setLoading(false)
-      }, 1500)
-    }
+        try {
+          const response = await fetch('/api/upload/dashboard-data', {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+          })
 
-    loadSampleData()
+          if (response.ok) {
+            const realData = await response.json()
+            console.log('Loaded real dashboard data:', realData)
+            setData(realData)
+          } else {
+            console.error('Failed to load dashboard data:', response.status)
+            // Check if there's an analysis in progress
+            if (analysisId) {
+              setShowProgress(true)
+            } else {
+              setData(null)
+            }
+          }
+        } catch (error) {
+          console.error('Error loading dashboard data:', error)
+          // Check if there's an analysis in progress
+          if (analysisId) {
+            setShowProgress(true)
+          } else {
+            setData(null)
+          }
+        } finally {
+          setLoading(false)
+        }
+      }
+
+      loadRealData()
     }
-  }, [analysisData])
+  }, [analysisData, token, analysisId])
+
+  // Check if analysis ID is provided and show progress
+  useEffect(() => {
+    if (analysisId && !data) {
+      setShowProgress(true)
+    }
+  }, [analysisId, data])
 
   // Update data when analysisData prop changes
   useEffect(() => {
@@ -146,13 +174,17 @@ export default function ModernDashboard({ token, analysisData }: ModernDashboard
     setActiveCategory('overview')
   }
 
-  // Refresh function for reloading data
-  const onRefresh = async () => {
-    setLoading(true)
-    // Add your data fetching logic here
-    setTimeout(() => {
-      setLoading(false)
-    }, 1000)
+  // Progress handlers
+  const handleAnalysisComplete = (results: any) => {
+    console.log('Analysis completed:', results)
+    setData(results)
+    setShowProgress(false)
+  }
+
+  const handleAnalysisError = (error: string) => {
+    console.error('Analysis error:', error)
+    setShowProgress(false)
+    // Could show an error message to the user
   }
 
   // Use centralized theme system
@@ -258,32 +290,251 @@ export default function ModernDashboard({ token, analysisData }: ModernDashboard
         setData(null)
         setActiveCategory('overview')
         setShowDeleteDialog(false)
-        alert('All data deleted successfully')
+        showNotification('All data deleted successfully', 'success')
       } else {
-        alert('Failed to delete data')
+        showNotification('Failed to delete data', 'error')
       }
     } catch (error) {
       console.error('Error deleting data:', error)
-      alert('Error deleting data')
+      showNotification('Error deleting data', 'error')
+    }
+  }
+
+  // Analysis control state
+  const [analysisStatus, setAnalysisStatus] = useState<string>('pending')
+  const [analysisProgress, setAnalysisProgress] = useState<number>(0)
+  const [isAnalysisRunning, setIsAnalysisRunning] = useState(false)
+
+  // Check analysis status
+  const checkAnalysisStatus = async () => {
+    if (!token || !analysisId) return
+
+    try {
+      const response = await fetch(`http://localhost:8000/analyze/progress/${analysisId}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      if (response.ok) {
+        const progress = await response.json()
+        
+        // Check for status mismatch (analysis shows processing but has completed results)
+        const hasCompletedResults = (
+          progress.analysis_results && 
+          progress.analysis_results.status === 'completed' &&
+          progress.status === 'processing'
+        )
+        
+        // Check for progress mismatch (100% but not marked as completed)
+        const shouldBeCompleted = (
+          progress.progress_percentage >= 100 && 
+          progress.status !== 'completed'
+        )
+        
+        if (hasCompletedResults || shouldBeCompleted) {
+          // Auto-fix status mismatch
+          console.log('Status mismatch detected, auto-correcting...')
+          const resetResponse = await fetch(`http://localhost:8000/analyze/reset-status/${analysisId}`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` }
+          })
+          if (resetResponse.ok) {
+            const resetResult = await resetResponse.json()
+            setAnalysisStatus(resetResult.status)
+            setAnalysisProgress(resetResult.progress_percentage || 0)
+            setIsAnalysisRunning(false)
+          }
+        } else {
+          setAnalysisStatus(progress.status)
+          setAnalysisProgress(progress.progress_percentage || 0)
+          setIsAnalysisRunning(progress.status === 'processing')
+        }
+        
+        // If analysis is complete, stop polling and refresh data
+        if (progress.status === 'completed' || hasCompletedResults || shouldBeCompleted) {
+          stopProgressPolling()
+          if (onRefresh) {
+            await onRefresh(token)
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error checking analysis status:', error)
+    }
+  }
+
+  // Start automatic progress polling
+  const startProgressPolling = () => {
+    if (progressInterval) return // Already polling
+    
+    const interval = setInterval(checkAnalysisStatus, 2000) // Poll every 2 seconds
+    setProgressInterval(interval)
+  }
+
+  // Stop automatic progress polling
+  const stopProgressPolling = () => {
+    if (progressInterval) {
+      clearInterval(progressInterval)
+      setProgressInterval(null)
+    }
+  }
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      stopProgressPolling()
+    }
+  }, [])
+
+  // Check initial status and start polling if needed
+  useEffect(() => {
+    checkAnalysisStatus()
+    
+    // Start polling if analysis is running
+    if (analysisId && token && isAnalysisRunning) {
+      startProgressPolling()
+    }
+  }, [analysisId, token, isAnalysisRunning])
+
+  // Start analysis
+  const handleStartAnalysis = async () => {
+    console.log('Start analysis clicked. Token:', !!token, 'Analysis ID:', analysisId)
+    if (!token || !analysisId) {
+      console.error('Missing token or analysisId:', { token: !!token, analysisId })
+      showNotification('Missing authentication or analysis ID. Please refresh the page.', 'error')
+      return
+    }
+
+    try {
+      setIsAnalysisRunning(true)
+      console.log(`Starting analysis for ID: ${analysisId}`)
+      const response = await fetch(`http://localhost:8000/analyze/start/${analysisId}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      
+      console.log('Start analysis response status:', response.status)
+      
+      if (response.ok) {
+        const result = await response.json()
+        console.log('Start analysis result:', result)
+        setAnalysisStatus('processing')
+        setShowProgress(true)
+        startProgressPolling() // Use our new polling method
+        showNotification('Analysis started successfully', 'success')
+      } else {
+        const errorText = await response.text()
+        console.error('Start analysis failed:', response.status, errorText)
+        showNotification(`Failed to start analysis: ${response.status} - ${errorText}`, 'error')
+        setIsAnalysisRunning(false)
+      }
+    } catch (error) {
+      console.error('Error starting analysis:', error)
+      showNotification(`Error starting analysis: ${error}`, 'error')
+      setIsAnalysisRunning(false)
+    }
+  }
+
+  const handleStopAnalysis = async () => {
+    console.log('Stop analysis clicked. Token:', !!token, 'Analysis ID:', analysisId)
+    if (!token || !analysisId) {
+      console.error('Missing token or analysisId:', { token: !!token, analysisId })
+      showNotification('Missing authentication or analysis ID. Please refresh the page.', 'error')
+      return
+    }
+
+    try {
+      console.log(`Stopping analysis for ID: ${analysisId}`)
+      const response = await fetch(`http://localhost:8000/analyze/stop/${analysisId}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      
+      console.log('Stop analysis response status:', response.status)
+      
+      if (response.ok) {
+        const result = await response.json()
+        console.log('Stop analysis result:', result)
+        setAnalysisStatus('stopped')
+        setIsAnalysisRunning(false)
+        stopProgressPolling()
+        await checkAnalysisStatus() // Refresh status
+        showNotification('Analysis stopped successfully', 'success')
+      } else {
+        const errorText = await response.text()
+        console.error('Stop analysis failed:', response.status, errorText)
+        showNotification(`Failed to stop analysis: ${response.status} - ${errorText}`, 'error')
+      }
+    } catch (error) {
+      console.error('Error stopping analysis:', error)
+      showNotification(`Error stopping analysis: ${error}`, 'error')
+    }
+  }
+
+  const handleResumeAnalysis = async () => {
+    console.log('Resume analysis clicked. Token:', !!token, 'Analysis ID:', analysisId)
+    if (!token || !analysisId) {
+      console.error('Missing token or analysisId:', { token: !!token, analysisId })
+      showNotification('Missing authentication or analysis ID. Please refresh the page.', 'error')
+      return
+    }
+
+    try {
+      setIsAnalysisRunning(true)
+      console.log(`Resuming analysis for ID: ${analysisId}`)
+      const response = await fetch(`http://localhost:8000/analyze/resume/${analysisId}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      
+      console.log('Resume analysis response status:', response.status)
+      
+      if (response.ok) {
+        const result = await response.json()
+        console.log('Resume analysis result:', result)
+        setAnalysisStatus('processing')
+        setShowProgress(true)
+        startProgressPolling()
+        showNotification('Analysis resumed successfully', 'success')
+      } else {
+        const errorText = await response.text()
+        console.error('Resume analysis failed:', response.status, errorText)
+        showNotification(`Failed to resume analysis: ${response.status} - ${errorText}`, 'error')
+        setIsAnalysisRunning(false)
+      }
+    } catch (error) {
+      console.error('Error resuming analysis:', error)
+      showNotification(`Error resuming analysis: ${error}`, 'error')
+      setIsAnalysisRunning(false)
     }
   }
 
   const handleRefreshData = async () => {
     try {
-      if (onRefresh) {
-        await onRefresh()
-        alert('Data refreshed successfully')
+      if (onRefresh && token) {
+        await onRefresh(token)
+        showNotification('Data refreshed successfully', 'success')
       }
     } catch (error) {
       console.error('Error refreshing data:', error)
-      alert('Error refreshing data')
+      showNotification('Error refreshing data', 'error')
     }
   }
 
+  // Check analysis status on mount
+  useEffect(() => {
+    checkAnalysisStatus()
+  }, [analysisId, token])
+
   const stats = [
     {
+      title: 'Variants Uploaded',
+      value: data?.real_data?.variants?.length || data?.summary?.total_variants || 0,
+      icon: Upload,
+      color: getThemeClass('text-gray-600', isDarkMode),
+      bgColor: getThemeClass('bg-gray-50', isDarkMode)
+    },
+    {
       title: 'Variants Analyzed',
-      value: data?.summary?.total_variants || data?.real_data?.variants?.length || 0,
+      value: data?.analysis_results?.variants_actually_processed || data?.processed_variants || 0,
       icon: BarChart3,
       color: getThemeClass('text-blue-600', isDarkMode),
       bgColor: getThemeClass('bg-blue-50', isDarkMode)
@@ -297,7 +548,7 @@ export default function ModernDashboard({ token, analysisData }: ModernDashboard
     },
     {
       title: 'Insights Found',
-      value: data?.insights?.length || data?.analysis_results?.insights?.length || 12,
+      value: (data?.analysis_results?.insights_generated || 0) + (data?.analysis_results?.drug_responses_generated || 0),
       icon: TrendingUp,
       color: getThemeClass('text-purple-600', isDarkMode),
       bgColor: getThemeClass('bg-purple-50', isDarkMode)
@@ -404,9 +655,9 @@ export default function ModernDashboard({ token, analysisData }: ModernDashboard
       case 'sports':
         return <SportsPanel data={data} isDarkMode={isDarkMode} theme={theme} />
       case 'health':
-        return <HealthPanel data={data} isDarkMode={isDarkMode} theme={theme} />
+        return <HealthPanel data={data} isDarkMode={isDarkMode} theme={theme} token={token} />
       case 'drug-responses':
-        return <DrugResponsesPanel data={data} isDarkMode={isDarkMode} />
+        return <DrugResponsesPanel data={data} isDarkMode={isDarkMode} token={token} />
       case 'ancestry':
         return <AncestryPanel data={data} isDarkMode={isDarkMode} />
       case 'carrier-status':
@@ -423,7 +674,7 @@ export default function ModernDashboard({ token, analysisData }: ModernDashboard
         return (
           <div className="space-y-8">
             {/* Hero Stats Row - Redesigned Compact */}
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-4 gap-4">
               {stats.map((stat, index) => {
                 const Icon = stat.icon
                 return (
@@ -571,6 +822,66 @@ export default function ModernDashboard({ token, analysisData }: ModernDashboard
 
               {/* Right Column - Data Overview and Quick Actions (1 column) */}
               <div className="xl:col-span-1 space-y-6">
+                {/* Analysis Progress (if running) */}
+                {(analysisStatus === 'processing' || isAnalysisRunning) && (
+                  <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-6`}>
+                    <div className="flex items-center space-x-3 mb-6">
+                      <div className="p-3 bg-gradient-to-br from-blue-500/20 to-cyan-500/20 backdrop-blur-xl rounded-xl border border-blue-500/30">
+                        <Activity className={`h-6 w-6 ${getThemeClass('text-blue-600', isDarkMode)} animate-pulse`} />
+                      </div>
+                      <h3 className={`text-lg font-bold ${theme.text.primary}`}>
+                        Analysis in Progress
+                      </h3>
+                    </div>
+                    
+                    <div className="space-y-4">
+                      {/* Progress Bar */}
+                      <div>
+                        <div className="flex justify-between items-center mb-2">
+                          <span className={`text-sm font-medium ${theme.text.secondary}`}>
+                            Processing variants...
+                          </span>
+                          <span className={`text-sm font-bold ${theme.text.primary}`}>
+                            {analysisProgress}%
+                          </span>
+                        </div>
+                        <div className={`w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3`}>
+                          <div
+                            className="bg-gradient-to-r from-blue-500 to-cyan-500 h-3 rounded-full transition-all duration-500"
+                            style={{ width: `${Math.max(0, Math.min(100, analysisProgress))}%` }}
+                          />
+                        </div>
+                      </div>
+                      
+                      {/* Progress Stats */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className={`${theme.glass} border ${theme.glassBorder} rounded-lg p-3 text-center`}>
+                          <div className={`text-lg font-bold ${theme.text.primary}`}>
+                            {analysisProgress}%
+                          </div>
+                          <div className={`text-xs ${theme.text.secondary}`}>Complete</div>
+                        </div>
+                        <div className={`${theme.glass} border ${theme.glassBorder} rounded-lg p-3 text-center`}>
+                          <div className={`text-lg font-bold ${theme.text.primary}`}>
+                            {analysisStatus === 'processing' ? 'Running' : 'Pending'}
+                          </div>
+                          <div className={`text-xs ${theme.text.secondary}`}>Status</div>
+                        </div>
+                      </div>
+                      
+                      {/* Status Message */}
+                      <div className={`p-3 rounded-lg ${getThemeClass('bg-blue-50', isDarkMode)} border ${getThemeClass('border-blue-200', isDarkMode)}`}>
+                        <div className={`text-sm ${getThemeClass('text-blue-800', isDarkMode)}`}>
+                          <div className="flex items-center space-x-2">
+                            <div className={`w-2 h-2 rounded-full ${getThemeClass('bg-blue-500', isDarkMode)} animate-pulse`}></div>
+                            <span>Analyzing your genetic variants for health insights...</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Data Overview */}
                 <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-6`}>
                   <div className="flex items-center space-x-3 mb-6">
@@ -630,62 +941,6 @@ export default function ModernDashboard({ token, analysisData }: ModernDashboard
                         </button>
                       </div>
                     )}
-                  </div>
-                </div>
-
-                {/* Quick Actions */}
-                <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-6`}>
-                  <h3 className={`text-lg font-bold ${theme.text.primary} mb-6`}>
-                    Quick Actions
-                  </h3>
-                  
-                  <div className="space-y-3">
-                    {[
-                      { 
-                        label: 'View Health Risks', 
-                        icon: Heart, 
-                        color: getThemeClass('text-red-600', isDarkMode), 
-                        bgColor: getThemeClass('bg-red-50', isDarkMode),
-                        onClick: () => setActiveCategory('health')
-                      },
-                      { 
-                        label: 'Drug Responses', 
-                        icon: Shield, 
-                        color: getThemeClass('text-purple-600', isDarkMode), 
-                        bgColor: getThemeClass('bg-purple-50', isDarkMode),
-                        onClick: () => setActiveCategory('health')
-                      },
-                      { 
-                        label: 'Search Variants', 
-                        icon: Search, 
-                        color: getThemeClass('text-blue-600', isDarkMode), 
-                        bgColor: getThemeClass('bg-blue-50', isDarkMode),
-                        onClick: () => setActiveCategory('variant-search')
-                      },
-                      { 
-                        label: 'Nutrition Insights', 
-                        icon: Apple, 
-                        color: getThemeClass('text-green-600', isDarkMode), 
-                        bgColor: getThemeClass('bg-green-50', isDarkMode),
-                        onClick: () => setActiveCategory('food-nutrition')
-                      }
-                    ].map((action, index) => {
-                      const Icon = action.icon
-                      return (
-                        <button
-                          key={index}
-                          onClick={action.onClick}
-                          className={`w-full flex items-center space-x-3 p-3 ${theme.glass} border ${theme.glassBorder} rounded-lg ${theme.glassHover} transition-all duration-300 group`}
-                        >
-                          <div className={`p-2 ${action.bgColor} rounded-lg group-hover:scale-110 transition-transform duration-300`}>
-                            <Icon className={`h-4 w-4 ${action.color}`} />
-                          </div>
-                          <span className={`text-sm font-medium ${theme.text.primary}`}>
-                            {action.label}
-                          </span>
-                        </button>
-                      )
-                    })}
                   </div>
                 </div>
               </div>
@@ -862,21 +1117,125 @@ export default function ModernDashboard({ token, analysisData }: ModernDashboard
               )}
             </button>
 
-            <button
-              onClick={handleRefreshData}
-              className="bg-gradient-to-r from-green-500/80 to-emerald-500/80 hover:from-green-600/80 hover:to-emerald-600/80 backdrop-blur-xl text-white px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-300 flex items-center space-x-2 border border-white/20 shadow-lg"
-            >
-              <Activity className="h-4 w-4" />
-              <span>Refresh Data</span>
-            </button>
-            
-            <button
-              onClick={onReset}
-              className="bg-gradient-to-r from-blue-500/80 to-purple-500/80 hover:from-blue-600/80 hover:to-purple-600/80 backdrop-blur-xl text-white px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-300 flex items-center space-x-2 border border-white/20 shadow-lg"
-            >
-              <Plus className="h-4 w-4" />
-              <span>Upload New Data</span>
-            </button>
+            {/* Analysis Controls */}
+            <div className="flex items-center space-x-2">
+              {/* Analysis Status Indicator */}
+              {analysisId && (
+                <div className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${
+                  analysisStatus === 'completed' 
+                    ? 'bg-green-50 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800'
+                    : analysisStatus === 'processing'
+                    ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800'
+                    : analysisStatus === 'stopped'
+                    ? 'bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400 dark:border-yellow-800'
+                    : analysisStatus === 'failed'
+                    ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800'
+                    : 'bg-gray-50 text-gray-700 border-gray-200 dark:bg-gray-900/30 dark:text-gray-400 dark:border-gray-800'
+                }`}>
+                  {analysisStatus === 'processing' ? (
+                    <div className="flex items-center space-x-2">
+                      <div className={`w-2 h-2 border rounded-full animate-spin ${
+                        isDarkMode ? 'border-blue-400 border-t-transparent' : 'border-blue-600 border-t-transparent'
+                      }`}></div>
+                      <span>Processing {analysisProgress}%</span>
+                    </div>
+                  ) : analysisStatus === 'stopped' ? (
+                    <div className="flex items-center space-x-2">
+                      <Pause className="w-2 h-2" />
+                      <span>
+                        {analysisProgress >= 100 ? 'Completed' : `Stopped at ${analysisProgress}%`}
+                      </span>
+                    </div>
+                  ) : analysisStatus === 'completed' ? (
+                    <span>Completed</span>
+                  ) : analysisStatus}
+                </div>
+              )}
+
+              {/* Compact Analysis Control Buttons */}
+              <div className={`flex items-center border rounded-lg backdrop-blur-xl ${
+                isDarkMode 
+                  ? 'border-white/20 bg-white/10' 
+                  : 'border-gray-300 bg-white/90 shadow-sm'
+              }`}>
+                {/* Start/Resume/Stop Analysis */}
+                {analysisStatus === 'processing' || isAnalysisRunning ? (
+                  // Stop button when analysis is running
+                  <button
+                    onClick={handleStopAnalysis}
+                    className={`px-3 py-2 text-xs font-medium transition-all duration-200 flex items-center space-x-1 rounded-l-lg ${
+                      isDarkMode 
+                        ? 'text-red-400 hover:bg-red-500/10' 
+                        : 'text-red-600 hover:bg-red-50'
+                    }`}
+                    title="Stop Analysis"
+                  >
+                    <Square className="h-3 w-3" />
+                    <span className="hidden sm:inline">Stop</span>
+                  </button>
+                ) : analysisStatus === 'stopped' ? (
+                  // Resume button when analysis is stopped
+                  <button
+                    onClick={handleResumeAnalysis}
+                    disabled={!analysisId}
+                    className={`px-3 py-2 text-xs font-medium transition-all duration-200 flex items-center space-x-1 rounded-l-lg disabled:opacity-50 disabled:cursor-not-allowed ${
+                      isDarkMode 
+                        ? 'text-blue-400 hover:bg-blue-500/10' 
+                        : 'text-blue-600 hover:bg-blue-50'
+                    }`}
+                    title="Resume Analysis"
+                  >
+                    <Play className="h-3 w-3" />
+                    <span className="hidden sm:inline">Resume</span>
+                  </button>
+                ) : (
+                  // Start button for new/completed analysis
+                  <button
+                    onClick={handleStartAnalysis}
+                    disabled={!analysisId}
+                    className={`px-3 py-2 text-xs font-medium transition-all duration-200 flex items-center space-x-1 rounded-l-lg disabled:opacity-50 disabled:cursor-not-allowed ${
+                      isDarkMode 
+                        ? 'text-green-400 hover:bg-green-500/10' 
+                        : 'text-green-600 hover:bg-green-50'
+                    }`}
+                    title={analysisStatus === 'completed' ? 'Restart Analysis' : 'Start Analysis'}
+                  >
+                    <Activity className="h-3 w-3" />
+                    <span className="hidden sm:inline">
+                      {analysisStatus === 'completed' ? 'Restart' : 'Start'}
+                    </span>
+                  </button>
+                )}
+
+                {/* Refresh Data */}
+                <button
+                  onClick={handleRefreshData}
+                  className={`px-3 py-2 text-xs font-medium transition-all duration-200 flex items-center space-x-1 border-l ${
+                    isDarkMode 
+                      ? 'text-white hover:bg-white/10 border-white/20' 
+                      : 'text-gray-700 hover:bg-gray-100 border-gray-300'
+                  }`}
+                  title="Refresh Data"
+                >
+                  <BarChart3 className="h-3 w-3" />
+                  <span className="hidden sm:inline">Refresh</span>
+                </button>
+
+                {/* Upload New Data */}
+                <button
+                  onClick={onReset}
+                  className={`px-3 py-2 text-xs font-medium transition-all duration-200 flex items-center space-x-1 border-l rounded-r-lg ${
+                    isDarkMode 
+                      ? 'text-white hover:bg-white/10 border-white/20' 
+                      : 'text-gray-700 hover:bg-gray-100 border-gray-300'
+                  }`}
+                  title="Upload New Data"
+                >
+                  <Plus className="h-3 w-3" />
+                  <span className="hidden sm:inline">Upload</span>
+                </button>
+              </div>
+            </div>
 
             {/* User Menu - Glassmorphism style */}
             <div className="relative">
@@ -962,7 +1321,15 @@ export default function ModernDashboard({ token, analysisData }: ModernDashboard
         {/* Main Content Area */}
         <main className={`flex-1 overflow-auto ${theme.background}`}>
           <div className="p-8 max-w-none">
-            {renderCategoryContent()}
+            {showProgress && analysisId ? (
+              <AnalysisProgressLoader
+                analysisId={analysisId}
+                onComplete={handleAnalysisComplete}
+                onError={handleAnalysisError}
+              />
+            ) : (
+              renderCategoryContent()
+            )}
           </div>
         </main>
       </div>
@@ -1039,6 +1406,58 @@ export default function ModernDashboard({ token, analysisData }: ModernDashboard
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Notification Toast */}
+      {notification.show && (
+        <div className={`fixed top-4 right-4 z-50 max-w-sm w-full ${theme.glass} border ${theme.glassBorder} rounded-lg p-4 shadow-xl backdrop-blur-xl transition-all duration-300 ${
+          notification.type === 'success' 
+            ? 'border-green-500/50 bg-green-50/90 dark:bg-green-900/30' 
+            : notification.type === 'error'
+            ? 'border-red-500/50 bg-red-50/90 dark:bg-red-900/30'
+            : 'border-blue-500/50 bg-blue-50/90 dark:bg-blue-900/30'
+        }`}>
+          <div className="flex items-start space-x-3">
+            <div className={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center ${
+              notification.type === 'success' 
+                ? 'bg-green-500' 
+                : notification.type === 'error'
+                ? 'bg-red-500'
+                : 'bg-blue-500'
+            }`}>
+              {notification.type === 'success' ? (
+                <CheckCircle className="w-3 h-3 text-white" />
+              ) : notification.type === 'error' ? (
+                <X className="w-3 h-3 text-white" />
+              ) : (
+                <Info className="w-3 h-3 text-white" />
+              )}
+            </div>
+            <div className="flex-1">
+              <p className={`text-sm font-medium ${
+                notification.type === 'success' 
+                  ? 'text-green-800 dark:text-green-200' 
+                  : notification.type === 'error'
+                  ? 'text-red-800 dark:text-red-200'
+                  : 'text-blue-800 dark:text-blue-200'
+              }`}>
+                {notification.message}
+              </p>
+            </div>
+            <button
+              onClick={() => setNotification(prev => ({ ...prev, show: false }))}
+              className={`flex-shrink-0 w-4 h-4 rounded-full flex items-center justify-center hover:bg-white/20 transition-colors ${
+                notification.type === 'success' 
+                  ? 'text-green-600 dark:text-green-400' 
+                  : notification.type === 'error'
+                  ? 'text-red-600 dark:text-red-400'
+                  : 'text-blue-600 dark:text-blue-400'
+              }`}
+            >
+              <X className="w-3 h-3" />
+            </button>
           </div>
         </div>
       )}

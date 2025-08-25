@@ -25,7 +25,8 @@ async def process_genetic_analysis(analysis_id: Any):
         analysis_job = AnalysisJob()
         # Convert analysis_id to int if needed
         actual_id = analysis_id if isinstance(analysis_id, int) else int(analysis_id)
-        await analysis_job.process_analysis(actual_id, max_variants=100)
+        # Remove max_variants limit to process ALL variants
+        await analysis_job.process_analysis(actual_id, max_variants=None)
         
     except Exception as e:
         print(f"Error in background analysis: {str(e)}")

@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import { Pill, AlertTriangle, CheckCircle, Clock, Info } from 'lucide-react'
 import { 
   getThemeClass, 
@@ -14,9 +14,10 @@ interface DrugResponsesPanelProps {
   isDarkMode?: boolean
   theme?: any
   data: any
+  token?: string
 }
 
-export default function DrugResponsesPanel({ data, isDarkMode = false }: DrugResponsesPanelProps) {
+export default function DrugResponsesPanel({ data, isDarkMode = false, token }: DrugResponsesPanelProps) {
   const glassBackground = getGlassBackground(isDarkMode);
   const glassBorder = getGlassBorder(isDarkMode);
   const textPrimary = getTextPrimary(isDarkMode);
@@ -24,8 +25,54 @@ export default function DrugResponsesPanel({ data, isDarkMode = false }: DrugRes
   const tagClass = getTagClass(isDarkMode);
   const progressBarBg = getProgressBarBg(isDarkMode);
 
+  const [realDrugResponses, setRealDrugResponses] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  
+  // Load real drug responses from API
+  useEffect(() => {
+    const loadDrugResponses = async () => {
+      if (!token) return
+      
+      setLoading(true)
+      try {
+        const response = await fetch('http://localhost:8000/analyze/drug-responses', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        })
+        
+        if (response.ok) {
+          const drugData = await response.json()
+          console.log('Loaded drug responses:', drugData)
+          setRealDrugResponses(drugData.drug_responses || [])
+        }
+      } catch (error) {
+        console.error('Error loading drug responses:', error)
+      } finally {
+        setLoading(false)
+      }
+    }
+    
+    loadDrugResponses()
+  }, [token])
+
   // Use real drug response data if available
   const getDrugResponses = () => {
+    // First priority: Real API data
+    if (realDrugResponses.length > 0) {
+      return realDrugResponses.map((dr: any) => ({
+        drug: dr.drug,
+        gene: dr.gene,
+        response: dr.response_type.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase()),
+        recommendation: dr.recommendations || 'Consult healthcare provider',
+        risk: dr.response_type.includes('poor') || dr.response_type.includes('ultrarapid') ? 'high' : 
+              dr.response_type.includes('intermediate') ? 'medium' : 'low',
+        genotype: dr.variants_involved?.join(', ') || 'Multiple variants'
+      }))
+    }
+    
+    // Second priority: Data from props
     if (data?.drug_interactions?.details && data.drug_interactions.details.length > 0) {
       return data.drug_interactions.details.map((dr: any) => ({
         drug: dr.drug,
@@ -38,14 +85,26 @@ export default function DrugResponsesPanel({ data, isDarkMode = false }: DrugRes
       }))
     }
     
+    // Loading state
+    if (loading) {
+      return [{
+        drug: 'Loading Drug Responses...',
+        gene: 'Multiple Genes',
+        response: 'Processing pharmacogenomic analysis',
+        recommendation: 'Loading your genetic drug response predictions...',
+        risk: 'pending',
+        genotype: 'Analyzing variants...'
+      }]
+    }
+    
     // Show processing message when no data available
     return [{
-      drug: 'Analysis in Progress',
+      drug: 'No Drug Responses Found',
       gene: 'Multiple Genes',
-      response: 'Processing pharmacogenomic data',
-      recommendation: 'Drug response predictions will appear here when analysis completes',
+      response: 'Analysis Complete',
+      recommendation: 'No significant drug response variations identified, or analysis is still in progress',
       risk: 'pending',
-      genotype: 'Analyzing variants...'
+      genotype: 'Standard response expected'
     }]
   }
 

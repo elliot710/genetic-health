@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import { Heart, Shield, Pill, AlertTriangle, Activity } from 'lucide-react'
 import { getTheme } from '../../utils/theme'
 
@@ -13,13 +13,64 @@ interface HealthPanelProps {
   isDarkMode?: boolean
   theme?: any
   data: AnalysisData
+  token?: string
 }
 
-export default function HealthPanel({ isDarkMode = false, theme, data }: HealthPanelProps) {
+export default function HealthPanel({ isDarkMode = false, theme, data, token }: HealthPanelProps) {
   const currentTheme = getTheme(isDarkMode)
+  const [realHealthRisks, setRealHealthRisks] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
   
-  // Use real health risks from data if available, otherwise show processing message
+  // Load real health risks from API
+  useEffect(() => {
+    const loadHealthRisks = async () => {
+      if (!token) return
+      
+      setLoading(true)
+      try {
+        const response = await fetch('http://localhost:8000/analyze/health-risks', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        })
+        
+        if (response.ok) {
+          const healthData = await response.json()
+          console.log('Loaded health risks:', healthData)
+          setRealHealthRisks(healthData.health_risks || [])
+        }
+      } catch (error) {
+        console.error('Error loading health risks:', error)
+      } finally {
+        setLoading(false)
+      }
+    }
+    
+    loadHealthRisks()
+  }, [token])
+  
+  // Use real health risks from API if available, otherwise fallback to data prop, then default
   const getHealthRisks = () => {
+    // First priority: Real API data
+    if (realHealthRisks.length > 0) {
+      return realHealthRisks.map((risk: any) => ({
+        condition: risk.condition,
+        risk: risk.risk_level.charAt(0).toUpperCase() + risk.risk_level.slice(1),
+        riskScore: risk.risk_level === 'high' ? 80 : risk.risk_level === 'moderate' ? 55 : 30,
+        gene: risk.associated_variants?.[0] || 'Unknown',
+        description: `Genetic analysis shows ${risk.risk_level} risk for this condition`,
+        icon: risk.risk_level === 'high' ? AlertTriangle : risk.risk_level === 'moderate' ? Activity : Heart,
+        color: risk.risk_level === 'high' 
+          ? `bg-red-500/20 text-red-600`
+          : risk.risk_level === 'moderate'
+          ? `${currentTheme.warning.bg} ${currentTheme.warning.text}`
+          : `${currentTheme.success.bg} ${currentTheme.success.text}`,
+        prevention: Array.isArray(risk.recommendations) ? risk.recommendations : [risk.recommendations || 'Consult with healthcare provider']
+      }))
+    }
+    
+    // Second priority: Data from props (existing dashboard data)
     if (data?.health_risks?.details && data.health_risks.details.length > 0) {
       return data.health_risks.details.map((risk: any) => ({
         condition: risk.condition,
@@ -37,16 +88,30 @@ export default function HealthPanel({ isDarkMode = false, theme, data }: HealthP
       }))
     }
     
-    // Return default message when no real data is available
+    // Third priority: Loading or default message
+    if (loading) {
+      return [{
+        condition: 'Loading Health Risks...',
+        risk: 'Processing',
+        riskScore: 0,
+        gene: 'Multiple',
+        description: 'Loading your genetic health risk analysis results...',
+        icon: Activity,
+        color: `${currentTheme.primary.bg} ${currentTheme.primary.text}`,
+        prevention: ['Analysis in progress...']
+      }]
+    }
+    
+    // Final fallback: No data available
     return [{
-      condition: 'Analysis in Progress',
-      risk: 'Processing',
-      riskScore: 0,
+      condition: 'No Health Risks Found',
+      risk: 'Good News',
+      riskScore: 20,
       gene: 'Multiple',
-      description: 'Your genetic health risk analysis is being processed. Background analysis of your uploaded genetic data is running.',
-      icon: Activity,
-      color: `${currentTheme.primary.bg} ${currentTheme.primary.text}`,
-      prevention: ['Check back in a few minutes for updated results', 'Analysis includes multiple health conditions', 'Results will show here when processing completes']
+      description: 'No significant genetic health risks identified in your analysis, or analysis is still in progress.',
+      icon: Heart,
+      color: `${currentTheme.success.bg} ${currentTheme.success.text}`,
+      prevention: ['Continue healthy lifestyle habits', 'Regular health checkups recommended', 'Results may update as analysis completes']
     }]
   }
 
