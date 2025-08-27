@@ -51,7 +51,16 @@ class RateLimiter:
             
             if time_since_last < self.min_interval:
                 sleep_time = self.min_interval - time_since_last
-                await asyncio.sleep(sleep_time)
+                # Yield control more frequently during rate limiting
+                if sleep_time > 0.1:
+                    # For longer sleeps, yield control periodically
+                    while sleep_time > 0.1:
+                        await asyncio.sleep(0.1)
+                        sleep_time -= 0.1
+                    if sleep_time > 0:
+                        await asyncio.sleep(sleep_time)
+                else:
+                    await asyncio.sleep(sleep_time)
             
             self.last_request = time.time()
 
@@ -138,29 +147,29 @@ class OptimizedGeneticAPIService:
         self._initialized = False
     
     def _initialize_endpoints(self) -> Dict[str, APIEndpoint]:
-        """Initialize API endpoint configurations."""
+        """Initialize API endpoint configurations with optimized rate limits."""
         return {
             'ensembl_vep': APIEndpoint(
                 url='https://rest.ensembl.org/vep/human/id/{rsid}',
                 headers={'Content-Type': 'application/json'},
                 rate_limit=15.0,  # Ensembl allows 15 requests/second
-                timeout=30.0
+                timeout=15.0  # Reduced timeout for speed
             ),
             'clinvar': APIEndpoint(
                 url='https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi',
-                rate_limit=3.0,  # NCBI default rate limit
-                timeout=30.0
+                rate_limit=10.0,  # Increased from 3.0 for speed
+                timeout=15.0
             ),
-            'pharmgkb': APIEndpoint(
+                        'pharmgkb': APIEndpoint(
                 url='https://api.pharmgkb.org/v1/data/variant/{rsid}',
-                headers={'Content-Type': 'application/json'},
-                rate_limit=10.0,
-                timeout=30.0
+                timeout=15,
+                rate_limit=2.0,  # Reduced from 10.0 to avoid rate limiting
+                headers={'Accept': 'application/json'}
             ),
             'snpedia': APIEndpoint(
                 url='https://bots.snpedia.com/api.php',
-                rate_limit=1.0,  # Conservative rate for SNPedia
-                timeout=30.0
+                rate_limit=2.0,  # Increased from 1.0 for speed
+                timeout=15.0
             )
         }
     
@@ -322,68 +331,11 @@ class OptimizedGeneticAPIService:
         )
     
     async def annotate_variant(self, rsid: str) -> Optional[Dict[str, Any]]:
-        """Get comprehensive annotation for a variant."""
+        """Get comprehensive annotation for a variant from ALL sources."""
         if not rsid or not rsid.startswith('rs'):
             return None
         
-        # Run all annotation sources concurrently
-        # Temporarily disable PharmGKB to avoid rate limiting
-        tasks = [
-            self._get_ensembl_annotation(rsid),
-            self._get_clinvar_annotation(rsid),
-            # self._get_pharmgkb_annotation(rsid),  # Disabled temporarily
-        ]
-        
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        annotation = {
-            'rsid': rsid,
-            'annotations': {},
-            'sources_queried': ['ensembl', 'clinvar'],  # Removed pharmgkb
-            'success_count': 0
-        }
-        
-        # Process Ensembl result
-        if not isinstance(results[0], Exception) and results[0]:
-            annotation['annotations']['ensembl'] = results[0]
-            annotation['success_count'] += 1
-        
-        # Process ClinVar result
-        if not isinstance(results[1], Exception) and results[1]:
-            annotation['annotations']['clinvar'] = results[1]
-            annotation['success_count'] += 1
-        
-        # PharmGKB processing disabled temporarily to avoid rate limiting
-        # if not isinstance(results[2], Exception) and results[2]:
-        #     annotation['annotations']['pharmgkb'] = results[2]
-        #     annotation['success_count'] += 1
-        
-        return annotation if annotation['success_count'] > 0 else None
-    
-    async def annotate_variant_minimal(self, rsid: str) -> Optional[Dict[str, Any]]:
-        """Get minimal annotation for fast processing."""
-        if not rsid or not rsid.startswith('rs'):
-            return None
-        
-        # Only use Ensembl for minimal annotation
-        ensembl_result = await self._get_ensembl_annotation(rsid)
-        
-        if ensembl_result:
-            return {
-                'rsid': rsid,
-                'annotations': {'ensembl': ensembl_result},
-                'sources_queried': ['ensembl'],
-                'success_count': 1
-            }
-        
-        return None
-    
-    async def annotate_variant_comprehensive(self, rsid: str) -> Optional[Dict[str, Any]]:
-        """Get comprehensive annotation with all sources."""
-        if not rsid or not rsid.startswith('rs'):
-            return None
-        
-        # Run all sources including SNPedia
+        # Run ALL annotation sources concurrently for maximum speed
         tasks = [
             self._get_ensembl_annotation(rsid),
             self._get_clinvar_annotation(rsid),
@@ -400,13 +352,37 @@ class OptimizedGeneticAPIService:
             'success_count': 0
         }
         
-        source_names = ['ensembl', 'clinvar', 'pharmgkb', 'snpedia']
-        for i, result in enumerate(results):
-            if not isinstance(result, Exception) and result:
-                annotation['annotations'][source_names[i]] = result
-                annotation['success_count'] += 1
+        # Process Ensembl result
+        if not isinstance(results[0], Exception) and results[0]:
+            annotation['annotations']['ensembl'] = results[0]
+            annotation['success_count'] += 1
+        
+        # Process ClinVar result
+        if not isinstance(results[1], Exception) and results[1]:
+            annotation['annotations']['clinvar'] = results[1]
+            annotation['success_count'] += 1
+        
+        # Process PharmGKB result
+        if not isinstance(results[2], Exception) and results[2]:
+            annotation['annotations']['pharmgkb'] = results[2]
+            annotation['success_count'] += 1
+        
+        # Process SNPedia result
+        if not isinstance(results[3], Exception) and results[3]:
+            annotation['annotations']['snpedia'] = results[3]
+            annotation['success_count'] += 1
         
         return annotation if annotation['success_count'] > 0 else None
+    
+    async def annotate_variant_minimal(self, rsid: str) -> Optional[Dict[str, Any]]:
+        """Get comprehensive annotation - no more minimal mode."""
+        # Always use full comprehensive annotation
+        return await self.annotate_variant(rsid)
+    
+    async def annotate_variant_comprehensive(self, rsid: str) -> Optional[Dict[str, Any]]:
+        """Get comprehensive annotation - same as standard now."""
+        # Always use full comprehensive annotation
+        return await self.annotate_variant(rsid)
     
     async def _get_ensembl_annotation(self, rsid: str) -> Optional[Dict[str, Any]]:
         """Get Ensembl VEP annotation."""
@@ -505,22 +481,17 @@ class OptimizedGeneticAPIService:
             logger.error(f"SNPedia annotation error for {rsid}: {e}")
             return {'found': False, 'source': 'snpedia', 'error': str(e)}
     
-    async def batch_annotate_variants(self, rsids: List[str], strategy: str = 'balanced') -> Dict[str, Optional[Dict[str, Any]]]:
-        """Annotate multiple variants in batch."""
+    async def batch_annotate_variants(self, rsids: List[str], strategy: str = 'comprehensive') -> Dict[str, Optional[Dict[str, Any]]]:
+        """Annotate multiple variants in batch - always comprehensive."""
         if not rsids:
             return {}
         
-        # Choose annotation method based on strategy
-        if strategy == 'fast':
-            annotation_method = self.annotate_variant_minimal
-        elif strategy == 'comprehensive':
-            annotation_method = self.annotate_variant_comprehensive
-        else:
-            annotation_method = self.annotate_variant
+        # Always use comprehensive annotation regardless of strategy
+        annotation_method = self.annotate_variant
         
-        # Process in controlled batches
-        batch_size = settings.api.batch_size
-        semaphore = Semaphore(settings.api.max_concurrent)
+        # Process in controlled batches with maximum concurrency
+        batch_size = min(settings.api.batch_size, 5)  # Very small batches for responsiveness
+        semaphore = Semaphore(min(settings.api.max_concurrent, 3))  # Limit concurrency
         
         async def annotate_with_semaphore(rsid: str):
             async with semaphore:
@@ -531,7 +502,13 @@ class OptimizedGeneticAPIService:
             batch = rsids[i:i + batch_size]
             tasks = [annotate_with_semaphore(rsid) for rsid in batch]
             
+            # Yield control before processing each batch
+            await asyncio.sleep(0.01)
+            
             batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Yield control after processing each batch
+            await asyncio.sleep(0.01)
             
             for rsid, result in zip(batch, batch_results):
                 if isinstance(result, Exception):

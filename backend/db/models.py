@@ -212,13 +212,12 @@ class DetoxificationProfile(Base):
     support_recommendations = Column(JSON)
     associated_variants = Column(JSON)
 
-class VariantAnnotation(Base):
-    __tablename__ = "variant_annotations"
+# Shared variant annotations - never deleted when users delete their data
+class SharedVariantAnnotation(Base):
+    __tablename__ = "shared_variant_annotations"
     
     id = Column(Integer, primary_key=True, index=True)
-    analysis_id = Column(Integer, ForeignKey("genetic_analyses.id", ondelete="CASCADE"), nullable=False)
-    analysis_variant_id = Column(Integer, ForeignKey("analysis_variants.id", ondelete="CASCADE"), nullable=False)
-    rsid = Column(String, nullable=False, index=True)
+    rsid = Column(String, nullable=False, unique=True, index=True)  # Unique per RSID
     
     # Raw API responses stored as JSON for future analysis
     ensembl_data = Column(JSON)  # Complete Ensembl API response
@@ -227,16 +226,37 @@ class VariantAnnotation(Base):
     snpedia_data = Column(JSON)  # Complete SNPedia API response
     litvar_data = Column(JSON)  # Complete LitVar/PubMed API response
     
-    # Processed timestamp for tracking when API calls were made
-    annotated_at = Column(DateTime(timezone=True), server_default=func.now())
-    
-    # Status fields
+    # Metadata for tracking and reuse
+    first_annotated_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     annotation_status = Column(String, default='completed')  # 'pending', 'completed', 'failed', 'partial'
-    api_calls_made = Column(Integer, default=0)  # Track number of API calls for this variant
+    total_api_calls = Column(Integer, default=0)  # Total API calls made for this variant
+    usage_count = Column(Integer, default=0)  # How many times this annotation has been used
+    
+    # Index for efficient lookups
+    __table_args__ = (
+        Index('ix_shared_variant_annotations_rsid', 'rsid'),
+    )
+
+
+# User-specific variant annotation references - links user variants to shared annotations
+class VariantAnnotation(Base):
+    __tablename__ = "variant_annotations"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    analysis_id = Column(Integer, ForeignKey("genetic_analyses.id", ondelete="CASCADE"), nullable=False)
+    analysis_variant_id = Column(Integer, ForeignKey("analysis_variants.id", ondelete="CASCADE"), nullable=False)
+    shared_annotation_id = Column(Integer, ForeignKey("shared_variant_annotations.id"), nullable=True)  # Reference to shared annotation
+    rsid = Column(String, nullable=False, index=True)
+    
+    # User-specific annotation data (if any customization is needed)
+    user_notes = Column(Text)  # Optional user notes
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # Relationships
     analysis_variant = relationship("AnalysisVariant", back_populates="variant_annotations")
     analysis = relationship("GeneticAnalysis")
+    shared_annotation = relationship("SharedVariantAnnotation")
 
 
 class RareMutation(Base):

@@ -34,8 +34,31 @@ app.include_router(variant_routes.router)
 
 @app.get("/")
 async def root():
-    """Health check endpoint"""
+    """Root endpoint"""
     return {"message": "Genetic Health Analysis Toolkit API"}
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Docker and monitoring"""
+    try:
+        # Test database connection
+        from .db.database import async_session_factory
+        async with async_session_factory() as session:
+            from sqlalchemy import text
+            await session.execute(text("SELECT 1"))
+        
+        return {
+            "status": "healthy",
+            "message": "Genetic Health Analysis Toolkit API is running",
+            "database": "connected",
+            "version": "1.0.0"
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "message": "Database connection failed",
+            "error": str(e)
+        }
 
 @app.on_event("startup")
 async def startup_event():

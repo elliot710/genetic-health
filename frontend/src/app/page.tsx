@@ -331,21 +331,6 @@ export default function Home() {
 
           {/* Main Content */}
           <div className="relative z-10 container mx-auto px-4 py-8">
-            <div className="text-center mb-8">
-              <div className={`backdrop-blur-xl border rounded-3xl p-8 max-w-2xl mx-auto ${theme.glass} ${theme.glassBorder}`}>
-                <div className="mb-6">
-                  <div className={`inline-flex items-center justify-center w-16 h-16 ${theme.primary.gradient} rounded-2xl mb-4`}>
-                    <Upload className="w-8 h-8 text-white" />
-                  </div>
-                  <h2 className={`text-2xl font-bold mb-2 ${theme.text.primary}`}>
-                    Upload Your Genetic Data
-                  </h2>
-                  <p className={theme.text.secondary}>
-                    Discover health insights and personalized recommendations from your genetic information
-                  </p>
-                </div>
-              </div>
-            </div>
             
             <FileUpload onAnalysisComplete={handleAnalysisComplete} token={token || ''} isDarkMode={isHydrated ? isDarkMode : false} />
           </div>

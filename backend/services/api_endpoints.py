@@ -18,37 +18,60 @@ class APIEndpoint:
     retries: int = 3
     description: str = ""
 
+# =============================================================================
+# CENTRALIZED RATE LIMIT CONFIGURATION
+# =============================================================================
+# All API rate limits defined in one place for easy adjustment
+RATE_LIMITS = {
+    # NCBI E-utilities (with API key can handle higher rates)
+    'NCBI': 10.0,  # requests per second - increased from 3.0 with API key
+    
+    # Ensembl VEP API (generous rate limits)
+    'ENSEMBL': 15.0,  # requests per second
+    
+    # PharmGKB API (very conservative to avoid 429 errors)
+    'PHARMGKB': 0.9,  # requests per second
+    
+    # ClinVar API (NCBI-based, same as NCBI)
+    'CLINVAR': 7.0,  # requests per second
+    
+    # SNPedia API (MediaWiki based, conservative)
+    'SNPEDIA': 2.0,  # requests per second
+    
+    # LitVar/PubMed API (NCBI-based)
+    'LITVAR': 10.0,  # requests per second
+}
+
 class APIEndpoints:
     """Centralized API endpoint configurations"""
     
     # NCBI E-utilities with API key from environment variable
     NCBI_API_KEY = os.getenv("NCBI_API_KEY", "")  # Load from environment variable
     NCBI_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
-    NCBI_RATE_LIMIT = 10.0  # Increased from 3.0 to 10.0 with API key
     NCBI_ENDPOINTS = {
         "esearch": APIEndpoint(
             url=f"{NCBI_BASE_URL}/esearch.fcgi",
-            rate_limit=10.0,  # Increased from 3.0 to 10.0 with API key
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Search NCBI databases for UIDs"
         ),
         "efetch": APIEndpoint(
             url=f"{NCBI_BASE_URL}/efetch.fcgi",
-            rate_limit=10.0,  # Increased from 3.0 to 10.0 with API key
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Fetch full records from NCBI databases"
         ),
         "einfo": APIEndpoint(
             url=f"{NCBI_BASE_URL}/einfo.fcgi",
-            rate_limit=10.0,  # Increased from 3.0 to 10.0 with API key
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Get information about NCBI databases"
         ),
         "elink": APIEndpoint(
             url=f"{NCBI_BASE_URL}/elink.fcgi",
-            rate_limit=10.0,  # Increased from 3.0 to 10.0 with API key
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Find related records in NCBI databases"
         ),
         "esummary": APIEndpoint(
             url=f"{NCBI_BASE_URL}/esummary.fcgi",
-            rate_limit=10.0,  # Increased from 3.0 to 10.0 with API key
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Get document summaries from NCBI databases"
         )
     }
@@ -58,17 +81,17 @@ class APIEndpoints:
     LITVAR_ENDPOINTS = {
         "variant_search": APIEndpoint(
             url=f"{LITVAR_BASE_URL}/variant/search",
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Search for variants in literature"
         ),
         "variant_detail": APIEndpoint(
             url=f"{LITVAR_BASE_URL}/variant/{{variant_id}}",
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Get detailed variant information"
         ),
         "publications": APIEndpoint(
             url=f"{LITVAR_BASE_URL}/variant/{{variant_id}}/publications",
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Get publications for a variant"
         )
     }
@@ -78,17 +101,17 @@ class APIEndpoints:
     SNPEDIA_ENDPOINTS = {
         "query": APIEndpoint(
             url=SNPEDIA_BASE_URL,
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['SNPEDIA'],
             description="Query SNPedia pages via MediaWiki API"
         ),
         "parse": APIEndpoint(
             url=SNPEDIA_BASE_URL,
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['SNPEDIA'],
             description="Parse SNPedia page content"
         ),
         "opensearch": APIEndpoint(
             url=SNPEDIA_BASE_URL,
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['SNPEDIA'],
             description="OpenSearch API for SNPedia"
         )
     }
@@ -100,7 +123,7 @@ class APIEndpoints:
         "variation": APIEndpoint(
             url=f"{ENSEMBL_BASE_URL}/variation/human/{{rsid}}",
             headers={"Content-Type": "application/json"},
-            rate_limit=15.0,
+            rate_limit=RATE_LIMITS['ENSEMBL'],
             description="Get variant information with population frequencies"
         ),
         
@@ -109,13 +132,13 @@ class APIEndpoints:
             url=f"{ENSEMBL_BASE_URL}/vep/human/id",
             method="POST",
             headers={"Content-Type": "application/json"},
-            rate_limit=15.0,
+            rate_limit=RATE_LIMITS['ENSEMBL'],
             description="Comprehensive VEP with pathogenicity scores (CADD, REVEL, etc.)"
         ),
         "vep_basic": APIEndpoint(
             url=f"{ENSEMBL_BASE_URL}/vep/human/id/{{rsid}}",
             headers={"Content-Type": "application/json"},
-            rate_limit=15.0,
+            rate_limit=RATE_LIMITS['ENSEMBL'],
             description="Basic Variant Effect Predictor"
         ),
         
@@ -123,13 +146,13 @@ class APIEndpoints:
         "lookup_gene": APIEndpoint(
             url=f"{ENSEMBL_BASE_URL}/lookup/id/{{gene_id}}",
             headers={"Content-Type": "application/json"},
-            rate_limit=15.0,
+            rate_limit=RATE_LIMITS['ENSEMBL'],
             description="Look up gene information"
         ),
         "lookup_symbol": APIEndpoint(
             url=f"{ENSEMBL_BASE_URL}/lookup/symbol/human/{{gene_symbol}}",
             headers={"Content-Type": "application/json"},
-            rate_limit=15.0,
+            rate_limit=RATE_LIMITS['ENSEMBL'],
             description="Look up gene by symbol"
         ),
         
@@ -137,7 +160,7 @@ class APIEndpoints:
         "variation_populations": APIEndpoint(
             url=f"{ENSEMBL_BASE_URL}/variation/human/{{rsid}}/populations",
             headers={"Content-Type": "application/json"},
-            rate_limit=15.0,
+            rate_limit=RATE_LIMITS['ENSEMBL'],
             description="Get population frequencies for variant"
         ),
         
@@ -145,19 +168,19 @@ class APIEndpoints:
         "phenotype_variant": APIEndpoint(
             url=f"{ENSEMBL_BASE_URL}/phenotype/variant/human/{{rsid}}",
             headers={"Content-Type": "application/json"},
-            rate_limit=15.0,
+            rate_limit=RATE_LIMITS['ENSEMBL'],
             description="Get phenotype associations for variant"
         ),
         "phenotype_gene": APIEndpoint(
             url=f"{ENSEMBL_BASE_URL}/phenotype/gene/human/{{gene_id}}",
             headers={"Content-Type": "application/json"},
-            rate_limit=15.0,
+            rate_limit=RATE_LIMITS['ENSEMBL'],
             description="Get phenotype associations for gene"
         ),
         "phenotype_region": APIEndpoint(
             url=f"{ENSEMBL_BASE_URL}/phenotype/region/human/{{region}}",
             headers={"Content-Type": "application/json"},
-            rate_limit=15.0,
+            rate_limit=RATE_LIMITS['ENSEMBL'],
             description="Get phenotype associations for genomic region"
         ),
         
@@ -165,13 +188,13 @@ class APIEndpoints:
         "regulatory_variant": APIEndpoint(
             url=f"{ENSEMBL_BASE_URL}/regulatory/species/human/{{rsid}}",
             headers={"Content-Type": "application/json"},
-            rate_limit=15.0,
+            rate_limit=RATE_LIMITS['ENSEMBL'],
             description="Get regulatory features for variant"
         ),
         "regulatory_region": APIEndpoint(
             url=f"{ENSEMBL_BASE_URL}/regulatory/species/human/{{region}}",
             headers={"Content-Type": "application/json"},
-            rate_limit=15.0,
+            rate_limit=RATE_LIMITS['ENSEMBL'],
             description="Get regulatory features for region"
         ),
         
@@ -179,7 +202,7 @@ class APIEndpoints:
         "ld": APIEndpoint(
             url=f"{ENSEMBL_BASE_URL}/ld/human/{{rsid}}",
             headers={"Content-Type": "application/json"},
-            rate_limit=15.0,
+            rate_limit=RATE_LIMITS['ENSEMBL'],
             description="Get linkage disequilibrium data"
         ),
         
@@ -187,13 +210,13 @@ class APIEndpoints:
         "transcript": APIEndpoint(
             url=f"{ENSEMBL_BASE_URL}/lookup/id/{{transcript_id}}",
             headers={"Content-Type": "application/json"},
-            rate_limit=15.0,
+            rate_limit=RATE_LIMITS['ENSEMBL'],
             description="Get transcript information"
         ),
         "protein_features": APIEndpoint(
             url=f"{ENSEMBL_BASE_URL}/overlap/id/{{gene_id}}",
             headers={"Content-Type": "application/json"},
-            rate_limit=15.0,
+            rate_limit=RATE_LIMITS['ENSEMBL'],
             description="Get protein domains and features"
         ),
         
@@ -201,7 +224,7 @@ class APIEndpoints:
         "homology": APIEndpoint(
             url=f"{ENSEMBL_BASE_URL}/homology/id/{{gene_id}}",
             headers={"Content-Type": "application/json"},
-            rate_limit=15.0,
+            rate_limit=RATE_LIMITS['ENSEMBL'],
             description="Get gene homology across species"
         ),
         
@@ -209,165 +232,164 @@ class APIEndpoints:
         "sequence_variant": APIEndpoint(
             url=f"{ENSEMBL_BASE_URL}/sequence/region/human/{{region}}",
             headers={"Content-Type": "application/json"},
-            rate_limit=15.0,
+            rate_limit=RATE_LIMITS['ENSEMBL'],
             description="Get genomic sequence for region"
         )
     }
     
     # PharmGKB API
-    PHARMGKB_RATE_LIMIT = 5.0
     PHARMGKB_BASE_URL = "https://api.pharmgkb.org"
     PHARMGKB_ENDPOINTS = {
         # Gene endpoints
         "gene": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/gene/{{gene}}",
-            rate_limit=PHARMGKB_RATE_LIMIT,
+            rate_limit=RATE_LIMITS['PHARMGKB'],
             description="Get gene information"
         ),
         "gene_drugs": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/gene/{{gene}}/drugs",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Get drugs associated with gene"
         ),
         "gene_annotations": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/gene/{{gene}}/clinicalAnnotations",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Get clinical annotations for gene"
         ),
         "gene_variants": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/gene/{{gene}}/variants",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Get variants in gene"
         ),
         "gene_haplotypes": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/gene/{{gene}}/haplotypes",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Get haplotypes for gene"
         ),
         
         # Variant endpoints
         "variant": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/variant/{{rsid}}",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Get variant information"
         ),
         "variant_annotations": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/variant/{{rsid}}/clinicalAnnotations",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Get clinical annotations for variant"
         ),
         "variant_drug_labels": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/variant/{{rsid}}/drugLabels",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Get drug labels for variant"
         ),
         "variant_guidelines": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/variant/{{rsid}}/guidelines",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Get guidelines for variant"
         ),
         
         # Drug endpoints
         "drug": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/drug/{{drug_id}}",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Get drug information"
         ),
         "drug_search": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/drug/search",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Search for drugs"
         ),
         "drug_annotations": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/drug/{{drug_id}}/clinicalAnnotations",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Get clinical annotations for drug"
         ),
         "drug_genes": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/drug/{{drug_id}}/genes",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Get genes associated with drug"
         ),
         "drug_variants": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/drug/{{drug_id}}/variants",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Get variants associated with drug"
         ),
         "drug_labels": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/drug/{{drug_id}}/drugLabels",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Get drug labels"
         ),
         
         # Guideline endpoints
         "guidelines": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/guideline",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Get all guidelines"
         ),
         "guideline": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/guideline/{{guideline_id}}",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Get specific guideline"
         ),
         
         # Clinical annotation endpoints
         "annotations": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/clinicalAnnotation",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Get all clinical annotations"
         ),
         "annotation": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/clinicalAnnotation/{{annotation_id}}",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Get specific clinical annotation"
         ),
         
         # Haplotype endpoints
         "haplotypes": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/haplotype",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Get all haplotypes"
         ),
         "haplotype": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/haplotype/{{haplotype_id}}",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Get specific haplotype"
         ),
         
         # Phenotype endpoints
         "phenotypes": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/phenotype",
-            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
+            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
             description="Get all phenotypes"
         ),
         "phenotype": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/phenotype/{{phenotype_id}}",
-            rate_limit=PHARMGKB_RATE_LIMIT,
+            rate_limit=RATE_LIMITS['PHARMGKB'],
             description="Get specific phenotype"
         ),
         
         # Chemical endpoints
         "chemicals": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/chemical",
-            rate_limit=PHARMGKB_RATE_LIMIT,
+            rate_limit=RATE_LIMITS['PHARMGKB'],
             description="Get all chemicals"
         ),
         "chemical": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/chemical/{{chemical_id}}",
-            rate_limit=PHARMGKB_RATE_LIMIT,
+            rate_limit=RATE_LIMITS['PHARMGKB'],
             description="Get specific chemical"
         ),
         
         # Disease endpoints
         "diseases": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/disease",
-            rate_limit=PHARMGKB_RATE_LIMIT,
+            rate_limit=RATE_LIMITS['PHARMGKB'],
             description="Get all diseases"
         ),
         "disease": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/disease/{{disease_id}}",
-            rate_limit=PHARMGKB_RATE_LIMIT,
+            rate_limit=RATE_LIMITS['PHARMGKB'],
             description="Get specific disease"
         )
     }
@@ -388,12 +410,12 @@ class APIEndpoints:
     CLINGEN_ENDPOINTS = {
         "gene_validity": APIEndpoint(
             url=f"{CLINGEN_BASE_URL}/gene/{{gene_symbol}}",
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Get gene-disease validity classifications"
         ),
         "dosage_sensitivity": APIEndpoint(
             url="https://dosage.clinicalgenome.org/api/region/{{region}}",
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Get dosage sensitivity information"
         )
     }
@@ -404,13 +426,13 @@ class APIEndpoints:
         "variant": APIEndpoint(
             url=f"{GNOMAD_BASE_URL}/variant/{{variant_id}}",
             headers={"Content-Type": "application/json"},
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Get gnomAD population frequencies and constraint metrics"
         ),
         "gene_constraint": APIEndpoint(
             url=f"{GNOMAD_BASE_URL}/gene/{{gene_id}}/constraint",
             headers={"Content-Type": "application/json"},
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Get gene constraint scores (pLI, LOEUF)"
         )
     }
@@ -421,19 +443,19 @@ class APIEndpoints:
         "protein": APIEndpoint(
             url=f"{UNIPROT_BASE_URL}/uniprotkb/{{accession}}",
             headers={"Accept": "application/json"},
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Get protein information and annotations"
         ),
         "protein_search": APIEndpoint(
             url=f"{UNIPROT_BASE_URL}/uniprotkb/search",
             headers={"Accept": "application/json"},
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Search proteins by gene name or other criteria"
         ),
         "protein_features": APIEndpoint(
             url=f"{UNIPROT_BASE_URL}/uniprotkb/{{accession}}/features",
             headers={"Accept": "application/json"},
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Get protein domains and functional features"
         )
     }
@@ -443,12 +465,12 @@ class APIEndpoints:
     STRING_ENDPOINTS = {
         "interactions": APIEndpoint(
             url=f"{STRING_BASE_URL}/json/network",
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Get protein-protein interaction networks"
         ),
         "functional_enrichment": APIEndpoint(
             url=f"{STRING_BASE_URL}/json/enrichment",
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Get functional enrichment analysis"
         )
     }
@@ -458,12 +480,12 @@ class APIEndpoints:
     OMIM_ENDPOINTS = {
         "entry": APIEndpoint(
             url=f"{OMIM_BASE_URL}/entry",
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Get OMIM disease entries"
         ),
         "gene": APIEndpoint(
             url=f"{OMIM_BASE_URL}/entry/search",
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Search OMIM by gene or phenotype"
         )
     }
@@ -474,19 +496,19 @@ class APIEndpoints:
         "variant_associations": APIEndpoint(
             url=f"{GWAS_BASE_URL}/singleNucleotidePolymorphisms/{{rsid}}/associations",
             headers={"Accept": "application/json"},
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Get GWAS associations for variant"
         ),
         "gene_associations": APIEndpoint(
             url=f"{GWAS_BASE_URL}/genes/{{gene_name}}/associations",
             headers={"Accept": "application/json"},
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Get GWAS associations for gene"
         ),
         "trait_associations": APIEndpoint(
             url=f"{GWAS_BASE_URL}/efoTraits/{{trait_id}}/associations",
             headers={"Accept": "application/json"},
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Get GWAS associations for trait"
         )
     }
@@ -498,14 +520,14 @@ class APIEndpoints:
             url=OPENTARGETS_BASE_URL,
             method="POST",
             headers={"Content-Type": "application/json"},
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Get target-disease associations"
         ),
         "drug_target": APIEndpoint(
             url=OPENTARGETS_BASE_URL,
             method="POST", 
             headers={"Content-Type": "application/json"},
-            rate_limit=10.0,
+            rate_limit=RATE_LIMITS['NCBI'],
             description="Get drug-target associations"
         )
     }

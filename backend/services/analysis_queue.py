@@ -130,14 +130,14 @@ class AnalysisQueue:
         logger.info(f"Starting analysis {analysis_id} for user {user_id}")
         
         # Import here to avoid circular dependencies
-        from .analysis_job import AnalysisJob
+        from .comprehensive_analysis_service import ComprehensiveAnalysisService
         
-        # Create and run the analysis job
-        analysis_job = AnalysisJob(user_id=user_id)
+        # Create and run the comprehensive analysis service
+        analysis_service = ComprehensiveAnalysisService(user_id=user_id)
         
         async def run_job():
             try:
-                result = await analysis_job.process_analysis(analysis_id)
+                result = await analysis_service.process_analysis(analysis_id)
                 logger.info(f"Completed analysis {analysis_id} for user {user_id}")
                 return result
             except Exception as e:

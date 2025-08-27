@@ -299,6 +299,15 @@ async def pause_analysis(
         if not analysis:
             raise HTTPException(status_code=404, detail="Analysis not found")
         
+        current_status = getattr(analysis, 'analysis_status', 'pending')
+        
+        # Check if analysis can be paused
+        if current_status not in ['processing', 'running']:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Cannot pause analysis with status '{current_status}'. Only running/processing analysis can be paused."
+            )
+        
         # Update status to paused using SQLAlchemy update
         await db.execute(
             update(GeneticAnalysis)
@@ -310,6 +319,7 @@ async def pause_analysis(
         )
         await db.commit()
         
+        logger.info(f"Analysis {analysis_id} paused successfully")
         return {"message": "Analysis paused successfully", "analysis_id": analysis_id}
     
     except HTTPException:
@@ -423,7 +433,7 @@ async def get_dashboard_data(
         processed_variants = sum(getattr(a, 'processed_variants', 0) or 0 for a in analyses)
         
         # Count actual variant annotations for more accurate "analyzed" count
-        from ..db.models import VariantAnnotation
+        from ..db.models import VariantAnnotation, SharedVariantAnnotation
         annotation_result = await db.execute(
             select(VariantAnnotation)
             .join(GeneticAnalysis, VariantAnnotation.analysis_id == GeneticAnalysis.id)
@@ -431,13 +441,14 @@ async def get_dashboard_data(
         )
         analyzed_variants = len(annotation_result.scalars().all())
         
-        # Count insights (annotations with meaningful data)
+        # Count insights (annotations with meaningful data) using shared annotations
         insights_result = await db.execute(
             select(VariantAnnotation)
             .join(GeneticAnalysis, VariantAnnotation.analysis_id == GeneticAnalysis.id)
+            .join(SharedVariantAnnotation, VariantAnnotation.shared_annotation_id == SharedVariantAnnotation.id)
             .where(
                 GeneticAnalysis.user_id == current_user.id,
-                VariantAnnotation.ensembl_data.isnot(None)
+                SharedVariantAnnotation.ensembl_data.isnot(None)
             )
         )
         insights_found = len(insights_result.scalars().all())

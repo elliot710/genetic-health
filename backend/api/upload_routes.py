@@ -6,14 +6,15 @@ from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from sqlalchemy import select, delete, func
+from sqlalchemy import select, func, delete, update
 
 from .auth_routes import get_current_user
 from ..db.database import get_session
 from ..db.models import GeneticAnalysis, AnalysisVariant
 from ..utils.vcf_parser import VCFParser
-from ..services.optimized_variant_uploader import OptimizedVariantUploader
+from ..services.smart_variant_uploader import SmartVariantUploader
 from ..services.analysis_queue import queue_analysis
+from ..services.comprehensive_analysis_service import ComprehensiveAnalysisService
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,7 @@ async def upload_vcf(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
-    """Upload VCF file and process genetic variants."""
+    """Upload VCF file and process genetic variants with comprehensive analysis."""
     try:
         if not file.filename or not file.filename.endswith('.vcf'):
             raise HTTPException(
@@ -41,7 +42,9 @@ async def upload_vcf(
         analysis = GeneticAnalysis(
             user_id=current_user.id,
             filename=file.filename,
-            file_type='vcf'
+            file_type='vcf',
+            analysis_status='processing',
+            current_step='uploading_variants'
         )
         session.add(analysis)
         await session.commit()
@@ -51,22 +54,60 @@ async def upload_vcf(
         parser = VCFParser()
         variants_data = await parser.parse_vcf_content(content)
         
-        uploader = OptimizedVariantUploader(session)
-        processed_count, _ = await uploader.upload_variants(analysis.id, variants_data)
+        # Get the analysis ID value after refresh
+        analysis_id = getattr(analysis, 'id')
         
+        uploader = SmartVariantUploader(session)
+        processed_count, new_count = await uploader.upload_variants(analysis_id, variants_data)
+        
+        # Update total_variants in the analysis record
+        await session.execute(
+            update(GeneticAnalysis)
+            .where(GeneticAnalysis.id == analysis_id)
+            .values(total_variants=processed_count)
+        )
         await session.commit()
 
-        # Queue background analysis
-        success = await queue_analysis(analysis.id, current_user.id, priority=1)
-        if not success:
-            logger.warning(f"Failed to queue analysis {analysis.id} for user {current_user.id}")
+        # Start comprehensive analysis immediately (no background queue)
+        try:
+            analysis_service = ComprehensiveAnalysisService(user_id=current_user.id)
+            analysis_result = await analysis_service.process_analysis(analysis_id)
+            
+            if analysis_result.get('success'):
+                return JSONResponse({
+                    "status": "success",
+                    "analysis_id": analysis_id,
+                    "message": "VCF file processed and analyzed successfully",
+                    "processed_variants": processed_count,
+                    "reused_annotations": analysis_result.get('reused_annotations', 0),
+                    "new_annotations": analysis_result.get('new_annotations', 0),
+                    "insights_generated": analysis_result.get('insights_generated', 0),
+                    "processing_time": analysis_result.get('processing_time', 0)
+                })
+            else:
+                return JSONResponse({
+                    "status": "completed_with_errors",
+                    "analysis_id": analysis_id,
+                    "message": "VCF file processed but analysis had errors",
+                    "processed_variants": processed_count,
+                    "error": analysis_result.get('error', 'Unknown analysis error')
+                })
+                
+        except Exception as analysis_error:
+            logger.error(f"Comprehensive analysis failed: {analysis_error}")
+            
+            # Fall back to background queue if immediate analysis fails
+            success = await queue_analysis(analysis_id, current_user.id, priority=1)
+            if not success:
+                logger.warning(f"Failed to queue analysis {analysis_id} for user {current_user.id}")
 
-        return JSONResponse({
-            "status": "success",
-            "analysis_id": analysis.id,
-            "message": "VCF file processed successfully",
-            "processed_variants": processed_count
-        })
+            return JSONResponse({
+                "status": "uploaded",
+                "analysis_id": analysis_id,
+                "message": "VCF file uploaded successfully, analysis queued in background",
+                "processed_variants": processed_count,
+                "analysis_error": str(analysis_error)
+            })
 
     except Exception as e:
         logger.error(f"VCF upload error: {e}")
@@ -82,7 +123,7 @@ async def upload_csv(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
-    """Upload CSV file and process genetic variants."""
+    """Upload CSV file and process genetic variants with comprehensive analysis."""
     try:
         if not file.filename or not file.filename.endswith('.csv'):
             raise HTTPException(
@@ -97,7 +138,9 @@ async def upload_csv(
         analysis = GeneticAnalysis(
             user_id=current_user.id,
             filename=file.filename,
-            file_type='csv'
+            file_type='csv',
+            analysis_status='processing',
+            current_step='uploading_variants'
         )
         session.add(analysis)
         await session.commit()
@@ -105,25 +148,65 @@ async def upload_csv(
 
         # Parse CSV and upload variants
         parser = VCFParser()
-        variants_data = await parser.parse_vcf_content(content)  # VCFParser can handle CSV too
+        variants_data = await parser.parse_vcf_content(content)
         
-        uploader = OptimizedVariantUploader(session)
-        analysis_id = getattr(analysis, 'id')  # Get the actual ID value
-        stats = await uploader.upload_variants(analysis_id, variants_data)
+        # Get the analysis ID value after refresh
+        analysis_id = getattr(analysis, 'id')
         
+        uploader = SmartVariantUploader(session)
+        processed_count, new_count = await uploader.upload_variants(analysis_id, variants_data)
+        
+        # Update total_variants in the analysis record
+        await session.execute(
+            update(GeneticAnalysis)
+            .where(GeneticAnalysis.id == analysis_id)
+            .values(total_variants=processed_count)
+        )
         await session.commit()
 
-        # Queue background analysis
-        success = await queue_analysis(analysis_id, current_user.id, priority=1)
-        if not success:
-            logger.warning(f"Failed to queue analysis {analysis_id} for user {current_user.id}")
+        # Start comprehensive analysis immediately (no background queue)
+        try:
+            analysis_service = ComprehensiveAnalysisService(user_id=current_user.id)
+            analysis_result = await analysis_service.process_analysis(analysis_id)
+            
+            if analysis_result.get('success'):
+                return JSONResponse({
+                    "status": "success",
+                    "analysis_id": analysis_id,
+                    "message": "CSV file processed and analyzed successfully",
+                    "processed_variants": processed_count,
+                    "reused_annotations": analysis_result.get('reused_annotations', 0),
+                    "new_annotations": analysis_result.get('new_annotations', 0),
+                    "insights_generated": analysis_result.get('insights_generated', 0),
+                    "processing_time": analysis_result.get('processing_time', 0),
+                    "redirect_to_dashboard": True
+                })
+            else:
+                return JSONResponse({
+                    "status": "completed_with_errors",
+                    "analysis_id": analysis_id,
+                    "message": "CSV file processed but analysis had errors",
+                    "processed_variants": processed_count,
+                    "error": analysis_result.get('error', 'Unknown analysis error'),
+                    "redirect_to_dashboard": True
+                })
+                
+        except Exception as analysis_error:
+            logger.error(f"Comprehensive analysis failed: {analysis_error}")
+            
+            # Fall back to background queue if immediate analysis fails
+            success = await queue_analysis(analysis_id, current_user.id, priority=1)
+            if not success:
+                logger.warning(f"Failed to queue analysis {analysis_id} for user {current_user.id}")
 
-        return JSONResponse({
-            "status": "success",
-            "analysis_id": analysis_id,
-            "message": "CSV file processed successfully",
-            "stats": stats
-        })
+            return JSONResponse({
+                "status": "uploaded",
+                "analysis_id": analysis_id,
+                "message": "CSV file uploaded successfully, analysis queued in background",
+                "processed_variants": processed_count,
+                "analysis_error": str(analysis_error),
+                "redirect_to_dashboard": True
+            })
 
     except Exception as e:
         logger.error(f"CSV upload error: {e}")
@@ -138,9 +221,21 @@ async def delete_all_user_data(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
-    """Delete all genetic data for the current user."""
+    """
+    Delete all genetic data for the current user.
+    This only deletes user-specific data (analyses and their insights),
+    but preserves shared variant annotations for efficiency.
+    """
     try:
-        # Get all user's analyses
+        # Get all user's analyses with their related data
+        from sqlalchemy import delete
+        from ..db.models import (
+            VariantAnnotation, AnalysisVariant, HealthRisk, DrugResponse,
+            PhysicalTrait, NutritionTrait, SportsPerformance, CognitiveProfile,
+            PersonalityTrait, AncestryResult, CarrierStatus, WellnessMetric,
+            MethylationProfile, DetoxificationProfile, RareMutation, UncommonMutation
+        )
+        
         result = await session.execute(
             select(GeneticAnalysis).where(
                 GeneticAnalysis.user_id == current_user.id
@@ -154,27 +249,30 @@ async def delete_all_user_data(
                 "message": "No data found to delete"
             })
 
-        deleted_count = 0
-        # Delete each analysis and its associated data
-        for analysis in analyses:
-            # Delete associated AnalysisVariant records (cascades will handle the rest)
-            await session.execute(
-                delete(AnalysisVariant).where(AnalysisVariant.analysis_id == analysis.id)
-            )
-            
-            # Delete the analysis
-            await session.delete(analysis)
-            deleted_count += 1
+        analysis_ids = [analysis.id for analysis in analyses]
+        deleted_count = len(analysis_ids)
+        
+        # Delete in correct order to respect foreign key constraints
+        # All insight tables have CASCADE delete on analysis_id, so we just need to delete analyses
+        # and the system will automatically clean up user-specific data while preserving shared annotations
+        
+        # Delete analyses (this will cascade to all user-specific data)
+        await session.execute(
+            delete(GeneticAnalysis).where(GeneticAnalysis.id.in_(analysis_ids))
+        )
         
         await session.commit()
 
         return JSONResponse({
             "status": "success",
-            "message": f"Successfully deleted {deleted_count} analyses and all associated data"
+            "message": f"Successfully deleted {deleted_count} analyses and user-specific data",
+            "deleted_analyses": analysis_ids,
+            "note": "User-specific data deleted, shared annotations automatically preserved"
         })
 
     except Exception as e:
         logger.error(f"Delete all data error: {e}")
+        await session.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete data: {str(e)}"
@@ -187,7 +285,10 @@ async def delete_analysis(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
-    """Delete an analysis and all associated data."""
+    """
+    Delete an analysis and all associated user data.
+    Preserves shared variant annotations for system efficiency.
+    """
     try:
         # Get analysis
         result = await session.execute(
@@ -204,22 +305,25 @@ async def delete_analysis(
                 detail="Analysis not found"
             )
 
-        # Delete associated AnalysisVariant records (cascades will handle the rest)
+        # Import necessary models for explicit deletion
+        from sqlalchemy import delete
+
+        # Delete analysis (this will cascade to all user-specific data while preserving shared annotations)
         await session.execute(
-            delete(AnalysisVariant).where(AnalysisVariant.analysis_id == analysis.id)
+            delete(GeneticAnalysis).where(GeneticAnalysis.id == analysis_id)
         )
         
-        # Delete the analysis
-        await session.delete(analysis)
         await session.commit()
 
         return JSONResponse({
             "status": "success",
-            "message": f"Analysis {analysis_id} deleted successfully"
+            "message": f"Analysis {analysis_id} deleted successfully",
+            "note": "User-specific data deleted, shared annotations automatically preserved"
         })
 
     except Exception as e:
         logger.error(f"Delete analysis error: {e}")
+        await session.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete analysis: {str(e)}"
@@ -333,4 +437,77 @@ async def get_analysis_variants(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get variants: {str(e)}"
+        )
+
+
+@router.post("/analysis/{analysis_id}/reanalyze")
+async def reanalyze_data(
+    analysis_id: int,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    """
+    Re-run comprehensive analysis on existing uploaded data.
+    Useful for getting updated insights or after system improvements.
+    """
+    try:
+        # Verify user owns the analysis
+        result = await session.execute(
+            select(GeneticAnalysis).where(
+                GeneticAnalysis.id == analysis_id,
+                GeneticAnalysis.user_id == current_user.id
+            )
+        )
+        analysis = result.scalar_one_or_none()
+        
+        if not analysis:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Analysis not found"
+            )
+
+        # Run comprehensive analysis
+        try:
+            analysis_service = ComprehensiveAnalysisService(user_id=current_user.id)
+            analysis_result = await analysis_service.process_analysis(analysis_id)
+            
+            if analysis_result.get('success'):
+                return JSONResponse({
+                    "status": "success",
+                    "analysis_id": analysis_id,
+                    "message": "Analysis completed successfully",
+                    "processed_variants": analysis_result.get('processed_variants', 0),
+                    "reused_annotations": analysis_result.get('reused_annotations', 0),
+                    "new_annotations": analysis_result.get('new_annotations', 0),
+                    "insights_generated": analysis_result.get('insights_generated', 0),
+                    "processing_time": analysis_result.get('processing_time', 0)
+                })
+            else:
+                return JSONResponse({
+                    "status": "completed_with_errors",
+                    "analysis_id": analysis_id,
+                    "message": "Analysis completed with errors",
+                    "error": analysis_result.get('error', 'Unknown analysis error')
+                })
+                
+        except Exception as analysis_error:
+            logger.error(f"Re-analysis failed: {analysis_error}")
+            
+            # Fall back to background queue
+            success = await queue_analysis(analysis_id, current_user.id, priority=1)
+            if not success:
+                logger.warning(f"Failed to queue analysis {analysis_id} for user {current_user.id}")
+
+            return JSONResponse({
+                "status": "queued",
+                "analysis_id": analysis_id,
+                "message": "Analysis queued in background due to error in immediate processing",
+                "analysis_error": str(analysis_error)
+            })
+
+    except Exception as e:
+        logger.error(f"Reanalyze error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to reanalyze: {str(e)}"
         )
