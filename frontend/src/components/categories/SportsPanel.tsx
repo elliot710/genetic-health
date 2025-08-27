@@ -36,7 +36,7 @@ export default function SportsPanel({ isDarkMode = false, theme, data, token }: 
       
       setLoading(true)
       try {
-        const response = await fetch('http://localhost:8000/analyze/dashboard-data', {
+        const response = await fetch('http://localhost:8000/api/analysis/dashboard-data', {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',

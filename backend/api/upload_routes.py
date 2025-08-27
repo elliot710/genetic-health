@@ -1,110 +1,75 @@
 """
-File upload API routes with database storage and genetic analysis
+Upload routes for genetic data files with optimized variant storage.
 """
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+import logging
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
-from typing import Dict, Any
-import asyncio
-from datetime import datetime
+from sqlalchemy.orm import selectinload
+from sqlalchemy import select, delete, func
 
-from ..db.database import get_session
-from ..db.models import GeneticAnalysis, GeneticVariant, HealthRisk, DrugResponse
-from ..utils.vcf_parser import VCFParser
-from ..services.genetic_api_service import GeneticAPIService
-from ..services.analysis_queue import queue_analysis
 from .auth_routes import get_current_user
+from ..db.database import get_session
+from ..db.models import GeneticAnalysis, AnalysisVariant
+from ..utils.vcf_parser import VCFParser
+from ..services.optimized_variant_uploader import OptimizedVariantUploader
+from ..services.analysis_queue import queue_analysis
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/upload", tags=["upload"])
-
-
-async def process_genetic_analysis(analysis_id: Any, user_id: int):
-    """Background task to analyze genetic variants using external APIs via queue"""
-    try:
-        # Queue the analysis instead of running it directly
-        success = await queue_analysis(analysis_id, user_id, priority=1)
-        if not success:
-            print(f"Failed to queue analysis {analysis_id} for user {user_id} - may already be running or user limit reached")
-        else:
-            print(f"Successfully queued analysis {analysis_id} for user {user_id}")
-        
-    except Exception as e:
-        print(f"Error queueing analysis for user {user_id}: {str(e)}")
 
 
 @router.post("/vcf")
 async def upload_vcf(
     file: UploadFile = File(...),
-    current_user = Depends(get_current_user),
-    db: AsyncSession = Depends(get_session)
-) -> Dict[str, Any]:
-    """Upload and parse VCF file, save to database, and analyze with APIs"""
-    
-    if not file.filename or not file.filename.endswith('.vcf'):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File must be a VCF file"
-        )
-    
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    """Upload VCF file and process genetic variants."""
     try:
+        if not file.filename or not file.filename.endswith('.vcf'):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only VCF files are supported"
+            )
+
         # Read file content
         content = await file.read()
         
-        # Parse VCF file
-        parser = VCFParser()
-        variants = await parser.parse_vcf_content(content)
-        
-        # Create genetic analysis record
+        # Create analysis record
         analysis = GeneticAnalysis(
             user_id=current_user.id,
             filename=file.filename,
-            file_type='vcf',
-            analysis_results={
-                'total_variants': len(variants),
-                'upload_timestamp': datetime.now().isoformat(),
-                'file_size': len(content)
-            }
+            file_type='vcf'
         )
+        session.add(analysis)
+        await session.commit()
+        await session.refresh(analysis)
+
+        # Parse VCF and upload variants
+        parser = VCFParser()
+        variants_data = await parser.parse_vcf_content(content)
         
-        db.add(analysis)
-        await db.flush()  # Get the analysis ID
-        await db.refresh(analysis)  # Refresh to get the actual ID value
+        uploader = OptimizedVariantUploader(session)
+        processed_count, _ = await uploader.upload_variants(analysis.id, variants_data)
         
-        # Save variants to database
-        db_variants = []
-        for variant in variants:
-            db_variant = GeneticVariant(
-                analysis_id=analysis.id,
-                chromosome=variant.get('chromosome', ''),
-                position=variant.get('position', 0),
-                rsid=variant.get('rsid'),
-                ref_allele=variant.get('ref', ''),
-                alt_allele=variant.get('alt', ''),
-                genotype=variant.get('genotype'),
-                quality=variant.get('quality'),
-                filter_status=variant.get('filter'),
-                info=variant.get('info', {})
-            )
-            db_variants.append(db_variant)
-        
-        db.add_all(db_variants)
-        await db.commit()
-        
-        # Start background analysis with APIs
-        analysis_id = analysis.id
-        asyncio.create_task(process_genetic_analysis(analysis_id, current_user.id))
-        
-        return {
-            "analysis_id": analysis_id,
-            "filename": file.filename,
-            "variants": variants[:10],  # Return first 10 for preview
-            "total_variants": len(variants),
-            "stored_variants": len(db_variants),
-            "status": "uploaded",
-            "message": "File uploaded successfully. Genetic analysis is being processed in the background."
-        }
-        
+        await session.commit()
+
+        # Queue background analysis
+        success = await queue_analysis(analysis.id, current_user.id, priority=1)
+        if not success:
+            logger.warning(f"Failed to queue analysis {analysis.id} for user {current_user.id}")
+
+        return JSONResponse({
+            "status": "success",
+            "analysis_id": analysis.id,
+            "message": "VCF file processed successfully",
+            "processed_variants": processed_count
+        })
+
     except Exception as e:
+        logger.error(f"VCF upload error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process VCF file: {str(e)}"
@@ -114,133 +79,54 @@ async def upload_vcf(
 @router.post("/csv")
 async def upload_csv(
     file: UploadFile = File(...),
-    current_user = Depends(get_current_user),
-    db: AsyncSession = Depends(get_session)
-) -> Dict[str, Any]:
-    """Upload and parse CSV file with genetic data"""
-    
-    if not file.filename or not file.filename.endswith('.csv'):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File must be a CSV file"
-        )
-    
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    """Upload CSV file and process genetic variants."""
     try:
-        import pandas as pd
-        import io
-        
-        # Read CSV file
+        if not file.filename or not file.filename.endswith('.csv'):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only CSV files are supported"
+            )
+
+        # Read file content
         content = await file.read()
         
-        # Parse CSV with flexible approach
-        try:
-            # Try reading with pandas, skipping comment lines starting with #
-            df = pd.read_csv(io.BytesIO(content), comment='#')
-        except Exception:
-            try:
-                # Try tab-separated
-                df = pd.read_csv(io.BytesIO(content), sep='\t', comment='#')
-            except Exception:
-                try:
-                    # Try comma-separated, skipping bad lines
-                    df = pd.read_csv(io.BytesIO(content), sep=',', on_bad_lines='skip', comment='#')
-                except Exception:
-                    # Last resort - try to manually skip comment lines
-                    lines = content.decode('utf-8').split('\n')
-                    data_lines = [line for line in lines if not line.startswith('#') and line.strip()]
-                    if data_lines:
-                        df = pd.read_csv(io.StringIO('\n'.join(data_lines)))
-                    else:
-                        raise ValueError("Unable to parse CSV file")
-        
-        # Clean the DataFrame
-        df = df.dropna(how='all')
-        
-        # Create genetic analysis record
+        # Create analysis record
         analysis = GeneticAnalysis(
             user_id=current_user.id,
             filename=file.filename,
-            file_type='csv',
-            analysis_results={
-                'total_rows': len(df),
-                'columns': list(df.columns),
-                'upload_timestamp': datetime.now().isoformat(),
-                'file_size': len(content)
-            }
+            file_type='csv'
         )
+        session.add(analysis)
+        await session.commit()
+        await session.refresh(analysis)
+
+        # Parse CSV and upload variants
+        parser = VCFParser()
+        variants_data = await parser.parse_vcf_content(content)  # VCFParser can handle CSV too
         
-        db.add(analysis)
-        await db.flush()
-        await db.refresh(analysis)  # Refresh to get the actual ID value
+        uploader = OptimizedVariantUploader(session)
+        analysis_id = getattr(analysis, 'id')  # Get the actual ID value
+        stats = await uploader.upload_variants(analysis_id, variants_data)
         
-        # If CSV contains genetic variant data, parse and save
-        genetic_columns = ['chromosome', 'position', 'rsid', 'ref', 'alt', 'genotype']
-        has_genetic_data = any(col.lower() in [c.lower() for c in df.columns] for col in genetic_columns)
-        
-        if has_genetic_data:
-            db_variants = []
-            for _, row in df.iterrows():  # Process all rows
-                # Map common column names - handle both lowercase and uppercase variants
-                chromosome = str(row.get('chromosome', row.get('chr', row.get('CHROM', row.get('CHROMOSOME', '')))))
-                
-                # Handle position more carefully
-                position_value = row.get('position', row.get('pos', row.get('POS', row.get('POSITION', 0))))
-                try:
-                    position = int(position_value) if position_value and str(position_value).strip() != '' else 0
-                except (ValueError, TypeError):
-                    position = 0
-                
-                rsid = str(row.get('rsid', row.get('RS_ID', row.get('ID', row.get('RSID', '')))))
-                ref = str(row.get('ref', row.get('reference', row.get('REF', ''))))
-                alt = str(row.get('alt', row.get('alternate', row.get('ALT', ''))))
-                # For MyHeritage format, RESULT contains the genotype
-                genotype = str(row.get('genotype', row.get('GT', row.get('RESULT', ''))))
-                
-                if chromosome and chromosome.strip() and position > 0:
-                    db_variant = GeneticVariant(
-                        analysis_id=analysis.id,
-                        chromosome=chromosome,
-                        position=position,
-                        rsid=rsid if rsid and rsid != 'nan' and rsid.strip() else None,
-                        ref_allele=ref if ref and ref != 'nan' and ref.strip() else '',
-                        alt_allele=alt if alt and alt != 'nan' and alt.strip() else '',
-                        genotype=genotype if genotype and genotype != 'nan' and genotype.strip() else None,
-                        info={'source': 'csv_upload'}
-                    )
-                    db_variants.append(db_variant)
-            
-            if db_variants:
-                db.add_all(db_variants)
-                await db.commit()
-                
-                # Start background analysis
-                analysis_id = analysis.id
-                asyncio.create_task(process_genetic_analysis(analysis_id, current_user.id))
-                
-                return {
-                    "analysis_id": analysis_id,
-                    "filename": file.filename,
-                    "total_rows": len(df),
-                    "genetic_variants_found": len(db_variants),
-                    "columns": list(df.columns),
-                    "preview": df.head(5).to_dict(orient='records'),
-                    "status": "uploaded",
-                    "message": "CSV file uploaded with genetic data. Analysis is being processed in the background."
-                }
-        
-        await db.commit()
-        
-        return {
-            "analysis_id": analysis.id,
-            "filename": file.filename,
-            "total_rows": len(df),
-            "columns": list(df.columns),
-            "preview": df.head(5).to_dict(orient='records'),
-            "status": "uploaded",
-            "message": f"CSV file uploaded successfully. Analysis record saved with ID {analysis.id}. No genetic variant data detected in columns: {list(df.columns)}"
-        }
-        
+        await session.commit()
+
+        # Queue background analysis
+        success = await queue_analysis(analysis_id, current_user.id, priority=1)
+        if not success:
+            logger.warning(f"Failed to queue analysis {analysis_id} for user {current_user.id}")
+
+        return JSONResponse({
+            "status": "success",
+            "analysis_id": analysis_id,
+            "message": "CSV file processed successfully",
+            "stats": stats
+        })
+
     except Exception as e:
+        logger.error(f"CSV upload error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process CSV file: {str(e)}"
@@ -248,342 +134,203 @@ async def upload_csv(
 
 
 @router.delete("/data")
-async def delete_user_data(
-    current_user = Depends(get_current_user),
-    db: AsyncSession = Depends(get_session)
-) -> Dict[str, Any]:
-    """Delete all uploaded genetic data for the current user"""
-    
+async def delete_all_user_data(
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    """Delete all genetic data for the current user."""
     try:
-        user_id = current_user.id
-        
-        # Get all analyses for this user
-        analyses_result = await db.execute(
-            select(GeneticAnalysis).where(GeneticAnalysis.user_id == user_id)
+        # Get all user's analyses
+        result = await session.execute(
+            select(GeneticAnalysis).where(
+                GeneticAnalysis.user_id == current_user.id
+            )
         )
-        analyses = analyses_result.scalars().all()
+        analyses = result.scalars().all()
         
+        if not analyses:
+            return JSONResponse({
+                "status": "success",
+                "message": "No data found to delete"
+            })
+
         deleted_count = 0
+        # Delete each analysis and its associated data
         for analysis in analyses:
-            # Delete variants
-            await db.execute(
-                delete(GeneticVariant).where(GeneticVariant.analysis_id == analysis.id)
+            # Delete associated AnalysisVariant records (cascades will handle the rest)
+            await session.execute(
+                delete(AnalysisVariant).where(AnalysisVariant.analysis_id == analysis.id)
             )
             
-            # Delete health risks
-            await db.execute(
-                delete(HealthRisk).where(HealthRisk.analysis_id == analysis.id)
-            )
-            
-            # Delete drug responses
-            await db.execute(
-                delete(DrugResponse).where(DrugResponse.analysis_id == analysis.id)
-            )
-            
-            # Delete the analysis itself
-            await db.delete(analysis)
+            # Delete the analysis
+            await session.delete(analysis)
             deleted_count += 1
         
-        await db.commit()
-        
-        return {
-            "message": f"Successfully deleted {deleted_count} analyses and all associated data for user {current_user.username}",
+        await session.commit()
+
+        return JSONResponse({
             "status": "success",
-            "deleted_analyses": deleted_count
-        }
-        
+            "message": f"Successfully deleted {deleted_count} analyses and all associated data"
+        })
+
     except Exception as e:
+        logger.error(f"Delete all data error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete user data: {str(e)}"
+            detail=f"Failed to delete data: {str(e)}"
+        )
+
+
+@router.delete("/analysis/{analysis_id}")
+async def delete_analysis(
+    analysis_id: int,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    """Delete an analysis and all associated data."""
+    try:
+        # Get analysis
+        result = await session.execute(
+            select(GeneticAnalysis).where(
+                GeneticAnalysis.id == analysis_id,
+                GeneticAnalysis.user_id == current_user.id
+            )
+        )
+        analysis = result.scalar_one_or_none()
+        
+        if not analysis:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Analysis not found"
+            )
+
+        # Delete associated AnalysisVariant records (cascades will handle the rest)
+        await session.execute(
+            delete(AnalysisVariant).where(AnalysisVariant.analysis_id == analysis.id)
+        )
+        
+        # Delete the analysis
+        await session.delete(analysis)
+        await session.commit()
+
+        return JSONResponse({
+            "status": "success",
+            "message": f"Analysis {analysis_id} deleted successfully"
+        })
+
+    except Exception as e:
+        logger.error(f"Delete analysis error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete analysis: {str(e)}"
         )
 
 
 @router.get("/data-summary")
-async def get_user_data_summary(
-    current_user = Depends(get_current_user),
-    db: AsyncSession = Depends(get_session)
-) -> Dict[str, Any]:
-    """Get summary of user's uploaded data"""
-    
+async def get_data_summary(
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    """Get summary of user's uploaded data."""
     try:
-        user_id = current_user.id
-        
-        # Get all analyses for this user
-        analyses_result = await db.execute(
-            select(GeneticAnalysis).where(GeneticAnalysis.user_id == user_id)
+        # Get user's analyses
+        result = await session.execute(
+            select(GeneticAnalysis).where(
+                GeneticAnalysis.user_id == current_user.id
+            ).options(selectinload(GeneticAnalysis.analysis_variants))
         )
-        analyses = analyses_result.scalars().all()
-        
-        # Count variants
-        total_variants = 0
-        for analysis in analyses:
-            variants_result = await db.execute(
-                select(GeneticVariant).where(GeneticVariant.analysis_id == analysis.id)
-            )
-            variants_count = len(variants_result.scalars().all())
-            total_variants += variants_count
-        
-        # Get health risks count
-        health_risks_result = await db.execute(
-            select(HealthRisk).where(HealthRisk.analysis_id.in_([a.id for a in analyses]))
-        )
-        health_risks_count = len(health_risks_result.scalars().all())
-        
-        # Get drug responses count
-        drug_responses_result = await db.execute(
-            select(DrugResponse).where(DrugResponse.analysis_id.in_([a.id for a in analyses]))
-        )
-        drug_responses_count = len(drug_responses_result.scalars().all())
-        
-        return {
-            "user_id": user_id,
-            "username": current_user.username,
-            "data_summary": {
-                "uploaded_files": len(analyses),
-                "total_variants": total_variants,
-                "health_risks_identified": health_risks_count,
-                "drug_responses_analyzed": drug_responses_count,
-                "last_upload": analyses[-1].upload_date.isoformat() if analyses else None,
-                "file_types": list(set([a.file_type for a in analyses]))
-            },
-            "analyses": [
-                {
-                    "id": a.id,
-                    "filename": a.filename,
-                    "file_type": a.file_type,
-                    "upload_date": a.upload_date.isoformat(),
-                    "total_variants": a.analysis_results.get('total_variants', 0)
-                }
-                for a in analyses
-            ]
+        analyses = result.scalars().all()
+
+        summary = {
+            "total_analyses": len(analyses),
+            "total_variants": sum(len(a.analysis_variants) for a in analyses),
+            "analyses": []
         }
-        
+
+        for a in analyses:
+            summary["analyses"].append({
+                "id": a.id,
+                "file_name": a.filename,  # Correct field name
+                "file_type": a.file_type,
+                "variant_count": len(a.analysis_variants),
+                "upload_date": a.upload_date.isoformat() if a.upload_date is not None else None
+            })
+
+        return JSONResponse(summary)
+
     except Exception as e:
+        logger.error(f"Data summary error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get data summary: {str(e)}"
         )
 
 
-@router.get("/analysis/{analysis_id}")
-async def get_analysis_results(
+@router.get("/analysis/{analysis_id}/variants")
+async def get_analysis_variants(
     analysis_id: int,
-    current_user = Depends(get_current_user),
-    db: AsyncSession = Depends(get_session)
-) -> Dict[str, Any]:
-    """Get detailed results for a specific analysis"""
-    
-    try:
-        # Get the analysis
-        result = await db.execute(
-            select(GeneticAnalysis).where(
-                GeneticAnalysis.id == analysis_id,
-                GeneticAnalysis.user_id == current_user.id
-            )
-        )
-        analysis = result.scalar_one_or_none()
-        
-        if not analysis:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Analysis not found"
-            )
-        
-        # Get health risks
-        health_risks_result = await db.execute(
-            select(HealthRisk).where(HealthRisk.analysis_id == analysis_id)
-        )
-        health_risks = health_risks_result.scalars().all()
-        
-        # Get drug responses
-        drug_responses_result = await db.execute(
-            select(DrugResponse).where(DrugResponse.analysis_id == analysis_id)
-        )
-        drug_responses = drug_responses_result.scalars().all()
-        
-        # Get sample variants
-        variants_result = await db.execute(
-            select(GeneticVariant).where(GeneticVariant.analysis_id == analysis_id).limit(20)
-        )
-        variants = variants_result.scalars().all()
-        
-        return {
-            "analysis": {
-                "id": analysis.id,
-                "filename": analysis.filename,
-                "file_type": analysis.file_type,
-                "upload_date": analysis.upload_date.isoformat(),
-                "results": analysis.analysis_results
-            },
-            "health_risks": [
-                {
-                    "condition": hr.condition,
-                    "risk_level": hr.risk_level,
-                    "risk_score": hr.risk_score,
-                    "associated_variants": hr.associated_variants,
-                    "recommendations": hr.recommendations
-                }
-                for hr in health_risks
-            ],
-            "drug_responses": [
-                {
-                    "gene": dr.gene,
-                    "drug": dr.drug,
-                    "response_type": dr.response_type,
-                    "recommendations": dr.recommendations,
-                    "variants_involved": dr.variants_involved
-                }
-                for dr in drug_responses
-            ],
-            "sample_variants": [
-                {
-                    "chromosome": v.chromosome,
-                    "position": v.position,
-                    "rsid": v.rsid,
-                    "ref_allele": v.ref_allele,
-                    "alt_allele": v.alt_allele,
-                    "genotype": v.genotype
-                }
-                for v in variants
-            ]
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get analysis results: {str(e)}"
-        )
-
-
-@router.post("/trigger-analysis/{analysis_id}")
-async def trigger_manual_analysis(
-    analysis_id: int,
-    current_user = Depends(get_current_user),
-    db: AsyncSession = Depends(get_session)
-) -> Dict[str, str]:
-    """Manually trigger background genetic analysis for an existing upload"""
-    
-    try:
-        # Verify the analysis belongs to the current user
-        result = await db.execute(
-            select(GeneticAnalysis).where(
-                GeneticAnalysis.id == analysis_id,
-                GeneticAnalysis.user_id == current_user.id
-            )
-        )
-        analysis = result.scalar_one_or_none()
-        
-        if not analysis:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Analysis not found"
-            )
-        
-        # Trigger background analysis with a new database session
-        async def trigger_analysis():
-            await process_genetic_analysis(analysis_id, current_user.id)
-        
-        asyncio.create_task(trigger_analysis())
-        
-        return {
-            "message": f"Background genetic analysis triggered for analysis {analysis_id}",
-            "status": "processing"
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to trigger analysis: {str(e)}"
-        )
-
-
-@router.post("/search-variant")
-async def search_variant(
-    data: Dict[str, str],
+    limit: int = 100,
+    offset: int = 0,
+    session: AsyncSession = Depends(get_session),
     current_user = Depends(get_current_user)
-) -> Dict[str, Any]:
-    """Search for variant information using comprehensive external APIs"""
-    
-    variant_id = data.get("variant_id", "").strip()
-    if not variant_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Variant ID is required"
-        )
-    
+):
+    """Get variants for a specific analysis."""
     try:
-        async with GeneticAPIService() as api_service:
-            # Get comprehensive annotation
-            annotation_result = await api_service.annotate_variant(variant_id)
-            
-            if 'error' in annotation_result:
-                return {
-                    "rsid": variant_id,
-                    "source": "Multiple databases",
-                    "error": annotation_result['error'],
-                    "found": False
-                }
-            
-            annotations = annotation_result.get('annotations', {})
-            
-            # Extract key information for display
-            display_result = {
-                "rsid": variant_id,
-                "source": "Multiple databases",
-                "found": True,
-                "search_timestamp": datetime.now().isoformat()
-            }
-            
-            # Extract Ensembl data
-            ensembl_data = annotations.get('ensembl', {})
-            if ensembl_data and not ensembl_data.get('error'):
-                display_result.update({
-                    "name": ensembl_data.get("name"),
-                    "most_severe_consequence": ensembl_data.get("most_severe_consequence"),
-                    "minor_allele": ensembl_data.get("minor_allele"),
-                    "minor_allele_freq": ensembl_data.get("minor_allele_freq"),
-                    "synonyms": ensembl_data.get("synonyms", [])
-                })
-            
-            # Extract ClinVar clinical significance
-            clinvar_data = annotations.get('clinvar', {})
-            if clinvar_data and clinvar_data.get('found'):
-                clinical_sigs = []
-                for entry in clinvar_data.get('entries', []):
-                    clinical_sigs.extend(entry.get('clinical_significance', []))
-                display_result["clinical_significance"] = list(set(clinical_sigs))
-            else:
-                display_result["clinical_significance"] = []
-            
-            # Extract PharmGKB information
-            pharmgkb_data = annotations.get('pharmgkb_variant', {})
-            display_result["pharmgkb_found"] = pharmgkb_data.get('found', False)
-            if pharmgkb_data.get('found'):
-                display_result["pharmgkb_gene"] = pharmgkb_data.get('gene')
-                display_result["pharmgkb_clinical_significance"] = pharmgkb_data.get('clinical_significance')
-            
-            # Extract literature count
-            literature_data = annotations.get('literature', {})
-            display_result["literature_count"] = literature_data.get('total_publications', 0)
-            
-            # Extract SNPedia information
-            snpedia_data = annotations.get('snpedia', {})
-            if snpedia_data and snpedia_data.get('found'):
-                display_result["snpedia_magnitude"] = snpedia_data.get('magnitude')
-                display_result["snpedia_summary"] = snpedia_data.get('extract', '')[:200]
-            
-            # Include raw annotation data for advanced users
-            display_result["annotations"] = annotations
-            
-            return display_result
-            
+        # Verify user owns the analysis
+        result = await session.execute(
+            select(GeneticAnalysis).where(
+                GeneticAnalysis.id == analysis_id,
+                GeneticAnalysis.user_id == current_user.id
+            )
+        )
+        analysis = result.scalar_one_or_none()
+        
+        if not analysis:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Analysis not found"
+            )
+
+        # Get variants with pagination
+        result = await session.execute(
+            select(AnalysisVariant).where(
+                AnalysisVariant.analysis_id == analysis_id
+            ).limit(limit).offset(offset)
+        )
+        analysis_variants = result.scalars().all()
+
+        # Get total count
+        total_result = await session.execute(
+            select(func.count(AnalysisVariant.id)).where(
+                AnalysisVariant.analysis_id == analysis_id
+            )
+        )
+        total_count = total_result.scalar()
+
+        variants_data = []
+        for av in analysis_variants:
+            variants_data.append({
+                "analysis_variant_id": av.id,
+                "chromosome": av.chromosome,
+                "position": av.position,
+                "rsid": av.rsid,
+                "ref_allele": av.ref_allele,
+                "alt_allele": av.alt_allele,
+                "genotype": av.genotype,
+                "quality": av.quality
+            })
+
+        return JSONResponse({
+            "analysis_id": analysis_id,
+            "variants": variants_data,
+            "total_count": total_count,
+            "limit": limit,
+            "offset": offset
+        })
+
     except Exception as e:
+        logger.error(f"Get variants error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to search variant: {str(e)}"
+            detail=f"Failed to get variants: {str(e)}"
         )

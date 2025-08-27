@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy import select, update
 
 from ..db.database import get_session
-from ..db.models import GeneticAnalysis, VariantAnnotation, DrugResponse
+from ..db.models import GeneticAnalysis, VariantAnnotation, DrugResponse, AnalysisVariant
 from .genetic_api_service import GeneticAPIService
 from .drug_response import DrugResponseAnalyzer
 
@@ -28,7 +28,7 @@ class GeneticAnalysisJob:
         
     async def process_genetic_analysis(self, analysis_id: int):
         """Process genetic analysis with FAST optimizations for better performance"""
-        self._job_start_time = datetime.utcnow()
+        self._job_start_time = datetime.now()
         start_time = time.time()
         
         logger.info(f"🚀 FAST ANALYSIS STARTED for analysis_id {analysis_id} (user: {self.user_id})")
@@ -38,10 +38,10 @@ class GeneticAnalysisJob:
         
         try:
             async for session in get_session():
-                # Load analysis efficiently
+                # Load analysis efficiently with analysis_variants
                 logger.info(f"🔍 Loading analysis {analysis_id} for user {self.user_id}")
                 analysis_query = select(GeneticAnalysis).options(
-                    selectinload(GeneticAnalysis.variants)
+                    selectinload(GeneticAnalysis.analysis_variants)
                 ).where(GeneticAnalysis.id == analysis_id)
                 
                 if self.user_id is not None:
@@ -56,7 +56,21 @@ class GeneticAnalysisJob:
                 
                 logger.info(f"📊 Analysis found: {analysis.filename}, status: {analysis.analysis_status}")
                 
-                variants = analysis.variants
+                variants = []
+                for av in analysis.analysis_variants:
+                    # Access variant data directly from denormalized AnalysisVariant
+                    variant_data = {
+                        'id': av.id,  # Use AnalysisVariant ID instead of Variant ID
+                        'rsid': av.rsid,
+                        'chromosome': av.chromosome,
+                        'position': av.position,
+                        'ref_allele': av.ref_allele,
+                        'alt_allele': av.alt_allele,
+                        'genotype': av.genotype,
+                        'quality': av.quality
+                    }
+                    variants.append(variant_data)
+                    
                 logger.info(f"🧬 Found {len(variants) if variants else 0} variants in analysis")
                 
                 # Update total_variants count if it's not set correctly
@@ -84,30 +98,59 @@ class GeneticAnalysisJob:
                 
                 logger.info(f"📊 FAST MODE: Processing {total_to_process} key variants with {api_delay}s delay")
                 
-                # Initialize tracking
-                processed_count = 0
+                # Initialize tracking - count already processed variants
+                existing_annotations = await session.execute(
+                    select(VariantAnnotation).where(VariantAnnotation.analysis_id == analysis_id)
+                )
+                already_processed_count = len(existing_annotations.scalars().all())
+                
+                processed_count = already_processed_count  # Start from existing count
                 api_calls_made = 0
                 health_risks = []
                 drug_responses = []
                 
+                logger.info(f"🔄 RESUMING: Found {already_processed_count} already processed variants, starting from variant {already_processed_count + 1}")
+                
+                # ALWAYS update the database to reflect correct starting progress, even if 0
+                initial_progress = min(int(already_processed_count / total_to_process * 100), 99) if total_to_process > 0 else 0
+                await self._update_analysis_status(
+                    analysis_id, 'processing', initial_progress,
+                    f'Resuming from {already_processed_count} processed variants',
+                    already_processed_count, total_to_process
+                )
+                
                 # FAST PROCESSING: Simple sequential with optimized delays
+                # First, get list of already processed analysis_variant IDs to skip them efficiently
+                processed_variant_ids = set()
+                if already_processed_count > 0:
+                    processed_variants_query = await session.execute(
+                        select(VariantAnnotation.analysis_variant_id).where(VariantAnnotation.analysis_id == analysis_id)
+                    )
+                    processed_variant_ids = {row[0] for row in processed_variants_query.fetchall()}
+                    logger.info(f"📋 Loaded {len(processed_variant_ids)} already processed analysis_variant IDs for fast skipping")
+                
                 for i, variant in enumerate(variants_to_process):
                     try:
-                        logger.info(f"🧬 Processing variant {i+1}/{total_to_process}: {variant.rsid}")
-                        
-                        # Check if already processed (skip duplicates)
-                        if await self._variant_already_processed(session, variant, analysis_id):
-                            processed_count += 1
-                            logger.info(f"⏭️ Skipped {variant.rsid} - already processed")
+                        # Fast check if already processed using pre-loaded set
+                        if variant['id'] in processed_variant_ids:
+                            logger.info(f"⏭️ Skipped {variant['rsid'] or f'chr{variant['chromosome']}:{variant['position']}'} - already processed (ID: {variant['id']})")
                             continue
                         
-                        # Fast annotation call with timing
+                        # Skip variants without RSIDs (can't annotate them)
+                        if not variant['rsid'] or variant['rsid'] == 'None':
+                            logger.warning(f"⚠️ Skipping variant {variant['id']} at chr{variant['chromosome']}:{variant['position']} - no RSID")
+                            processed_count += 1
+                            continue
+                        
+                        logger.info(f"🧬 Processing NEW variant {processed_count + 1}/{total_to_process}: {variant['rsid']}")
+                        
+                        # Fast annotation call with timing - ENSEMBL ONLY to avoid rate limiting
                         start_time = time.time()
-                        annotation = await self.api_service.annotate_variant(str(variant.rsid))
+                        annotation = await self.api_service.annotate_variant(str(variant['rsid']))
                         api_time = time.time() - start_time
                         api_calls_made += 1
                         
-                        logger.info(f"⚡ Variant {variant.rsid} annotated in {api_time:.2f}s")
+                        logger.info(f"⚡ Variant {variant['rsid']} annotated in {api_time:.2f}s")
                         
                         if annotation:
                             # Save annotation data
@@ -123,6 +166,14 @@ class GeneticAnalysisJob:
                         
                         # Update progress every 10 variants
                         if processed_count % 10 == 0:
+                            # Commit the session periodically to prevent long transactions
+                            try:
+                                await session.commit()
+                                logger.info(f"💾 Committed database changes for {processed_count} variants")
+                            except Exception as e:
+                                logger.error(f"❌ Failed to commit at variant {processed_count}: {e}")
+                                await session.rollback()
+                            
                             progress = min(int(processed_count / total_to_process * 100), 99)
                             elapsed = time.time() - start_time
                             rate = processed_count / elapsed if elapsed > 0 else 0
@@ -134,19 +185,26 @@ class GeneticAnalysisJob:
                             await self._update_analysis_status(
                                 analysis_id, 'processing', progress,
                                 f'Fast processing - {processed_count}/{total_to_process} variants',
-                                processed_count
+                                processed_count, total_to_process
                             )
                         
                         # Optimized delay
                         await asyncio.sleep(api_delay)
                         
                     except Exception as e:
-                        logger.error(f"❌ Error processing {variant.rsid}: {e}")
-                        processed_count += 1
+                        logger.error(f"❌ Error processing {variant['rsid']}: {e}")
                         continue
                 
+                # Final commit for any remaining annotations
+                try:
+                    await session.commit()
+                    logger.info(f"💾 Final commit completed for {processed_count} total variants")
+                except Exception as e:
+                    logger.error(f"❌ Failed final commit: {e}")
+                    await session.rollback()
+                
                 # Finalize analysis
-                await self._finalize_analysis(session, analysis_id, health_risks, drug_responses)
+                await self._finalize_analysis(session, analysis_id, health_risks, drug_responses, processed_count, total_to_process)
                 
                 total_time = time.time() - start_time
                 rate = processed_count / total_time if total_time > 0 else 0
@@ -165,7 +223,7 @@ class GeneticAnalysisJob:
                 }
                 
         except Exception as e:
-            analysis_duration = (datetime.utcnow() - self._job_start_time).total_seconds() if hasattr(self, '_job_start_time') else 0
+            analysis_duration = (datetime.now() - self._job_start_time).total_seconds() if hasattr(self, '_job_start_time') else 0
             logger.error(f"💥 FAST ANALYSIS FAILED for analysis_id {analysis_id}: {str(e)}")
             
             try:
@@ -187,9 +245,9 @@ class GeneticAnalysisJob:
             except Exception:
                 pass
 
-    def _is_pharmacogene_variant(self, variant) -> bool:
+    def _is_pharmacogene_variant(self, variant: Dict) -> bool:
         """Check if variant is in a pharmacogene"""
-        rsid = str(variant.rsid).lower()
+        rsid = str(variant['rsid']).lower()
         return any(gene in rsid for gene in ['cyp', 'adh', 'aldh', 'comt', 'mthfr', 'apoe'])
 
     async def _process_single_variant(self, variant, analysis_id: int, session: AsyncSession) -> Dict:
@@ -227,7 +285,7 @@ class GeneticAnalysisJob:
         """Check if variant already has annotation data"""
         try:
             query = select(VariantAnnotation).where(
-                VariantAnnotation.variant_id == variant.id,
+                VariantAnnotation.analysis_variant_id == variant['id'],
                 VariantAnnotation.analysis_id == analysis_id
             )
             result = await session.execute(query)
@@ -235,23 +293,24 @@ class GeneticAnalysisJob:
         except Exception:
             return False
 
-    async def _save_variant_annotation(self, session: AsyncSession, variant, annotation: Dict, 
+    async def _save_variant_annotation(self, session: AsyncSession, variant: Dict, annotation: Dict, 
                                      analysis_id: int, api_call_number: int):
         """Save variant annotation to database"""
         try:
             variant_annotation = VariantAnnotation(
-                variant_id=variant.id,
+                analysis_variant_id=variant['id'],  # Now using AnalysisVariant ID
                 analysis_id=analysis_id,
-                rsid=variant.rsid or f"chr{variant.chromosome}:{variant.position}",
+                rsid=variant['rsid'] or f"chr{variant['chromosome']}:{variant['position']}",
                 ensembl_data=annotation.get('ensembl', {}),
                 clinvar_data=annotation.get('clinvar', {}),
                 pharmgkb_data=annotation.get('pharmgkb', {}),
-                api_calls_made=api_call_number
+                api_calls_made=api_call_number,
+                annotation_status='completed'
             )
             session.add(variant_annotation)
             # Don't commit here - let the main process handle commits
         except Exception as e:
-            logger.error(f"❌ Failed to save annotation for variant {variant.id}: {e}")
+            logger.error(f"❌ Failed to save annotation for variant {variant['id']}: {e}")
             await session.rollback()
 
     async def _generate_drug_response(self, variant, annotation: Dict) -> Optional[Dict]:
@@ -260,15 +319,15 @@ class GeneticAnalysisJob:
             # Simple drug response logic for speed
             if annotation and 'annotations' in annotation:
                 return {
-                    'variant_id': variant.id,
+                    'analysis_variant_id': variant['id'],  # Now using AnalysisVariant ID
                     'drug_class': 'metabolizer_enzyme',
                     'response_type': 'metabolic_rate',
                     'confidence': 'medium',
                     'recommendation': 'Consult pharmacist for dosing guidance',
-                    'created_at': datetime.utcnow()
+                    'created_at': datetime.now()
                 }
         except Exception as e:
-            logger.error(f"❌ Failed to generate drug response for {variant.rsid}: {e}")
+            logger.error(f"❌ Failed to generate drug response for {variant['rsid']}: {e}")
         return None
 
     async def _update_analysis_status(self, analysis_id: int, status: str, 
@@ -301,7 +360,7 @@ class GeneticAnalysisJob:
             logger.error(f"❌ Failed to update analysis status: {e}")
 
     async def _finalize_analysis(self, session: AsyncSession, analysis_id: int, 
-                               health_risks: List, drug_responses: List):
+                               health_risks: List, drug_responses: List, processed_count: int = 0, total_count: int = 0):
         """Finalize analysis and save results"""
         try:
             # Save drug responses
@@ -314,7 +373,7 @@ class GeneticAnalysisJob:
             # Final status update
             await self._update_analysis_status(
                 analysis_id, 'completed', 100, 
-                'Analysis completed successfully', 0
+                'Analysis completed successfully', processed_count, total_count
             )
             
             logger.info(f"✅ Analysis {analysis_id} finalized successfully")

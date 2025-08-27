@@ -113,7 +113,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
       if (!token || !analysisId) return
 
       try {
-        const response = await fetch(`http://localhost:8000/api/analysis/${analysisId}/progress`, {
+        const response = await fetch(`http://localhost:8000/api/analysis/status/${analysisId}`, {
           headers: { 'Authorization': `Bearer ${token}` }
         })
         if (response.ok) {
@@ -370,7 +370,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
     if (!token || !analysisId) return
 
     try {
-      const response = await fetch(`http://localhost:8000/api/analysis/${analysisId}/progress`, {
+      const response = await fetch(`http://localhost:8000/api/analysis/status/${analysisId}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       if (response.ok) {
@@ -392,7 +392,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
         if (hasCompletedResults || shouldBeCompleted) {
           // Auto-fix status mismatch
           console.log('Status mismatch detected, auto-correcting...')
-          const resetResponse = await fetch(`http://localhost:8000/api/analysis/${analysisId}/reset-status`, {
+          const resetResponse = await fetch(`http://localhost:8000/api/analysis/cancel/${analysisId}`, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${token}` }
           })
@@ -453,7 +453,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
     try {
       setIsAnalysisRunning(true)
       console.log(`Starting analysis for ID: ${analysisId}`)
-      const response = await fetch(`http://localhost:8000/api/analysis/${analysisId}/start`, {
+      const response = await fetch(`http://localhost:8000/api/analysis/start/${analysisId}`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       })
@@ -518,7 +518,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
     try {
       console.log(`Stopping analysis for ID: ${analysisId}`)
-      const response = await fetch(`http://localhost:8000/api/analysis/${analysisId}/stop`, {
+      const response = await fetch(`http://localhost:8000/api/analysis/cancel/${analysisId}`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       })
@@ -554,7 +554,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
     try {
       console.log(`Pausing analysis for ID: ${analysisId}`)
-      const response = await fetch(`http://localhost:8000/api/analysis/${analysisId}/pause`, {
+      const response = await fetch(`http://localhost:8000/api/analysis/pause/${analysisId}`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       })
@@ -591,7 +591,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
     try {
       setIsAnalysisRunning(true)
       console.log(`Resuming analysis for ID: ${analysisId}`)
-      const response = await fetch(`http://localhost:8000/api/analysis/${analysisId}/resume`, {
+      const response = await fetch(`http://localhost:8000/api/analysis/resume/${analysisId}`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       })
@@ -640,7 +640,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
     },
     {
       title: 'Variants Analyzed',
-      value: data?.analysis_results?.variants_actually_processed || data?.processed_variants || 0,
+      value: data?.summary?.analyzed_variants || data?.analysis_results?.variants_actually_processed || data?.processed_variants || 0,
       icon: BarChart3,
       color: getThemeClass('text-blue-600', isDarkMode),
       bgColor: getThemeClass('bg-blue-50', isDarkMode)
@@ -654,7 +654,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
     },
     {
       title: 'Insights Found',
-      value: (data?.analysis_results?.insights_generated || 0) + (data?.analysis_results?.drug_responses_generated || 0),
+      value: data?.summary?.insights_found || (data?.analysis_results?.insights_generated || 0) + (data?.analysis_results?.drug_responses_generated || 0),
       icon: TrendingUp,
       color: getThemeClass('text-purple-600', isDarkMode),
       bgColor: getThemeClass('bg-purple-50', isDarkMode)
@@ -1018,11 +1018,11 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                   </div>
                   
                   <div className="space-y-4">
-                    {data && typeof data === 'object' && data.real_data && data.real_data.variants && Array.isArray(data.real_data.variants) && data.real_data.variants.length > 0 ? (
+                    {data && data.summary && data.summary.total_variants > 0 ? (
                       <>
                         <div className={`${theme.glass} border ${theme.glassBorder} rounded-xl p-4 text-center`}>
                           <div className="text-3xl font-bold text-green-600 mb-1">
-                            {data?.real_data?.variants?.length || 0}
+                            {data?.summary?.total_variants || 0}
                           </div>
                           <div className={`text-sm ${theme.text.secondary}`}>DNA Variants</div>
                         </div>

@@ -6,7 +6,7 @@ from alembic import context
 
 # Import your models here
 from backend.db.database import Base
-from backend.db.models import User, GeneticAnalysis, GeneticVariant, HealthRisk, DrugResponse
+from backend.db.models import *  # Import all models for Alembic auto-detection
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

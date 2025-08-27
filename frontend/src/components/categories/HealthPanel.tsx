@@ -101,7 +101,7 @@ export default function HealthPanel({ isDarkMode = false, theme, data, token }: 
       
       setLoading(true)
       try {
-        const response = await fetch('http://localhost:8000/analyze/health-risks', {
+        const response = await fetch('http://localhost:8000/api/analysis/dashboard-data', {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',

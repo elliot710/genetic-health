@@ -80,17 +80,22 @@ async def lookup_variant(
         )
     
     try:
-        async with GeneticAPIService() as api_service:
+        # Initialize API service
+        api_service = GeneticAPIService()
+        await api_service.initialize()
+        
+        try:
             # Get comprehensive annotation
             annotation_result = await api_service.annotate_variant(variant_id)
             
-            if 'error' in annotation_result:
+            if not annotation_result or 'error' in annotation_result:
+                error_msg = annotation_result.get('error', 'Unknown error') if annotation_result else 'No data returned'
                 return VariantLookupResponse(
                     variant_id=variant_id,
                     found=False,
                     source="Multiple databases",
                     search_timestamp=datetime.now().isoformat(),
-                    basic_info={"error": annotation_result['error']},
+                    basic_info={"error": error_msg},
                     clinical_significance=[],
                     population_data={},
                     pharmacogenomics={},
@@ -180,6 +185,13 @@ async def lookup_variant(
                 external_links=external_links,
                 annotations=annotations
             )
+            
+        finally:
+            # Clean up API service
+            try:
+                await api_service.close()
+            except Exception:
+                pass
             
     except Exception as e:
         raise HTTPException(

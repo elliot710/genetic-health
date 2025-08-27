@@ -61,76 +61,57 @@ export default function ModernFileUpload({ onAnalysisComplete, token, isDarkMode
       setUploadStatus('processing')
       setProgress(0)
 
-      // Trigger background analysis automatically
-      try {
-        await fetch(`http://localhost:8000/upload/trigger-analysis/${uploadResult.analysis_id}`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        })
-      } catch (triggerError) {
-        console.log('Analysis trigger failed, continuing with existing data:', triggerError)
-      }
+      // Analysis is automatically queued by the upload endpoint
+      console.log('Upload successful, analysis queued automatically:', uploadResult)
 
       // Simulate analysis progress
       const analysisInterval = setInterval(() => {
         setProgress(prev => Math.min(prev + 15, 90))
       }, 300)
 
-      // Get the actual analysis data from the uploaded file instead of calling the mocked analysis endpoint
+      // Wait for simulated analysis time
+      setTimeout(() => {
+        clearInterval(analysisInterval)
+        setProgress(100)
+      }, 2000)
+
+      // Use the upload result stats instead of trying to fetch incomplete analysis
       const analysisId = uploadResult.analysis_id
       
-      // Fetch the real analysis results from the database
-      const analysisResponse = await fetch(`http://localhost:8000/upload/analysis/${analysisId}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      })
-
-      clearInterval(analysisInterval)
-      setProgress(100)
-
-      if (!analysisResponse.ok) {
-        const errorData = await analysisResponse.json()
-        throw new Error(errorData.detail || 'Failed to fetch analysis results')
-      }
-
-      const analysisResult = await analysisResponse.json()
-      
-      // Transform the real data into the format expected by Dashboard
+      // Transform the upload stats into the format expected by Dashboard
       const dashboardData = {
         summary: {
-          total_variants: analysisResult.sample_variants?.length || uploadResult.genetic_variants_found || uploadResult.total_rows,
-          data_sources: [uploadResult.filename],
+          total_variants: uploadResult.stats?.total_variants || 0,
+          new_variants: uploadResult.stats?.new_variants || 0,
+          reused_variants: uploadResult.stats?.reused_variants || 0,
+          data_sources: [file.name],
           analysis_id: analysisId,
           upload_info: uploadResult
         },
         health_risks: {
           overall_score: 85, // Will be updated when background analysis completes
-          risk_categories: analysisResult.health_risks?.reduce((acc: any, risk: any) => {
-            acc[risk.condition] = {
-              score: risk.risk_level === 'high' ? 90 : risk.risk_level === 'moderate' ? 60 : 30,
-              variants: risk.associated_variants || []
-            }
-            return acc
-          }, {}) || {}
+          risk_categories: {}  // Will be populated when analysis completes
         },
         drug_interactions: {
-          high_risk_genes: analysisResult.drug_responses?.filter((dr: any) => dr.response_type === 'poor_metabolizer').map((dr: any) => dr.gene) || [],
-          moderate_risk_genes: analysisResult.drug_responses?.filter((dr: any) => dr.response_type === 'intermediate_metabolizer').map((dr: any) => dr.gene) || [],
-          affected_drug_classes: [...new Set(analysisResult.drug_responses?.map((dr: any) => dr.drug) || [])]
+          high_risk_genes: [],
+          moderate_risk_genes: [],
+          affected_drug_classes: []
         },
         recommendations: [
-          `Successfully uploaded ${uploadResult.filename} with ${uploadResult.genetic_variants_found || uploadResult.total_rows} data points`,
-          ...(analysisResult.health_risks?.map((risk: any) => risk.recommendations).flat() || []),
+          `Successfully uploaded ${file.name} with ${uploadResult.stats?.total_variants || 0} variants processed`,
+          uploadResult.stats?.reused_variants > 0 
+            ? `Efficiency: ${uploadResult.stats.reused_variants} variants were reused from existing database (deduplication active)`
+            : "All variants were new to the database",
+          `Processing complete: ${uploadResult.stats?.new_variants || 0} new variants stored`,
           "Genetic analysis is processing in the background - refresh for updated results",
           "Consult with a healthcare provider for personalized recommendations"
         ],
         real_data: {
-          variants: analysisResult.sample_variants || [],
-          analysis: analysisResult.analysis,
+          variants: [],
+          analysis: {
+            status: "processing",
+            message: "Background analysis in progress"
+          },
           upload_result: uploadResult
         }
       }
@@ -144,7 +125,7 @@ export default function ModernFileUpload({ onAnalysisComplete, token, isDarkMode
       setTimeout(async () => {
         try {
           // Fetch the updated dashboard data which includes the new upload
-          const dashboardResponse = await fetch('http://localhost:8000/analyze/dashboard-data', {
+          const dashboardResponse = await fetch('http://localhost:8000/api/analysis/dashboard-data', {
             headers: {
               'Authorization': `Bearer ${token}`
             }

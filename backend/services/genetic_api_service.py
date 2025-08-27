@@ -1,1261 +1,581 @@
 """
-External API integrations for genetic variant annotation and drug response
-Includes NCBI E-utilities, LitVar, SNPedia, ClinVar, and Ensembl APIs
-Uses centralized endpoint configuration
+Optimized genetic API service with connection pooling, rate limiting, and batch processing.
 """
-import aiohttp
 import asyncio
-import xml.etree.ElementTree as ET
+import aiohttp
+import logging
+import time
 from typing import Dict, List, Any, Optional
-import re
-from .api_endpoints import APIEndpoints
+from dataclasses import dataclass
+from asyncio import Semaphore
 
-class GeneticAPIService:
-    def __init__(self):
-        self.session: Optional[aiohttp.ClientSession] = None
-        self.endpoints = APIEndpoints()
-        
-    async def __aenter__(self):
-        self.session = aiohttp.ClientSession()
-        return self
-        
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self.session:
-            await self.session.close()
+from ..core.config import settings
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class APIEndpoint:
+    """Configuration for an API endpoint."""
+    url: str
+    headers: Optional[Dict[str, str]] = None
+    timeout: float = 30.0
+    rate_limit: float = 1.0  # requests per second
+    max_retries: int = 3
+
+
+@dataclass
+class APIResponse:
+    """Standardized API response."""
+    success: bool
+    data: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    status_code: Optional[int] = None
+    response_time: float = 0.0
+
+
+class RateLimiter:
+    """Rate limiter for API requests."""
     
-    async def _ensure_session(self):
-        """Ensure session is initialized"""
-        if self.session is None:
-            self.session = aiohttp.ClientSession()
+    def __init__(self, rate: float):
+        self.rate = rate  # requests per second
+        self.min_interval = 1.0 / rate if rate > 0 else 0
+        self.last_request = 0.0
+        self._lock = asyncio.Lock()
+    
+    async def acquire(self):
+        """Acquire permission to make a request."""
+        async with self._lock:
+            now = time.time()
+            time_since_last = now - self.last_request
+            
+            if time_since_last < self.min_interval:
+                sleep_time = self.min_interval - time_since_last
+                await asyncio.sleep(sleep_time)
+            
+            self.last_request = time.time()
+
+
+class ConnectionPool:
+    """Manages HTTP connections with pooling."""
+    
+    def __init__(self, max_connections: int = 20):
+        self.max_connections = max_connections
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._connector: Optional[aiohttp.TCPConnector] = None
+        self._semaphore = Semaphore(max_connections)
+    
+    async def __aenter__(self):
+        await self.initialize()
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+    
+    async def initialize(self):
+        """Initialize the connection pool."""
+        if self._session is None:
+            self._connector = aiohttp.TCPConnector(
+                limit=self.max_connections,
+                limit_per_host=5,
+                ttl_dns_cache=300,
+                use_dns_cache=True,
+            )
+            
+            timeout = aiohttp.ClientTimeout(total=settings.api.timeout)
+            self._session = aiohttp.ClientSession(
+                connector=self._connector,
+                timeout=timeout
+            )
+        
+        return self._session
+    
+    async def get_session(self) -> aiohttp.ClientSession:
+        """Get a session from the pool."""
+        if self._session is None:
+            await self.initialize()
+        assert self._session is not None  # Help type checker
+        return self._session
     
     async def close(self):
-        """Close the HTTP session"""
-        if self.session:
-            await self.session.close()
-            self.session = None
+        """Close the connection pool."""
+        if self._session:
+            await self._session.close()
+            self._session = None
+        
+        if self._connector:
+            await self._connector.close()
+            self._connector = None
 
-    async def _make_api_request(self, service: str, endpoint_name: str, params: Optional[Dict] = None, **url_params) -> Dict[str, Any]:
-        """
-        Generic method to make API requests using endpoint configurations
-        """
-        try:
-            await self._ensure_session()
-            if self.session is None:
-                return {'error': 'Failed to initialize HTTP session'}
+
+class OptimizedGeneticAPIService:
+    """Optimized genetic API service with advanced features."""
+    
+    def __init__(self):
+        self.connection_pool = ConnectionPool(max_connections=settings.api.max_concurrent * 2)
+        self.rate_limiters: Dict[str, RateLimiter] = {}
+        self.endpoints = self._initialize_endpoints()
+        self._cache: Dict[str, APIResponse] = {}
+        self._initialized = False
+    
+    async def __aenter__(self):
+        await self.initialize()
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+    
+    async def initialize(self):
+        """Initialize the service."""
+        if not self._initialized:
+            await self.connection_pool.initialize()
+            self._initialized = True
+    
+    async def close(self):
+        """Close the service and clean up resources."""
+        await self.connection_pool.close()
+        self._cache.clear()
+        self._initialized = False
+    
+    def _initialize_endpoints(self) -> Dict[str, APIEndpoint]:
+        """Initialize API endpoint configurations."""
+        return {
+            'ensembl_vep': APIEndpoint(
+                url='https://rest.ensembl.org/vep/human/id/{rsid}',
+                headers={'Content-Type': 'application/json'},
+                rate_limit=15.0,  # Ensembl allows 15 requests/second
+                timeout=30.0
+            ),
+            'clinvar': APIEndpoint(
+                url='https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi',
+                rate_limit=3.0,  # NCBI default rate limit
+                timeout=30.0
+            ),
+            'pharmgkb': APIEndpoint(
+                url='https://api.pharmgkb.org/v1/data/variant/{rsid}',
+                headers={'Content-Type': 'application/json'},
+                rate_limit=10.0,
+                timeout=30.0
+            ),
+            'snpedia': APIEndpoint(
+                url='https://bots.snpedia.com/api.php',
+                rate_limit=1.0,  # Conservative rate for SNPedia
+                timeout=30.0
+            )
+        }
+    
+    def _get_rate_limiter(self, endpoint_name: str) -> RateLimiter:
+        """Get or create a rate limiter for an endpoint."""
+        if endpoint_name not in self.rate_limiters:
+            endpoint = self.endpoints.get(endpoint_name)
+            rate = endpoint.rate_limit if endpoint else 1.0
+            self.rate_limiters[endpoint_name] = RateLimiter(rate)
+        
+        return self.rate_limiters[endpoint_name]
+    
+    async def _make_request(
+        self,
+        endpoint_name: str,
+        url: str,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        method: str = 'GET'
+    ) -> APIResponse:
+        """Make an HTTP request with rate limiting and retries."""
+        if not self._initialized:
+            await self.initialize()
+        
+        endpoint = self.endpoints.get(endpoint_name)
+        if not endpoint:
+            return APIResponse(
+                success=False,
+                error=f"Unknown endpoint: {endpoint_name}"
+            )
+        
+        # Check cache first
+        cache_key = f"{endpoint_name}:{url}:{str(params)}"
+        if cache_key in self._cache:
+            cached_response = self._cache[cache_key]
+            # Use cached response if it's less than 1 hour old
+            if time.time() - cached_response.response_time < 3600:
+                return cached_response
+        
+        rate_limiter = self._get_rate_limiter(endpoint_name)
+        session = await self.connection_pool.get_session()
+        
+        # Merge headers
+        request_headers = endpoint.headers.copy() if endpoint.headers else {}
+        if headers:
+            request_headers.update(headers)
+        
+        start_time = time.time()
+        
+        for attempt in range(endpoint.max_retries):
+            try:
+                await rate_limiter.acquire()
+                
+                async with self.connection_pool._semaphore:
+                    timeout = aiohttp.ClientTimeout(total=endpoint.timeout)
+                    
+                    async with session.request(
+                        method=method,
+                        url=url,
+                        params=params,
+                        headers=request_headers,
+                        timeout=timeout
+                    ) as response:
+                        response_time = time.time() - start_time
+                        
+                        if response.status == 200:
+                            try:
+                                if 'application/json' in response.headers.get('content-type', ''):
+                                    data = await response.json()
+                                else:
+                                    content = await response.text()
+                                    data = {'content': content, 'content_type': response.headers.get('content-type')}
+                                
+                                api_response = APIResponse(
+                                    success=True,
+                                    data=data,
+                                    status_code=response.status,
+                                    response_time=response_time
+                                )
+                                
+                                # Cache successful responses
+                                self._cache[cache_key] = api_response
+                                return api_response
+                                
+                            except Exception as e:
+                                logger.error(f"Error parsing response from {endpoint_name}: {e}")
+                                return APIResponse(
+                                    success=False,
+                                    error=f"Response parsing error: {str(e)}",
+                                    status_code=response.status,
+                                    response_time=response_time
+                                )
+                        
+                        elif response.status == 429:  # Rate limited
+                            if attempt < endpoint.max_retries - 1:
+                                wait_time = (2 ** attempt) * 1.0  # Exponential backoff
+                                logger.warning(f"Rate limited by {endpoint_name}, waiting {wait_time}s")
+                                await asyncio.sleep(wait_time)
+                                continue
+                            else:
+                                return APIResponse(
+                                    success=False,
+                                    error="Rate limit exceeded",
+                                    status_code=response.status,
+                                    response_time=response_time
+                                )
+                        
+                        else:
+                            error_msg = f"HTTP {response.status}"
+                            try:
+                                error_text = await response.text()
+                                if error_text:
+                                    error_msg += f": {error_text[:200]}"
+                            except Exception:
+                                pass
+                            
+                            if attempt < endpoint.max_retries - 1:
+                                wait_time = (2 ** attempt) * 0.5
+                                await asyncio.sleep(wait_time)
+                                continue
+                            else:
+                                return APIResponse(
+                                    success=False,
+                                    error=error_msg,
+                                    status_code=response.status,
+                                    response_time=response_time
+                                )
             
-            endpoint = self.endpoints.get_endpoint(service, endpoint_name)
-            if not endpoint:
-                return {'error': f'Unknown endpoint: {service}.{endpoint_name}'}
-            
-            # Format URL with parameters
-            url = self.endpoints.format_url(endpoint.url, **url_params) if url_params else endpoint.url
-            
-            # Prepare headers
-            headers = endpoint.headers or {}
-            
-            # Create timeout object
-            timeout = aiohttp.ClientTimeout(total=endpoint.timeout)
-            
-            async with self.session.get(url, params=params, headers=headers, timeout=timeout) as response:
-                if response.status == 200:
-                    if 'application/json' in response.headers.get('content-type', ''):
-                        return await response.json()
-                    else:
-                        text_content = await response.text()
-                        return {'content': text_content, 'content_type': response.headers.get('content-type')}
+            except asyncio.TimeoutError:
+                if attempt < endpoint.max_retries - 1:
+                    wait_time = (2 ** attempt) * 1.0
+                    logger.warning(f"Timeout for {endpoint_name}, retrying in {wait_time}s")
+                    await asyncio.sleep(wait_time)
+                    continue
                 else:
-                    return {'error': f'{service} API failed with status {response.status}', 'status': response.status}
-                    
-        except Exception as e:
-            return {'error': f'{service} API error: {str(e)}'}
-
-    async def ncbi_esearch(self, database: str, term: str, retmax: int = 20) -> Dict[str, Any]:
-        """
-        Use NCBI E-utilities ESearch to find UIDs for a search term
-        """
-        params = {
-            'db': database,
-            'term': term,
-            'retmode': 'json',
-            'retmax': retmax,
-            'usehistory': 'y'
+                    return APIResponse(
+                        success=False,
+                        error="Request timeout",
+                        response_time=time.time() - start_time
+                    )
+            
+            except Exception as e:
+                if attempt < endpoint.max_retries - 1:
+                    wait_time = (2 ** attempt) * 1.0
+                    logger.warning(f"Error with {endpoint_name}: {e}, retrying in {wait_time}s")
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    return APIResponse(
+                        success=False,
+                        error=f"Request failed: {str(e)}",
+                        response_time=time.time() - start_time
+                    )
+        
+        return APIResponse(
+            success=False,
+            error="Max retries exceeded",
+            response_time=time.time() - start_time
+        )
+    
+    async def annotate_variant(self, rsid: str) -> Optional[Dict[str, Any]]:
+        """Get comprehensive annotation for a variant."""
+        if not rsid or not rsid.startswith('rs'):
+            return None
+        
+        # Run all annotation sources concurrently
+        # Temporarily disable PharmGKB to avoid rate limiting
+        tasks = [
+            self._get_ensembl_annotation(rsid),
+            self._get_clinvar_annotation(rsid),
+            # self._get_pharmgkb_annotation(rsid),  # Disabled temporarily
+        ]
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        annotation = {
+            'rsid': rsid,
+            'annotations': {},
+            'sources_queried': ['ensembl', 'clinvar'],  # Removed pharmgkb
+            'success_count': 0
         }
         
-        # Add API key if available (for increased rate limits: 3 -> 10 requests/second)
-        if self.endpoints.NCBI_API_KEY:
-            params['api_key'] = self.endpoints.NCBI_API_KEY
+        # Process Ensembl result
+        if not isinstance(results[0], Exception) and results[0]:
+            annotation['annotations']['ensembl'] = results[0]
+            annotation['success_count'] += 1
         
-        result = await self._make_api_request('ncbi', 'esearch', params=params)
+        # Process ClinVar result
+        if not isinstance(results[1], Exception) and results[1]:
+            annotation['annotations']['clinvar'] = results[1]
+            annotation['success_count'] += 1
         
-        if 'error' not in result:
-            # Parse the response
-            search_result = result.get('esearchresult', {})
+        # PharmGKB processing disabled temporarily to avoid rate limiting
+        # if not isinstance(results[2], Exception) and results[2]:
+        #     annotation['annotations']['pharmgkb'] = results[2]
+        #     annotation['success_count'] += 1
+        
+        return annotation if annotation['success_count'] > 0 else None
+    
+    async def annotate_variant_minimal(self, rsid: str) -> Optional[Dict[str, Any]]:
+        """Get minimal annotation for fast processing."""
+        if not rsid or not rsid.startswith('rs'):
+            return None
+        
+        # Only use Ensembl for minimal annotation
+        ensembl_result = await self._get_ensembl_annotation(rsid)
+        
+        if ensembl_result:
             return {
-                'database': database,
-                'term': term,
-                'count': int(search_result.get('count', 0)),
-                'ids': search_result.get('idlist', []),
-                'webenv': search_result.get('webenv'),
-                'query_key': search_result.get('querykey')
-            }
-        
-        return result
-
-    async def ncbi_efetch(self, database: str, ids: List[str], rettype: str = 'xml') -> Dict[str, Any]:
-        """
-        Use NCBI E-utilities EFetch to retrieve full records for given UIDs
-        """
-        params = {
-            'db': database,
-            'id': ','.join(ids),
-            'rettype': rettype,
-            'retmode': 'xml' if rettype == 'xml' else 'text'
-        }
-        
-        # Add API key if available (for increased rate limits: 3 -> 10 requests/second)
-        if self.endpoints.NCBI_API_KEY:
-            params['api_key'] = self.endpoints.NCBI_API_KEY
-        
-        result = await self._make_api_request('ncbi', 'efetch', params=params)
-        
-        if 'error' not in result:
-            return {
-                'database': database,
-                'xml_content' if rettype == 'xml' else 'content': result.get('content', '')
-            }
-        
-        return result
-
-    async def get_variant_info_from_clinvar(self, rsid: str) -> Dict[str, Any]:
-        """
-        Get variant information from ClinVar using NCBI E-utilities
-        """
-        try:
-            # Search for the variant in ClinVar
-            search_result = await self.ncbi_esearch('clinvar', rsid)
-            
-            if search_result.get('error'):
-                return search_result
-                
-            if not search_result.get('ids'):
-                return {'source': 'ClinVar', 'rsid': rsid, 'found': False, 'message': 'No entries found'}
-            
-            # Fetch detailed information
-            fetch_result = await self.ncbi_efetch('clinvar', search_result['ids'][:5])  # Limit to first 5
-            
-            if fetch_result.get('error'):
-                return fetch_result
-                
-            # Parse XML content (simplified parsing)
-            clinvar_data = {
-                'source': 'ClinVar',
                 'rsid': rsid,
-                'found': True,
-                'entry_count': len(search_result['ids']),
-                'entries': []
+                'annotations': {'ensembl': ensembl_result},
+                'sources_queried': ['ensembl'],
+                'success_count': 1
             }
-            
-            if 'xml_content' in fetch_result:
-                try:
-                    root = ET.fromstring(fetch_result['xml_content'])
-                    for variation_set in root.findall('.//VariationArchive'):
-                        entry = {
-                            'accession': variation_set.get('Accession'),
-                            'version': variation_set.get('Version'),
-                            'variation_id': variation_set.get('VariationID'),
-                            'clinical_significance': [],
-                            'conditions': []
-                        }
-                        
-                        # Extract clinical significance
-                        for clin_sig in variation_set.findall('.//ClinicalSignificance'):
-                            description = clin_sig.find('.//Description')
-                            if description is not None:
-                                entry['clinical_significance'].append(description.text)
-                        
-                        # Extract associated conditions
-                        for trait in variation_set.findall('.//Trait'):
-                            name_elem = trait.find('.//Name/ElementValue')
-                            if name_elem is not None:
-                                entry['conditions'].append(name_elem.text)
-                        
-                        clinvar_data['entries'].append(entry)
-                        
-                except ET.ParseError:
-                    clinvar_data['parse_error'] = 'XML parsing error occurred'
-            
-            return clinvar_data
-            
-        except Exception as e:
-            return {'error': f'ClinVar API error: {str(e)}'}
-
-    async def get_litvar_publications(self, rsid: str) -> Dict[str, Any]:
-        """
-        Get publications related to a variant from LitVar API (with PubMed fallback)
-        """
+        
+        return None
+    
+    async def annotate_variant_comprehensive(self, rsid: str) -> Optional[Dict[str, Any]]:
+        """Get comprehensive annotation with all sources."""
+        if not rsid or not rsid.startswith('rs'):
+            return None
+        
+        # Run all sources including SNPedia
+        tasks = [
+            self._get_ensembl_annotation(rsid),
+            self._get_clinvar_annotation(rsid),
+            self._get_pharmgkb_annotation(rsid),
+            self._get_snpedia_annotation(rsid),
+        ]
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        annotation = {
+            'rsid': rsid,
+            'annotations': {},
+            'sources_queried': ['ensembl', 'clinvar', 'pharmgkb', 'snpedia'],
+            'success_count': 0
+        }
+        
+        source_names = ['ensembl', 'clinvar', 'pharmgkb', 'snpedia']
+        for i, result in enumerate(results):
+            if not isinstance(result, Exception) and result:
+                annotation['annotations'][source_names[i]] = result
+                annotation['success_count'] += 1
+        
+        return annotation if annotation['success_count'] > 0 else None
+    
+    async def _get_ensembl_annotation(self, rsid: str) -> Optional[Dict[str, Any]]:
+        """Get Ensembl VEP annotation."""
         try:
-            await self._ensure_session()
-            if self.session is None:
-                return {'error': 'Failed to initialize HTTP session'}
-                
-            # Search for variant in LitVar
-            params = {
-                'query': rsid,
-                'format': 'json'
-            }
+            url = self.endpoints['ensembl_vep'].url.format(rsid=rsid)
+            response = await self._make_request('ensembl_vep', url)
             
-            result = await self._make_api_request('litvar', 'variant_search', params=params)
-            
-            if 'error' not in result:
-                litvar_result = {
-                    'source': 'LitVar',
-                    'rsid': rsid,
-                    'publications': [],
-                    'total_publications': 0
-                }
-                
-                if 'results' in result and result['results']:
-                    for res in result['results'][:10]:  # Limit to first 10
-                        pub_info = {
-                            'pmid': res.get('pmid'),
-                            'title': res.get('title'),
-                            'authors': res.get('authors', []),
-                            'journal': res.get('journal'),
-                            'pub_date': res.get('pub_date'),
-                            'abstract': res.get('abstract', '')[:500] + '...' if res.get('abstract') and len(res.get('abstract', '')) > 500 else res.get('abstract')
-                        }
-                        litvar_result['publications'].append(pub_info)
-                    
-                    litvar_result['total_publications'] = len(result['results'])
-                
-                return litvar_result
-            else:
-                # Fallback to PubMed search
-                return await self.search_pubmed_for_variant(rsid)
-                    
-        except Exception:
-            # LitVar API might not be available, so we'll use PubMed search as fallback
-            return await self.search_pubmed_for_variant(rsid)
-
-    async def search_pubmed_for_variant(self, rsid: str) -> Dict[str, Any]:
-        """
-        Search PubMed for publications mentioning a specific variant using NCBI E-utilities
-        """
-        try:
-            # Search PubMed for the rsID
-            search_term = f'"{rsid}"[All Fields] OR "{rsid}"[Title/Abstract]'
-            search_result = await self.ncbi_esearch('pubmed', search_term, retmax=10)
-            
-            if search_result.get('error'):
-                return search_result
-                
-            if not search_result.get('ids'):
+            if response.success and response.data:
                 return {
-                    'source': 'PubMed',
-                    'rsid': rsid,
-                    'publications': [],
-                    'total_publications': 0,
-                    'message': 'No publications found'
+                    'found': True,
+                    'source': 'ensembl',
+                    'data': response.data
                 }
             
-            # Fetch publication details
-            fetch_result = await self.ncbi_efetch('pubmed', search_result['ids'], rettype='xml')
-            
-            pubmed_result = {
-                'source': 'PubMed',
-                'rsid': rsid,
-                'publications': [],
-                'total_publications': search_result.get('count', 0)
-            }
-            
-            if 'xml_content' in fetch_result:
-                try:
-                    root = ET.fromstring(fetch_result['xml_content'])
-                    for article in root.findall('.//PubmedArticle'):
-                        pub_info = {
-                            'pmid': '',
-                            'title': '',
-                            'authors': [],
-                            'journal': '',
-                            'pub_date': '',
-                            'abstract': ''
-                        }
-                        
-                        # Extract PMID
-                        pmid_elem = article.find('.//PMID')
-                        if pmid_elem is not None:
-                            pub_info['pmid'] = pmid_elem.text
-                        
-                        # Extract title
-                        title_elem = article.find('.//ArticleTitle')
-                        if title_elem is not None:
-                            pub_info['title'] = title_elem.text or ''
-                        
-                        # Extract authors
-                        for author in article.findall('.//Author'):
-                            last_name = author.find('.//LastName')
-                            first_name = author.find('.//ForeName')
-                            if last_name is not None and last_name.text:
-                                author_name = last_name.text
-                                if first_name is not None and first_name.text:
-                                    author_name += f", {first_name.text}"
-                                pub_info['authors'].append(author_name)
-                        
-                        # Extract journal
-                        journal_elem = article.find('.//Journal/Title')
-                        if journal_elem is not None:
-                            pub_info['journal'] = journal_elem.text
-                        
-                        # Extract publication date
-                        pub_date_elem = article.find('.//PubDate/Year')
-                        if pub_date_elem is not None:
-                            pub_info['pub_date'] = pub_date_elem.text
-                        
-                        # Extract abstract
-                        abstract_elem = article.find('.//Abstract/AbstractText')
-                        if abstract_elem is not None:
-                            abstract_text = abstract_elem.text or ''
-                            pub_info['abstract'] = abstract_text[:500] + '...' if len(abstract_text) > 500 else abstract_text
-                        
-                        pubmed_result['publications'].append(pub_info)
-                        
-                except ET.ParseError:
-                    pubmed_result['parse_error'] = 'XML parsing error occurred'
-            
-            return pubmed_result
+            return {'found': False, 'source': 'ensembl', 'error': response.error}
             
         except Exception as e:
-            return {'error': f'PubMed search error: {str(e)}'}
-
-    async def get_snpedia_info(self, rsid: str) -> Dict[str, Any]:
-        """
-        Get variant information from SNPedia using MediaWiki API
-        """
+            logger.error(f"Ensembl annotation error for {rsid}: {e}")
+            return {'found': False, 'source': 'ensembl', 'error': str(e)}
+    
+    async def _get_clinvar_annotation(self, rsid: str) -> Optional[Dict[str, Any]]:
+        """Get ClinVar annotation."""
         try:
-            await self._ensure_session()
-            if self.session is None:
-                return {'error': 'Failed to initialize HTTP session'}
+            params = {
+                'db': 'clinvar',
+                'term': f'{rsid}[RS]',
+                'retmode': 'json',
+                'retmax': 5
+            }
+            
+            response = await self._make_request('clinvar', self.endpoints['clinvar'].url, params=params)
+            
+            if response.success and response.data:
+                search_result = response.data.get('esearchresult', {})
+                count = int(search_result.get('count', 0))
                 
-            # Query SNPedia MediaWiki API
+                return {
+                    'found': count > 0,
+                    'source': 'clinvar',
+                    'count': count,
+                    'ids': search_result.get('idlist', [])
+                }
+            
+            return {'found': False, 'source': 'clinvar', 'error': response.error}
+            
+        except Exception as e:
+            logger.error(f"ClinVar annotation error for {rsid}: {e}")
+            return {'found': False, 'source': 'clinvar', 'error': str(e)}
+    
+    async def _get_pharmgkb_annotation(self, rsid: str) -> Optional[Dict[str, Any]]:
+        """Get PharmGKB annotation."""
+        try:
+            url = self.endpoints['pharmgkb'].url.format(rsid=rsid)
+            response = await self._make_request('pharmgkb', url)
+            
+            if response.success and response.data:
+                return {
+                    'found': True,
+                    'source': 'pharmgkb',
+                    'data': response.data
+                }
+            
+            return {'found': False, 'source': 'pharmgkb', 'error': response.error}
+            
+        except Exception as e:
+            logger.error(f"PharmGKB annotation error for {rsid}: {e}")
+            return {'found': False, 'source': 'pharmgkb', 'error': str(e)}
+    
+    async def _get_snpedia_annotation(self, rsid: str) -> Optional[Dict[str, Any]]:
+        """Get SNPedia annotation."""
+        try:
             params = {
                 'action': 'query',
                 'format': 'json',
                 'titles': rsid,
-                'prop': 'extracts|pageprops',
-                'exintro': True,
-                'explaintext': True,
-                'exsectionformat': 'plain'
+                'prop': 'revisions',
+                'rvprop': 'content'
             }
             
-            result = await self._make_api_request('snpedia', 'query', params=params)
+            response = await self._make_request('snpedia', self.endpoints['snpedia'].url, params=params)
             
-            if 'error' not in result:
-                snpedia_result = {
-                    'source': 'SNPedia',
-                    'rsid': rsid,
-                    'found': False
-                }
-                
-                pages = result.get('query', {}).get('pages', {})
-                for page_id, page_data in pages.items():
-                    if page_id != '-1':  # Page exists
-                        snpedia_result['found'] = True
-                        snpedia_result['title'] = page_data.get('title')
-                        extract = page_data.get('extract', '')
-                        snpedia_result['extract'] = extract[:500] + '...' if extract and len(extract) > 500 else extract
-                        
-                        # Try to extract structured data from page properties
-                        pageprops = page_data.get('pageprops', {})
-                        snpedia_result['properties'] = pageprops
-                        
-                        # Parse common SNPedia template data from extract
-                        if extract:
-                            # Look for magnitude
-                            magnitude_match = re.search(r'magnitude[:\s]*(\d+)', extract, re.IGNORECASE)
-                            if magnitude_match:
-                                snpedia_result['magnitude'] = int(magnitude_match.group(1))
-                            
-                            # Look for frequency
-                            freq_match = re.search(r'frequency[:\s]*([0-9.]+)', extract, re.IGNORECASE)
-                            if freq_match:
-                                snpedia_result['frequency'] = float(freq_match.group(1))
-                        
-                        break
-                
-                if not snpedia_result['found']:
-                    snpedia_result['message'] = 'No SNPedia page found for this variant'
-                
-                return snpedia_result
-            else:
-                return result  # Return the error from _make_api_request
-                    
-        except Exception as e:
-            return {'error': f'SNPedia API error: {str(e)}'}
-
-    async def get_comprehensive_vep_annotation(self, rsid: str) -> Dict[str, Any]:
-        """
-        Get comprehensive VEP annotation with advanced pathogenicity scores and clinical predictions
-        """
-        try:
-            await self._ensure_session()
-            if self.session is None:
-                return {'error': 'Failed to initialize HTTP session'}
-            
-            # POST request to comprehensive VEP endpoint
-            payload = {"ids": [rsid]}
-            
-            # VEP parameters for comprehensive annotation
-            params = {
-                # Core annotation features
-                "hgvs": "1",
-                "canonical": "1",
-                "ccds": "1",
-                "domains": "1",
-                "numbers": "1",
-                "protein": "1",
-                "variant_class": "1",
-                "tsl": "1",
-                "appris": "1",
-                "mane": "1",
-                "uniprot": "1",
-                
-                # Clinical and pathogenicity predictions
-                "CADD": "snv_indels",  # CADD deleteriousness scores
-                "REVEL": "1",            # Rare Exome Variant Ensemble Learner
-                "AlphaMissense": "1",    # Google DeepMind pathogenicity scores
-                "ClinPred": "1",         # Disease-relevant variant prediction
-                "EVE": "1",              # Evolutionary model of variant effect
-                "SpliceAI": "2",         # Splice junction predictions
-                "LOEUF": "1",            # Loss-of-function constraint scores
-                "LoF": "1",              # Loss-of-function identification
-                
-                # Database annotations
-                "dbNSFP": "LRT_pred,MutationTaster_pred,SIFT_pred,Polyphen2_HDIV_pred,CADD_phred,GERP++_RS,phyloP30way_mammalian,phastCons30way_mammalian",
-                "dbscSNV": "1",          # Splicing predictions
-                "Phenotypes": "1",       # Phenotype associations
-                "GO": "1",               # Gene Ontology terms
-                "IntAct": "1",           # Molecular interactions
-                "Geno2MP": "1",          # Genotype-phenotype associations
-                "OpenTargets": "1",      # Drug targets and disease associations
-                "MaveDB": "1",           # Multiplexed variant effect assays
-                "DosageSensitivity": "1",# Haploinsufficiency scores
-                
-                # Regulatory and conservation
-                "Enformer": "1",         # Gene expression impact
-                "UTRAnnotator": "1",     # UTR variant effects
-                "MaxEntScan": "1",       # Splice site predictions
-                "GeneSplicer": "1",      # Splice site detection
-                "NMD": "1",              # Nonsense-mediated decay
-                "Blosum62": "1",         # Amino acid conservation
-                "AncestralAllele": "1",  # Ancestral allele information
-                
-                # Output format
-                "pick": "1",             # Pick most severe consequence
-                "format": "json"
-            }
-            
-            # Make POST request with both payload and params
-            endpoint = self.endpoints.get_endpoint('ensembl', 'vep_comprehensive')
-            if not endpoint:
-                return {'error': 'VEP endpoint not configured'}
-            
-            timeout = aiohttp.ClientTimeout(total=endpoint.timeout)
-            headers = endpoint.headers or {}
-            
-            async with self.session.post(
-                endpoint.url, 
-                json=payload, 
-                params=params, 
-                headers=headers, 
-                timeout=timeout
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    
-                    vep_result = {
-                        'source': 'Ensembl VEP (Comprehensive)',
-                        'rsid': rsid,
-                        'annotations': result,
-                        'pathogenicity_scores': {},
-                        'clinical_predictions': {},
-                        'conservation_scores': {},
-                        'functional_impact': {}
-                    }
-                    
-                    # Extract and organize the comprehensive annotations
-                    if isinstance(result, list) and len(result) > 0:
-                        annotation = result[0]
-                        
-                        # Extract pathogenicity scores
-                        if 'cadd_phred' in annotation:
-                            vep_result['pathogenicity_scores']['CADD'] = annotation['cadd_phred']
-                        if 'revel_score' in annotation:
-                            vep_result['pathogenicity_scores']['REVEL'] = annotation['revel_score']
-                        if 'alphamissense_score' in annotation:
-                            vep_result['pathogenicity_scores']['AlphaMissense'] = annotation['alphamissense_score']
-                        if 'clinpred_score' in annotation:
-                            vep_result['pathogenicity_scores']['ClinPred'] = annotation['clinpred_score']
-                        if 'eve_score' in annotation:
-                            vep_result['pathogenicity_scores']['EVE'] = annotation['eve_score']
-                        
-                        # Extract clinical predictions
-                        if 'sift_prediction' in annotation:
-                            vep_result['clinical_predictions']['SIFT'] = annotation['sift_prediction']
-                        if 'polyphen_prediction' in annotation:
-                            vep_result['clinical_predictions']['PolyPhen'] = annotation['polyphen_prediction']
-                        if 'lrt_pred' in annotation:
-                            vep_result['clinical_predictions']['LRT'] = annotation['lrt_pred']
-                        
-                        # Extract conservation scores
-                        if 'gerp_rs' in annotation:
-                            vep_result['conservation_scores']['GERP++'] = annotation['gerp_rs']
-                        if 'phylop_score' in annotation:
-                            vep_result['conservation_scores']['phyloP'] = annotation['phylop_score']
-                        if 'phastcons_score' in annotation:
-                            vep_result['conservation_scores']['phastCons'] = annotation['phastcons_score']
-                        
-                        # Extract functional impact
-                        vep_result['functional_impact'] = {
-                            'most_severe_consequence': annotation.get('most_severe_consequence'),
-                            'impact': annotation.get('impact'),
-                            'gene_symbol': annotation.get('gene_symbol'),
-                            'gene_id': annotation.get('gene_id'),
-                            'feature_type': annotation.get('feature_type'),
-                            'biotype': annotation.get('biotype'),
-                            'canonical': annotation.get('canonical'),
-                            'mane_select': annotation.get('mane_select'),
-                            'domains': annotation.get('domains', [])
+            if response.success and response.data:
+                pages = response.data.get('query', {}).get('pages', {})
+                if pages:
+                    page_data = next(iter(pages.values()))
+                    if 'revisions' in page_data:
+                        return {
+                            'found': True,
+                            'source': 'snpedia',
+                            'data': page_data
                         }
-                    
-                    return vep_result
-                else:
-                    return {'error': f'VEP API failed with status {response.status}'}
-                
-        except Exception as e:
-            return {'error': f'Comprehensive VEP annotation error: {str(e)}'}
-
-    async def get_variant_population_frequencies(self, rsid: str) -> Dict[str, Any]:
-        """
-        Get comprehensive population frequency data from multiple sources
-        """
-        try:
-            # Get population frequencies from Ensembl
-            result = await self._make_api_request('ensembl', 'variation_populations', rsid=rsid)
             
-            population_data = {
-                'source': 'Population Frequencies',
-                'rsid': rsid,
-                'global_maf': None,
-                'populations': {},
-                'ancestry_specific': {}
-            }
-            
-            if 'error' not in result:
-                populations = result.get('populations', [])
-                
-                for pop in populations:
-                    pop_name = pop.get('population')
-                    if pop_name:
-                        population_data['populations'][pop_name] = {
-                            'frequency': pop.get('frequency'),
-                            'allele': pop.get('allele'),
-                            'allele_count': pop.get('allele_count'),
-                            'total_count': pop.get('total_count')
-                        }
-                        
-                        # Extract ancestry-specific frequencies
-                        if any(ancestry in pop_name.lower() for ancestry in ['afr', 'african']):
-                            population_data['ancestry_specific']['African'] = pop.get('frequency')
-                        elif any(ancestry in pop_name.lower() for ancestry in ['eas', 'east_asian', 'asian']):
-                            population_data['ancestry_specific']['East Asian'] = pop.get('frequency')
-                        elif any(ancestry in pop_name.lower() for ancestry in ['eur', 'european']):
-                            population_data['ancestry_specific']['European'] = pop.get('frequency')
-                        elif any(ancestry in pop_name.lower() for ancestry in ['amr', 'american']):
-                            population_data['ancestry_specific']['American'] = pop.get('frequency')
-                        elif any(ancestry in pop_name.lower() for ancestry in ['sas', 'south_asian']):
-                            population_data['ancestry_specific']['South Asian'] = pop.get('frequency')
-                
-                # Set global MAF from 1000 Genomes if available
-                if '1000GENOMES:phase_3:ALL' in population_data['populations']:
-                    population_data['global_maf'] = population_data['populations']['1000GENOMES:phase_3:ALL']['frequency']
-            
-            return population_data
+            return {'found': False, 'source': 'snpedia', 'error': response.error}
             
         except Exception as e:
-            return {'error': f'Population frequency error: {str(e)}'}
-
-    async def get_gwas_associations(self, rsid: str) -> Dict[str, Any]:
-        """
-        Get GWAS associations for a variant
-        """
-        try:
-            result = await self._make_api_request('gwas', 'variant_associations', rsid=rsid)
-            
-            if 'error' not in result:
-                gwas_data = {
-                    'source': 'GWAS Catalog',
-                    'rsid': rsid,
-                    'associations': [],
-                    'trait_count': 0,
-                    'study_count': 0
-                }
-                
-                # Process GWAS associations
-                associations = result.get('_embedded', {}).get('associations', [])
-                for assoc in associations[:20]:  # Limit to top 20
-                    trait_info = assoc.get('efoTraits', [{}])[0] if assoc.get('efoTraits') else {}
-                    study_info = assoc.get('study', {})
-                    
-                    gwas_data['associations'].append({
-                        'trait': trait_info.get('trait'),
-                        'trait_uri': trait_info.get('uri'),
-                        'p_value': assoc.get('pvalue'),
-                        'beta': assoc.get('betaNum'),
-                        'odds_ratio': assoc.get('orPerCopyNum'),
-                        'risk_allele': assoc.get('strongestAllele'),
-                        'study_title': study_info.get('title'),
-                        'pubmed_id': study_info.get('pubmedId'),
-                        'sample_size': study_info.get('initialSampleSize')
-                    })
-                
-                gwas_data['trait_count'] = len(set(a['trait'] for a in gwas_data['associations'] if a['trait']))
-                gwas_data['study_count'] = len(set(a['pubmed_id'] for a in gwas_data['associations'] if a['pubmed_id']))
-                
-                return gwas_data
-            else:
-                return {
-                    'source': 'GWAS Catalog',
-                    'rsid': rsid,
-                    'associations': [],
-                    'trait_count': 0,
-                    'study_count': 0,
-                    'message': 'No GWAS associations found'
-                }
-                
-        except Exception as e:
-            return {'error': f'GWAS associations error: {str(e)}'}
-
-    async def get_protein_information(self, gene_symbol: str) -> Dict[str, Any]:
-        """
-        Get comprehensive protein information from UniProt
-        """
-        try:
-            # Search for protein by gene name
-            search_params = {
-                'query': f'gene:{gene_symbol} AND organism_id:9606',  # Human proteins only
-                'format': 'json',
-                'size': '5'
-            }
-            
-            search_result = await self._make_api_request('uniprot', 'protein_search', params=search_params)
-            
-            if 'error' not in search_result and 'results' in search_result:
-                results = search_result['results']
-                if not results:
-                    return {
-                        'source': 'UniProt',
-                        'gene_symbol': gene_symbol,
-                        'found': False,
-                        'message': 'No protein entries found'
-                    }
-                
-                # Get detailed information for the primary protein
-                protein = results[0]
-                protein_data = {
-                    'source': 'UniProt',
-                    'gene_symbol': gene_symbol,
-                    'found': True,
-                    'accession': protein.get('primaryAccession'),
-                    'name': protein.get('proteinDescription', {}).get('recommendedName', {}).get('fullName', {}).get('value'),
-                    'gene_names': [gene.get('value') for gene in protein.get('genes', [])],
-                    'length': protein.get('sequence', {}).get('length'),
-                    'function': [],
-                    'domains': [],
-                    'pathways': [],
-                    'subcellular_location': [],
-                    'disease_associations': []
-                }
-                
-                # Extract functional annotations
-                comments = protein.get('comments', [])
-                for comment in comments:
-                    comment_type = comment.get('commentType')
-                    if comment_type == 'FUNCTION':
-                        for text in comment.get('texts', []):
-                            protein_data['function'].append(text.get('value', ''))
-                    elif comment_type == 'PATHWAY':
-                        for text in comment.get('texts', []):
-                            protein_data['pathways'].append(text.get('value', ''))
-                    elif comment_type == 'SUBCELLULAR LOCATION':
-                        for location in comment.get('subcellularLocations', []):
-                            loc_name = location.get('location', {}).get('value')
-                            if loc_name:
-                                protein_data['subcellular_location'].append(loc_name)
-                    elif comment_type == 'DISEASE':
-                        for disease in comment.get('disease', []):
-                            protein_data['disease_associations'].append({
-                                'name': disease.get('diseaseId'),
-                                'description': disease.get('description')
-                            })
-                
-                # Extract protein features (domains, etc.)
-                features = protein.get('features', [])
-                for feature in features:
-                    if feature.get('type') == 'DOMAIN':
-                        protein_data['domains'].append({
-                            'name': feature.get('description'),
-                            'start': feature.get('location', {}).get('start', {}).get('value'),
-                            'end': feature.get('location', {}).get('end', {}).get('value')
-                        })
-                
-                return protein_data
-            else:
-                return {
-                    'source': 'UniProt',
-                    'gene_symbol': gene_symbol,
-                    'found': False,
-                    'message': 'Protein search failed'
-                }
-                
-        except Exception as e:
-            return {'error': f'UniProt protein information error: {str(e)}'}
-
-    async def get_protein_interactions(self, gene_symbol: str) -> Dict[str, Any]:
-        """
-        Get protein-protein interactions from STRING database
-        """
-        try:
-            await self._ensure_session()
-            if self.session is None:
-                return {'error': 'Failed to initialize HTTP session'}
-            
-            # STRING API parameters
-            params = {
-                'identifiers': gene_symbol,
-                'species': '9606',  # Human
-                'required_score': '400',  # Medium confidence
-                'network_type': 'functional',
-                'caller_identity': 'genetic_analysis_toolkit'
-            }
-            
-            result = await self._make_api_request('string', 'interactions', params=params)
-            
-            if 'error' not in result:
-                interaction_data = {
-                    'source': 'STRING',
-                    'gene_symbol': gene_symbol,
-                    'interactions': [],
-                    'interaction_count': 0,
-                    'functional_partners': []
-                }
-                
-                # Process interaction data
-                if isinstance(result, list):
-                    for i, interaction in enumerate(result):
-                        if i >= 20:  # Limit to top 20 interactions
-                            break
-                        
-                        if isinstance(interaction, dict):
-                            interaction_data['interactions'].append({
-                                'partner_a': interaction.get('preferredName_A'),
-                                'partner_b': interaction.get('preferredName_B'),
-                                'combined_score': interaction.get('score'),
-                                'experimental_score': interaction.get('experimentally_determined_interaction'),
-                                'database_score': interaction.get('database_annotated'),
-                                'coexpression_score': interaction.get('coexpression'),
-                                'neighborhood_score': interaction.get('neighborhood_on_chromosome')
-                            })
-                            
-                            # Add unique functional partners
-                            partner_a = interaction.get('preferredName_A')
-                            partner_b = interaction.get('preferredName_B')
-                            if partner_a != gene_symbol and partner_a not in interaction_data['functional_partners']:
-                                interaction_data['functional_partners'].append(partner_a)
-                            if partner_b != gene_symbol and partner_b not in interaction_data['functional_partners']:
-                                interaction_data['functional_partners'].append(partner_b)
-                    
-                    interaction_data['interaction_count'] = len(interaction_data['interactions'])
-                
-                return interaction_data
-            else:
-                return {
-                    'source': 'STRING',
-                    'gene_symbol': gene_symbol,
-                    'interactions': [],
-                    'interaction_count': 0,
-                    'functional_partners': [],
-                    'message': 'No protein interactions found'
-                }
-                
-        except Exception as e:
-            return {'error': f'STRING protein interactions error: {str(e)}'}
-
-    async def get_variant_info_from_ensembl(self, rsid: str) -> Dict[str, Any]:
-        """
-        Get variant information from Ensembl REST API with enhanced data extraction
-        """
-        result = await self._make_api_request('ensembl', 'variation', rsid=rsid)
-        
-        if 'error' not in result:
-            ensembl_result = {
-                'source': 'Ensembl',
-                'rsid': rsid,
-                'name': result.get('name'),
-                'most_severe_consequence': result.get('most_severe_consequence'),
-                'minor_allele': result.get('minor_allele'),
-                'minor_allele_freq': result.get('minor_allele_freq'),
-                'clinical_significance': result.get('clinical_significance', []),
-                'synonyms': result.get('synonyms', []),
-                'populations': {},
-                'consequences': []
-            }
-            
-            # Extract population frequencies
-            populations = result.get('populations', [])
-            for pop in populations:
-                pop_name = pop.get('population')
-                if pop_name:
-                    ensembl_result['populations'][pop_name] = {
-                        'frequency': pop.get('frequency'),
-                        'allele': pop.get('allele'),
-                        'allele_count': pop.get('allele_count'),
-                        'total_count': pop.get('total_count')
-                    }
-            
-            # Extract consequence predictions
-            mappings = result.get('mappings', [])
-            for mapping in mappings[:5]:  # Limit to first 5
-                if 'consequence_type' in mapping:
-                    ensembl_result['consequences'].append({
-                        'gene': mapping.get('gene_name'),
-                        'consequence': mapping.get('consequence_type'),
-                        'impact': mapping.get('impact'),
-                        'biotype': mapping.get('biotype')
-                    })
-            
-            return ensembl_result
-        else:
-            # Check if it's a 404 error (variant not found)
-            if 'status' in result and result['status'] == 404:
-                return {
-                    'source': 'Ensembl',
-                    'rsid': rsid,
-                    'found': False,
-                    'message': 'Variant not found in Ensembl'
-                }
-            else:
-                return result  # Return the error from _make_api_request
-
-    async def get_pharmgkb_drug_info(self, gene: str) -> Dict[str, Any]:
-        """
-        Get pharmacogenomic information from PharmGKB API
-        """
-        try:
-            await self._ensure_session()
-            if self.session is None:
-                return {'error': 'Failed to initialize HTTP session'}
-                
-            # PharmGKB API base URL
-            pharmgkb_base_url = "https://api.pharmgkb.org"
-            
-            # Search for gene information
-            gene_url = f"{pharmgkb_base_url}/v1/gene/{gene.upper()}"
-            
-            async with self.session.get(gene_url) as response:
-                if response.status == 200:
-                    gene_data = await response.json()
-                    
-                    pharmgkb_result = {
-                        'source': 'PharmGKB',
-                        'gene': gene,
-                        'found': True,
-                        'gene_id': gene_data.get('id'),
-                        'name': gene_data.get('name'),
-                        'symbol': gene_data.get('symbol'),
-                        'drugs': [],
-                        'drug_count': 0,
-                        'clinical_annotations': [],
-                        'function': gene_data.get('function', ''),
-                        'clinical_significance': 'Unknown'
-                    }
-                    
-                    # Get drug associations for this gene
-                    drugs_url = f"{pharmgkb_base_url}/v1/gene/{gene.upper()}/drugs"
-                    try:
-                        async with self.session.get(drugs_url) as drug_response:
-                            if drug_response.status == 200:
-                                drug_data = await drug_response.json()
-                                if 'data' in drug_data:
-                                    pharmgkb_result['drugs'] = [
-                                        {
-                                            'name': drug.get('name'),
-                                            'id': drug.get('id'),
-                                            'type': drug.get('type')
-                                        }
-                                        for drug in drug_data['data'][:10]  # Limit to first 10
-                                    ]
-                                    pharmgkb_result['drug_count'] = len(drug_data['data'])
-                    except Exception:
-                        # Continue if drug lookup fails
-                        pass
-                    
-                    # Get clinical annotations for this gene
-                    annotations_url = f"{pharmgkb_base_url}/v1/gene/{gene.upper()}/clinicalAnnotations"
-                    try:
-                        async with self.session.get(annotations_url) as ann_response:
-                            if ann_response.status == 200:
-                                ann_data = await ann_response.json()
-                                if 'data' in ann_data:
-                                    pharmgkb_result['clinical_annotations'] = [
-                                        {
-                                            'id': ann.get('id'),
-                                            'text': ann.get('summaryMarkdown', ann.get('textMarkdown', ''))[:200] + '...' if ann.get('summaryMarkdown') or ann.get('textMarkdown') else '',
-                                            'level': ann.get('level'),
-                                            'type': ann.get('type'),
-                                            'drugs': [drug.get('name') for drug in ann.get('relatedChemicals', [])]
-                                        }
-                                        for ann in ann_data['data'][:5]  # Limit to first 5
-                                    ]
-                                    
-                                    # Determine clinical significance based on annotations
-                                    if pharmgkb_result['clinical_annotations']:
-                                        levels = [ann.get('level') for ann in pharmgkb_result['clinical_annotations'] if ann.get('level')]
-                                        if any(level in ['1A', '1B', '2A'] for level in levels):
-                                            pharmgkb_result['clinical_significance'] = 'High'
-                                        elif any(level in ['2B', '3'] for level in levels):
-                                            pharmgkb_result['clinical_significance'] = 'Moderate'
-                                        else:
-                                            pharmgkb_result['clinical_significance'] = 'Limited'
-                    except Exception:
-                        # Continue if annotations lookup fails
-                        pass
-                    
-                    return pharmgkb_result
-                    
-                elif response.status == 404:
-                    return {
-                        'source': 'PharmGKB',
-                        'gene': gene,
-                        'found': False,
-                        'message': f'Gene {gene} not found in PharmGKB'
-                    }
-                else:
-                    return {'error': f'PharmGKB API failed with status {response.status}'}
-                    
-        except Exception as e:
-            return {'error': f'PharmGKB API error: {str(e)}'}
-
-    async def get_pharmgkb_variant_info(self, rsid: str) -> Dict[str, Any]:
-        """
-        Get variant-specific information from PharmGKB API
-        """
-        try:
-            await self._ensure_session()
-            if self.session is None:
-                return {'error': 'Failed to initialize HTTP session'}
-                
-            pharmgkb_base_url = "https://api.pharmgkb.org"
-            
-            # Search for variant by rsID
-            variant_url = f"{pharmgkb_base_url}/v1/variant/{rsid}"
-            
-            async with self.session.get(variant_url) as response:
-                if response.status == 200:
-                    variant_data = await response.json()
-                    
-                    pharmgkb_result = {
-                        'source': 'PharmGKB',
-                        'rsid': rsid,
-                        'found': True,
-                        'variant_id': variant_data.get('id'),
-                        'name': variant_data.get('name'),
-                        'gene': variant_data.get('gene', {}).get('symbol') if variant_data.get('gene') else None,
-                        'chromosome': variant_data.get('chromosome'),
-                        'position': variant_data.get('position'),
-                        'clinical_annotations': [],
-                        'drug_labels': [],
-                        'clinical_significance': 'Unknown'
-                    }
-                    
-                    # Get clinical annotations for this variant
-                    annotations_url = f"{pharmgkb_base_url}/v1/variant/{rsid}/clinicalAnnotations"
-                    try:
-                        async with self.session.get(annotations_url) as ann_response:
-                            if ann_response.status == 200:
-                                ann_data = await ann_response.json()
-                                if 'data' in ann_data:
-                                    pharmgkb_result['clinical_annotations'] = [
-                                        {
-                                            'id': ann.get('id'),
-                                            'text': ann.get('summaryMarkdown', ann.get('textMarkdown', ''))[:200] + '...' if ann.get('summaryMarkdown') or ann.get('textMarkdown') else '',
-                                            'level': ann.get('level'),
-                                            'drugs': [drug.get('name') for drug in ann.get('relatedChemicals', [])]
-                                        }
-                                        for ann in ann_data['data'][:5]
-                                    ]
-                    except Exception:
-                        pass
-                    
-                    # Get drug labels for this variant
-                    labels_url = f"{pharmgkb_base_url}/v1/variant/{rsid}/drugLabels"
-                    try:
-                        async with self.session.get(labels_url) as label_response:
-                            if label_response.status == 200:
-                                label_data = await label_response.json()
-                                if 'data' in label_data:
-                                    pharmgkb_result['drug_labels'] = [
-                                        {
-                                            'id': label.get('id'),
-                                            'name': label.get('name'),
-                                            'source': label.get('source'),
-                                            'text_markdown': label.get('textMarkdown', '')[:200] + '...' if label.get('textMarkdown') else ''
-                                        }
-                                        for label in label_data['data'][:5]
-                                    ]
-                    except Exception:
-                        pass
-                    
-                    # Determine clinical significance
-                    if pharmgkb_result['clinical_annotations'] or pharmgkb_result['drug_labels']:
-                        if pharmgkb_result['clinical_annotations']:
-                            levels = [ann.get('level') for ann in pharmgkb_result['clinical_annotations'] if ann.get('level')]
-                            if any(level in ['1A', '1B', '2A'] for level in levels):
-                                pharmgkb_result['clinical_significance'] = 'High'
-                            elif any(level in ['2B', '3'] for level in levels):
-                                pharmgkb_result['clinical_significance'] = 'Moderate'
-                            else:
-                                pharmgkb_result['clinical_significance'] = 'Limited'
-                        else:
-                            pharmgkb_result['clinical_significance'] = 'Moderate'
-                    
-                    return pharmgkb_result
-                    
-                elif response.status == 404:
-                    return {
-                        'source': 'PharmGKB',
-                        'rsid': rsid,
-                        'found': False,
-                        'message': f'Variant {rsid} not found in PharmGKB'
-                    }
-                else:
-                    return {'error': f'PharmGKB variant API failed with status {response.status}'}
-                    
-        except Exception as e:
-            return {'error': f'PharmGKB variant API error: {str(e)}'}
-
-    async def search_pharmgkb_drugs(self, query: str) -> Dict[str, Any]:
-        """
-        Search for drugs in PharmGKB
-        """
-        try:
-            await self._ensure_session()
-            if self.session is None:
-                return {'error': 'Failed to initialize HTTP session'}
-                
-            pharmgkb_base_url = "https://api.pharmgkb.org"
-            
-            # Search drugs
-            search_url = f"{pharmgkb_base_url}/v1/drug/search"
-            params = {'q': query, 'limit': 10}
-            
-            async with self.session.get(search_url, params=params) as response:
-                if response.status == 200:
-                    search_data = await response.json()
-                    
-                    return {
-                        'source': 'PharmGKB',
-                        'query': query,
-                        'found': len(search_data.get('data', [])) > 0,
-                        'drugs': [
-                            {
-                                'id': drug.get('id'),
-                                'name': drug.get('name'),
-                                'type': drug.get('type'),
-                                'trade_names': drug.get('tradeNames', [])
-                            }
-                            for drug in search_data.get('data', [])
-                        ]
-                    }
-                else:
-                    return {'error': f'PharmGKB drug search failed with status {response.status}'}
-                    
-        except Exception as e:
-            return {'error': f'PharmGKB drug search error: {str(e)}'}
-
-    async def get_pharmgkb_guidelines(self, gene: Optional[str] = None, drug: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Get clinical guidelines from PharmGKB
-        """
-        try:
-            await self._ensure_session()
-            if self.session is None:
-                return {'error': 'Failed to initialize HTTP session'}
-                
-            pharmgkb_base_url = "https://api.pharmgkb.org"
-            
-            # Get guidelines
-            guidelines_url = f"{pharmgkb_base_url}/v1/guideline"
-            params = {}
-            if gene:
-                params['gene'] = gene.upper()
-            if drug:
-                params['drug'] = drug
-            
-            async with self.session.get(guidelines_url, params=params) as response:
-                if response.status == 200:
-                    guidelines_data = await response.json()
-                    
-                    return {
-                        'source': 'PharmGKB',
-                        'gene': gene,
-                        'drug': drug,
-                        'guidelines': [
-                            {
-                                'id': guideline.get('id'),
-                                'name': guideline.get('name'),
-                                'source': guideline.get('source'),
-                                'text': guideline.get('summaryMarkdown', '')[:300] + '...' if guideline.get('summaryMarkdown') else '',
-                                'drugs': [drug.get('name') for drug in guideline.get('relatedChemicals', [])],
-                                'genes': [gene.get('symbol') for gene in guideline.get('relatedGenes', [])]
-                            }
-                            for guideline in guidelines_data.get('data', [])[:5]
-                        ]
-                    }
-                else:
-                    return {'error': f'PharmGKB guidelines API failed with status {response.status}'}
-                    
-        except Exception as e:
-            return {'error': f'PharmGKB guidelines API error: {str(e)}'}
+            logger.error(f"SNPedia annotation error for {rsid}: {e}")
+            return {'found': False, 'source': 'snpedia', 'error': str(e)}
     
-    async def annotate_variant(self, rsid: str, gene: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Comprehensive variant annotation using multiple sources including advanced VEP and new databases
-        """
-        results = {
-            'rsid': rsid,
-            'gene': gene,
-            'annotations': {}
-        }
+    async def batch_annotate_variants(self, rsids: List[str], strategy: str = 'balanced') -> Dict[str, Optional[Dict[str, Any]]]:
+        """Annotate multiple variants in batch."""
+        if not rsids:
+            return {}
         
-        # Gather data from multiple sources concurrently
-        tasks = [
-            self.get_variant_info_from_ensembl(rsid),
-            self.get_comprehensive_vep_annotation(rsid),
-            self.get_variant_population_frequencies(rsid),
-            self.get_variant_info_from_clinvar(rsid),
-            self.get_snpedia_info(rsid),
-            self.get_litvar_publications(rsid),
-            self.get_pharmgkb_variant_info(rsid),
-            self.get_gwas_associations(rsid)
-        ]
+        # Choose annotation method based on strategy
+        if strategy == 'fast':
+            annotation_method = self.annotate_variant_minimal
+        elif strategy == 'comprehensive':
+            annotation_method = self.annotate_variant_comprehensive
+        else:
+            annotation_method = self.annotate_variant
         
-        if gene:
-            tasks.extend([
-                self.get_pharmgkb_drug_info(gene),
-                self.get_protein_information(gene),
-                self.get_protein_interactions(gene)
-            ])
+        # Process in controlled batches
+        batch_size = settings.api.batch_size
+        semaphore = Semaphore(settings.api.max_concurrent)
         
-        try:
-            annotations = await asyncio.gather(*tasks, return_exceptions=True)
+        async def annotate_with_semaphore(rsid: str):
+            async with semaphore:
+                return await annotation_method(rsid)
+        
+        results = {}
+        for i in range(0, len(rsids), batch_size):
+            batch = rsids[i:i + batch_size]
+            tasks = [annotate_with_semaphore(rsid) for rsid in batch]
             
-            results['annotations']['ensembl'] = annotations[0] if len(annotations) > 0 else {}
-            results['annotations']['vep_comprehensive'] = annotations[1] if len(annotations) > 1 else {}
-            results['annotations']['population_frequencies'] = annotations[2] if len(annotations) > 2 else {}
-            results['annotations']['clinvar'] = annotations[3] if len(annotations) > 3 else {}
-            results['annotations']['snpedia'] = annotations[4] if len(annotations) > 4 else {}
-            results['annotations']['literature'] = annotations[5] if len(annotations) > 5 else {}
-            results['annotations']['pharmgkb_variant'] = annotations[6] if len(annotations) > 6 else {}
-            results['annotations']['gwas'] = annotations[7] if len(annotations) > 7 else {}
+            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
             
-            if gene and len(annotations) > 8:
-                results['annotations']['pharmgkb_gene'] = annotations[8]
-                results['annotations']['protein_info'] = annotations[9] if len(annotations) > 9 else {}
-                results['annotations']['protein_interactions'] = annotations[10] if len(annotations) > 10 else {}
-                
-        except Exception as e:
-            results['error'] = f'Comprehensive annotation error: {str(e)}'
+            for rsid, result in zip(batch, batch_results):
+                if isinstance(result, Exception):
+                    logger.error(f"Batch annotation error for {rsid}: {result}")
+                    results[rsid] = None
+                else:
+                    results[rsid] = result
         
         return results
-    
-    async def batch_annotate_variants(self, variants: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Annotate multiple variants in batch with improved rate limiting
-        """
-        annotated_variants = []
-        
-        # Limit batch size to avoid overwhelming APIs
-        batch_size = 5  # Reduced for better API compliance
-        for i in range(0, len(variants), batch_size):
-            batch = variants[i:i + batch_size]
-            
-            tasks = []
-            for variant in batch:
-                rsid = variant.get('rsid') or variant.get('id')
-                gene = variant.get('gene')
-                if rsid:
-                    tasks.append(self.annotate_variant(rsid, gene if gene else None))
-            
-            if tasks:
-                batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-                annotated_variants.extend(batch_results)
-            
-            # Enhanced rate limiting - pause between batches (optimized for speed)
-            await asyncio.sleep(0.05)  # Reduced from 1.0s to 0.05s for faster processing
-        
-        return annotated_variants
 
-    async def get_variant_clinical_summary(self, rsid: str, gene: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Get a comprehensive clinical summary combining all data sources
-        """
-        annotation_result = await self.annotate_variant(rsid, gene)
-        
-        summary = {
-            'rsid': rsid,
-            'gene': gene,
-            'clinical_significance': 'Unknown',
-            'drug_responses': [],
-            'population_frequency': None,
-            'literature_count': 0,
-            'evidence_level': 'Limited',
-            'recommendations': []
-        }
-        
-        if 'annotations' in annotation_result:
-            annotations = annotation_result['annotations']
-            
-            # Extract clinical significance from ClinVar
-            if 'clinvar' in annotations and annotations['clinvar'].get('found'):
-                entries = annotations['clinvar'].get('entries', [])
-                if entries:
-                    clinical_sigs = []
-                    for entry in entries:
-                        clinical_sigs.extend(entry.get('clinical_significance', []))
-                    if clinical_sigs:
-                        summary['clinical_significance'] = ', '.join(set(clinical_sigs))
-            
-            # Extract population frequency from Ensembl
-            if 'ensembl' in annotations:
-                freq = annotations['ensembl'].get('minor_allele_freq')
-                if freq:
-                    summary['population_frequency'] = freq
-            
-            # Extract literature count
-            if 'literature' in annotations:
-                summary['literature_count'] = annotations['literature'].get('total_publications', 0)
-            
-            # Extract drug response information
-            if 'pharmgkb' in annotations and 'drugs' in annotations['pharmgkb']:
-                summary['drug_responses'] = annotations['pharmgkb']['drugs']
-                summary['evidence_level'] = annotations['pharmgkb'].get('clinical_significance', 'Limited')
-            
-            # Generate recommendations
-            if summary['clinical_significance'] != 'Unknown':
-                summary['recommendations'].append('Consult healthcare provider for clinical interpretation')
-            if summary['drug_responses']:
-                summary['recommendations'].append('Consider pharmacogenomic testing for personalized dosing')
-            if summary['literature_count'] > 5:
-                summary['recommendations'].append('Well-studied variant with substantial literature')
-        
-        return summary
+
+# Legacy compatibility wrapper
+class GeneticAPIService:
+    """Legacy compatibility wrapper for existing code."""
+    
+    def __init__(self):
+        self.optimized_service = OptimizedGeneticAPIService()
+        self._initialized = False
+    
+    async def initialize(self):
+        """Initialize the service."""
+        if not self._initialized:
+            await self.optimized_service.initialize()
+            self._initialized = True
+    
+    async def close(self):
+        """Close the service."""
+        await self.optimized_service.close()
+        self._initialized = False
+    
+    async def annotate_variant(self, rsid: str) -> Optional[Dict[str, Any]]:
+        """Legacy method for variant annotation."""
+        if not self._initialized:
+            await self.initialize()
+        return await self.optimized_service.annotate_variant(rsid)
+    
+    async def annotate_variant_minimal(self, rsid: str) -> Optional[Dict[str, Any]]:
+        """Legacy method for minimal annotation."""
+        if not self._initialized:
+            await self.initialize()
+        return await self.optimized_service.annotate_variant_minimal(rsid)
+    
+    async def annotate_variant_comprehensive(self, rsid: str) -> Optional[Dict[str, Any]]:
+        """Legacy method for comprehensive annotation."""
+        if not self._initialized:
+            await self.initialize()
+        return await self.optimized_service.annotate_variant_comprehensive(rsid)

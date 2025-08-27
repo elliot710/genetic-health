@@ -1,7 +1,7 @@
 """
 Database models for user authentication and genetic data storage
 """
-from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey, JSON, Float
+from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey, JSON, Float, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .database import Base
@@ -43,26 +43,40 @@ class GeneticAnalysis(Base):
     # Relationship to user
     user = relationship("User", back_populates="genetic_analyses")
     
-    # Relationship to variants
-    variants = relationship("GeneticVariant", back_populates="analysis")
+    # Relationship to variants (using optimized structure)
+    analysis_variants = relationship("AnalysisVariant", back_populates="analysis")
 
-class GeneticVariant(Base):
-    __tablename__ = "genetic_variants"
+class AnalysisVariant(Base):
+    """Denormalized table containing all variant data for each analysis"""
+    __tablename__ = "analysis_variants"
     
     id = Column(Integer, primary_key=True, index=True)
     analysis_id = Column(Integer, ForeignKey("genetic_analyses.id", ondelete="CASCADE"), nullable=False)
+    
+    # Variant identification fields (formerly from Variant table)
     chromosome = Column(String, nullable=False)
-    position = Column(Integer, nullable=False)
+    position = Column(Integer, nullable=False, index=True)
     rsid = Column(String, index=True)
     ref_allele = Column(String, nullable=False)
     alt_allele = Column(String, nullable=False)
+    
+    # User-specific variant data
     genotype = Column(String)
     quality = Column(String)
     filter_status = Column(String)
     info = Column(JSON)  # Additional variant information
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
     
-    # Relationship to analysis
-    analysis = relationship("GeneticAnalysis", back_populates="variants")
+    # Relationships
+    analysis = relationship("GeneticAnalysis", back_populates="analysis_variants")
+    variant_annotations = relationship("VariantAnnotation", back_populates="analysis_variant")
+    
+    # Indexes for efficient querying
+    __table_args__ = (
+        Index('ix_analysis_variants_position', 'chromosome', 'position'),
+        Index('ix_analysis_variants_rsid', 'rsid'),
+    )
+
 
 class HealthRisk(Base):
     __tablename__ = "health_risks"
@@ -203,7 +217,7 @@ class VariantAnnotation(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     analysis_id = Column(Integer, ForeignKey("genetic_analyses.id", ondelete="CASCADE"), nullable=False)
-    variant_id = Column(Integer, ForeignKey("genetic_variants.id", ondelete="CASCADE"), nullable=False)
+    analysis_variant_id = Column(Integer, ForeignKey("analysis_variants.id", ondelete="CASCADE"), nullable=False)
     rsid = Column(String, nullable=False, index=True)
     
     # Raw API responses stored as JSON for future analysis
@@ -221,7 +235,7 @@ class VariantAnnotation(Base):
     api_calls_made = Column(Integer, default=0)  # Track number of API calls for this variant
     
     # Relationships
-    variant = relationship("GeneticVariant")
+    analysis_variant = relationship("AnalysisVariant", back_populates="variant_annotations")
     analysis = relationship("GeneticAnalysis")
 
 

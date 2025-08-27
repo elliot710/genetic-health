@@ -158,11 +158,13 @@ export default function Home() {
       
       // Start the background analysis job
       try {
-        const startResponse = await fetch(`http://localhost:8000/analyze/start/${newAnalysisId}`, {
+        const startResponse = await fetch(`http://localhost:8000/api/analysis/start/${newAnalysisId}`, {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${token}`
-          }
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({})
         })
         
         if (startResponse.ok) {
@@ -170,7 +172,8 @@ export default function Home() {
           setShowProgressLoader(true)
           setAnalysisData(null) // Clear any existing data to show progress
         } else {
-          console.error('Failed to start analysis job')
+          const errorText = await startResponse.text()
+          console.error('Failed to start analysis job:', startResponse.status, errorText)
           setAnalysisData(data) // Show the upload data immediately if analysis start fails
         }
       } catch (error) {

@@ -44,7 +44,7 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, theme, data, t
       
       setLoading(true)
       try {
-        const response = await fetch('http://localhost:8000/analyze/dashboard-data', {
+        const response = await fetch('http://localhost:8000/api/analysis/dashboard-data', {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',

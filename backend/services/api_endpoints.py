@@ -24,6 +24,7 @@ class APIEndpoints:
     # NCBI E-utilities with API key from environment variable
     NCBI_API_KEY = os.getenv("NCBI_API_KEY", "")  # Load from environment variable
     NCBI_BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+    NCBI_RATE_LIMIT = 10.0  # Increased from 3.0 to 10.0 with API key
     NCBI_ENDPOINTS = {
         "esearch": APIEndpoint(
             url=f"{NCBI_BASE_URL}/esearch.fcgi",
@@ -214,158 +215,159 @@ class APIEndpoints:
     }
     
     # PharmGKB API
+    PHARMGKB_RATE_LIMIT = 5.0
     PHARMGKB_BASE_URL = "https://api.pharmgkb.org"
     PHARMGKB_ENDPOINTS = {
         # Gene endpoints
         "gene": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/gene/{{gene}}",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,
             description="Get gene information"
         ),
         "gene_drugs": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/gene/{{gene}}/drugs",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Get drugs associated with gene"
         ),
         "gene_annotations": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/gene/{{gene}}/clinicalAnnotations",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Get clinical annotations for gene"
         ),
         "gene_variants": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/gene/{{gene}}/variants",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Get variants in gene"
         ),
         "gene_haplotypes": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/gene/{{gene}}/haplotypes",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Get haplotypes for gene"
         ),
         
         # Variant endpoints
         "variant": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/variant/{{rsid}}",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Get variant information"
         ),
         "variant_annotations": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/variant/{{rsid}}/clinicalAnnotations",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Get clinical annotations for variant"
         ),
         "variant_drug_labels": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/variant/{{rsid}}/drugLabels",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Get drug labels for variant"
         ),
         "variant_guidelines": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/variant/{{rsid}}/guidelines",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Get guidelines for variant"
         ),
         
         # Drug endpoints
         "drug": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/drug/{{drug_id}}",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Get drug information"
         ),
         "drug_search": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/drug/search",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Search for drugs"
         ),
         "drug_annotations": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/drug/{{drug_id}}/clinicalAnnotations",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Get clinical annotations for drug"
         ),
         "drug_genes": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/drug/{{drug_id}}/genes",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Get genes associated with drug"
         ),
         "drug_variants": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/drug/{{drug_id}}/variants",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Get variants associated with drug"
         ),
         "drug_labels": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/drug/{{drug_id}}/drugLabels",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Get drug labels"
         ),
         
         # Guideline endpoints
         "guidelines": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/guideline",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Get all guidelines"
         ),
         "guideline": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/guideline/{{guideline_id}}",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Get specific guideline"
         ),
         
         # Clinical annotation endpoints
         "annotations": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/clinicalAnnotation",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Get all clinical annotations"
         ),
         "annotation": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/clinicalAnnotation/{{annotation_id}}",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Get specific clinical annotation"
         ),
         
         # Haplotype endpoints
         "haplotypes": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/haplotype",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Get all haplotypes"
         ),
         "haplotype": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/haplotype/{{haplotype_id}}",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Get specific haplotype"
         ),
         
         # Phenotype endpoints
         "phenotypes": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/phenotype",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,  # Reduced from 10.0 to PHARMGKB_RATE_LIMIT
             description="Get all phenotypes"
         ),
         "phenotype": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/phenotype/{{phenotype_id}}",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,
             description="Get specific phenotype"
         ),
         
         # Chemical endpoints
         "chemicals": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/chemical",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,
             description="Get all chemicals"
         ),
         "chemical": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/chemical/{{chemical_id}}",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,
             description="Get specific chemical"
         ),
         
         # Disease endpoints
         "diseases": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/disease",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,
             description="Get all diseases"
         ),
         "disease": APIEndpoint(
             url=f"{PHARMGKB_BASE_URL}/v1/disease/{{disease_id}}",
-            rate_limit=10.0,
+            rate_limit=PHARMGKB_RATE_LIMIT,
             description="Get specific disease"
         )
     }

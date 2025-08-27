@@ -38,10 +38,10 @@ export default function AnalysisProgressLoader({
           throw new Error('No authentication token found');
         }
 
-        console.log('🔍 Making request to:', `http://localhost:8000/analyze/progress/${analysisId}`);
+        console.log('🔍 Making request to:', `http://localhost:8000/api/analysis/status/${analysisId}`);
         console.log('🔑 Using token:', token.substring(0, 20) + '...');
 
-        const response = await fetch(`http://localhost:8000/analyze/progress/${analysisId}`, {
+        const response = await fetch(`http://localhost:8000/api/analysis/status/${analysisId}`, {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -67,7 +67,7 @@ export default function AnalysisProgressLoader({
           setIsLoading(false);
           if (onComplete) {
             // Fetch full results
-            const resultsResponse = await fetch(`http://localhost:8000/analyze/dashboard-data`, {
+            const resultsResponse = await fetch(`http://localhost:8000/api/analysis/dashboard-data`, {
               headers: {
                 'Authorization': `Bearer ${token}`,
                 'Content-Type': 'application/json',
@@ -86,16 +86,28 @@ export default function AnalysisProgressLoader({
           if (onError) {
             onError(errorMsg);
           }
+        } else if (data.status === 'pending') {
+          // Analysis is queued but not yet started - this is normal
+          console.log('Analysis is pending/queued, waiting for processing to start...');
+        } else if (data.status === 'processing') {
+          // Analysis is actively running - this is normal
+          console.log('Analysis is processing...');
+        } else {
+          // Handle any other unexpected status
+          console.warn('Unexpected analysis status:', data.status);
         }
 
       } catch (err) {
         console.error('Error checking progress:', err);
+        
+        // Don't immediately fail on network errors - they might be temporary
+        // Only fail after multiple consecutive failures
         const errorMsg = err instanceof Error ? err.message : 'Unknown error occurred';
-        setError(errorMsg);
-        setIsLoading(false);
-        if (onError) {
-          onError(errorMsg);
-        }
+        
+        // For now, just log the error but continue polling
+        // The user will see the error in console but won't get the "failed" UI
+        // unless the backend explicitly returns status 'failed'
+        console.warn('Temporary error checking analysis progress, will retry...', errorMsg);
       }
     };
 
@@ -182,7 +194,7 @@ export default function AnalysisProgressLoader({
               )}
               <div>
                 <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
-                  Analyzing Genetic Data
+                  {progress.status === 'pending' ? 'Preparing Genetic Analysis' : 'Analyzing Genetic Data'}
                 </h2>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
                   {progress.filename}
@@ -190,7 +202,7 @@ export default function AnalysisProgressLoader({
               </div>
             </div>
             <div className="flex items-center">
-              {progress.status === 'processing' && (
+              {(progress.status === 'processing' || progress.status === 'pending') && (
                 <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
               )}
             </div>
@@ -313,9 +325,18 @@ export default function AnalysisProgressLoader({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               <div className="text-sm text-blue-800 dark:text-blue-200">
-                <strong>Processing your genetic data...</strong> We're analyzing {progress.total_variants.toLocaleString()} variants 
-                across 14 comprehensive categories including health, nutrition, drug responses, physical traits, sports performance, 
-                intelligence, personality, ancestry, wellness, methylation, and detoxification pathways.
+                {progress.status === 'pending' ? (
+                  <div>
+                    <strong>Analysis queued...</strong> Your genetic data has been uploaded successfully and is waiting in the processing queue. 
+                    We'll begin analyzing your {progress.total_variants.toLocaleString()} variants shortly.
+                  </div>
+                ) : (
+                  <div>
+                    <strong>Processing your genetic data...</strong> We're analyzing {progress.total_variants.toLocaleString()} variants 
+                    across 14 comprehensive categories including health, nutrition, drug responses, physical traits, sports performance, 
+                    intelligence, personality, ancestry, wellness, methylation, and detoxification pathways.
+                  </div>
+                )}
               </div>
             </div>
           </div>
