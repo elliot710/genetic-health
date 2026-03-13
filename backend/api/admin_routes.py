@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from datetime import datetime
 
 from ..db.database import get_session
-from ..db.models import User, PanelMarkerConfig, GeneticAnalysis, VariantMapping
+from ..db.models import User, PanelMarkerConfig, GeneticAnalysis, VariantMapping, PendingDiscovery
 from .auth_routes import get_current_user
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -50,6 +50,7 @@ class MarkerConfigResponse(BaseModel):
     description: Optional[str] = None
     category: Optional[str] = None
     is_active: bool = True
+    is_auto_discovered: bool = False
     created_at: Optional[datetime] = None
 
     class Config:
@@ -551,3 +552,298 @@ async def delete_variant_mapping(
     await db.delete(obj)
     await db.commit()
     return {"detail": "Mapping deleted"}
+
+
+# --- Pending Discoveries ---
+
+class PendingDiscoveryResponse(BaseModel):
+    id: int
+    discovery_type: str
+    rsid: str
+    gene: Optional[str] = None
+    panel_id: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    map_type: Optional[str] = None
+    mapping_category: Optional[str] = None
+    mapping_data: Optional[dict] = None
+    source_data: Optional[dict] = None
+    status: str
+    reviewed_by: Optional[int] = None
+    reviewed_at: Optional[datetime] = None
+    rejection_reason: Optional[str] = None
+    discovered_by: Optional[int] = None
+    lookup_count: int = 1
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class DiscoverySummary(BaseModel):
+    total_pending: int
+    total_approved: int
+    total_rejected: int
+    panel_marker_pending: int
+    variant_mapping_pending: int
+
+
+class DiscoveryReviewAction(BaseModel):
+    action: str  # 'approve' or 'reject'
+    rejection_reason: Optional[str] = None
+    # Optional overrides before approving
+    description: Optional[str] = None
+    category: Optional[str] = None
+    mapping_data: Optional[dict] = None
+
+
+@router.get("/discoveries/summary", response_model=DiscoverySummary)
+async def get_discovery_summary(
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Get summary counts of pending discoveries."""
+    result = await db.execute(
+        select(
+            PendingDiscovery.status,
+            PendingDiscovery.discovery_type,
+            func.count().label("cnt"),
+        )
+        .group_by(PendingDiscovery.status, PendingDiscovery.discovery_type)
+    )
+    rows = result.all()
+
+    summary = {
+        'total_pending': 0, 'total_approved': 0, 'total_rejected': 0,
+        'panel_marker_pending': 0, 'variant_mapping_pending': 0,
+    }
+    for status_val, dtype, cnt in rows:
+        if status_val == 'pending':
+            summary['total_pending'] += cnt
+            if dtype == 'panel_marker':
+                summary['panel_marker_pending'] = cnt
+            elif dtype == 'variant_mapping':
+                summary['variant_mapping_pending'] = cnt
+        elif status_val == 'approved':
+            summary['total_approved'] += cnt
+        elif status_val == 'rejected':
+            summary['total_rejected'] += cnt
+
+    return DiscoverySummary(**summary)
+
+
+@router.get("/discoveries", response_model=List[PendingDiscoveryResponse])
+async def list_discoveries(
+    status_filter: Optional[str] = Query('pending', pattern="^(pending|approved|rejected|all)$"),
+    discovery_type: Optional[str] = Query(None, pattern="^(panel_marker|variant_mapping)$"),
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """List pending discoveries with optional filters."""
+    q = select(PendingDiscovery)
+    if status_filter and status_filter != 'all':
+        q = q.where(PendingDiscovery.status == status_filter)
+    if discovery_type:
+        q = q.where(PendingDiscovery.discovery_type == discovery_type)
+    q = q.order_by(PendingDiscovery.lookup_count.desc(), PendingDiscovery.created_at.desc())
+
+    result = await db.execute(q)
+    return result.scalars().all()
+
+
+@router.post("/discoveries/{discovery_id}/review", response_model=PendingDiscoveryResponse)
+async def review_discovery(
+    discovery_id: int,
+    review: DiscoveryReviewAction,
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Approve or reject a pending discovery. Approving creates the live entry."""
+    if review.action not in ('approve', 'reject'):
+        raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
+
+    result = await db.execute(
+        select(PendingDiscovery).where(PendingDiscovery.id == discovery_id)
+    )
+    discovery = result.scalar_one_or_none()
+    if not discovery:
+        raise HTTPException(status_code=404, detail="Discovery not found")
+    if discovery.status != 'pending':
+        raise HTTPException(status_code=409, detail=f"Discovery already {discovery.status}")
+
+    if review.action == 'reject':
+        discovery.status = 'rejected'
+        discovery.reviewed_by = admin.id
+        discovery.reviewed_at = func.now()
+        discovery.rejection_reason = review.rejection_reason
+        await db.commit()
+        await db.refresh(discovery)
+        return discovery
+
+    # Approve: create the live entry
+    if discovery.discovery_type == 'panel_marker':
+        # Apply overrides if provided
+        desc = review.description or discovery.description
+        cat = review.category or discovery.category
+
+        # Final duplicate check
+        existing = await db.execute(
+            select(PanelMarkerConfig.id).where(
+                PanelMarkerConfig.panel_id == discovery.panel_id,
+                PanelMarkerConfig.rsid == discovery.rsid,
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            discovery.status = 'rejected'
+            discovery.reviewed_by = admin.id
+            discovery.reviewed_at = func.now()
+            discovery.rejection_reason = 'Already exists in panel markers'
+            await db.commit()
+            await db.refresh(discovery)
+            raise HTTPException(status_code=409, detail="Marker already exists in the target panel")
+
+        marker = PanelMarkerConfig(
+            panel_id=discovery.panel_id,
+            rsid=discovery.rsid,
+            gene=discovery.gene,
+            description=desc,
+            category=cat,
+            is_active=True,
+            is_auto_discovered=True,
+        )
+        db.add(marker)
+
+    elif discovery.discovery_type == 'variant_mapping':
+        m_data = review.mapping_data or discovery.mapping_data
+        m_cat = discovery.mapping_category
+
+        # Final duplicate check
+        existing = await db.execute(
+            select(VariantMapping.id).where(
+                VariantMapping.category == m_cat,
+                VariantMapping.map_type == discovery.map_type,
+                VariantMapping.key == discovery.rsid,
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            discovery.status = 'rejected'
+            discovery.reviewed_by = admin.id
+            discovery.reviewed_at = func.now()
+            discovery.rejection_reason = 'Already exists in variant mappings'
+            await db.commit()
+            await db.refresh(discovery)
+            raise HTTPException(status_code=409, detail="Mapping already exists")
+
+        mapping = VariantMapping(
+            category=m_cat,
+            map_type=discovery.map_type,
+            key=discovery.rsid,
+            data=m_data,
+            is_active=True,
+            is_auto_discovered=True,
+        )
+        db.add(mapping)
+
+    discovery.status = 'approved'
+    discovery.reviewed_by = admin.id
+    discovery.reviewed_at = func.now()
+    await db.commit()
+    await db.refresh(discovery)
+    return discovery
+
+
+@router.post("/discoveries/bulk-review")
+async def bulk_review_discoveries(
+    discovery_ids: List[int],
+    review: DiscoveryReviewAction,
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Bulk approve or reject multiple discoveries."""
+    if review.action not in ('approve', 'reject'):
+        raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
+
+    result = await db.execute(
+        select(PendingDiscovery).where(
+            PendingDiscovery.id.in_(discovery_ids),
+            PendingDiscovery.status == 'pending',
+        )
+    )
+    discoveries = result.scalars().all()
+
+    approved = 0
+    rejected = 0
+    skipped = 0
+
+    for discovery in discoveries:
+        if review.action == 'reject':
+            discovery.status = 'rejected'
+            discovery.reviewed_by = admin.id
+            discovery.reviewed_at = func.now()
+            discovery.rejection_reason = review.rejection_reason
+            rejected += 1
+            continue
+
+        # Approve with duplicate check
+        if discovery.discovery_type == 'panel_marker':
+            existing = await db.execute(
+                select(PanelMarkerConfig.id).where(
+                    PanelMarkerConfig.panel_id == discovery.panel_id,
+                    PanelMarkerConfig.rsid == discovery.rsid,
+                )
+            )
+            if existing.scalar_one_or_none() is not None:
+                discovery.status = 'rejected'
+                discovery.reviewed_by = admin.id
+                discovery.reviewed_at = func.now()
+                discovery.rejection_reason = 'Duplicate - already exists'
+                skipped += 1
+                continue
+
+            db.add(PanelMarkerConfig(
+                panel_id=discovery.panel_id,
+                rsid=discovery.rsid,
+                gene=discovery.gene,
+                description=discovery.description,
+                category=discovery.category,
+                is_active=True,
+                is_auto_discovered=True,
+            ))
+
+        elif discovery.discovery_type == 'variant_mapping':
+            existing = await db.execute(
+                select(VariantMapping.id).where(
+                    VariantMapping.category == discovery.mapping_category,
+                    VariantMapping.map_type == discovery.map_type,
+                    VariantMapping.key == discovery.rsid,
+                )
+            )
+            if existing.scalar_one_or_none() is not None:
+                discovery.status = 'rejected'
+                discovery.reviewed_by = admin.id
+                discovery.reviewed_at = func.now()
+                discovery.rejection_reason = 'Duplicate - already exists'
+                skipped += 1
+                continue
+
+            db.add(VariantMapping(
+                category=discovery.mapping_category,
+                map_type=discovery.map_type,
+                key=discovery.rsid,
+                data=discovery.mapping_data,
+                is_active=True,
+                is_auto_discovered=True,
+            ))
+
+        discovery.status = 'approved'
+        discovery.reviewed_by = admin.id
+        discovery.reviewed_at = func.now()
+        approved += 1
+
+    await db.commit()
+    return {
+        "detail": f"Bulk review complete: {approved} approved, {rejected} rejected, {skipped} skipped (duplicates)",
+        "approved": approved,
+        "rejected": rejected,
+        "skipped": skipped,
+    }

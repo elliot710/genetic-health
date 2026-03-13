@@ -363,6 +363,7 @@ class PanelMarkerConfig(Base):
     description = Column(String)  # Human-readable description
     category = Column(String)  # Sub-category within panel
     is_active = Column(Boolean, default=True)
+    is_auto_discovered = Column(Boolean, default=False)  # True if created by auto-discovery
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
@@ -382,6 +383,7 @@ class VariantMapping(Base):
     key = Column(String, nullable=False)                     # e.g. 'rs7903146' or 'TP73'
     data = Column(JSON, nullable=False)                      # Metadata dict (varies by category)
     is_active = Column(Boolean, default=True)
+    is_auto_discovered = Column(Boolean, default=False)  # True if created by auto-discovery
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -402,3 +404,44 @@ class VariantLookupCache(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     lookup_count = Column(Integer, default=1)
+
+
+class PendingDiscovery(Base):
+    """Auto-discovered panel markers and variant mappings from user lookups.
+    Requires admin approval before going live."""
+    __tablename__ = "pending_discoveries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    discovery_type = Column(String, nullable=False)  # 'panel_marker' or 'variant_mapping'
+    rsid = Column(String, nullable=False, index=True)
+    gene = Column(String)
+    
+    # For panel_marker discoveries
+    panel_id = Column(String)  # e.g. 'health', 'drug_responses'
+    description = Column(String)
+    category = Column(String)  # Sub-category within panel
+    
+    # For variant_mapping discoveries
+    map_type = Column(String)  # 'rsid' or 'gene'
+    mapping_category = Column(String)  # e.g. 'health', 'drug'
+    mapping_data = Column(JSON)  # The data dict for VariantMapping
+    
+    # Source data from the lookup that triggered the discovery
+    source_data = Column(JSON)  # Snapshot of lookup data used to generate this
+    
+    # Status tracking
+    status = Column(String, default='pending', nullable=False)  # 'pending', 'approved', 'rejected'
+    reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    rejection_reason = Column(String, nullable=True)
+    
+    # Discovery metadata
+    discovered_by = Column(Integer, ForeignKey("users.id"), nullable=True)  # User who triggered the lookup
+    lookup_count = Column(Integer, default=1)  # How many lookups produced the same suggestion
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        Index('ix_pending_discoveries_type_rsid_panel', 'discovery_type', 'rsid', 'panel_id', unique=True),
+        Index('ix_pending_discoveries_status', 'status'),
+    )

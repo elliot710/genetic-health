@@ -11,6 +11,7 @@ from sqlalchemy import select, func as sa_func
 import re
 
 from ..services.genetic_api_service import GeneticAPIService
+from ..services.discovery_service import process_lookup_discoveries
 from ..db.database import get_session
 from ..db.models import (
     GeneticAnalysis, AnalysisVariant, GeneticMarker,
@@ -286,6 +287,15 @@ async def lookup_variant(
                 await session.commit()
             except Exception:
                 pass
+            
+            # Auto-discover panel markers and variant mappings for admin review
+            if found:
+                try:
+                    user_id = current_user.id if current_user else None
+                    await process_lookup_discoveries(session, variant_id, response_data, user_id)
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
             
             return VariantLookupResponse(
                 variant_id=variant_id,
