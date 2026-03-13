@@ -388,3 +388,17 @@ class VariantMapping(Base):
     __table_args__ = (
         Index('ix_variant_mappings_cat_type_key', 'category', 'map_type', 'key', unique=True),
     )
+
+
+class VariantLookupCache(Base):
+    """Caches external variant lookup results to avoid redundant API calls."""
+    __tablename__ = "variant_lookup_cache"
+
+    id = Column(Integer, primary_key=True, index=True)
+    variant_id = Column(String, unique=True, nullable=False, index=True)
+    found = Column(Boolean, default=False)
+    response_data = Column(JSON)        # Full processed response (basic_info, clinical_significance, etc.)
+    raw_annotations = Column(JSON)      # Raw API annotations for re-processing
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    lookup_count = Column(Integer, default=1)

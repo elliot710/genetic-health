@@ -5,12 +5,12 @@ Fixed version with correct SQLAlchemy ORM usage patterns.
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func as sa_func, outerjoin
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel
 
 from ..db.database import get_session
-from ..db.models import GeneticAnalysis, HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait, SportsPerformance, CognitiveProfile, PersonalityTrait, AncestryResult, CarrierStatus, WellnessMetric, MethylationProfile, DetoxificationProfile, RareMutation, UncommonMutation
+from ..db.models import GeneticAnalysis, HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait, SportsPerformance, CognitiveProfile, PersonalityTrait, AncestryResult, CarrierStatus, WellnessMetric, MethylationProfile, DetoxificationProfile, RareMutation, UncommonMutation, AnalysisVariant, GeneticMarker
 from ..core.container import ServiceManager
 from .auth_routes import get_current_user
 
@@ -445,30 +445,28 @@ async def get_dashboard_data(
         if not primary_analysis:
             primary_analysis = analyses[0]  # Use the most recent one
         
-        # Calculate totals
-        total_variants = sum(getattr(a, 'total_variants', 0) or 0 for a in analyses)
-        processed_variants = sum(getattr(a, 'processed_variants', 0) or 0 for a in analyses)
+        # Calculate totals from primary analysis only
+        total_variants = getattr(primary_analysis, 'total_variants', 0) or 0
+        processed_variants = getattr(primary_analysis, 'processed_variants', 0) or 0
         
-        # Count actual variant annotations for more accurate "analyzed" count
+        # Count actual variant annotations for the primary analysis
         from ..db.models import VariantAnnotation, SharedVariantAnnotation
-        annotation_result = await db.execute(
-            select(VariantAnnotation)
-            .join(GeneticAnalysis, VariantAnnotation.analysis_id == GeneticAnalysis.id)
-            .where(GeneticAnalysis.user_id == current_user.id)
+        analyzed_count = await db.execute(
+            select(sa_func.count(sa_func.distinct(VariantAnnotation.analysis_variant_id)))
+            .where(VariantAnnotation.analysis_id == primary_analysis.id)
         )
-        analyzed_variants = len(annotation_result.scalars().all())
+        analyzed_variants = analyzed_count.scalar() or 0
         
-        # Count insights (annotations with meaningful data) using shared annotations
-        insights_result = await db.execute(
-            select(VariantAnnotation)
-            .join(GeneticAnalysis, VariantAnnotation.analysis_id == GeneticAnalysis.id)
+        # Count insights (unique variants with meaningful annotation data)
+        insights_count = await db.execute(
+            select(sa_func.count(sa_func.distinct(VariantAnnotation.analysis_variant_id)))
             .join(SharedVariantAnnotation, VariantAnnotation.shared_annotation_id == SharedVariantAnnotation.id)
             .where(
-                GeneticAnalysis.user_id == current_user.id,
+                VariantAnnotation.analysis_id == primary_analysis.id,
                 SharedVariantAnnotation.ensembl_data.isnot(None)
             )
         )
-        insights_found = len(insights_result.scalars().all())
+        insights_found = insights_count.scalar() or 0
         
         # Get upload date safely
         upload_date = getattr(primary_analysis, 'upload_date', None)
@@ -487,7 +485,40 @@ async def get_dashboard_data(
             },
         }
 
-        analysis_ids = [a.id for a in analyses]
+        # Only use completed analyses for category data
+        analysis_ids = [a.id for a in analyses if getattr(a, 'analysis_status', '') == 'completed']
+        if not analysis_ids:
+            analysis_ids = [primary_analysis.id]
+        
+        # Get real variant data for the overview page
+        variant_result = await db.execute(
+            select(
+                GeneticMarker.chromosome,
+                GeneticMarker.position,
+                GeneticMarker.rsid,
+                GeneticMarker.ref_allele,
+                GeneticMarker.alt_alleles,
+                AnalysisVariant.genotype
+            )
+            .join(GeneticMarker, AnalysisVariant.marker_id == GeneticMarker.id)
+            .where(AnalysisVariant.analysis_id == primary_analysis.id)
+            .order_by(GeneticMarker.chromosome, GeneticMarker.position)
+        )
+        variant_rows = variant_result.all()
+        
+        dashboard_data["real_data"] = {
+            "variants": [
+                {
+                    "chromosome": v.chromosome,
+                    "position": v.position,
+                    "rsid": v.rsid,
+                    "ref_allele": v.ref_allele,
+                    "alt_allele": v.alt_alleles,
+                    "genotype": v.genotype
+                }
+                for v in variant_rows
+            ]
+        }
 
         # Health risks
         hr = await db.execute(
