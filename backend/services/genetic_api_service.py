@@ -163,12 +163,12 @@ class OptimizedGeneticAPIService:
                         'clinpgx': APIEndpoint(
                 url='https://api.clinpgx.org/v1/data/variant/',
                 timeout=15,
-                rate_limit=2.0,
+                rate_limit=1.0,  # Lowered from 2.0 — server returns 429 at higher rates
                 headers={'Accept': 'application/json'}
             ),
             'snpedia': APIEndpoint(
                 url='https://bots.snpedia.com/api.php',
-                rate_limit=2.0,  # Increased from 1.0 for speed
+                rate_limit=2.0,
                 timeout=15.0
             )
         }
@@ -564,41 +564,97 @@ class OptimizedGeneticAPIService:
             return {'found': False, 'source': 'snpedia', 'error': str(e)}
     
     async def batch_annotate_variants(self, rsids: List[str], strategy: str = 'comprehensive') -> Dict[str, Optional[Dict[str, Any]]]:
-        """Annotate multiple variants in batch - always comprehensive."""
+        """Annotate multiple variants with each API source running independently.
+        
+        Each API (Ensembl, ClinVar, ClinPGx, SNPedia) processes all rsids at its
+        own rate without blocking the others. Results are merged per-variant at the end.
+        """
         if not rsids:
             return {}
+
+        # Filter to valid rsids
+        valid_rsids = [r for r in rsids if r and r.startswith('rs')]
+        if not valid_rsids:
+            return {}
+
+        # Run each API source independently — fast APIs finish first,
+        # slow APIs (ClinPGx @ 2 req/s) don't block the rest
+        api_sources = [
+            ('ensembl', self._get_ensembl_annotation, 8),
+            ('clinvar', self._get_clinvar_annotation, 5),
+            ('clinpgx', self._get_clinpgx_annotation, 2),
+            ('snpedia', self._get_snpedia_annotation, 2),
+        ]
+
+        source_tasks = [
+            self._batch_single_api(valid_rsids, api_func, name, max_concurrent)
+            for name, api_func, max_concurrent in api_sources
+        ]
+
+        all_source_results = await asyncio.gather(*source_tasks, return_exceptions=True)
+
+        # Merge per-variant from all sources
+        source_names = [name for name, _, _ in api_sources]
+        results: Dict[str, Optional[Dict[str, Any]]] = {}
+
+        for rsid in valid_rsids:
+            annotation: Dict[str, Any] = {
+                'rsid': rsid,
+                'annotations': {},
+                'sources_queried': source_names,
+                'success_count': 0,
+            }
+
+            for idx, source_name in enumerate(source_names):
+                if isinstance(all_source_results[idx], Exception):
+                    continue
+                source_data = all_source_results[idx].get(rsid)
+                if source_data and isinstance(source_data, dict) and source_data.get('found'):
+                    annotation['annotations'][source_name] = source_data
+                    annotation['success_count'] += 1
+
+            results[rsid] = annotation if annotation['success_count'] > 0 else None
+
+        return results
+
+    async def _batch_single_api(
+        self,
+        rsids: List[str],
+        api_func,
+        source_name: str,
+        max_concurrent: int = 5,
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
+        """Process all rsids through a single API source at its own rate.
         
-        # Always use comprehensive annotation regardless of strategy
-        annotation_method = self.annotate_variant
-        
-        # Process in controlled batches with maximum concurrency
-        batch_size = min(settings.api.batch_size, 5)  # Very small batches for responsiveness
-        semaphore = Semaphore(min(settings.api.max_concurrent, 3))  # Limit concurrency
-        
-        async def annotate_with_semaphore(rsid: str):
+        Each source runs independently with its own concurrency limit.
+        The per-endpoint RateLimiter still enforces the actual req/s cap.
+        """
+        results: Dict[str, Optional[Dict[str, Any]]] = {}
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def process_one(rsid: str):
             async with semaphore:
-                return await annotation_method(rsid)
-        
-        results = {}
-        for i in range(0, len(rsids), batch_size):
-            batch = rsids[i:i + batch_size]
-            tasks = [annotate_with_semaphore(rsid) for rsid in batch]
-            
-            # Yield control before processing each batch
-            await asyncio.sleep(0.01)
-            
-            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            # Yield control after processing each batch
-            await asyncio.sleep(0.01)
-            
-            for rsid, result in zip(batch, batch_results):
-                if isinstance(result, Exception):
-                    logger.error(f"Batch annotation error for {rsid}: {result}")
-                    results[rsid] = None
-                else:
-                    results[rsid] = result
-        
+                try:
+                    return rsid, await api_func(rsid)
+                except Exception as e:
+                    logger.error(f"{source_name} error for {rsid}: {e}")
+                    return rsid, None
+
+        # Process in chunks to avoid creating too many coroutines at once
+        chunk_size = 50
+        for i in range(0, len(rsids), chunk_size):
+            chunk = rsids[i:i + chunk_size]
+            chunk_results = await asyncio.gather(
+                *(process_one(r) for r in chunk),
+                return_exceptions=True,
+            )
+            for item in chunk_results:
+                if isinstance(item, Exception):
+                    continue
+                rsid, data = item
+                results[rsid] = data
+            await asyncio.sleep(0)  # yield control
+
         return results
 
 

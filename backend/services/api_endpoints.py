@@ -30,7 +30,7 @@ RATE_LIMITS = {
     'ENSEMBL': 15.0,  # requests per second
     
     # ClinPGx API (formerly PharmGKB)
-    'CLINPGX': 2.0,  # requests per second
+    'CLINPGX': 1.0,  # requests per second — server returns 429 at higher rates
     
     # ClinVar API (NCBI-based, same as NCBI)
     'CLINVAR': 3.0,  # requests per second
