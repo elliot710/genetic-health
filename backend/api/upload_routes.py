@@ -12,9 +12,9 @@ from .auth_routes import get_current_user
 from ..db.database import get_session
 from ..db.models import GeneticAnalysis, AnalysisVariant
 from ..utils.vcf_parser import VCFParser
-from ..services.smart_variant_uploader import SmartVariantUploader
+from ..services.variant_uploader import VariantUploader
+from ..services.analysis_service import ComprehensiveAnalysisService
 from ..services.analysis_queue import queue_analysis
-from ..services.comprehensive_analysis_service import ComprehensiveAnalysisService
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ async def upload_vcf(
         # Get the analysis ID value after refresh
         analysis_id = getattr(analysis, 'id')
         
-        uploader = SmartVariantUploader(session)
+        uploader = VariantUploader(session)
         processed_count, new_count = await uploader.upload_variants(analysis_id, variants_data)
         
         # Update total_variants in the analysis record
@@ -68,46 +68,18 @@ async def upload_vcf(
         )
         await session.commit()
 
-        # Start comprehensive analysis immediately (no background queue)
-        try:
-            analysis_service = ComprehensiveAnalysisService(user_id=current_user.id)
-            analysis_result = await analysis_service.process_analysis(analysis_id)
-            
-            if analysis_result.get('success'):
-                return JSONResponse({
-                    "status": "success",
-                    "analysis_id": analysis_id,
-                    "message": "VCF file processed and analyzed successfully",
-                    "processed_variants": processed_count,
-                    "reused_annotations": analysis_result.get('reused_annotations', 0),
-                    "new_annotations": analysis_result.get('new_annotations', 0),
-                    "insights_generated": analysis_result.get('insights_generated', 0),
-                    "processing_time": analysis_result.get('processing_time', 0)
-                })
-            else:
-                return JSONResponse({
-                    "status": "completed_with_errors",
-                    "analysis_id": analysis_id,
-                    "message": "VCF file processed but analysis had errors",
-                    "processed_variants": processed_count,
-                    "error": analysis_result.get('error', 'Unknown analysis error')
-                })
-                
-        except Exception as analysis_error:
-            logger.error(f"Comprehensive analysis failed: {analysis_error}")
-            
-            # Fall back to background queue if immediate analysis fails
-            success = await queue_analysis(analysis_id, current_user.id, priority=1)
-            if not success:
-                logger.warning(f"Failed to queue analysis {analysis_id} for user {current_user.id}")
-
-            return JSONResponse({
-                "status": "uploaded",
-                "analysis_id": analysis_id,
-                "message": "VCF file uploaded successfully, analysis queued in background",
-                "processed_variants": processed_count,
-                "analysis_error": str(analysis_error)
-            })
+        # Return immediately - frontend will trigger background analysis via /api/analysis/start/{id}
+        return JSONResponse({
+            "status": "uploaded",
+            "analysis_id": analysis_id,
+            "message": "VCF file uploaded successfully",
+            "processed_variants": processed_count,
+            "stats": {
+                "total_variants": processed_count,
+                "new_variants": new_count,
+                "reused_variants": processed_count - new_count
+            }
+        })
 
     except Exception as e:
         logger.error(f"VCF upload error: {e}")
@@ -153,7 +125,7 @@ async def upload_csv(
         # Get the analysis ID value after refresh
         analysis_id = getattr(analysis, 'id')
         
-        uploader = SmartVariantUploader(session)
+        uploader = VariantUploader(session)
         processed_count, new_count = await uploader.upload_variants(analysis_id, variants_data)
         
         # Update total_variants in the analysis record
@@ -164,49 +136,19 @@ async def upload_csv(
         )
         await session.commit()
 
-        # Start comprehensive analysis immediately (no background queue)
-        try:
-            analysis_service = ComprehensiveAnalysisService(user_id=current_user.id)
-            analysis_result = await analysis_service.process_analysis(analysis_id)
-            
-            if analysis_result.get('success'):
-                return JSONResponse({
-                    "status": "success",
-                    "analysis_id": analysis_id,
-                    "message": "CSV file processed and analyzed successfully",
-                    "processed_variants": processed_count,
-                    "reused_annotations": analysis_result.get('reused_annotations', 0),
-                    "new_annotations": analysis_result.get('new_annotations', 0),
-                    "insights_generated": analysis_result.get('insights_generated', 0),
-                    "processing_time": analysis_result.get('processing_time', 0),
-                    "redirect_to_dashboard": True
-                })
-            else:
-                return JSONResponse({
-                    "status": "completed_with_errors",
-                    "analysis_id": analysis_id,
-                    "message": "CSV file processed but analysis had errors",
-                    "processed_variants": processed_count,
-                    "error": analysis_result.get('error', 'Unknown analysis error'),
-                    "redirect_to_dashboard": True
-                })
-                
-        except Exception as analysis_error:
-            logger.error(f"Comprehensive analysis failed: {analysis_error}")
-            
-            # Fall back to background queue if immediate analysis fails
-            success = await queue_analysis(analysis_id, current_user.id, priority=1)
-            if not success:
-                logger.warning(f"Failed to queue analysis {analysis_id} for user {current_user.id}")
-
-            return JSONResponse({
-                "status": "uploaded",
-                "analysis_id": analysis_id,
-                "message": "CSV file uploaded successfully, analysis queued in background",
-                "processed_variants": processed_count,
-                "analysis_error": str(analysis_error),
-                "redirect_to_dashboard": True
-            })
+        # Return immediately - frontend will trigger background analysis via /api/analysis/start/{id}
+        return JSONResponse({
+            "status": "uploaded",
+            "analysis_id": analysis_id,
+            "message": "CSV file uploaded successfully",
+            "processed_variants": processed_count,
+            "stats": {
+                "total_variants": processed_count,
+                "new_variants": new_count,
+                "reused_variants": processed_count - new_count
+            },
+            "redirect_to_dashboard": True
+        })
 
     except Exception as e:
         logger.error(f"CSV upload error: {e}")

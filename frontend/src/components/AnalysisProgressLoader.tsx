@@ -1,4 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { AlertCircle, Check, ChevronLeft, ChevronRight, Clock, Info, Loader2 } from 'lucide-react';
+import { getTheme } from '../utils/theme';
+import { Button } from '@/components/ui/button';
 
 interface AnalysisProgress {
   analysis_id: number;
@@ -13,13 +16,15 @@ interface AnalysisProgress {
 
 interface AnalysisProgressLoaderProps {
   analysisId: number;
-  onComplete?: (results: any) => void;
+  isDarkMode?: boolean;
+  onComplete?: (results: Record<string, unknown>) => void;
   onError?: (error: string) => void;
   onBack?: () => void;
 }
 
 export default function AnalysisProgressLoader({ 
   analysisId, 
+  isDarkMode: isDarkModeProp,
   onComplete, 
   onError,
   onBack
@@ -27,6 +32,17 @@ export default function AnalysisProgressLoader({
   const [progress, setProgress] = useState<AnalysisProgress | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Use prop if provided, otherwise read from localStorage
+  const [localDarkMode, setLocalDarkMode] = useState(false);
+  useEffect(() => {
+    if (isDarkModeProp === undefined) {
+      const saved = localStorage.getItem('darkMode');
+      if (saved) setLocalDarkMode(JSON.parse(saved));
+    }
+  }, [isDarkModeProp]);
+  const isDarkMode = isDarkModeProp ?? localDarkMode;
+  const theme = getTheme(isDarkMode);
 
   useEffect(() => {
     if (!analysisId) return;
@@ -123,18 +139,16 @@ export default function AnalysisProgressLoader({
   if (error) {
     return (
       <div className="max-w-2xl mx-auto p-6">
-        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+        <div className={`${theme.error.bg} border ${theme.error.border} rounded-lg p-4`}>
           <div className="flex items-center">
             <div className="flex-shrink-0">
-              <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-              </svg>
+              <AlertCircle className={`h-5 w-5 ${theme.error.text}`} />
             </div>
             <div className="ml-3">
-              <h3 className="text-sm font-medium text-red-800 dark:text-red-200">
+              <h3 className={`text-sm font-medium ${theme.error.text}`}>
                 Analysis Error
               </h3>
-              <div className="mt-2 text-sm text-red-700 dark:text-red-300">
+              <div className={`mt-2 text-sm ${theme.text.secondary}`}>
                 {error}
               </div>
             </div>
@@ -147,9 +161,9 @@ export default function AnalysisProgressLoader({
   if (!progress) {
     return (
       <div className="max-w-2xl mx-auto p-6">
-        <div className="animate-pulse">
-          <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-3/4 mb-4"></div>
-          <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-1/2"></div>
+        <div className="animate-pulse space-y-4">
+          <div className={`h-4 ${theme.glassSecondary} rounded w-3/4`}></div>
+          <div className={`h-4 ${theme.glassSecondary} rounded w-1/2`}></div>
         </div>
       </div>
     );
@@ -176,34 +190,34 @@ export default function AnalysisProgressLoader({
 
   return (
     <div className="max-w-2xl mx-auto p-6">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700">
+      <div className={`${theme.glass} rounded-lg shadow-lg border ${theme.glassBorder}`}>
         <div className="p-6">
           {/* Header */}
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center space-x-3">
               {onBack && (
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={onBack}
-                  className="flex items-center justify-center w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 transition-colors duration-200"
                   title="Back to dashboard"
+                  className="h-8 w-8"
                 >
-                  <svg className="w-4 h-4 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                  </svg>
-                </button>
+                  <ChevronLeft className={`w-4 h-4 ${theme.text.secondary}`} />
+                </Button>
               )}
               <div>
-                <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
+                <h2 className={`text-xl font-semibold ${theme.text.primary}`}>
                   {progress.status === 'pending' ? 'Preparing Genetic Analysis' : 'Analyzing Genetic Data'}
                 </h2>
-                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                <p className={`text-sm ${theme.text.tertiary} mt-1`}>
                   {progress.filename}
                 </p>
               </div>
             </div>
             <div className="flex items-center">
               {(progress.status === 'processing' || progress.status === 'pending') && (
-                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                <Loader2 className={`h-6 w-6 animate-spin ${theme.primary.text}`} />
               )}
             </div>
           </div>
@@ -211,16 +225,16 @@ export default function AnalysisProgressLoader({
           {/* Progress Bar */}
           <div className="mb-6">
             <div className="flex justify-between items-center mb-2">
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              <span className={`text-sm font-medium ${theme.text.secondary}`}>
                 Progress
               </span>
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              <span className={`text-sm font-medium ${theme.text.secondary}`}>
                 {progressPercentage}%
               </span>
             </div>
-            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3">
+            <div className={`w-full ${theme.glassSecondary} rounded-full h-3`}>
               <div
-                className="bg-gradient-to-r from-blue-500 to-green-500 h-3 rounded-full transition-all duration-500"
+                className="bg-gradient-to-r from-teal-500 to-cyan-500 h-3 rounded-full transition-all duration-500"
                 style={{ width: `${progressPercentage}%` }}
               />
             </div>
@@ -228,29 +242,27 @@ export default function AnalysisProgressLoader({
 
           {/* Current Step */}
           <div className="mb-6">
-            <div className="flex items-center text-sm text-gray-600 dark:text-gray-400">
-              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-              </svg>
+            <div className={`flex items-center text-sm ${theme.text.tertiary}`}>
+              <ChevronRight className="w-4 h-4 mr-2" />
               {progress.current_step}
             </div>
           </div>
 
           {/* Statistics Grid */}
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
-              <div className="text-2xl font-bold text-gray-900 dark:text-white">
+            <div className={`${theme.glassSecondary} rounded-lg p-4`}>
+              <div className={`text-2xl font-bold ${theme.text.primary}`}>
                 {progress.total_variants.toLocaleString()}
               </div>
-              <div className="text-sm text-gray-600 dark:text-gray-400">
+              <div className={`text-sm ${theme.text.tertiary}`}>
                 Total Variants
               </div>
             </div>
-            <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
-              <div className="text-2xl font-bold text-gray-900 dark:text-white">
+            <div className={`${theme.glassSecondary} rounded-lg p-4`}>
+              <div className={`text-2xl font-bold ${theme.text.primary}`}>
                 {progress.processed_variants.toLocaleString()}
               </div>
-              <div className="text-sm text-gray-600 dark:text-gray-400">
+              <div className={`text-sm ${theme.text.tertiary}`}>
                 Processed
               </div>
             </div>
@@ -259,10 +271,8 @@ export default function AnalysisProgressLoader({
           {/* Time Remaining */}
           {remainingTime && remainingTime > 0 && (
             <div className="mb-6">
-              <div className="flex items-center text-sm text-gray-600 dark:text-gray-400">
-                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
+              <div className={`flex items-center text-sm ${theme.text.tertiary}`}>
+                <Clock className="w-4 h-4 mr-2" />
                 {formatTimeRemaining(remainingTime)}
               </div>
             </div>
@@ -270,7 +280,7 @@ export default function AnalysisProgressLoader({
 
           {/* Processing Steps */}
           <div className="space-y-3">
-            <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+            <div className={`text-sm font-medium ${theme.text.secondary} mb-3`}>
               Analysis Steps
             </div>
             
@@ -294,23 +304,21 @@ export default function AnalysisProgressLoader({
               <div key={index} className="flex items-center">
                 <div className={`w-4 h-4 rounded-full mr-3 flex items-center justify-center ${
                   item.status === 'completed' 
-                    ? 'bg-green-500' 
+                    ? 'bg-teal-500' 
                     : item.status === 'current' 
-                      ? 'bg-blue-500 animate-pulse' 
-                      : 'bg-gray-300 dark:bg-gray-600'
+                      ? 'bg-cyan-500 animate-pulse' 
+                      : theme.glassSecondary
                 }`}>
                   {item.status === 'completed' && (
-                    <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                    </svg>
+                    <Check className="w-2.5 h-2.5 text-white" />
                   )}
                 </div>
                 <span className={`text-sm ${
                   item.status === 'completed' 
-                    ? 'text-green-700 dark:text-green-400' 
+                    ? theme.success.text 
                     : item.status === 'current'
-                      ? 'text-blue-700 dark:text-blue-400 font-medium'
-                      : 'text-gray-500 dark:text-gray-500'
+                      ? `${theme.primary.text} font-medium`
+                      : theme.text.muted
                 }`}>
                   {item.step}
                 </span>
@@ -319,12 +327,10 @@ export default function AnalysisProgressLoader({
           </div>
 
           {/* Status Message */}
-          <div className="mt-6 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+          <div className={`mt-6 p-4 ${theme.glass} border ${theme.primary.border} rounded-lg`}>
             <div className="flex items-center">
-              <svg className="w-5 h-5 text-blue-600 dark:text-blue-400 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <div className="text-sm text-blue-800 dark:text-blue-200">
+              <Info className={`w-5 h-5 ${theme.primary.text} mr-3 flex-shrink-0`} />
+              <div className={`text-sm ${theme.text.secondary}`}>
                 {progress.status === 'pending' ? (
                   <div>
                     <strong>Analysis queued...</strong> Your genetic data has been uploaded successfully and is waiting in the processing queue. 

@@ -123,3 +123,6 @@ SELECT * FROM drug_responses;    -- Pharmacogenomic data
 
 email: elliotalderson710@gmail.com
 password: Victor123!
+
+## Important
+- When creating files, do not use unnecessary adjectives like `comprehensive_analysis_service.py` but just `analysis_service.py`

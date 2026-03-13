@@ -42,7 +42,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    command: ["uv", "run", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["uv", "run", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "backend"]
 
   # Next.js Frontend
   frontend:

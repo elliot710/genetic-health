@@ -3,9 +3,9 @@ name = "genetic-health-toolkit"
 version = "0.1.0"
 description = "Comprehensive genetic health analysis toolkit with FastAPI backend and Next.js frontend"
 authors = [
-    { name = "Victor Iatco", email = "victor.iatco@appsfactory.de" }
+    { name = "Victor Iatco", email = "victoriatco@proton.me" }
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
     "aiofiles>=24.1.0",
     "aiohttp>=3.11.5",
@@ -26,6 +26,7 @@ dependencies = [
     "scikit-learn>=1.7.1",
     "sqlalchemy[asyncio]>=2.0.43",
     "uvicorn>=0.35.0",
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]

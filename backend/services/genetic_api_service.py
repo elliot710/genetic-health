@@ -538,12 +538,23 @@ class GeneticAPIService:
         """Close the service."""
         await self.optimized_service.close()
         self._initialized = False
-    
-    async def annotate_variant(self, rsid: str) -> Optional[Dict[str, Any]]:
-        """Legacy method for variant annotation."""
+
+    async def __aenter__(self):
+        await self.initialize()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+        return False
+
+    async def annotate_variant(self, rsid: str, gene: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Variant annotation - gene param accepted for API compat but unused."""
         if not self._initialized:
             await self.initialize()
-        return await self.optimized_service.annotate_variant(rsid)
+        result = await self.optimized_service.annotate_variant(rsid)
+        if result and gene:
+            result['gene'] = gene
+        return result
     
     async def annotate_variant_minimal(self, rsid: str) -> Optional[Dict[str, Any]]:
         """Legacy method for minimal annotation."""
@@ -556,3 +567,113 @@ class GeneticAPIService:
         if not self._initialized:
             await self.initialize()
         return await self.optimized_service.annotate_variant_comprehensive(rsid)
+
+    async def batch_annotate_variants(self, variants: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Batch annotate variants from a list of dicts with rsid keys."""
+        if not self._initialized:
+            await self.initialize()
+        rsids = [v.get('rsid', '') for v in variants]
+        results_dict = await self.optimized_service.batch_annotate_variants(rsids)
+        results = []
+        for v in variants:
+            rsid = v.get('rsid', '')
+            annotation = results_dict.get(rsid)
+            results.append({
+                'rsid': rsid,
+                'gene': v.get('gene'),
+                'annotations': annotation.get('annotations', {}) if annotation else {},
+                'error': None if annotation else 'Annotation not found'
+            })
+        return results
+
+    async def get_variant_clinical_summary(self, rsid: str, gene: Optional[str] = None) -> Dict[str, Any]:
+        """Get clinical summary by aggregating all annotation sources."""
+        if not self._initialized:
+            await self.initialize()
+        annotation = await self.optimized_service.annotate_variant(rsid)
+        
+        summary: Dict[str, Any] = {
+            'rsid': rsid,
+            'gene': gene,
+            'clinical_significance': 'unknown',
+            'population_frequency': None,
+            'drug_responses': [],
+            'literature_count': 0,
+            'sources': [],
+        }
+        
+        if not annotation:
+            return summary
+        
+        annotations = annotation.get('annotations', {})
+        
+        # Extract ClinVar data
+        clinvar = annotations.get('clinvar', {})
+        if clinvar.get('found'):
+            summary['sources'].append('clinvar')
+            summary['clinical_significance'] = 'reported_in_clinvar'
+            summary['clinvar_ids'] = clinvar.get('ids', [])
+        
+        # Extract Ensembl data
+        ensembl = annotations.get('ensembl', {})
+        if ensembl.get('found'):
+            summary['sources'].append('ensembl')
+            data = ensembl.get('data', [])
+            if isinstance(data, list) and data:
+                vep = data[0] if data else {}
+                freqs = vep.get('colocated_variants', [{}])
+                if freqs:
+                    freq_data = freqs[0].get('frequencies', {})
+                    if freq_data:
+                        summary['population_frequency'] = freq_data
+                consequences = vep.get('most_severe_consequence', '')
+                if consequences:
+                    summary['consequence'] = consequences
+        
+        # Extract PharmGKB data
+        pharmgkb = annotations.get('pharmgkb', {})
+        if pharmgkb.get('found'):
+            summary['sources'].append('pharmgkb')
+        
+        # Extract SNPedia data
+        snpedia = annotations.get('snpedia', {})
+        if snpedia.get('found'):
+            summary['sources'].append('snpedia')
+        
+        return summary
+
+    async def get_litvar_publications(self, rsid: str) -> Dict[str, Any]:
+        """Get literature publications for a variant."""
+        if not self._initialized:
+            await self.initialize()
+        # LitVar not implemented in optimized service, return empty result
+        return {'rsid': rsid, 'publications': [], 'count': 0}
+
+    async def get_pharmgkb_drug_info(self, gene: str) -> Dict[str, Any]:
+        """Get pharmacogenomic info for a gene."""
+        if not self._initialized:
+            await self.initialize()
+        # Delegate to PharmGKB annotation using gene as search term
+        result = await self.optimized_service._get_pharmgkb_annotation(gene)
+        return result or {'gene': gene, 'found': False, 'drug_responses': []}
+
+    async def get_snpedia_info(self, rsid: str) -> Dict[str, Any]:
+        """Get SNPedia info for a variant."""
+        if not self._initialized:
+            await self.initialize()
+        result = await self.optimized_service._get_snpedia_annotation(rsid)
+        return result or {'rsid': rsid, 'found': False}
+
+    async def get_variant_info_from_ensembl(self, rsid: str) -> Dict[str, Any]:
+        """Get Ensembl VEP info for a variant."""
+        if not self._initialized:
+            await self.initialize()
+        result = await self.optimized_service._get_ensembl_annotation(rsid)
+        return result or {'rsid': rsid, 'found': False}
+
+    async def get_variant_info_from_clinvar(self, rsid: str) -> Dict[str, Any]:
+        """Get ClinVar info for a variant."""
+        if not self._initialized:
+            await self.initialize()
+        result = await self.optimized_service._get_clinvar_annotation(rsid)
+        return result or {'rsid': rsid, 'found': False}

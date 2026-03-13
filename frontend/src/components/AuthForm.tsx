@@ -3,6 +3,9 @@
 import { useState, useEffect } from 'react'
 import { Eye, EyeOff, Mail, Lock, User, Dna, Sparkles, Shield, Sun, Moon } from 'lucide-react'
 import { getTheme } from '../utils/theme'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Card, CardContent } from '@/components/ui/card'
 
 interface AuthFormProps {
   onLogin: (token: string) => void
@@ -100,19 +103,22 @@ export default function AuthForm({ onLogin, isDarkMode: initialDarkMode = false,
 
       <div className="w-full max-w-md relative z-10">
         {/* Main Container - Glassmorphism design */}
-        <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl backdrop-blur-xl p-8 shadow-2xl relative`}>
+        <Card className={`${theme.glass} border ${theme.glassBorder} rounded-2xl backdrop-blur-xl shadow-2xl relative`}>
+          <CardContent className="p-8">
           {/* Theme Toggle - Inside wrapper */}
           <div className="absolute top-4 right-4">
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={() => setIsDarkMode(!isDarkMode)}
-              className={`p-2.5 ${theme.glassSecondary} border ${theme.glassSecondaryBorder} rounded-lg backdrop-blur-sm transition-all duration-300 hover:scale-105 shadow-sm`}
+              className={`${theme.glassSecondary} border ${theme.glassSecondaryBorder} backdrop-blur-sm`}
             >
               {isDarkMode ? (
                 <Sun className={`h-4 w-4 ${theme.warning.text}`} />
               ) : (
                 <Moon className={`h-4 w-4 ${theme.text.secondary}`} />
               )}
-            </button>
+            </Button>
           </div>
 
           {/* Header */}
@@ -135,14 +141,14 @@ export default function AuthForm({ onLogin, isDarkMode: initialDarkMode = false,
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                 <Mail className={`h-5 w-5 ${theme.text.muted}`} />
               </div>
-              <input
+              <Input
                 type="email"
                 name="email"
                 autoComplete="email"
                 placeholder="Email address"
                 value={formData.email}
                 onChange={(e) => setFormData({...formData, email: e.target.value})}
-                className={`w-full pl-10 pr-4 py-3 border ${theme.form.input.border} rounded-lg ${theme.form.input.text} ${theme.form.input.placeholder} ${theme.form.input.bg} ${theme.form.input.focus} transition-all duration-200 backdrop-blur-sm`}
+                className={`pl-10 pr-4 py-3 border ${theme.form.input.border} ${theme.form.input.text} ${theme.form.input.placeholder} ${theme.form.input.bg} ${theme.form.input.focus} backdrop-blur-sm`}
                 required
               />
             </div>
@@ -154,14 +160,14 @@ export default function AuthForm({ onLogin, isDarkMode: initialDarkMode = false,
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                     <User className={`h-5 w-5 ${theme.text.muted}`} />
                   </div>
-                  <input
+                  <Input
                     type="text"
                     name="username"
                     autoComplete="username"
                     placeholder="Username (optional)"
                     value={formData.username}
                     onChange={(e) => setFormData({...formData, username: e.target.value})}
-                    className={`w-full pl-10 pr-4 py-3 border ${theme.form.input.border} rounded-lg ${theme.form.input.text} ${theme.form.input.placeholder} ${theme.form.input.bg} ${theme.form.input.focus} transition-all duration-200 backdrop-blur-sm`}
+                    className={`pl-10 pr-4 py-3 border ${theme.form.input.border} ${theme.form.input.text} ${theme.form.input.placeholder} ${theme.form.input.bg} ${theme.form.input.focus} backdrop-blur-sm`}
                   />
                 </div>
 
@@ -169,14 +175,14 @@ export default function AuthForm({ onLogin, isDarkMode: initialDarkMode = false,
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                     <Sparkles className={`h-5 w-5 ${theme.text.muted}`} />
                   </div>
-                  <input
+                  <Input
                     type="text"
                     name="fullName"
                     autoComplete="name"
                     placeholder="Full name"
                     value={formData.fullName}
                     onChange={(e) => setFormData({...formData, fullName: e.target.value})}
-                    className={`w-full pl-10 pr-4 py-3 border ${theme.form.input.border} rounded-lg ${theme.form.input.text} ${theme.form.input.placeholder} ${theme.form.input.bg} ${theme.form.input.focus} transition-all duration-200 backdrop-blur-sm`}
+                    className={`pl-10 pr-4 py-3 border ${theme.form.input.border} ${theme.form.input.text} ${theme.form.input.placeholder} ${theme.form.input.bg} ${theme.form.input.focus} backdrop-blur-sm`}
                     required
                   />
                 </div>
@@ -188,14 +194,14 @@ export default function AuthForm({ onLogin, isDarkMode: initialDarkMode = false,
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                 <Lock className={`h-5 w-5 ${theme.text.muted}`} />
               </div>
-              <input
+              <Input
                 type={showPassword ? 'text' : 'password'}
                 name="password"
                 autoComplete={isLogin ? 'current-password' : 'new-password'}
                 placeholder="Password"
                 value={formData.password}
                 onChange={(e) => setFormData({...formData, password: e.target.value})}
-                className={`w-full pl-10 pr-12 py-3 border ${theme.form.input.border} rounded-lg ${theme.form.input.text} ${theme.form.input.placeholder} ${theme.form.input.bg} ${theme.form.input.focus} transition-all duration-200 backdrop-blur-sm`}
+                className={`pl-10 pr-12 py-3 border ${theme.form.input.border} ${theme.form.input.text} ${theme.form.input.placeholder} ${theme.form.input.bg} ${theme.form.input.focus} backdrop-blur-sm`}
                 required
               />
               <button
@@ -215,10 +221,10 @@ export default function AuthForm({ onLogin, isDarkMode: initialDarkMode = false,
             )}
 
             {/* Submit Button */}
-            <button
+            <Button
               type="submit"
               disabled={loading}
-              className={`w-full py-3 rounded-lg transition-all duration-200 flex items-center justify-center space-x-2 backdrop-blur-xl border shadow-lg ${
+              className={`w-full py-3 h-auto backdrop-blur-xl shadow-lg ${
                 loading 
                   ? 'bg-gray-400/80 text-white cursor-not-allowed border-gray-300' 
                   : theme.form.button.primary
@@ -228,11 +234,11 @@ export default function AuthForm({ onLogin, isDarkMode: initialDarkMode = false,
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
               ) : (
                 <>
-                  <Shield className="w-5 h-5" />
+                  <Shield className="w-5 h-5 mr-2" />
                   <span>{isLogin ? 'Sign In' : 'Create Account'}</span>
                 </>
               )}
-            </button>
+            </Button>
           </form>
 
           {/* Toggle */}
@@ -259,7 +265,8 @@ export default function AuthForm({ onLogin, isDarkMode: initialDarkMode = false,
               <span>Your genetic data is encrypted and secure</span>
             </div>
           </div>
-        </div>
+          </CardContent>
+        </Card>
       </div>
 
       {/* CSS Animations for Glassmorphism */}

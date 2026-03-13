@@ -15,7 +15,7 @@ DATABASE_URL = os.getenv(
 # Create async engine
 engine = create_async_engine(
     DATABASE_URL,
-    echo=True,  # Set to False in production
+    echo=False,  # Set to True for SQL debugging
     future=True
 )
 

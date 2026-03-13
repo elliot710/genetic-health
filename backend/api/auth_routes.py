@@ -5,12 +5,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import timedelta
+from pydantic import BaseModel
+from typing import Optional
 
 from ..db.database import get_session
 from ..db.schemas import UserCreate, UserResponse, Token, UserLogin
 from ..db.models import User
 from ..services.user_service import UserService
-from ..core.auth import create_access_token, verify_token, ACCESS_TOKEN_EXPIRE_MINUTES
+from ..core.auth import create_access_token, verify_token, verify_password, get_password_hash, ACCESS_TOKEN_EXPIRE_MINUTES
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 security = HTTPBearer()
@@ -87,3 +89,42 @@ async def get_current_user(
 async def get_me(current_user = Depends(get_current_user)):
     """Get current user profile"""
     return UserResponse.model_validate(current_user)
+
+
+class ProfileUpdate(BaseModel):
+    full_name: Optional[str] = None
+
+
+@router.put("/me", response_model=UserResponse)
+async def update_profile(
+    update: ProfileUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Update current user profile"""
+    if update.full_name is not None:
+        current_user.full_name = update.full_name
+    await db.commit()
+    await db.refresh(current_user)
+    return UserResponse.model_validate(current_user)
+
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@router.post("/change-password")
+async def change_password(
+    data: PasswordChange,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Change current user password"""
+    if not verify_password(data.current_password, str(current_user.hashed_password)):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    if len(data.new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    current_user.hashed_password = get_password_hash(data.new_password)
+    await db.commit()
+    return {"detail": "Password changed successfully"}

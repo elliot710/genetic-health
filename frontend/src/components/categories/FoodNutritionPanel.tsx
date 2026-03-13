@@ -1,46 +1,30 @@
 import React, { useState, useEffect } from 'react'
-import { Apple, Coffee, Utensils, Wheat, ChefHat } from 'lucide-react'
-import { 
-  getThemeClass, 
-  getGlassBackground, 
-  getGlassBorder, 
-  getTextPrimary, 
-  getTextSecondary, 
-  getTagClass, 
-  getProgressBarBg 
-} from '../../utils/theme'
+import { Apple, Coffee, Utensils, Wheat, ChefHat, ChevronRight, CheckCircle } from 'lucide-react'
+import { Badge } from '../ui/badge'
+import {
+  useThemeClasses,
+  CategoryHeader,
+  EmptyState,
+  SectionCard,
+  StatusBadge,
+  VariantLinks,
+  sensitivityToSeverity,
+  formatLabel,
+  MasonryLayout,
+} from './shared'
+import type { CategoryPanelProps, NutritionTrait } from './types'
 
-interface AnalysisData {
-  summary?: any
-  health_risks?: any
-  drug_interactions?: any
-  recommendations?: string[]
-}
+export default function FoodNutritionPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
+  const theme = useThemeClasses(isDarkMode)
+  const [selectedItem, setSelectedItem] = useState<string | null>(null)
 
-interface FoodNutritionPanelProps {
-  isDarkMode?: boolean
-  theme?: any
-  data: AnalysisData
-  token?: string
-}
-
-export default function FoodNutritionPanel({ isDarkMode = false, theme, data, token }: FoodNutritionPanelProps) {
-  const glassBackground = getGlassBackground(isDarkMode);
-  const glassBorder = getGlassBorder(isDarkMode);
-  const textPrimary = getTextPrimary(isDarkMode);
-  const textSecondary = getTextSecondary(isDarkMode);
-  const tagClass = getTagClass(isDarkMode);
-  const progressBarBg = getProgressBarBg(isDarkMode);
-  const cardBackground = getThemeClass('bg-gray-50', isDarkMode);
-  
-  const [realNutritionTraits, setRealNutritionTraits] = useState<any[]>([])
+  const [realNutritionTraits, setRealNutritionTraits] = useState<NutritionTrait[]>([])
   const [loading, setLoading] = useState(false)
-  
-  // Load real nutrition traits from dashboard API
+
   useEffect(() => {
     const loadNutritionTraits = async () => {
       if (!token) return
-      
+
       setLoading(true)
       try {
         const response = await fetch('http://localhost:8000/api/analysis/dashboard-data', {
@@ -49,57 +33,21 @@ export default function FoodNutritionPanel({ isDarkMode = false, theme, data, to
             'Content-Type': 'application/json',
           },
         })
-        
+
         if (response.ok) {
           const dashboardData = await response.json()
-          console.log('Loaded dashboard data for nutrition:', dashboardData)
-          // Nutrition traits might be in the analysis results or a specific section
           const traits = dashboardData.nutrition_traits || dashboardData.analysis_results?.nutrition_traits || []
           setRealNutritionTraits(traits)
         }
       } catch (error) {
-        console.error('Error loading nutrition traits:', error)
+        // silently handle fetch errors
       } finally {
         setLoading(false)
       }
     }
-    
+
     loadNutritionTraits()
   }, [token])
-  
-  // Use real nutrition data if available
-  const getNutritionTraits = () => {
-    // First priority: Real API data
-    if (realNutritionTraits.length > 0) {
-      return realNutritionTraits.map((trait: any) => ({
-        trait: trait.nutrient || trait.trait_name,
-        gene: trait.associated_variants?.[0] || 'Multiple',
-        status: trait.metabolism_type || trait.genetic_result,
-        description: trait.description || `Genetic analysis for ${trait.nutrient || trait.trait_name}`,
-        recommendation: Array.isArray(trait.dietary_recommendations) 
-          ? trait.dietary_recommendations.join(', ') 
-          : trait.dietary_recommendations || 'Consult with nutritionist',
-        icon: getTraitIcon(trait.nutrient || trait.trait_name),
-        color: getTraitColor(trait.metabolism_type || trait.genetic_result, isDarkMode)
-      }))
-    }
-    
-    // Loading state
-    if (loading) {
-      return [{
-        trait: 'Loading Nutrition Analysis...',
-        gene: 'Multiple',
-        status: 'Processing',
-        description: 'Loading your genetic nutrition analysis...',
-        recommendation: 'Analysis in progress...',
-        icon: ChefHat,
-        color: getThemeClass('bg-blue-50', isDarkMode) + ' ' + getThemeClass('text-blue-700', isDarkMode)
-      }]
-    }
-    
-    // No data available
-    return []
-  }
 
   const getTraitIcon = (trait: string) => {
     const traitLower = trait.toLowerCase()
@@ -110,217 +58,128 @@ export default function FoodNutritionPanel({ isDarkMode = false, theme, data, to
     return ChefHat
   }
 
-  const getTraitColor = (status: string, isDarkMode: boolean) => {
-    const statusLower = status.toLowerCase()
-    if (statusLower.includes('fast') || statusLower.includes('enhanced')) {
-      return getThemeClass('bg-green-50', isDarkMode) + ' ' + getThemeClass('text-green-700', isDarkMode)
+  const getNutritionTraits = () => {
+    if (realNutritionTraits.length > 0) {
+      return realNutritionTraits.map((trait: NutritionTrait) => ({
+        trait: trait.nutrient || trait.trait_name,
+        gene: trait.associated_variants?.[0] || 'Multiple',
+        status: trait.metabolism_type || trait.genetic_result || 'normal',
+        sensitivity: trait.sensitivity_level || 'moderate',
+        description: trait.description || `Genetic analysis for ${trait.nutrient || trait.trait_name}`,
+        recommendations: Array.isArray(trait.dietary_recommendations)
+          ? trait.dietary_recommendations
+          : trait.dietary_recommendations ? [trait.dietary_recommendations] : [],
+        icon: getTraitIcon(trait.nutrient || trait.trait_name || ''),
+      }))
     }
-    if (statusLower.includes('slow') || statusLower.includes('poor')) {
-      return getThemeClass('bg-red-50', isDarkMode) + ' ' + getThemeClass('text-red-700', isDarkMode)
+
+    if (loading) {
+      return [{
+        trait: 'Loading Nutrition Analysis...',
+        gene: 'Multiple',
+        status: 'Processing',
+        sensitivity: 'moderate',
+        description: 'Loading your genetic nutrition analysis...',
+        recommendations: [] as string[],
+        icon: ChefHat,
+      }]
     }
-    if (statusLower.includes('normal') || statusLower.includes('tolerant')) {
-      return getThemeClass('bg-blue-50', isDarkMode) + ' ' + getThemeClass('text-blue-700', isDarkMode)
-    }
-    return getThemeClass('bg-gray-50', isDarkMode) + ' ' + getThemeClass('text-gray-700', isDarkMode)
+
+    return []
   }
-  
+
   const nutritionTraits = getNutritionTraits()
 
-  // If no real data is available, show message
+  const headerProps = {
+    icon: Apple,
+    iconColorClass: 'text-green-400',
+    gradientFrom: 'from-green-500/20',
+    gradientTo: 'to-emerald-500/20',
+    borderColor: 'border-green-500/30',
+    title: 'Food & Nutrition',
+    description: 'Genetic insights for personalized nutrition',
+    count: nutritionTraits.length,
+    countLabel: nutritionTraits.length === 1 ? 'Trait' : 'Traits',
+    theme,
+  }
+
   if (nutritionTraits.length === 0 && !loading) {
     return (
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className={`text-2xl font-bold ${textPrimary} mb-2`}>
-              Food & Nutrition
-            </h2>
-            <p className={textSecondary}>
-              Genetic insights for personalized nutrition
-            </p>
-          </div>
-          <div className={`${glassBackground} border ${glassBorder} rounded-xl p-4`}>
-            <div className="flex items-center space-x-3">
-              <Apple className={`h-8 w-8 ${getThemeClass('text-green-500', isDarkMode)}`} />
-              <div>
-                <div className={`text-2xl font-bold ${textPrimary}`}>0</div>
-                <div className={`text-sm ${getThemeClass("text-gray-500", isDarkMode)}`}>Traits</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* No Data Available */}
-        <div className={`${glassBackground} border ${glassBorder} rounded-xl p-8 text-center`}>
-          <div className="flex flex-col items-center space-y-4">
-            <div className="p-4 bg-gradient-to-br from-green-500/20 to-blue-500/20 backdrop-blur-xl rounded-xl border border-green-500/30">
-              <Apple className="h-8 w-8 text-green-400" />
-            </div>
-            <div>
-              <h3 className={`text-xl font-bold ${textPrimary} mb-2`}>
-                Nutrition Analysis in Progress
-              </h3>
-              <p className={`${textSecondary} max-w-md mx-auto`}>
-                Nutrition trait analysis is not yet available for your genetic data. 
-                This analysis requires specific nutrition-related variants that may be added in future updates.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Information Panel */}
-        <div className={`${glassBackground} border ${glassBorder} rounded-xl p-8`}>
-          <h3 className={`text-xl font-bold ${textPrimary} mb-6`}>
-            About Nutrition Genetics
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <h4 className={`text-lg font-semibold ${textPrimary} mb-4`}>Analyzed Traits</h4>
-              <ul className={`${textSecondary} space-y-2`}>
-                <li>• <strong>Caffeine Metabolism:</strong> How quickly you process caffeine</li>
-                <li>• <strong>Lactose Tolerance:</strong> Ability to digest dairy products</li>
-                <li>• <strong>Alcohol Processing:</strong> Genetic alcohol metabolism efficiency</li>
-                <li>• <strong>Nutrient Absorption:</strong> Vitamin and mineral processing</li>
-              </ul>
-            </div>
-            <div>
-              <h4 className={`text-lg font-semibold ${textPrimary} mb-4`}>Personalized Insights</h4>
-              <p className={`${textSecondary} leading-relaxed`}>
-                Nutrition genetics helps optimize your diet based on genetic variants that affect 
-                how your body processes different foods, nutrients, and compounds.
-              </p>
-            </div>
-          </div>
-        </div>
+        <CategoryHeader {...headerProps} />
+        <EmptyState
+          icon={Apple}
+          iconColorClass="text-green-400"
+          gradientFrom="from-green-500/20"
+          gradientTo="to-emerald-500/20"
+          borderColor="border-green-500/30"
+          title="No Nutrition Data Available"
+          description="Nutrition trait analysis is not yet available for your genetic data."
+          theme={theme}
+        />
       </div>
     )
   }
 
-  const dietaryRecommendations = [
-    {
-      type: 'Mediterranean Diet',
-      suitability: 95,
-      reason: 'High genetic compatibility with anti-inflammatory foods'
-    },
-    {
-      type: 'Low-Carb Diet',
-      suitability: 75,
-      reason: 'Good fat metabolism, moderate carb sensitivity'
-    },
-    {
-      type: 'Plant-Based Diet',
-      suitability: 85,
-      reason: 'Efficient plant nutrient absorption'
-    },
-    {
-      type: 'Intermittent Fasting',
-      suitability: 80,
-      reason: 'Favorable insulin sensitivity genes'
-    }
-  ]
-
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
-        <div className="flex items-center mb-4">
-          <Apple className={`h-8 w-8 ${getThemeClass('text-green-600', isDarkMode)} mr-3`} />
-          <div>
-            <h2 className={`text-2xl font-bold ${textPrimary}`}>Food & Nutrition</h2>
-            <p className={`${textSecondary}`}>Your genetic response to food and nutrients</p>
-          </div>
-        </div>
-      </div>
+      <CategoryHeader {...headerProps} />
 
-      {/* Nutrition Traits */}
-      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
-        <h3 className={`text-lg font-semibold ${textPrimary} mb-4`}>Metabolic Traits</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <SectionCard title="Metabolic Traits" theme={theme}>
+        <MasonryLayout>
           {nutritionTraits.map((trait, index) => {
             const Icon = trait.icon
+            const itemKey = `nutrition-${index}`
+            const isExpanded = selectedItem === itemKey
+            const rsid = trait.gene?.startsWith('rs') ? trait.gene : undefined
+            const gene = !trait.gene?.startsWith('rs') ? trait.gene : undefined
             return (
-              <div key={index} className={`${cardBackground} border ${glassBorder} rounded-lg p-4 hover:shadow-md transition-shadow`}>
-                <div className="flex items-start space-x-3">
-                  <div className={`p-2 rounded-lg ${trait.color}`}>
-                    <Icon className="h-5 w-5" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex justify-between items-start mb-2">
-                      <h4 className={`font-medium ${textPrimary}`}>{trait.trait}</h4>
-                      <span className={`text-xs px-2 py-1 rounded ${tagClass}`}>
-                        {trait.gene}
-                      </span>
+              <div
+                key={index}
+                className={`${theme.glass} border ${theme.border} rounded-xl p-5 cursor-pointer hover:border-green-500/50 transition-all duration-300`}
+                onClick={() => setSelectedItem(isExpanded ? null : itemKey)}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-lg bg-green-500/10">
+                      <Icon className="h-5 w-5 text-green-400" />
                     </div>
-                    <p className={`text-sm font-medium ${textSecondary} mb-1`}>{trait.status}</p>
-                    <p className={`text-xs ${textSecondary} mb-2`}>{trait.description}</p>
-                    <p className={`text-xs p-2 rounded ${getThemeClass('text-blue-600', isDarkMode)} ${getThemeClass('bg-blue-50', isDarkMode)}`}>
-                      💡 {trait.recommendation}
-                    </p>
+                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{trait.trait}</h4>
+                    <StatusBadge
+                      label={formatLabel(trait.status)}
+                      severity={sensitivityToSeverity(trait.sensitivity)}
+                    />
                   </div>
+                  <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
+
+                <div className="flex flex-wrap gap-1.5">
+                  {rsid && <Badge variant="secondary" className="text-xs">{rsid}</Badge>}
+                  {gene && <Badge variant="outline" className="text-xs">{gene}</Badge>}
+                </div>
+
+                {isExpanded && (
+                  <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
+                    <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{trait.description}</p>
+                    {trait.recommendations.length > 0 && (
+                      <div className="space-y-2">
+                        <span className={`text-xs font-semibold ${theme.textSecondary} uppercase tracking-wider`}>Dietary Recommendations</span>
+                        {trait.recommendations.map((rec: string, i: number) => (
+                          <div key={i} className={`flex items-start gap-2 text-sm ${theme.textSecondary}`}>
+                            <CheckCircle className="h-4 w-4 text-green-400 mt-0.5 shrink-0" />
+                            <span>{rec}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <VariantLinks rsid={rsid} gene={gene} />
+                  </div>
+                )}
               </div>
             )
           })}
-        </div>
-      </div>
-
-      {/* Diet Compatibility */}
-      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
-        <h3 className={`text-lg font-semibold ${textPrimary} mb-4`}>Diet Compatibility</h3>
-        <div className="space-y-4">
-          {dietaryRecommendations.map((diet, index) => (
-            <div key={index} className={`${cardBackground} border ${glassBorder} rounded-lg p-4`}>
-              <div className="flex justify-between items-center mb-2">
-                <h4 className={`font-medium ${textPrimary}`}>{diet.type}</h4>
-                <div className="flex items-center space-x-2">
-                  <div className={`w-24 rounded-full h-2 ${progressBarBg}`}>
-                    <div 
-                      className="bg-green-500 h-2 rounded-full"
-                      style={{ width: `${diet.suitability}%` }}
-                    ></div>
-                  </div>
-                  <span className={`text-sm font-medium ${textSecondary}`}>{diet.suitability}%</span>
-                </div>
-              </div>
-              <p className={`text-sm ${textSecondary}`}>{diet.reason}</p>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Nutritional Focus Areas */}
-      <div className={`${glassBackground} border ${glassBorder} rounded-xl p-6`}>
-        <h3 className={`text-lg font-semibold ${textPrimary} mb-4`}>Personalized Nutrition Focus</h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className={`p-4 ${getThemeClass('bg-green-50', isDarkMode)} rounded-lg`}>
-            <h4 className={`font-medium ${getThemeClass('text-green-900', isDarkMode)} mb-2`}>Prioritize</h4>
-            <ul className={`text-sm ${getThemeClass('text-green-700', isDarkMode)} space-y-1`}>
-              <li>• Omega-3 fatty acids</li>
-              <li>• Antioxidant-rich foods</li>
-              <li>• Complex carbohydrates</li>
-              <li>• Lean proteins</li>
-            </ul>
-          </div>
-          <div className={`p-4 ${getThemeClass('bg-yellow-50', isDarkMode)} rounded-lg`}>
-            <h4 className={`font-medium ${getThemeClass('text-yellow-900', isDarkMode)} mb-2`}>Moderate</h4>
-            <ul className={`text-sm ${getThemeClass('text-yellow-700', isDarkMode)} space-y-1`}>
-              <li>• Saturated fats</li>
-              <li>• Simple sugars</li>
-              <li>• Processed foods</li>
-              <li>• Caffeine intake</li>
-            </ul>
-          </div>
-          <div className={`p-4 ${getThemeClass('bg-red-50', isDarkMode)} rounded-lg`}>
-            <h4 className={`font-medium ${getThemeClass('text-red-900', isDarkMode)} mb-2`}>Consider Avoiding</h4>
-            <ul className={`text-sm ${getThemeClass('text-red-700', isDarkMode)} space-y-1`}>
-              <li>• Trans fats</li>
-              <li>• Excessive alcohol</li>
-              <li>• High sodium foods</li>
-              <li>• Ultra-processed foods</li>
-            </ul>
-          </div>
-        </div>
-      </div>
+        </MasonryLayout>
+      </SectionCard>
     </div>
   )
 }

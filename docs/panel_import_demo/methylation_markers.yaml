@@ -1,0 +1,37 @@
+markers:
+- category: folate_cycle
+  description: C677T - Reduced folate metabolism
+  gene: MTHFR
+  is_active: true
+  rsid: rs1801133
+- category: folate_cycle
+  description: A1298C - Reduced folate metabolism
+  gene: MTHFR
+  is_active: true
+  rsid: rs1801131
+- category: methylation_enzymes
+  description: Val158Met - Catechol-O-methyltransferase
+  gene: COMT
+  is_active: true
+  rsid: rs4680
+- category: methylation_enzymes
+  description: A2756G - Methionine synthase
+  gene: MTR
+  is_active: true
+  rsid: rs1805087
+- category: methylation_enzymes
+  description: A66G - Methionine synthase reductase
+  gene: MTRR
+  is_active: true
+  rsid: rs1801394
+- category: transsulfuration
+  description: C699T - Cystathionine beta-synthase
+  gene: CBS
+  is_active: true
+  rsid: rs234706
+- category: transsulfuration
+  description: CBS variant
+  gene: CBS
+  is_active: true
+  rsid: rs2851391
+panel_id: methylation

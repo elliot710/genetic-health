@@ -26,6 +26,7 @@ interface User {
   email?: string
   username?: string
   full_name?: string
+  is_admin?: boolean
 }
 
 export default function Home() {
@@ -55,6 +56,8 @@ export default function Home() {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       localStorage.setItem('darkMode', JSON.stringify(isDarkMode))
+      // Sync .dark class on <html> for shadcn CSS variables
+      document.documentElement.classList.toggle('dark', isDarkMode)
     }
   }, [isDarkMode])
 
@@ -109,7 +112,7 @@ export default function Home() {
     }
   }, [])
 
-  const verifyToken = useCallback(async (tokenToVerify: string) => {
+  const verifyToken = useCallback(async (tokenToVerify: string, retries = 2) => {
     try {
       const response = await fetch('http://localhost:8000/auth/me', {
         headers: {
@@ -128,6 +131,11 @@ export default function Home() {
         localStorage.removeItem('token')
       }
     } catch (error) {
+      // Retry on network errors (backend may be restarting)
+      if (retries > 0) {
+        await new Promise(r => setTimeout(r, 2000))
+        return verifyToken(tokenToVerify, retries - 1)
+      }
       console.error('Token verification failed:', error)
       localStorage.removeItem('token')
     } finally {
@@ -274,6 +282,7 @@ export default function Home() {
           <div className="container mx-auto px-4 py-8">
             <AnalysisProgressLoader 
               analysisId={analysisId}
+              isDarkMode={isDarkMode}
               onComplete={handleProgressComplete}
               onError={handleProgressError}
             />
@@ -341,6 +350,7 @@ export default function Home() {
           analysisData={analysisData}
           analysisId={analysisId}
           onRefresh={loadExistingData}
+          isAdmin={user?.is_admin || false}
         />
       )}
     </main>

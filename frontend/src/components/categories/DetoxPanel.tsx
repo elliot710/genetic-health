@@ -1,359 +1,195 @@
 'use client'
 
-import { useState } from 'react'
-import { Shield, Zap, AlertTriangle, CheckCircle, Flame, ChevronRight } from 'lucide-react'
-import { getGlassBackground, getTextPrimary, getTextSecondary } from '../../utils/theme'
+import React, { useState, useMemo } from 'react'
+import { Shield, ChevronRight, CheckCircle } from 'lucide-react'
+import { Badge } from '../ui/badge'
+import {
+  useThemeClasses,
+  CategoryHeader,
+  EmptyState,
+  SectionCard,
+  StatusBadge,
+  capacityToSeverity,
+  sensitivityToSeverity,
+  VariantLinks,
+  formatLabel,
+  MasonryLayout,
+} from './shared'
+import type { CategoryPanelProps, DetoxProfile } from './types'
 
-interface DetoxPanelProps {
-  data: any
-  isDarkMode: boolean
-  theme?: any
+const PHASE_LABELS: Record<string, string> = {
+  phase1: 'Phase I',
+  phase2: 'Phase II',
+  phase3: 'Phase III',
+  antioxidant: 'Antioxidant',
+  peroxisomal: 'Peroxisomal',
+  coenzyme_a: 'CoA Biosynthesis',
 }
 
-export default function DetoxPanel({ data, isDarkMode, theme }: DetoxPanelProps) {
-  const [selectedPhase, setSelectedPhase] = useState<string | null>(null)
+const PHASE_ORDER = ['phase1', 'phase2', 'phase3', 'antioxidant', 'peroxisomal', 'coenzyme_a']
 
-  // Check if detoxification data is available from the database
-  const hasRealData = data?.detoxification_profiles && data.detoxification_profiles.length > 0
-  const detoxData = hasRealData ? data.detoxification_profiles[0] : null
+export default function DetoxPanel({ isDarkMode = false, data }: CategoryPanelProps) {
+  const [expandedGene, setExpandedGene] = useState<string | null>(null)
+  const theme = useThemeClasses(isDarkMode)
 
-  const glassBackground = getGlassBackground(isDarkMode)
-  const textPrimary = getTextPrimary(isDarkMode)
-  const textSecondary = getTextSecondary(isDarkMode)
-  const borderColor = isDarkMode ? 'border-gray-700/50' : 'border-gray-200/50'
+  const profiles: DetoxProfile[] = data?.detoxification_profiles || []
 
-  // If no real data is available, show message
-  if (!hasRealData) {
+  const formatPhase = (phase: string): string =>
+    PHASE_LABELS[phase] || formatLabel(phase)
+
+  const grouped = useMemo(() => {
+    const map: Record<string, DetoxProfile[]> = {}
+    for (const p of profiles) {
+      const phase = p.detox_phase || 'other'
+      if (!map[phase]) map[phase] = []
+      map[phase].push(p)
+    }
+    const sorted = PHASE_ORDER
+      .filter(k => map[k])
+      .map(k => ({ phase: k, items: map[k] }))
+    const extra = Object.keys(map)
+      .filter(k => !PHASE_ORDER.includes(k))
+      .map(k => ({ phase: k, items: map[k] }))
+    return [...sorted, ...extra]
+  }, [profiles])
+
+  const allRecommendations = useMemo(() => {
+    const seen = new Set<string>()
+    const result: string[] = []
+    for (const p of profiles) {
+      for (const rec of p.support_recommendations || []) {
+        const key = rec.toLowerCase().trim()
+        if (!seen.has(key)) {
+          seen.add(key)
+          result.push(rec)
+        }
+      }
+    }
+    return result
+  }, [profiles])
+
+  const headerProps = {
+    icon: Shield,
+    iconColorClass: 'text-green-400',
+    gradientFrom: 'from-green-500/20',
+    gradientTo: 'to-emerald-500/20',
+    borderColor: 'border-green-500/30',
+    title: 'Detox Capacity',
+    description: 'Your genetic detoxification pathway analysis',
+    count: profiles.length,
+    countLabel: profiles.length === 1 ? 'Marker' : 'Markers',
+    theme,
+  }
+
+  if (profiles.length === 0) {
     return (
       <div className="space-y-6">
-        {/* Header */}
-        <div className={`${glassBackground} border ${borderColor} rounded-2xl p-8`}>
-          <div className="flex items-center space-x-4 mb-6">
-            <div className="p-3 bg-gradient-to-br from-green-500/20 to-blue-500/20 backdrop-blur-xl rounded-xl border border-green-500/30">
-              <Shield className="h-7 w-7 text-green-400" />
-            </div>
-            <div>
-              <h2 className={`text-2xl font-bold ${textPrimary}`}>
-                Detoxification Analysis
-              </h2>
-              <p className={`text-sm ${textSecondary}`}>
-                Your genetic detoxification capacity and support needs
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* No Data Available */}
-        <div className={`${glassBackground} border ${borderColor} rounded-2xl p-8 text-center`}>
-          <div className="flex flex-col items-center space-y-4">
-            <div className="p-4 bg-gradient-to-br from-green-500/20 to-blue-500/20 backdrop-blur-xl rounded-xl border border-green-500/30">
-              <Shield className="h-8 w-8 text-green-400" />
-            </div>
-            <div>
-              <h3 className={`text-xl font-bold ${textPrimary} mb-2`}>
-                Detoxification Analysis in Progress
-              </h3>
-              <p className={`${textSecondary} max-w-md mx-auto`}>
-                Detoxification pathway analysis is not yet available for your genetic data. 
-                This analysis requires specific genetic variants that may be added in future updates.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Information Panel */}
-        <div className={`${glassBackground} border ${borderColor} rounded-2xl p-8`}>
-          <h3 className={`text-xl font-bold ${textPrimary} mb-6`}>
-            About Detoxification Analysis
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div>
-              <h4 className={`text-lg font-semibold ${textPrimary} mb-4`}>Phase I Detox</h4>
-              <p className={`${textSecondary} leading-relaxed`}>
-                Phase I detoxification involves cytochrome P450 enzymes that convert toxins 
-                into intermediate metabolites through oxidation, reduction, and hydrolysis reactions.
-              </p>
-            </div>
-            <div>
-              <h4 className={`text-lg font-semibold ${textPrimary} mb-4`}>Phase II Detox</h4>
-              <p className={`${textSecondary} leading-relaxed`}>
-                Phase II conjugation reactions neutralize Phase I metabolites through 
-                glucuronidation, sulfation, and glutathione conjugation pathways.
-              </p>
-            </div>
-            <div>
-              <h4 className={`text-lg font-semibold ${textPrimary} mb-4`}>Phase III Detox</h4>
-              <p className={`${textSecondary} leading-relaxed`}>
-                Phase III elimination involves transport proteins that move conjugated 
-                toxins out of cells for final elimination from the body.
-              </p>
-            </div>
-          </div>
-        </div>
+        <CategoryHeader {...headerProps} />
+        <EmptyState
+          icon={Shield}
+          iconColorClass="text-green-400"
+          gradientFrom="from-green-500/20"
+          gradientTo="to-emerald-500/20"
+          borderColor="border-green-500/30"
+          title="No Detox Data Available"
+          description="Detoxification pathway analysis is not yet available for your genetic data."
+          theme={theme}
+        />
       </div>
     )
   }
 
-  const detoxPhases = [
-    {
-      phase: 'Phase I',
-      name: 'Oxidation',
-      capacity: detoxData?.phase1_capacity || 'Unknown',
-      genes: [
-        'CYP1A1', 'CYP1A2', 'CYP1B1', 'CYP2A6', 'CYP2B6', 'CYP2C8', 
-        'CYP2C9', 'CYP2C19', 'CYP2D6', 'CYP2E1', 'CYP3A4', 'CYP3A5', 
-        'CYP3A7', 'FMO3', 'ALDH1A1', 'ALDH2', 'ADH1B', 'ADH1C'
-      ],
-      description: 'Converts toxins into intermediate metabolites using cytochrome P450 enzymes and other oxidative enzymes',
-      function: 'Oxidation, reduction, hydrolysis, dealkylation',
-      risk: detoxData?.phase1_capacity === 'Fast' ? 'moderate' : 'low'
-    },
-    {
-      phase: 'Phase II',
-      name: 'Conjugation',
-      capacity: detoxData?.phase2_capacity || 'Unknown',
-      genes: [
-        'GSTM1', 'GSTT1', 'GSTP1', 'GSTA1', 'GSTA4', 'GSTM3', 'GSTT2',
-        'UGT1A1', 'UGT1A3', 'UGT1A4', 'UGT1A6', 'UGT1A7', 'UGT1A8', 'UGT1A9',
-        'UGT2B4', 'UGT2B7', 'UGT2B10', 'UGT2B15', 'UGT2B17',
-        'SULT1A1', 'SULT1A2', 'SULT1A3', 'SULT1E1', 'SULT2A1',
-        'NAT1', 'NAT2', 'TPMT', 'COMT', 'HNMT'
-      ],
-      description: 'Neutralizes Phase I metabolites through conjugation reactions with glutathione, glucuronic acid, sulfate, and other molecules',
-      function: 'Glucuronidation, sulfation, glutathione conjugation, acetylation, methylation',
-      risk: detoxData?.phase2_capacity === 'Slow' ? 'high' : 'low'
-    },
-    {
-      phase: 'Phase III',
-      name: 'Elimination',
-      capacity: detoxData?.phase3_capacity || 'Unknown',
-      genes: [
-        'ABCB1', 'ABCC1', 'ABCC2', 'ABCC3', 'ABCC4', 'ABCG2',
-        'SLC22A1', 'SLC22A2', 'SLC22A6', 'SLC22A8', 'SLCO1A2',
-        'SLCO1B1', 'SLCO1B3', 'SLCO2B1'
-      ],
-      description: 'Transports conjugated toxins out of cells and tissues for final elimination from the body via bile, urine, and feces',
-      function: 'Active transport, efflux pumps, elimination',
-      risk: 'low'
-    }
-  ]
-
-  const getRiskColor = (risk: string) => {
-    switch (risk) {
-      case 'high': return 'text-red-400'
-      case 'moderate': return 'text-yellow-400'
-      default: return 'text-green-400'
-    }
-  }
-
-  const getRiskBg = (risk: string) => {
-    switch (risk) {
-      case 'high': return 'bg-red-500/20'
-      case 'moderate': return 'bg-yellow-500/20'
-      default: return 'bg-green-500/20'
-    }
-  }
-
-  const getCapacityColor = (capacity: string) => {
-    switch (capacity.toLowerCase()) {
-      case 'fast': return 'text-orange-400'
-      case 'slow': return 'text-red-400'
-      default: return 'text-green-400'
-    }
-  }
-
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className={`${glassBackground} border ${borderColor} rounded-2xl p-8`}>
-        <div className="flex items-center space-x-4 mb-6">
-          <div className="p-3 bg-gradient-to-br from-green-500/20 to-blue-500/20 backdrop-blur-xl rounded-xl border border-green-500/30">
-            <Shield className="h-7 w-7 text-green-400" />
-          </div>
-          <div>
-            <h2 className={`text-2xl font-bold ${textPrimary}`}>
-              Detoxification Analysis
-            </h2>
-            <p className={`text-sm ${textSecondary}`}>
-              Your genetic detoxification capacity and support needs
-            </p>
-          </div>
-        </div>
+      <CategoryHeader {...headerProps} />
 
-        {/* Overall Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-          <div className={`${glassBackground} border ${borderColor} rounded-xl p-6`}>
-            <div className="flex items-center space-x-3 mb-3">
-              <Zap className="h-5 w-5 text-blue-400" />
-              <span className={`text-sm font-medium ${textSecondary}`}>Detox Score</span>
-            </div>
-            <div className={`text-2xl font-bold ${textPrimary} mb-2`}>
-              {detoxData?.overall_detox_score || 'N/A'}/100
-            </div>
-            <div className={`text-xs ${textSecondary}`}>
-              Overall capacity
-            </div>
+      {grouped.map(({ phase, items }) => (
+        <SectionCard key={phase} title={formatPhase(phase)} theme={theme}>
+          <div className="flex items-center gap-2 -mt-2 mb-4">
+            <Badge variant="outline" className="text-xs">{items.length}</Badge>
           </div>
+          <MasonryLayout>
+            {items.map((item: DetoxProfile, idx: number) => {
+              const key = `${phase}-${item.gene}-${idx}`
+              const isExpanded = expandedGene === key
+              const capacity = item.detox_capacity || 'normal'
+              const sensitivity = item.toxin_sensitivity
 
-          <div className={`${glassBackground} border ${borderColor} rounded-xl p-6`}>
-            <div className="flex items-center space-x-3 mb-3">
-              <Flame className="h-5 w-5 text-orange-400" />
-              <span className={`text-sm font-medium ${textSecondary}`}>Phase I</span>
-            </div>
-            <div className={`text-lg font-bold ${getCapacityColor(detoxData?.phase1_capacity || 'Unknown')} mb-2`}>
-              {detoxData?.phase1_capacity || 'Unknown'}
-            </div>
-            <div className={`text-xs ${textSecondary}`}>
-              Oxidation capacity
-            </div>
-          </div>
-
-          <div className={`${glassBackground} border ${borderColor} rounded-xl p-6`}>
-            <div className="flex items-center space-x-3 mb-3">
-              <Shield className="h-5 w-5 text-green-400" />
-              <span className={`text-sm font-medium ${textSecondary}`}>Phase II</span>
-            </div>
-            <div className={`text-lg font-bold ${getCapacityColor(detoxData?.phase2_capacity || 'Unknown')} mb-2`}>
-              {detoxData?.phase2_capacity || 'Unknown'}
-            </div>
-            <div className={`text-xs ${textSecondary}`}>
-              Conjugation capacity
-            </div>
-          </div>
-
-          <div className={`${glassBackground} border ${borderColor} rounded-xl p-6`}>
-            <div className="flex items-center space-x-3 mb-3">
-              <AlertTriangle className="h-5 w-5 text-yellow-400" />
-              <span className={`text-sm font-medium ${textSecondary}`}>Sensitivity</span>
-            </div>
-            <div className={`text-lg font-bold ${textPrimary} mb-2`}>
-              {detoxData?.toxin_sensitivity || 'Unknown'}
-            </div>
-            <div className={`text-xs ${textSecondary}`}>
-              To environmental toxins
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Detox Phases */}
-      <div className={`${glassBackground} border ${borderColor} rounded-2xl p-8`}>
-        <h3 className={`text-xl font-bold ${textPrimary} mb-6`}>
-          Detoxification Phases
-        </h3>
-        
-        <div className="space-y-4">
-          {detoxPhases.map((phase, index) => (
-            <div key={index} className={`${glassBackground} border ${borderColor} rounded-xl p-6 hover:border-green-500/50 transition-all duration-300 cursor-pointer`}
-                 onClick={() => setSelectedPhase(selectedPhase === phase.phase ? null : phase.phase)}>
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center space-x-4">
-                  <div className={`w-4 h-4 rounded-full ${getRiskBg(phase.risk)} ${getRiskColor(phase.risk)}`}></div>
-                  <div>
-                    <h4 className={`text-lg font-bold ${textPrimary}`}>{phase.phase} - {phase.name}</h4>
-                    <p className={`text-sm ${textSecondary}`}>{phase.function}</p>
+              return (
+                <div
+                  key={key}
+                  className={`${theme.glass} border ${theme.border} rounded-xl p-4 hover:border-green-500/50 transition-all duration-300 cursor-pointer`}
+                  onClick={() => setExpandedGene(isExpanded ? null : key)}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <h4 className={`font-bold text-base ${theme.textPrimary}`}>{item.gene}</h4>
+                      <StatusBadge
+                        label={formatLabel(capacity)}
+                        severity={capacityToSeverity(capacity)}
+                      />
+                      {sensitivity && (
+                        <StatusBadge
+                          label={`Sensitivity: ${formatLabel(sensitivity)}`}
+                          severity={sensitivityToSeverity(sensitivity)}
+                          showIcon={false}
+                        />
+                      )}
+                    </div>
+                    <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                   </div>
-                </div>
-                <div className="flex items-center space-x-3">
-                  <span className={`text-sm font-medium ${getCapacityColor(phase.capacity)}`}>
-                    {phase.capacity}
-                  </span>
-                  <ChevronRight className={`h-5 w-5 ${textSecondary} transition-transform duration-300 ${selectedPhase === phase.phase ? 'rotate-90' : ''}`} />
-                </div>
-              </div>
 
-              {selectedPhase === phase.phase && (
-                <div className={`mt-4 pt-4 border-t ${borderColor} space-y-4`}>
-                  <p className={`text-sm ${textSecondary} leading-relaxed`}>
-                    {phase.description}
-                  </p>
-                  
-                  <div>
-                    <h5 className={`text-sm font-semibold ${textPrimary} mb-2`}>Key Genes:</h5>
-                    <div className="flex flex-wrap gap-2">
-                      {phase.genes.map((gene, geneIndex) => (
-                        <span key={geneIndex} className={`px-3 py-1 ${glassBackground} border ${borderColor} rounded-full text-xs font-medium ${textPrimary}`}>
-                          {gene}
-                        </span>
+                  {item.associated_variants?.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {item.associated_variants.map((v: string) => (
+                        <Badge key={v} variant="secondary" className="text-xs">{v}</Badge>
                       ))}
                     </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
+                  )}
 
-      {/* Risk Genes */}
-      <div className={`${glassBackground} border ${borderColor} rounded-2xl p-8`}>
-        <h3 className={`text-xl font-bold ${textPrimary} mb-6`}>
-          Risk Gene Variants
-        </h3>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {(detoxData?.risk_genes || ['No specific risk genes identified']).map((gene: string, index: number) => (
-            <div key={index} className={`${glassBackground} border ${borderColor} rounded-xl p-6`}>
-              <div className="flex items-center space-x-3 mb-3">
-                <AlertTriangle className="h-5 w-5 text-red-400" />
-                <h4 className={`text-lg font-bold ${textPrimary}`}>{gene}</h4>
-              </div>
-              <p className={`text-sm ${textSecondary} mb-3`}>
-                {gene === 'No specific risk genes identified' 
-                  ? 'Analysis in progress or no significant variants found'
-                  : 'Null variant detected - reduced detoxification capacity'
-                }
-              </p>
-              <div className={`px-3 py-1 ${gene === 'No specific risk genes identified' ? 'bg-blue-500/20 text-blue-400' : 'bg-red-500/20 text-red-400'} rounded-full text-xs font-medium inline-block`}>
-                {gene === 'No specific risk genes identified' ? 'Analysis Pending' : 'High Risk'}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
+                  {isExpanded && (
+                    <div className={`mt-4 pt-4 border-t ${theme.border} space-y-4`}>
+                      {item.support_recommendations?.length > 0 && (
+                        <div>
+                          <h5 className={`text-sm font-semibold ${theme.textPrimary} mb-2`}>Support Recommendations</h5>
+                          <div className="space-y-2">
+                            {item.support_recommendations.map((rec: string, i: number) => (
+                              <div key={i} className="flex items-start gap-2">
+                                <CheckCircle className="h-4 w-4 text-green-400 mt-0.5 shrink-0" />
+                                <span className={`text-sm ${theme.textSecondary}`}>{rec}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
 
-      {/* Recommendations */}
-      <div className={`${glassBackground} border ${borderColor} rounded-2xl p-8`}>
-        <h3 className={`text-xl font-bold ${textPrimary} mb-6`}>
-          Detox Support Recommendations
-        </h3>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <h4 className={`text-lg font-semibold ${textPrimary} mb-4`}>Recommended Supplements</h4>
-            <div className="space-y-3">
-              {(detoxData?.recommended_support || ['No specific recommendations available']).map((supplement: string, index: number) => (
-                <div key={index} className={`${glassBackground} border ${borderColor} rounded-lg p-4`}>
-                  <div className="flex items-center space-x-3">
-                    <CheckCircle className="h-5 w-5 text-green-400" />
-                    <span className={`font-medium ${textPrimary}`}>{supplement}</span>
-                  </div>
+                      <VariantLinks
+                        rsid={item.associated_variants?.[0]}
+                        gene={item.gene}
+                      />
+                    </div>
+                  )}
                 </div>
-              ))}
-            </div>
-          </div>
-          
-          <div>
-            <h4 className={`text-lg font-semibold ${textPrimary} mb-4`}>Lifestyle Recommendations</h4>
-            <div className="space-y-3">
-              {[
-                'Reduce exposure to environmental toxins',
-                'Support liver health with cruciferous vegetables',
-                'Stay well hydrated',
-                'Regular sauna or sweating',
-                'Avoid alcohol and processed foods'
-              ].map((recommendation, index) => (
-                <div key={index} className={`${glassBackground} border ${borderColor} rounded-lg p-4`}>
-                  <div className="flex items-center space-x-3">
-                    <Zap className="h-5 w-5 text-blue-400" />
-                    <span className={`font-medium ${textPrimary}`}>{recommendation}</span>
-                  </div>
+              )
+            })}
+          </MasonryLayout>
+        </SectionCard>
+      ))}
+
+      {allRecommendations.length > 0 && (
+        <SectionCard title="Detox Support" theme={theme}>
+          <div className="space-y-3">
+            {allRecommendations.map((rec, i) => (
+              <div key={i} className={`${theme.glass} border ${theme.border} rounded-lg p-4`}>
+                <div className="flex items-start gap-3">
+                  <CheckCircle className="h-5 w-5 text-green-400 mt-0.5 shrink-0" />
+                  <span className={`font-medium ${theme.textPrimary}`}>{rec}</span>
                 </div>
-              ))}
-            </div>
+              </div>
+            ))}
           </div>
-        </div>
-      </div>
+        </SectionCard>
+      )}
     </div>
   )
 }

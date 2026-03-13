@@ -124,13 +124,11 @@ def setup_services():
     """Set up all service dependencies."""
     # Import here to avoid circular imports
     from ..services.genetic_api_service import OptimizedGeneticAPIService
-    from ..services.specialized_analyzers import SpecializedAnalyzerManager
     from ..services.health_insights import HealthInsights
     from ..services.drug_response import DrugResponseAnalyzer
     
     # Register services
     container.register_class('api_service', OptimizedGeneticAPIService)
-    container.register_class('specialized_analyzer', SpecializedAnalyzerManager)
     container.register_class('health_insights', HealthInsights)
     container.register_class('drug_response', DrugResponseAnalyzer)
     
@@ -180,6 +178,6 @@ class ServiceManager:
     
     def get_analysis_service(self, user_id: Optional[int] = None):
         """Get a configured analysis service."""
-        from ..services.analysis_service import GeneticAnalysisService
+        from ..services.analysis_service import ComprehensiveAnalysisService
         
-        return GeneticAnalysisService(user_id=user_id)
+        return ComprehensiveAnalysisService(user_id=user_id)

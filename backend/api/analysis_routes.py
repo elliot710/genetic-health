@@ -10,9 +10,8 @@ from typing import Dict, Any, Optional, List
 from pydantic import BaseModel
 
 from ..db.database import get_session
-from ..db.models import GeneticAnalysis
+from ..db.models import GeneticAnalysis, HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait, SportsPerformance, CognitiveProfile, PersonalityTrait, AncestryResult, CarrierStatus, WellnessMetric, MethylationProfile, DetoxificationProfile, RareMutation, UncommonMutation
 from ..core.container import ServiceManager
-from ..services.analysis_service import AnalysisStrategy
 from .auth_routes import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -83,9 +82,6 @@ async def start_analysis(
                 detail="Analysis not found"
             )
         
-        # Only fast strategy is supported
-        strategy = AnalysisStrategy.FAST
-        
         # Update analysis status to processing using SQLAlchemy update
         await db.execute(
             update(GeneticAnalysis)
@@ -106,7 +102,7 @@ async def start_analysis(
             try:
                 async with ServiceManager() as service_manager:
                     analysis_service = service_manager.get_analysis_service(current_user.id)
-                    await analysis_service.process_analysis(analysis_id, strategy)
+                    await analysis_service.process_analysis(analysis_id)
             except Exception as e:
                 logger.error(f"Background analysis failed: {e}")
         
@@ -252,18 +248,18 @@ async def cancel_analysis(
                 detail="Analysis not found"
             )
         
-        # Update status to cancelled using SQLAlchemy update
+        # Update status to stopped using SQLAlchemy update
         await db.execute(
             update(GeneticAnalysis)
             .where(GeneticAnalysis.id == analysis_id)
             .values(
-                analysis_status="cancelled",
-                current_step="cancelled by user"
+                analysis_status="stopped",
+                current_step="stopped by user"
             )
         )
         await db.commit()
         
-        return {"message": "Analysis cancelled successfully", "analysis_id": analysis_id}
+        return {"message": "Analysis stopped successfully", "analysis_id": analysis_id}
         
     except HTTPException:
         raise
@@ -335,11 +331,12 @@ async def pause_analysis(
 @router.post("/resume/{analysis_id}")
 async def resume_analysis(
     analysis_id: int,
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     db: AsyncSession = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
     """
-    Resume a paused genetic analysis.
+    Resume a paused or stopped genetic analysis.
     """
     try:
         logger.info(f"Resuming analysis {analysis_id} for user {current_user.id}")
@@ -356,19 +353,34 @@ async def resume_analysis(
         if not analysis:
             raise HTTPException(status_code=404, detail="Analysis not found")
         
-        # Update status to processing using SQLAlchemy update
+        current_status = getattr(analysis, 'analysis_status', 'pending')
+        if current_status not in ['paused', 'stopped']:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot resume analysis with status '{current_status}'. Only paused/stopped analysis can be resumed."
+            )
+        
+        # Update status to processing
         await db.execute(
             update(GeneticAnalysis)
             .where(GeneticAnalysis.id == analysis_id)
             .values(
                 analysis_status="processing",
-                current_step=f"resuming from {analysis.processed_variants} variants"
+                current_step=f"resuming from {analysis.processed_variants or 0} variants"
             )
         )
         await db.commit()
         
-        # Note: The actual analysis job would need to be restarted separately
-        # This just updates the database status
+        # Restart the background processing job
+        async def run_analysis():
+            try:
+                async with ServiceManager() as service_manager:
+                    analysis_service = service_manager.get_analysis_service(current_user.id)
+                    await analysis_service.process_analysis(analysis_id)
+            except Exception as e:
+                logger.error(f"Resumed analysis failed: {e}")
+        
+        background_tasks.add_task(run_analysis)
         
         return {"message": "Analysis resumed successfully", "analysis_id": analysis_id}
     
@@ -406,16 +418,21 @@ async def get_dashboard_data(
                     "analysis_id": None,
                     "status": "no_data"
                 },
-                "health": {},
-                "ancestry": {},
-                "sports": {},
-                "nutrition": {},
+                "health_risks": [],
+                "ancestry_results": [],
+                "sports_performance": [],
+                "nutrition_traits": [],
                 "metabolic": {},
-                "carrier": {},
-                "pharmacogenomics": {},
-                "rare": {},
-                "methylation": {},
-                "detox": {}
+                "carrier_status": [],
+                "drug_responses": [],
+                "rare_mutations": [],
+                "methylation_profiles": [],
+                "detoxification_profiles": [],
+                "physical_traits": [],
+                "intelligence": [],
+                "personality_traits": [],
+                "wellness_traits": [],
+                "uncommon_mutations": []
             }
         
         # Get the most recent completed analysis or the first one
@@ -461,59 +478,210 @@ async def get_dashboard_data(
             "summary": {
                 "total_variants": total_variants,
                 "processed_variants": processed_variants,
-                "analyzed_variants": analyzed_variants,  # Add real analyzed count
-                "insights_found": insights_found,  # Add insights count
+                "analyzed_variants": analyzed_variants,
+                "insights_found": insights_found,
                 "analysis_id": getattr(primary_analysis, 'id', None),
                 "status": getattr(primary_analysis, 'analysis_status', 'pending'),
-                "upload_date": upload_date_str
+                "upload_date": upload_date_str,
+                "filename": getattr(primary_analysis, 'filename', None)
             },
-            # Placeholder category data - these would be populated by specialized analyzers
-            "health": {
-                "cardiovascular_risk": "moderate",
-                "diabetes_risk": "low",
-                "alzheimer_risk": "low"
-            },
-            "ancestry": {
-                "european": 0.7,
-                "asian": 0.2,
-                "african": 0.1
-            },
-            "sports": {
-                "endurance": "high",
-                "power": "moderate",
-                "recovery": "good"
-            },
-            "nutrition": {
-                "caffeine_metabolism": "fast",
-                "lactose_tolerance": "tolerant",
-                "vitamin_d": "normal"
-            },
-            "metabolic": {
-                "metabolism_rate": "normal",
-                "fat_storage": "low_risk",
-                "insulin_sensitivity": "high"
-            },
-            "carrier": {
-                "cystic_fibrosis": "not_carrier",
-                "sickle_cell": "not_carrier"
-            },
-            "pharmacogenomics": {
-                "warfarin_sensitivity": "normal",
-                "statins_response": "good"
-            },
-            "rare": {
-                "mutations_found": 0,
-                "pathogenic_variants": 0
-            },
-            "methylation": {
-                "mthfr_status": "normal",
-                "folate_cycle": "efficient"
-            },
-            "detox": {
-                "phase1_enzymes": "normal",
-                "phase2_enzymes": "normal"
-            }
         }
+
+        analysis_ids = [a.id for a in analyses]
+
+        # Health risks
+        hr = await db.execute(
+            select(HealthRisk).where(HealthRisk.analysis_id.in_(analysis_ids))
+        )
+        health_rows = hr.scalars().all()
+        dashboard_data["health_risks"] = [
+            {"condition": r.condition, "risk_level": r.risk_level, "risk_score": r.risk_score,
+             "associated_variants": r.associated_variants, "recommendations": r.recommendations}
+            for r in health_rows
+        ]
+
+        # Drug responses
+        dr = await db.execute(
+            select(DrugResponse).where(DrugResponse.analysis_id.in_(analysis_ids))
+        )
+        drug_rows = dr.scalars().all()
+        dashboard_data["drug_responses"] = [
+            {"gene": r.gene, "drug": r.drug, "response_type": r.response_type,
+             "recommendations": r.recommendations, "variants_involved": r.variants_involved}
+            for r in drug_rows
+        ]
+
+        # Ancestry
+        ar = await db.execute(
+            select(AncestryResult).where(AncestryResult.analysis_id.in_(analysis_ids))
+        )
+        ancestry_rows = ar.scalars().all()
+        dashboard_data["ancestry_results"] = [
+            {"population": r.population, "percentage": r.percentage,
+             "confidence": r.confidence, "geographic_origin": r.geographic_origin}
+            for r in ancestry_rows
+        ]
+
+        # Sports
+        sp = await db.execute(
+            select(SportsPerformance).where(SportsPerformance.analysis_id.in_(analysis_ids))
+        )
+        sports_rows = sp.scalars().all()
+        dashboard_data["sports_performance"] = [
+            {"category": r.performance_category, "genetic_advantage": r.genetic_advantage,
+             "sport_recommendations": r.sport_recommendations, "training_advice": r.training_advice}
+            for r in sports_rows
+        ]
+
+        # Nutrition
+        nt = await db.execute(
+            select(NutritionTrait).where(NutritionTrait.analysis_id.in_(analysis_ids))
+        )
+        nutrition_rows = nt.scalars().all()
+        dashboard_data["nutrition_traits"] = [
+            {"nutrient": r.nutrient, "metabolism_type": r.metabolism_type,
+             "dietary_recommendations": r.dietary_recommendations, "sensitivity_level": r.sensitivity_level}
+            for r in nutrition_rows
+        ]
+
+        # Carrier status
+        cs = await db.execute(
+            select(CarrierStatus).where(CarrierStatus.analysis_id.in_(analysis_ids))
+        )
+        carrier_rows = cs.scalars().all()
+        dashboard_data["carrier_status"] = [
+            {"condition": r.condition, "carrier_status": r.carrier_status,
+             "inheritance_pattern": r.inheritance_pattern,
+             "genetic_counseling_recommended": r.genetic_counseling_recommended}
+            for r in carrier_rows
+        ]
+
+        # Methylation profiles
+        mp = await db.execute(
+            select(MethylationProfile).where(MethylationProfile.analysis_id.in_(analysis_ids))
+        )
+        methylation_rows = mp.scalars().all()
+        dashboard_data["methylation_profiles"] = [
+            {"gene": r.gene, "variant": r.variant,
+             "methylation_capacity": r.methylation_capacity,
+             "supplement_recommendations": r.supplement_recommendations,
+             "associated_variants": r.associated_variants}
+            for r in methylation_rows
+        ]
+
+        # Detoxification profiles
+        dp = await db.execute(
+            select(DetoxificationProfile).where(DetoxificationProfile.analysis_id.in_(analysis_ids))
+        )
+        detox_rows = dp.scalars().all()
+        dashboard_data["detoxification_profiles"] = [
+            {"detox_phase": r.detox_phase, "gene": r.gene,
+             "detox_capacity": r.detox_capacity, "toxin_sensitivity": r.toxin_sensitivity,
+             "support_recommendations": r.support_recommendations,
+             "associated_variants": r.associated_variants}
+            for r in detox_rows
+        ]
+
+        # Rare mutations
+        rm = await db.execute(
+            select(RareMutation).where(RareMutation.analysis_id.in_(analysis_ids))
+        )
+        rare_rows = rm.scalars().all()
+        dashboard_data["rare_mutations"] = [
+            {"gene": r.gene, "mutation_type": r.mutation_type,
+             "mutation_name": r.mutation_name,
+             "clinical_significance": r.clinical_significance,
+             "disease_association": r.disease_association,
+             "penetrance": r.penetrance,
+             "population_frequency": r.population_frequency,
+             "associated_variants": r.associated_variants}
+            for r in rare_rows
+        ]
+
+        # Cognitive, Personality, Wellness, Physical Traits - metabolic/wellness
+        wm = await db.execute(
+            select(WellnessMetric).where(WellnessMetric.analysis_id.in_(analysis_ids))
+        )
+        wellness_rows = wm.scalars().all()
+        dashboard_data["metabolic"] = {
+            "metrics": [
+                {"metric_name": r.metric_name, "genetic_predisposition": r.genetic_predisposition,
+                 "optimization_score": r.optimization_score,
+                 "lifestyle_recommendations": r.lifestyle_recommendations}
+                for r in wellness_rows
+            ]
+        } if wellness_rows else {}
+
+        # Also provide wellness data under wellness_traits key for frontend compatibility
+        dashboard_data["wellness_traits"] = [
+            {"trait": r.metric_name, "category": "Wellness", "value": r.genetic_predisposition,
+             "gene": (r.associated_variants[0] if r.associated_variants and len(r.associated_variants) == 1 else "Multiple"),
+             "confidence": r.optimization_score or "Medium",
+             "associated_variants": r.associated_variants or [],
+             "recommendations": r.lifestyle_recommendations}
+            for r in wellness_rows
+        ] if wellness_rows else []
+
+        # Physical traits
+        pt = await db.execute(
+            select(PhysicalTrait).where(PhysicalTrait.analysis_id.in_(analysis_ids))
+        )
+        physical_rows = pt.scalars().all()
+        dashboard_data["physical_traits"] = [
+            {"trait_name": r.trait_name, "trait_category": r.trait_category,
+             "genetic_result": r.genetic_result, "confidence": r.confidence,
+             "associated_variants": r.associated_variants, "description": r.description,
+             "category": r.trait_category}
+            for r in physical_rows
+        ] if physical_rows else []
+
+        # Cognitive profiles (intelligence)
+        cp = await db.execute(
+            select(CognitiveProfile).where(CognitiveProfile.analysis_id.in_(analysis_ids))
+        )
+        cognitive_rows = cp.scalars().all()
+        dashboard_data["intelligence"] = [
+            {"cognitive_ability": r.cognitive_domain, "trait_name": r.cognitive_domain,
+             "genetic_advantage": r.genetic_score, "genetic_result": r.genetic_score,
+             "percentile": r.percentile,
+             "associated_variants": r.associated_variants,
+             "description": '; '.join(r.enhancement_suggestions) if r.enhancement_suggestions else '',
+             "enhancement_suggestions": r.enhancement_suggestions}
+            for r in cognitive_rows
+        ] if cognitive_rows else []
+
+        # Personality traits
+        pp = await db.execute(
+            select(PersonalityTrait).where(PersonalityTrait.analysis_id.in_(analysis_ids))
+        )
+        personality_rows = pp.scalars().all()
+        dashboard_data["personality_traits"] = [
+            {"trait": r.trait_name,
+             "score": 70 if r.genetic_tendency == 'moderate' else (85 if r.genetic_tendency == 'high' else 55),
+             "confidence": r.confidence_level,
+             "gene": r.associated_variants[0] if r.associated_variants else "Multiple markers",
+             "description": r.behavioral_insights[0] if r.behavioral_insights else "Genetic analysis based",
+             "characteristics": (r.behavioral_insights[1:] if r.behavioral_insights and len(r.behavioral_insights) > 1 else [])}
+            for r in personality_rows
+        ] if personality_rows else []
+
+        # Uncommon mutations
+        um = await db.execute(
+            select(UncommonMutation).where(UncommonMutation.analysis_id.in_(analysis_ids))
+        )
+        uncommon_rows = um.scalars().all()
+        dashboard_data["uncommon_mutations"] = [
+            {"rsid": r.associated_variants[0] if r.associated_variants else r.mutation_name,
+             "gene": r.gene, "effect": r.trait_association or r.mutation_name,
+             "population_frequency": r.population_frequency or 0,
+             "effect_size": r.effect_size or "small",
+             "research_status": r.research_status or "emerging",
+             "clinical_relevance": r.clinical_significance or "low",
+             "literature_count": 0,
+             "mutation_name": r.mutation_name,
+             "mutation_type": r.mutation_type}
+            for r in uncommon_rows
+        ] if uncommon_rows else []
         
         return dashboard_data
         
@@ -572,7 +740,7 @@ async def list_user_analyses(
 
 
 # Background task handler with proper error handling
-async def background_analysis_task(analysis_id: int, user_id: int, strategy: AnalysisStrategy):
+async def background_analysis_task(analysis_id: int, user_id: int, strategy: str):
     """
     Background task to run genetic analysis with proper error handling.
     """

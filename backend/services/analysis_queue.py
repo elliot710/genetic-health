@@ -130,7 +130,7 @@ class AnalysisQueue:
         logger.info(f"Starting analysis {analysis_id} for user {user_id}")
         
         # Import here to avoid circular dependencies
-        from .comprehensive_analysis_service import ComprehensiveAnalysisService
+        from .analysis_service import ComprehensiveAnalysisService
         
         # Create and run the comprehensive analysis service
         analysis_service = ComprehensiveAnalysisService(user_id=user_id)

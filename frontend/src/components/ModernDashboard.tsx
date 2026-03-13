@@ -26,6 +26,8 @@ import MethylationPanel from './categories/MethylationPanel'
 import DetoxPanel from './categories/DetoxPanel'
 import RareMutationsPanel from './categories/RareMutationsPanel'
 import UncommonMutationsPanel from './categories/UncommonMutationsPanel'
+import AdminPanel from './admin/AdminPanel'
+import SettingsPanel from './SettingsPanel'
 import VariantSearch from './VariantSearch'
 import AnalysisProgressLoader from './AnalysisProgressLoader'
 import { getThemeClass } from '../utils/theme'
@@ -35,9 +37,10 @@ interface ModernDashboardProps {
   analysisData?: any
   analysisId?: number | null
   onRefresh?: (token: string) => Promise<void>
+  isAdmin?: boolean
 }
 
-export default function ModernDashboard({ token, analysisData, analysisId, onRefresh }: ModernDashboardProps) {
+export default function ModernDashboard({ token, analysisData, analysisId, onRefresh, isAdmin }: ModernDashboardProps) {
   console.log('Dashboard component props:', { token: !!token, analysisData, analysisId })
   console.log('Analysis ID in dashboard:', analysisId)
   
@@ -46,13 +49,20 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
   const [loading, setLoading] = useState(!analysisData)
   const [showProgress, setShowProgress] = useState(false)
   const [progressInterval, setProgressInterval] = useState<NodeJS.Timeout | null>(null)
-  const [activeCategory, setActiveCategory] = useState('overview')
+  const [activeCategory, setActiveCategory] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash.slice(1)
+      return hash || 'overview'
+    }
+    return 'overview'
+  })
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [variantsPerPage] = useState(25)
   const [searchRsid, setSearchRsid] = useState('')
   const [goToPage, setGoToPage] = useState('')
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
   
   // Notification system
   const [notification, setNotification] = useState<{
@@ -89,29 +99,39 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
   useEffect(() => {
     if (typeof window !== 'undefined') {
       localStorage.setItem('darkMode', JSON.stringify(isDarkMode))
+      document.documentElement.classList.toggle('dark', isDarkMode)
     }
   }, [isDarkMode])
+
+  // Sync URL hash with active category
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const newHash = activeCategory === 'overview' ? '' : activeCategory
+      if (window.location.hash.slice(1) !== newHash) {
+        window.history.replaceState(null, '', newHash ? `#${newHash}` : window.location.pathname)
+      }
+    }
+  }, [activeCategory])
+
+  useEffect(() => {
+    const onHashChange = () => {
+      const hash = window.location.hash.slice(1)
+      setActiveCategory(hash || 'overview')
+    }
+    window.addEventListener('hashchange', onHashChange)
+    return () => window.removeEventListener('hashchange', onHashChange)
+  }, [])
 
   // Reset pagination when changing categories
   useEffect(() => {
     setCurrentPage(1)
   }, [activeCategory])
 
-  // Cleanup polling on unmount
-  useEffect(() => {
-    return () => {
-      if (progressInterval) {
-        clearInterval(progressInterval)
-        setProgressInterval(null)
-      }
-    }
-  }, [progressInterval])
-
   // Check initial status and start polling if needed
   useEffect(() => {
-    const checkStatus = async () => {
-      if (!token || !analysisId) return
+    if (!token || !analysisId) return
 
+    const checkStatus = async () => {
       try {
         const response = await fetch(`http://localhost:8000/api/analysis/status/${analysisId}`, {
           headers: { 'Authorization': `Bearer ${token}` }
@@ -122,21 +142,31 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
           setAnalysisProgress(progress.progress_percentage || 0)
           setTotalVariants(progress.total_variants || 0)
           setProcessedVariants(progress.processed_variants || 0)
-          setIsAnalysisRunning(['processing', 'running'].includes(progress.status))
+          const stillRunning = ['processing', 'running'].includes(progress.status)
+          setIsAnalysisRunning(stillRunning)
+          return stillRunning
         }
       } catch (error) {
         console.error('Error checking analysis status:', error)
       }
+      return false
     }
 
+    // Initial check
     checkStatus()
-    
-    // Start polling if analysis is running
-    if (analysisId && token && isAnalysisRunning && !progressInterval) {
-      const interval = setInterval(checkStatus, 2000)
-      setProgressInterval(interval)
-    }
-  }, [analysisId, token, isAnalysisRunning, progressInterval])
+
+    // Only start polling if analysis is running
+    if (!isAnalysisRunning) return
+
+    const interval = setInterval(async () => {
+      const stillRunning = await checkStatus()
+      if (!stillRunning) {
+        clearInterval(interval)
+      }
+    }, 2000)
+
+    return () => clearInterval(interval)
+  }, [analysisId, token, isAnalysisRunning])
 
   // Load real data from backend on component mount only if no analysisData provided
   useEffect(() => {
@@ -145,7 +175,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
         setLoading(true)
         
         try {
-          const response = await fetch('/api/upload/dashboard-data', {
+          const response = await fetch('http://localhost:8000/api/analysis/dashboard-data', {
             headers: {
               'Authorization': `Bearer ${token}`,
               'Content-Type': 'application/json',
@@ -339,10 +369,11 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
       id: 'variant-search',
       title: 'Variant Search',
       icon: Search,
-    }
+    },
   ]
 
   const handleDeleteData = async () => {
+    setIsDeleting(true)
     try {
       const response = await fetch('http://localhost:8000/upload/data', {
         method: 'DELETE',
@@ -352,16 +383,29 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
       })
 
       if (response.ok) {
+        // Clear all data state immediately
         setData(null)
+        setAnalysisStatus('pending')
+        setAnalysisProgress(0)
+        setTotalVariants(0)
+        setProcessedVariants(0)
+        setIsAnalysisRunning(false)
+        if (progressInterval) { clearInterval(progressInterval); setProgressInterval(null) }
         setActiveCategory('overview')
         setShowDeleteDialog(false)
         showNotification('All data deleted successfully', 'success')
+        // Re-fetch from server to fully sync parent state
+        if (onRefresh && token) {
+          await onRefresh(token)
+        }
       } else {
         showNotification('Failed to delete data', 'error')
       }
     } catch (error) {
       console.error('Error deleting data:', error)
       showNotification('Error deleting data', 'error')
+    } finally {
+      setIsDeleting(false)
     }
   }
 
@@ -390,20 +434,13 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
         )
         
         if (hasCompletedResults || shouldBeCompleted) {
-          // Auto-fix status mismatch
-          console.log('Status mismatch detected, auto-correcting...')
-          const resetResponse = await fetch(`http://localhost:8000/api/analysis/cancel/${analysisId}`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${token}` }
-          })
-          if (resetResponse.ok) {
-            const resetResult = await resetResponse.json()
-            setAnalysisStatus(resetResult.status)
-            setAnalysisProgress(resetResult.progress_percentage || 0)
-            setTotalVariants(resetResult.total_variants || 0)
-            setProcessedVariants(resetResult.processed_variants || 0)
-            setIsAnalysisRunning(false)
-          }
+          // Auto-fix status mismatch — treat as completed
+          console.log('Status mismatch detected, marking as completed...')
+          setAnalysisStatus('completed')
+          setAnalysisProgress(100)
+          setTotalVariants(progress.total_variants || 0)
+          setProcessedVariants(progress.processed_variants || progress.total_variants || 0)
+          setIsAnalysisRunning(false)
         } else {
           setAnalysisStatus(progress.status)
           setAnalysisProgress(progress.progress_percentage || 0)
@@ -640,7 +677,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
     },
     {
       title: 'Variants Analyzed',
-      value: data?.summary?.analyzed_variants || data?.analysis_results?.variants_actually_processed || data?.processed_variants || 0,
+      value: data?.summary?.analyzed_variants || data?.summary?.processed_variants || data?.analysis_results?.variants_actually_processed || data?.processed_variants || 0,
       icon: BarChart3,
       color: getThemeClass('text-blue-600', isDarkMode),
       bgColor: getThemeClass('bg-blue-50', isDarkMode)
@@ -751,17 +788,17 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
   const renderCategoryContent = () => {
     switch (activeCategory) {
       case 'food-nutrition':
-        return <FoodNutritionPanel data={data} isDarkMode={isDarkMode} theme={theme} />
+        return <FoodNutritionPanel data={data} isDarkMode={isDarkMode} token={token} />
       case 'intelligence':
-        return <IntelligencePanel data={data} isDarkMode={isDarkMode} theme={theme} />
+        return <IntelligencePanel data={data} isDarkMode={isDarkMode} token={token} />
       case 'physical-traits':
-        return <PhysicalTraitsPanel data={data} isDarkMode={isDarkMode} theme={theme} />
+        return <PhysicalTraitsPanel data={data} isDarkMode={isDarkMode} token={token} />
       case 'personality':
-        return <PersonalityPanel data={data} isDarkMode={isDarkMode} theme={theme} token={token} />
+        return <PersonalityPanel data={data} isDarkMode={isDarkMode} token={token} />
       case 'sports':
-        return <SportsPanel data={data} isDarkMode={isDarkMode} theme={theme} />
+        return <SportsPanel data={data} isDarkMode={isDarkMode} token={token} />
       case 'health':
-        return <HealthPanel data={data} isDarkMode={isDarkMode} theme={theme} token={token} />
+        return <HealthPanel data={data} isDarkMode={isDarkMode} token={token} />
       case 'drug-responses':
         return <DrugResponsesPanel data={data} isDarkMode={isDarkMode} token={token} />
       case 'ancestry':
@@ -771,15 +808,19 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
       case 'wellness':
         return <WellnessPanel data={data} isDarkMode={isDarkMode} token={token} />
       case 'methylation':
-        return <MethylationPanel data={data} isDarkMode={isDarkMode} theme={theme} />
+        return <MethylationPanel data={data} isDarkMode={isDarkMode} token={token} />
       case 'detox':
-        return <DetoxPanel data={data} isDarkMode={isDarkMode} theme={theme} />
+        return <DetoxPanel data={data} isDarkMode={isDarkMode} token={token} />
       case 'rare-mutations':
-        return <RareMutationsPanel data={data} isDarkMode={isDarkMode} theme={theme} />
+        return <RareMutationsPanel data={data} isDarkMode={isDarkMode} token={token} />
       case 'uncommon-mutations':
-        return <UncommonMutationsPanel data={data} isDarkMode={isDarkMode} theme={theme} />
+        return <UncommonMutationsPanel data={data} isDarkMode={isDarkMode} token={token} />
       case 'variant-search':
         return <VariantSearch token={token} isDarkMode={isDarkMode} theme={theme} />
+      case 'admin':
+        return <AdminPanel token={token} isDarkMode={isDarkMode} theme={theme} />
+      case 'settings':
+        return <SettingsPanel token={token} theme={theme} data={data} />
       default:
         return (
           <div className="space-y-8">
@@ -815,7 +856,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                 <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-8`}>
                   <div className="flex items-center justify-between mb-8">
                     <div className="flex items-center space-x-4">
-                      <div className="p-3 bg-gradient-to-br from-blue-500/20 to-purple-500/20 backdrop-blur-xl rounded-xl border border-blue-500/30">
+                      <div className="p-3 bg-gradient-to-br from-teal-500/20 to-cyan-500/20 backdrop-blur-xl rounded-xl border border-teal-500/30">
                         <Sparkles className={`h-7 w-7 ${getThemeClass('text-blue-500', isDarkMode)}`} />
                       </div>
                       <div>
@@ -930,7 +971,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                 </div>
               </div>
 
-              {/* Right Column - Data Overview and Quick Actions (1 column) */}
+              {/* Right Column - Quick Actions (1 column) */}
               <div className="xl:col-span-1 space-y-6">
                 {/* Analysis Progress (if running) */}
                 {(analysisStatus === 'processing' || isAnalysisRunning) && (
@@ -940,21 +981,15 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                     title="Click to view detailed analysis progress"
                   >
                     <div className="flex items-center space-x-3 mb-6">
-                      <div className="p-3 bg-gradient-to-br from-blue-500/20 to-cyan-500/20 backdrop-blur-xl rounded-xl border border-blue-500/30">
-                        <Activity className={`h-6 w-6 ${getThemeClass('text-blue-600', isDarkMode)} animate-pulse`} />
+                      <div className="p-3 bg-gradient-to-br from-teal-500/20 to-cyan-500/20 backdrop-blur-xl rounded-xl border border-teal-500/30">
+                        <Activity className={`h-6 w-6 ${getThemeClass('text-teal-600', isDarkMode)} animate-pulse`} />
                       </div>
                       <h3 className={`text-lg font-bold ${theme.text.primary}`}>
                         Analysis in Progress
                       </h3>
-                      <div className="ml-auto">
-                        <svg className={`w-5 h-5 ${theme.text.secondary}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                        </svg>
-                      </div>
                     </div>
                     
                     <div className="space-y-4">
-                      {/* Progress Bar */}
                       <div>
                         <div className="flex justify-between items-center mb-2">
                           <span className={`text-sm font-medium ${theme.text.secondary}`}>
@@ -966,13 +1001,12 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                         </div>
                         <div className={`w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3`}>
                           <div
-                            className="bg-gradient-to-r from-blue-500 to-cyan-500 h-3 rounded-full transition-all duration-500"
+                            className="bg-gradient-to-r from-teal-500 to-cyan-500 h-3 rounded-full transition-all duration-500"
                             style={{ width: `${Math.max(0, Math.min(100, analysisProgress))}%` }}
                           />
                         </div>
                       </div>
                       
-                      {/* Progress Stats */}
                       <div className="grid grid-cols-2 gap-3">
                         <div className={`${theme.glass} border ${theme.glassBorder} rounded-lg p-3 text-center`}>
                           <div className={`text-lg font-bold ${theme.text.primary}`}>
@@ -987,86 +1021,9 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                           <div className={`text-xs ${theme.text.secondary}`}>Total</div>
                         </div>
                       </div>
-                      
-                      {/* Status Message */}
-                      <div className={`p-3 rounded-lg ${getThemeClass('bg-blue-50', isDarkMode)} border ${getThemeClass('border-blue-200', isDarkMode)}`}>
-                        <div className={`text-sm ${getThemeClass('text-blue-800', isDarkMode)}`}>
-                          <div className="flex items-center space-x-2">
-                            <div className={`w-2 h-2 rounded-full ${getThemeClass('bg-blue-500', isDarkMode)} animate-pulse`}></div>
-                            <span>
-                              {totalVariants > 0 
-                                ? `Analyzing ${processedVariants.toLocaleString()} of ${totalVariants.toLocaleString()} variants for health insights...`
-                                : 'Analyzing your genetic variants for health insights...'
-                              }
-                            </span>
-                          </div>
-                        </div>
-                      </div>
                     </div>
                   </div>
                 )}
-
-                {/* Data Overview */}
-                <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-6`}>
-                  <div className="flex items-center space-x-3 mb-6">
-                    <div className="p-3 bg-gradient-to-br from-green-500/20 to-emerald-500/20 backdrop-blur-xl rounded-xl border border-green-500/30">
-                      <Dna className={`h-6 w-6 ${getThemeClass('text-green-600', isDarkMode)}`} />
-                    </div>
-                    <h3 className={`text-lg font-bold ${theme.text.primary}`}>
-                      Your Data
-                    </h3>
-                  </div>
-                  
-                  <div className="space-y-4">
-                    {data && data.summary && data.summary.total_variants > 0 ? (
-                      <>
-                        <div className={`${theme.glass} border ${theme.glassBorder} rounded-xl p-4 text-center`}>
-                          <div className="text-3xl font-bold text-green-600 mb-1">
-                            {data?.summary?.total_variants || 0}
-                          </div>
-                          <div className={`text-sm ${theme.text.secondary}`}>DNA Variants</div>
-                        </div>
-                        
-                        <div className="space-y-3">
-                          {[
-                            { 
-                              label: 'File', 
-                              value: data.summary?.upload_info?.filename || 
-                                     data.summary?.data_sources?.[0] || 
-                                     data.real_data?.upload_result?.filename ||
-                                     data.summary?.upload_info?.file_name ||
-                                     'Unknown', 
-                              icon: Upload 
-                            },
-                            { label: 'Analysis ID', value: data.summary?.analysis_id || 'N/A', icon: Shield }
-                          ].map((item, index) => (
-                            <div key={index} className={`flex items-center justify-between p-3 ${theme.glass} border ${theme.glassBorder} rounded-lg`}>
-                              <div className="flex items-center space-x-2">
-                                <item.icon className={`h-4 w-4 ${theme.text.muted}`} />
-                                <span className={`text-sm ${theme.text.secondary}`}>{item.label}</span>
-                              </div>
-                              <span className={`text-sm font-medium ${theme.text.primary} truncate max-w-24`} title={item.value}>
-                                {item.value}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    ) : (
-                      <div className={`${theme.glass} border ${theme.glassBorder} rounded-xl p-6 text-center`}>
-                        <Upload className={`h-12 w-12 ${theme.text.muted} mx-auto mb-4`} />
-                        <h4 className={`font-medium ${theme.text.primary} mb-2`}>No Data Uploaded</h4>
-                        <p className={`text-sm ${theme.text.secondary} mb-4`}>Upload your genetic data to get started</p>
-                        <button
-                          onClick={onReset}
-                          className="bg-gradient-to-r from-blue-500/80 to-purple-500/80 hover:from-blue-600/80 hover:to-purple-600/80 backdrop-blur-xl text-white px-4 py-2 rounded-lg text-sm font-medium transition-all duration-300 border border-white/20 shadow-lg w-full"
-                        >
-                          Upload Data
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
               </div>
             </div>
 
@@ -1338,11 +1295,11 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
       </div>
 
       {/* Header - Glassmorphism Effect */}
-      <header className={`${theme.glass} border-b ${theme.glassBorder} relative z-20`}>
+      <header className={`${theme.glass} border-b ${theme.glassBorder} sticky top-0 z-30`}>
         <div className="flex items-center justify-between px-6 py-4">
           {/* Logo and Title */}
           <div className="flex items-center space-x-4">
-            <div className="p-3 bg-gradient-to-br from-purple-500/80 to-pink-500/80 backdrop-blur-xl rounded-xl border border-white/20 shadow-xl">
+            <div className="p-3 bg-gradient-to-br from-teal-500/80 to-cyan-500/80 backdrop-blur-xl rounded-xl border border-white/20 shadow-xl">
               <Dna className="h-7 w-7 text-white" />
             </div>
             <div>
@@ -1360,25 +1317,13 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
           {/* Right side actions */}
           <div className="flex items-center space-x-4">
-            {/* Theme Toggle */}
-            <button
-              onClick={() => setIsDarkMode(!isDarkMode)}
-              className={`p-2.5 ${theme.glass} border ${theme.glassBorder} rounded-xl ${theme.glassHover} transition-all duration-300`}
-            >
-              {isDarkMode ? (
-                <Sun className={`h-5 w-5 ${theme.text.secondary}`} />
-              ) : (
-                <Moon className={`h-5 w-5 ${theme.text.secondary}`} />
-              )}
-            </button>
-
             {/* Analysis Controls */}
             <div className="flex items-center space-x-2">
               {/* Analysis Status Indicator */}
               {analysisId && (
                 <div className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${
                   analysisStatus === 'completed' 
-                    ? 'bg-green-50 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800'
+                    ? 'bg-green-600 text-white border-green-700 dark:bg-green-700 dark:text-white dark:border-green-600'
                     : analysisStatus === 'processing'
                     ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800'
                     : analysisStatus === 'stopped'
@@ -1409,7 +1354,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                       <span>Paused at {analysisProgress}%</span>
                     </div>
                   ) : analysisStatus === 'completed' ? (
-                    <span>Completed</span>
+                    <span>✓ Completed</span>
                   ) : analysisStatus}
                 </div>
               )}
@@ -1519,7 +1464,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                 onClick={() => setShowUserMenu(!showUserMenu)}
                 className={`flex items-center space-x-3 ${theme.glass} border ${theme.glassBorder} px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-300 ${theme.glassHover}`}
               >
-                <div className="w-7 h-7 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center shadow-lg">
+                <div className="w-7 h-7 bg-gradient-to-br from-teal-500 to-cyan-500 rounded-full flex items-center justify-center shadow-lg">
                   <span className="text-white text-sm font-bold">V</span>
                 </div>
                 <span className={theme.text.primary}>Victor</span>
@@ -1529,7 +1474,23 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
               {showUserMenu && (
                 <div className={`absolute right-0 mt-3 w-52 ${theme.glass} border ${theme.glassBorder} rounded-xl shadow-2xl py-2 z-50`}>
                   <button
-                    onClick={() => setShowUserMenu(false)}
+                    onClick={() => { setIsDarkMode(!isDarkMode); setShowUserMenu(false) }}
+                    className={`w-full text-left px-4 py-3 text-sm ${theme.text.primary} ${theme.glassHover} flex items-center space-x-3 transition-all duration-200`}
+                  >
+                    {isDarkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                    <span>{isDarkMode ? 'Light Mode' : 'Dark Mode'}</span>
+                  </button>
+                  {isAdmin && (
+                    <button
+                      onClick={() => { setActiveCategory('admin'); setShowUserMenu(false) }}
+                      className={`w-full text-left px-4 py-3 text-sm ${theme.text.primary} ${theme.glassHover} flex items-center space-x-3 transition-all duration-200`}
+                    >
+                      <Shield className="h-4 w-4" />
+                      <span>Admin Panel</span>
+                    </button>
+                  )}
+                  <button
+                    onClick={() => { setActiveCategory('settings'); setShowUserMenu(false) }}
                     className={`w-full text-left px-4 py-3 text-sm ${theme.text.primary} ${theme.glassHover} flex items-center space-x-3 transition-all duration-200`}
                   >
                     <Settings className="h-4 w-4" />
@@ -1558,9 +1519,9 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
       </header>
 
       {/* Main Content */}
-      <div className="flex h-screen">
+      <div className="flex" style={{ height: 'calc(100vh - 73px)' }}>
         {/* Sidebar - Glassmorphism style */}
-        <aside className={`w-72 ${theme.glass} border-r ${theme.glassBorder} relative z-10`}>
+        <aside className={`w-72 ${theme.glass} border-r ${theme.glassBorder} overflow-y-auto relative z-10`}>
           <div className="p-6">
             <div className="space-y-2">
               {categories.map((category) => {
@@ -1579,7 +1540,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                     onClick={() => setActiveCategory(category.id)}
                     className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-300 ${
                       isActive 
-                        ? 'bg-gradient-to-r from-blue-500/80 to-purple-500/80 text-white shadow-lg border border-white/20 backdrop-blur-xl' 
+                        ? 'bg-gradient-to-r from-teal-500/80 to-cyan-500/80 text-white shadow-lg border border-white/20 backdrop-blur-xl' 
                         : isDarkMode
                           ? 'text-gray-300 hover:bg-slate-700/40 hover:text-white border border-transparent hover:border-slate-600/30 backdrop-blur-sm'
                           : 'text-gray-600 hover:bg-gray-200/30 hover:text-gray-900 border border-transparent hover:border-gray-300/30 backdrop-blur-sm'
@@ -1600,6 +1561,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
             {showProgress && analysisId ? (
               <AnalysisProgressLoader
                 analysisId={analysisId}
+                isDarkMode={isDarkMode}
                 onComplete={handleAnalysisComplete}
                 onError={handleAnalysisError}
                 onBack={() => setShowProgress(false)}
@@ -1668,18 +1630,23 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
               <div className="flex gap-3 justify-center">
                 <button
                   onClick={() => setShowDeleteDialog(false)}
-                  className={`px-4 py-2 rounded-lg ${theme.glass} border ${theme.glassBorder} ${theme.text.primary} hover:bg-white/10 transition-colors`}
+                  disabled={isDeleting}
+                  className={`px-4 py-2 rounded-lg ${theme.glass} border ${theme.glassBorder} ${theme.text.primary} hover:bg-white/10 transition-colors disabled:opacity-50`}
                 >
                   Cancel
                 </button>
                 <button
-                  onClick={() => {
-                    setShowDeleteDialog(false);
-                    handleDeleteData();
-                  }}
-                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+                  onClick={handleDeleteData}
+                  disabled={isDeleting}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
                 >
-                  Delete
+                  {isDeleting && (
+                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  )}
+                  {isDeleting ? 'Deleting...' : 'Delete'}
                 </button>
               </div>
             </div>

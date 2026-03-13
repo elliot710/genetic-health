@@ -16,6 +16,7 @@ class User(Base):
     full_name = Column(String)
     is_active = Column(Boolean, default=True)
     is_verified = Column(Boolean, default=False)
+    is_admin = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
@@ -44,37 +45,78 @@ class GeneticAnalysis(Base):
     user = relationship("User", back_populates="genetic_analyses")
     
     # Relationship to variants (using optimized structure)
-    analysis_variants = relationship("AnalysisVariant", back_populates="analysis")
+    analysis_variants = relationship("AnalysisVariant", back_populates="analysis", cascade="all, delete-orphan")
+
+
+# Global marker catalog - stores every unique genetic marker ever uploaded.
+# NEVER deleted when users remove their data. Enables deduplication and
+# avoids redundant 3rd-party API calls for markers already in the system.
+class GeneticMarker(Base):
+    __tablename__ = "genetic_markers"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    rsid = Column(String, unique=True, nullable=False, index=True)
+    chromosome = Column(String, nullable=False)
+    position = Column(Integer, nullable=False)
+    ref_allele = Column(String, nullable=False)
+    alt_alleles = Column(String)  # Comma-separated list of all observed alt alleles
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    upload_count = Column(Integer, default=1)  # How many times this marker has been uploaded
+    
+    # Relationships
+    analysis_variants = relationship("AnalysisVariant", back_populates="marker")
+    shared_annotation = relationship("SharedVariantAnnotation", back_populates="marker", uselist=False)
+    
+    __table_args__ = (
+        Index('ix_genetic_markers_chr_pos', 'chromosome', 'position'),
+    )
+
 
 class AnalysisVariant(Base):
-    """Denormalized table containing all variant data for each analysis"""
+    """Links a user's analysis to a global genetic marker with user-specific genotype data."""
     __tablename__ = "analysis_variants"
     
     id = Column(Integer, primary_key=True, index=True)
     analysis_id = Column(Integer, ForeignKey("genetic_analyses.id", ondelete="CASCADE"), nullable=False)
+    marker_id = Column(Integer, ForeignKey("genetic_markers.id"), nullable=False)
     
-    # Variant identification fields (formerly from Variant table)
-    chromosome = Column(String, nullable=False)
-    position = Column(Integer, nullable=False, index=True)
-    rsid = Column(String, index=True)
-    ref_allele = Column(String, nullable=False)
-    alt_allele = Column(String, nullable=False)
-    
-    # User-specific variant data
+    # User-specific data (genotype varies per person)
     genotype = Column(String)
     quality = Column(String)
     filter_status = Column(String)
-    info = Column(JSON)  # Additional variant information
+    info = Column(JSON)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # Relationships
     analysis = relationship("GeneticAnalysis", back_populates="analysis_variants")
-    variant_annotations = relationship("VariantAnnotation", back_populates="analysis_variant")
+    marker = relationship("GeneticMarker", back_populates="analysis_variants", lazy="joined")
+    variant_annotations = relationship("VariantAnnotation", back_populates="analysis_variant", cascade="all, delete-orphan")
     
-    # Indexes for efficient querying
+    # Proxy properties – delegate to the related GeneticMarker so that
+    # existing code using variant.rsid / variant.chromosome etc. keeps working.
+    @property
+    def rsid(self):
+        return self.marker.rsid if self.marker else None
+
+    @property
+    def chromosome(self):
+        return self.marker.chromosome if self.marker else None
+
+    @property
+    def position(self):
+        return self.marker.position if self.marker else None
+
+    @property
+    def ref_allele(self):
+        return self.marker.ref_allele if self.marker else None
+
+    @property
+    def alt_allele(self):
+        return self.marker.alt_alleles if self.marker else None
+
     __table_args__ = (
-        Index('ix_analysis_variants_position', 'chromosome', 'position'),
-        Index('ix_analysis_variants_rsid', 'rsid'),
+        Index('ix_analysis_variants_analysis_marker', 'analysis_id', 'marker_id'),
     )
 
 
@@ -212,12 +254,14 @@ class DetoxificationProfile(Base):
     support_recommendations = Column(JSON)
     associated_variants = Column(JSON)
 
-# Shared variant annotations - never deleted when users delete their data
+# Shared variant annotations - never deleted when users delete their data.
+# Linked to GeneticMarker for efficient lookup and API call deduplication.
 class SharedVariantAnnotation(Base):
     __tablename__ = "shared_variant_annotations"
     
     id = Column(Integer, primary_key=True, index=True)
-    rsid = Column(String, nullable=False, unique=True, index=True)  # Unique per RSID
+    marker_id = Column(Integer, ForeignKey("genetic_markers.id"), nullable=False, unique=True, index=True)
+    rsid = Column(String, nullable=False, unique=True, index=True)  # Denormalized for fast lookup
     
     # Raw API responses stored as JSON for future analysis
     ensembl_data = Column(JSON)  # Complete Ensembl API response
@@ -233,9 +277,11 @@ class SharedVariantAnnotation(Base):
     total_api_calls = Column(Integer, default=0)  # Total API calls made for this variant
     usage_count = Column(Integer, default=0)  # How many times this annotation has been used
     
-    # Index for efficient lookups
+    # Relationships
+    marker = relationship("GeneticMarker", back_populates="shared_annotation")
+    
     __table_args__ = (
-        Index('ix_shared_variant_annotations_rsid', 'rsid'),
+        Index('ix_shared_variant_annotations_marker_id', 'marker_id'),
     )
 
 
@@ -304,3 +350,41 @@ class UncommonMutation(Base):
     
     # Relationship
     analysis = relationship("GeneticAnalysis")
+
+
+class PanelMarkerConfig(Base):
+    """Configures which genetic markers are used for each dashboard panel."""
+    __tablename__ = "panel_marker_configs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    panel_id = Column(String, nullable=False, index=True)  # e.g. 'methylation', 'detox', 'health'
+    rsid = Column(String, nullable=False)  # e.g. 'rs1801133'
+    gene = Column(String)  # e.g. 'MTHFR'
+    description = Column(String)  # Human-readable description
+    category = Column(String)  # Sub-category within panel
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    __table_args__ = (
+        Index('ix_panel_marker_panel_rsid', 'panel_id', 'rsid', unique=True),
+    )
+
+
+class VariantMapping(Base):
+    """Stores rsid→condition and gene→trait mappings used by the analysis engine.
+    Replaces the static variant_registry.py file so mappings can be managed from the admin panel."""
+    __tablename__ = "variant_mappings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    category = Column(String, nullable=False, index=True)   # 'health', 'drug', 'physical', etc.
+    map_type = Column(String, nullable=False)                # 'rsid' or 'gene'
+    key = Column(String, nullable=False)                     # e.g. 'rs7903146' or 'TP73'
+    data = Column(JSON, nullable=False)                      # Metadata dict (varies by category)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        Index('ix_variant_mappings_cat_type_key', 'category', 'map_type', 'key', unique=True),
+    )
