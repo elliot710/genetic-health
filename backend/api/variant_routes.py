@@ -12,6 +12,7 @@ import re
 
 from ..services.genetic_api_service import GeneticAPIService
 from ..services.discovery_service import process_lookup_discoveries
+from ..utils.alpha_missense import get_alpha_missense_service
 from ..db.database import get_session
 from ..db.models import (
     GeneticAnalysis, AnalysisVariant, GeneticMarker,
@@ -32,11 +33,13 @@ class VariantLookupResponse(BaseModel):
     found: bool
     source: str
     search_timestamp: str
+    description: Optional[str] = None
     basic_info: Dict[str, Any]
     clinical_significance: List[str]
     population_data: Dict[str, Any]
     pharmacogenomics: Dict[str, Any]
     literature: Dict[str, Any]
+    alpha_missense: Optional[Dict[str, Any]] = None
     external_links: Dict[str, str]
     annotations: Dict[str, Any]
     cached: bool = False
@@ -112,11 +115,19 @@ async def lookup_variant(
                     found=resp.get('found', False),
                     source=resp.get('source', 'Multiple databases'),
                     search_timestamp=resp.get('search_timestamp', ''),
+                    description=resp.get('description') or _build_variant_lookup_description(
+                        variant_id,
+                        resp.get('basic_info', {}),
+                        resp.get('clinical_significance', []),
+                        resp.get('annotations', {}).get('clinvar', {}),
+                        resp.get('pharmacogenomics', {}),
+                    ),
                     basic_info=resp.get('basic_info', {}),
                     clinical_significance=resp.get('clinical_significance', []),
                     population_data=resp.get('population_data', {}),
                     pharmacogenomics=resp.get('pharmacogenomics', {}),
                     literature=resp.get('literature', {}),
+                    alpha_missense=resp.get('alpha_missense'),
                     external_links=_generate_external_links(variant_id),
                     annotations=resp.get('annotations', {}),
                     cached=True,
@@ -240,6 +251,21 @@ async def lookup_variant(
             # Generate external links
             external_links = _generate_external_links(variant_id)
             
+            # AlphaMissense local lookup (AI prediction, NOT clinically validated)
+            alpha_missense = {}
+            if ensembl_entry:
+                chrom = ensembl_entry.get('seq_region_name')
+                pos = ensembl_entry.get('start')
+                allele_str = ensembl_entry.get('allele_string', '')
+                allele_parts = allele_str.split('/') if allele_str else []
+                if chrom and pos and len(allele_parts) == 2:
+                    ref_a, alt_a = allele_parts[0], allele_parts[1]
+                    if len(ref_a) == 1 and len(alt_a) == 1:
+                        am_svc = get_alpha_missense_service()
+                        formatted = am_svc.lookup_comprehensive(str(chrom), int(pos), ref_a, alt_a)
+                        if formatted:
+                            alpha_missense = formatted
+
             # Determine if variant was found
             found = any([
                 basic_info.get('name'),
@@ -251,15 +277,23 @@ async def lookup_variant(
             
             # Build response data to cache
             now = datetime.now()
+
+            # Generate natural language description
+            description = _build_variant_lookup_description(
+                variant_id, basic_info, clinical_significance, clinvar_data, pharmacogenomics
+            )
+
             response_data = {
                 "found": found,
                 "source": "Multiple databases",
                 "search_timestamp": now.isoformat(),
+                "description": description,
                 "basic_info": basic_info,
                 "clinical_significance": clinical_significance,
                 "population_data": population_data,
                 "pharmacogenomics": pharmacogenomics,
                 "literature": literature,
+                "alpha_missense": alpha_missense,
                 "annotations": annotations
             }
             
@@ -302,11 +336,13 @@ async def lookup_variant(
                 found=found,
                 source="Multiple databases",
                 search_timestamp=now.isoformat(),
+                description=description,
                 basic_info=basic_info,
                 clinical_significance=clinical_significance,
                 population_data=population_data,
                 pharmacogenomics=pharmacogenomics,
                 literature=literature,
+                alpha_missense=alpha_missense if alpha_missense else None,
                 external_links=external_links,
                 annotations=annotations,
                 cached=False
@@ -335,6 +371,71 @@ def _generate_external_links(variant_id: str) -> Dict[str, str]:
         "SNPedia": f"https://www.snpedia.com/index.php/{variant_id}",
         "PubMed": f"https://pubmed.ncbi.nlm.nih.gov/?term={variant_id}"
     }
+
+
+def _build_variant_lookup_description(
+    variant_id: str,
+    basic_info: Dict[str, Any],
+    clinical_significance: List[str],
+    clinvar_data: Dict[str, Any],
+    pharmacogenomics: Dict[str, Any],
+) -> str:
+    """Build natural language description from variant lookup data."""
+    parts = []
+    consequence = basic_info.get("most_severe_consequence", "")
+    variant_type_label = consequence if consequence else "variant"
+    gene = basic_info.get("gene_symbol")
+
+    # HGVS name and conditions from ClinVar entries
+    hgvs_name = None
+    all_conditions: list[str] = []
+    clinvar_variation_type = None
+    entries = clinvar_data.get("entries", []) if clinvar_data else []
+    for entry in entries:
+        title = entry.get("title", "")
+        if title and not hgvs_name:
+            hgvs_name = title
+        vt = entry.get("variation_type", "")
+        if vt and not clinvar_variation_type:
+            clinvar_variation_type = vt
+        for c in entry.get("conditions", []):
+            if c and c.lower() not in ("not provided", "not specified"):
+                all_conditions.append(c)
+    all_conditions = list(dict.fromkeys(all_conditions))
+
+    # Prefer ClinVar variation type over Ensembl consequence
+    if clinvar_variation_type:
+        variant_type_label = clinvar_variation_type
+
+    # Opening sentence
+    if gene and gene != "Unknown" and not gene.startswith("rs"):
+        parts.append(f"{variant_id} is a {variant_type_label} in the {gene} gene")
+    else:
+        parts.append(f"{variant_id} is a {variant_type_label}")
+
+    if hgvs_name:
+        parts[-1] += f", specifically identified as {hgvs_name}."
+    else:
+        parts[-1] += "."
+
+    # Associated conditions
+    if all_conditions:
+        if len(all_conditions) == 1:
+            parts.append(f"This variant is associated with {all_conditions[0]}.")
+        else:
+            joined = ", ".join(all_conditions[:-1]) + " and " + all_conditions[-1]
+            parts.append(f"This variant is associated with {joined}.")
+
+    # Clinical significance
+    if clinical_significance:
+        formatted = [s.replace("_", " ") for s in clinical_significance]
+        parts.append(f"Clinical assessments classify it as {', '.join(formatted)}.")
+
+    # Pharmacogenomic note
+    if pharmacogenomics and pharmacogenomics.get("found"):
+        parts.append("It has known pharmacogenomic associations that may affect drug response.")
+
+    return " ".join(parts) if len(parts) > 1 else parts[0] if parts else ""
 
 @router.get("/examples")
 async def get_example_variants():
@@ -486,6 +587,7 @@ async def search_user_variants(
             SharedVariantAnnotation.pharmgkb_data,
             SharedVariantAnnotation.snpedia_data,
             SharedVariantAnnotation.litvar_data,
+            SharedVariantAnnotation.alpha_missense_data,
         )
         .join(GeneticMarker, AnalysisVariant.marker_id == GeneticMarker.id)
         .outerjoin(SharedVariantAnnotation, SharedVariantAnnotation.marker_id == GeneticMarker.id)
@@ -546,8 +648,10 @@ async def search_user_variants(
                             gene_name = tc['gene_symbol']
                             break
 
+            clinvar_count = 0
             if r.clinvar_data and r.clinvar_data.get('found'):
                 sources.append('clinvar')
+                clinvar_count = r.clinvar_data.get('count', 0)
                 for entry in r.clinvar_data.get('entries', []):
                     clinical_significance.extend(entry.get('clinical_significance', []))
 
@@ -560,11 +664,21 @@ async def search_user_variants(
             if r.litvar_data and r.litvar_data.get('total_publications', 0) > 0:
                 sources.append('litvar')
 
+            # Extract AlphaMissense pathogenicity if available
+            am_summary = None
+            if r.alpha_missense_data and isinstance(r.alpha_missense_data, dict) and r.alpha_missense_data.get('found'):
+                am_summary = {
+                    "score": r.alpha_missense_data.get('am_pathogenicity'),
+                    "classification": r.alpha_missense_data.get('am_class'),
+                }
+
             annotation_summary = {
                 "sources": sources,
                 "gene": gene_name,
                 "consequence": consequence,
                 "clinical_significance": list(set(clinical_significance)) if clinical_significance else [],
+                "clinvar_count": clinvar_count,
+                "alpha_missense": am_summary,
             }
 
         variant_category = get_variant_category(

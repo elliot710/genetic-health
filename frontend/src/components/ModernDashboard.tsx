@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { 
   Apple, Brain, Dumbbell, Heart, Zap, Palette, 
   ChevronDown, ChevronRight, TrendingUp, AlertTriangle, CheckCircle, 
@@ -10,6 +10,8 @@ import {
   Square, Play, Pause, Pill, FlaskConical, FileText
 } from 'lucide-react'
 import { getTheme } from '../utils/theme'
+import type { LucideIcon } from 'lucide-react'
+import type { DashboardData, HealthRisk, DrugResponse, NutritionTrait, SportsPerformance, AncestryResult, CarrierCondition, MethylationProfile, DetoxProfile, IntelligenceTrait, PersonalityTraitData, PhysicalTrait, WellnessTrait, RareMutation, UncommonMutation } from './categories/types'
 
 // Import category components
 import FoodNutritionPanel from './categories/FoodNutritionPanel'
@@ -34,18 +36,20 @@ import { getThemeClass } from '../utils/theme'
 
 interface ModernDashboardProps {
   token?: string
-  analysisData?: any
+  analysisData?: DashboardData | null
   analysisId?: number | null
   onRefresh?: (token: string) => Promise<void>
   isAdmin?: boolean
+  userName?: string
+  userAvatarUrl?: string | null
 }
 
-export default function ModernDashboard({ token, analysisData, analysisId, onRefresh, isAdmin }: ModernDashboardProps) {
+export default function ModernDashboard({ token, analysisData, analysisId, onRefresh, isAdmin, userName, userAvatarUrl }: ModernDashboardProps) {
   console.log('Dashboard component props:', { token: !!token, analysisData, analysisId })
   console.log('Analysis ID in dashboard:', analysisId)
   
   // ALL STATE HOOKS MUST BE AT THE TOP
-  const [data, setData] = useState<any>(analysisData || null)
+  const [data, setData] = useState<DashboardData | undefined>(analysisData || undefined)
   const [loading, setLoading] = useState(!analysisData)
   const [showProgress, setShowProgress] = useState(false)
   const [progressInterval, setProgressInterval] = useState<NodeJS.Timeout | null>(null)
@@ -60,6 +64,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [variantCategories, setVariantCategories] = useState<{name: string, count: number}[]>([])
+  const [currentUserName, setCurrentUserName] = useState(userName || 'User')
+  const [currentAvatarUrl, setCurrentAvatarUrl] = useState<string | null | undefined>(userAvatarUrl)
   
   // Notification system
   const [notification, setNotification] = useState<{
@@ -99,6 +105,21 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
       document.documentElement.classList.toggle('dark', isDarkMode)
     }
   }, [isDarkMode])
+
+  // Re-fetch user info (e.g. after avatar update in settings)
+  const refreshUserInfo = useCallback(async () => {
+    if (!token) return
+    try {
+      const res = await fetch('http://localhost:8000/auth/me', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      if (res.ok) {
+        const u = await res.json()
+        setCurrentUserName(u.full_name || u.username || 'User')
+        setCurrentAvatarUrl(u.avatar_url)
+      }
+    } catch { /* ignore */ }
+  }, [token])
 
   // Sync URL hash with active category
   useEffect(() => {
@@ -195,7 +216,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
             if (analysisId) {
               setShowProgress(true)
             } else {
-              setData(null)
+              setData(undefined)
             }
           }
         } catch (error) {
@@ -204,7 +225,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
           if (analysisId) {
             setShowProgress(true)
           } else {
-            setData(null)
+            setData(undefined)
           }
         } finally {
           setLoading(false)
@@ -255,12 +276,12 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
   // Reset function for clearing data
   const onReset = () => {
-    setData(null)
+    setData(undefined)
     setActiveCategory('overview')
   }
 
   // Progress handlers
-  const handleAnalysisComplete = (results: any) => {
+  const handleAnalysisComplete = (results: DashboardData) => {
     console.log('Analysis completed:', results)
     setData(results)
     setShowProgress(false)
@@ -384,7 +405,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
       if (response.ok) {
         // Clear all data state immediately
-        setData(null)
+        setData(undefined)
         setAnalysisStatus('pending')
         setAnalysisProgress(0)
         setTotalVariants(0)
@@ -667,8 +688,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
     }
   }
 
-  const generateHealthInsights = (): any[] => {
-    const insights: any[] = []
+  const generateHealthInsights = (): { category: string; insight: string; icon: LucideIcon; color: string; bgColor: string; navigateTo?: string }[] => {
+    const insights: { category: string; insight: string; icon: LucideIcon; color: string; bgColor: string; navigateTo?: string }[] = []
     
     // Return empty array if data is not loaded yet
     if (!data) return insights
@@ -701,8 +722,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
     }
     
     if (Array.isArray(data?.drug_responses) && data.drug_responses.length > 0) {
-      const poor = data.drug_responses.filter((r: any) => r.response_type === 'poor').length
-      const rapid = data.drug_responses.filter((r: any) => r.response_type === 'rapid').length
+      const poor = data.drug_responses.filter((r: DrugResponse) => r.response_type === 'poor').length
+      const rapid = data.drug_responses.filter((r: DrugResponse) => r.response_type === 'rapid').length
       const detail = poor > 0 || rapid > 0
         ? ` — ${poor > 0 ? `${poor} poor metabolizer` : ''}${poor > 0 && rapid > 0 ? ', ' : ''}${rapid > 0 ? `${rapid} rapid metabolizer` : ''}`
         : ''
@@ -718,7 +739,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
     // Rare mutations
     if (Array.isArray(data?.rare_mutations) && data.rare_mutations.length > 0) {
-      const pathogenic = data.rare_mutations.filter((m: any) => m.mutation_type === 'pathogenic' || m.clinical_significance === 'very_high').length
+      const pathogenic = data.rare_mutations.filter((m: RareMutation) => m.mutation_type === 'pathogenic' || m.clinical_significance === 'very_high').length
       insights.push({
         category: 'Rare Mutations',
         insight: `${data.rare_mutations.length} rare mutation${data.rare_mutations.length > 1 ? 's' : ''} detected${pathogenic > 0 ? ` — ${pathogenic} pathogenic` : ''}`,
@@ -731,8 +752,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
     // Carrier status
     if (Array.isArray(data?.carrier_status) && data.carrier_status.length > 0) {
-      const carriers = data.carrier_status.filter((c: any) => c.carrier_status === 'carrier').length
-      const counseling = data.carrier_status.filter((c: any) => c.genetic_counseling_recommended).length
+      const carriers = data.carrier_status.filter((c: CarrierCondition) => c.carrier_status === 'carrier').length
+      const counseling = data.carrier_status.filter((c: CarrierCondition) => c.genetic_counseling_recommended).length
       if (carriers > 0) {
         insights.push({
           category: 'Carrier Status',
@@ -747,7 +768,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
     // Nutrition sensitivities
     if (Array.isArray(data?.nutrition_traits) && data.nutrition_traits.length > 0) {
-      const sensitivities = data.nutrition_traits.filter((n: any) => n.metabolism_type === 'slow' || n.metabolism_type === 'deficient').length
+      const sensitivities = data.nutrition_traits.filter((n: NutritionTrait) => n.metabolism_type === 'slow' || n.metabolism_type === 'deficient').length
       if (sensitivities > 0) {
         insights.push({
           category: 'Nutrition',
@@ -762,7 +783,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
     // Methylation
     if (Array.isArray(data?.methylation_profiles) && data.methylation_profiles.length > 0) {
-      const impaired = data.methylation_profiles.filter((m: any) => m.methylation_capacity === 'impaired' || m.methylation_capacity === 'reduced').length
+      const impaired = data.methylation_profiles.filter((m: MethylationProfile) => m.methylation_capacity === 'impaired' || m.methylation_capacity === 'reduced').length
       if (impaired > 0) {
         insights.push({
           category: 'Methylation',
@@ -777,7 +798,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
     // Sports performance
     if (Array.isArray(data?.sports_performance) && data.sports_performance.length > 0) {
-      const highAdvantage = data.sports_performance.filter((s: any) => s.genetic_advantage === 'high').length
+      const highAdvantage = data.sports_performance.filter((s: SportsPerformance) => s.genetic_advantage === 'high').length
       if (highAdvantage > 0) {
         insights.push({
           category: 'Athletic Potential',
@@ -790,9 +811,10 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
       }
     }
     
-    if (data?.real_data?.variants?.length > 0) {
-      const withRsId = data.real_data.variants.filter((v: any) => v.rsid && v.rsid !== '-' && v.rsid !== 'nan').length
-      const coverage = Math.round((withRsId / data.real_data.variants.length) * 100)
+    if (data?.real_data?.variants && data.real_data.variants.length > 0) {
+      const variants = data.real_data.variants
+      const withRsId = variants.filter((v) => v.rsid && v.rsid !== '-' && v.rsid !== 'nan').length
+      const coverage = Math.round((withRsId / variants.length) * 100)
       
       insights.push({
         category: 'Analysis Coverage',
@@ -812,7 +834,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
   const quickInsights = healthInsights.length > 0 ? healthInsights : [
     {
       category: 'Genetic Analysis',
-      insight: data?.real_data?.variants?.length > 0 
+      insight: data?.real_data?.variants && data.real_data.variants.length > 0 
         ? `${data.real_data.variants.length} variants uploaded and ready for analysis`
         : 'Upload genetic data to begin analysis',
       icon: Dna,
@@ -872,7 +894,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
       case 'admin':
         return <AdminPanel token={token} isDarkMode={isDarkMode} theme={theme} />
       case 'settings':
-        return <SettingsPanel token={token} theme={theme} data={data} />
+        return <SettingsPanel token={token} theme={theme} data={data} onProfileUpdate={refreshUserInfo} />
       default:
         return (
           <div className="space-y-6">
@@ -930,7 +952,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                 },
                 {
                   label: 'Carrier Conditions',
-                  value: Array.isArray(data?.carrier_status) ? data.carrier_status.filter((c: any) => c.carrier_status === 'carrier').length : 0,
+                  value: Array.isArray(data?.carrier_status) ? data.carrier_status.filter((c: CarrierCondition) => c.carrier_status === 'carrier').length : 0,
                   icon: AlertTriangle,
                   gradient: 'from-orange-500 to-red-500',
                   navigateTo: 'carrier-status',
@@ -969,7 +991,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
               const categoryCards: {
                 id: string
                 title: string
-                icon: any
+                icon: LucideIcon
                 gradient: string
                 items: { label: string; value: string | number; color?: string }[]
                 summary: string
@@ -978,10 +1000,10 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
               // Health
               if (Array.isArray(data?.health_risks) && data.health_risks.length > 0) {
-                const high = data.health_risks.filter((r: any) => r.risk_level === 'high').length
-                const moderate = data.health_risks.filter((r: any) => r.risk_level === 'moderate').length
-                const low = data.health_risks.filter((r: any) => r.risk_level === 'low').length
-                const topCondition = data.health_risks.find((r: any) => r.risk_level === 'high')?.condition || data.health_risks[0]?.condition || ''
+                const high = data.health_risks.filter((r: HealthRisk) => r.risk_level === 'high').length
+                const moderate = data.health_risks.filter((r: HealthRisk) => r.risk_level === 'moderate').length
+                const low = data.health_risks.filter((r: HealthRisk) => r.risk_level === 'low').length
+                const topCondition = data.health_risks.find((r: HealthRisk) => r.risk_level === 'high')?.condition || data.health_risks[0]?.condition || ''
                 categoryCards.push({
                   id: 'health', title: 'Health & Wellness', icon: Heart, gradient: 'from-rose-500 to-pink-500',
                   items: [
@@ -996,10 +1018,10 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
               // Drug Responses
               if (Array.isArray(data?.drug_responses) && data.drug_responses.length > 0) {
-                const poor = data.drug_responses.filter((r: any) => r.response_type === 'poor').length
-                const rapid = data.drug_responses.filter((r: any) => r.response_type === 'rapid').length
-                const normal = data.drug_responses.filter((r: any) => r.response_type === 'normal').length
-                const genes = [...new Set(data.drug_responses.map((r: any) => r.gene))].slice(0, 3)
+                const poor = data.drug_responses.filter((r: DrugResponse) => r.response_type === 'poor').length
+                const rapid = data.drug_responses.filter((r: DrugResponse) => r.response_type === 'rapid').length
+                const normal = data.drug_responses.filter((r: DrugResponse) => r.response_type === 'normal').length
+                const genes = [...new Set(data.drug_responses.map((r: DrugResponse) => r.gene))].slice(0, 3)
                 categoryCards.push({
                   id: 'drug-responses', title: 'Drug Responses', icon: Pill, gradient: 'from-amber-500 to-orange-500',
                   items: [
@@ -1014,10 +1036,10 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
               // Nutrition
               if (Array.isArray(data?.nutrition_traits) && data.nutrition_traits.length > 0) {
-                const slow = data.nutrition_traits.filter((n: any) => n.metabolism_type === 'slow' || n.metabolism_type === 'deficient').length
-                const fast = data.nutrition_traits.filter((n: any) => n.metabolism_type === 'fast').length
-                const normal = data.nutrition_traits.filter((n: any) => n.metabolism_type === 'normal').length
-                const notable = data.nutrition_traits.find((n: any) => n.metabolism_type === 'slow' || n.metabolism_type === 'deficient')
+                const slow = data.nutrition_traits.filter((n: NutritionTrait) => n.metabolism_type === 'slow' || n.metabolism_type === 'deficient').length
+                const fast = data.nutrition_traits.filter((n: NutritionTrait) => n.metabolism_type === 'fast').length
+                const normal = data.nutrition_traits.filter((n: NutritionTrait) => n.metabolism_type === 'normal').length
+                const notable = data.nutrition_traits.find((n: NutritionTrait) => n.metabolism_type === 'slow' || n.metabolism_type === 'deficient')
                 categoryCards.push({
                   id: 'food-nutrition', title: 'Food & Nutrition', icon: Apple, gradient: 'from-green-500 to-emerald-500',
                   items: [
@@ -1032,9 +1054,9 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
               // Sports Performance
               if (Array.isArray(data?.sports_performance) && data.sports_performance.length > 0) {
-                const high = data.sports_performance.filter((s: any) => s.genetic_advantage === 'high').length
-                const moderate = data.sports_performance.filter((s: any) => s.genetic_advantage === 'moderate').length
-                const topCategory = data.sports_performance.find((s: any) => s.genetic_advantage === 'high')?.category
+                const high = data.sports_performance.filter((s: SportsPerformance) => s.genetic_advantage === 'high').length
+                const moderate = data.sports_performance.filter((s: SportsPerformance) => s.genetic_advantage === 'moderate').length
+                const topCategory = data.sports_performance.find((s: SportsPerformance) => s.genetic_advantage === 'high')?.category
                 categoryCards.push({
                   id: 'sports', title: 'Sports & Fitness', icon: Dumbbell, gradient: 'from-teal-500 to-emerald-500',
                   items: [
@@ -1048,11 +1070,11 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
               // Ancestry
               if (Array.isArray(data?.ancestry_results) && data.ancestry_results.length > 0) {
-                const sorted = [...data.ancestry_results].sort((a: any, b: any) => parseFloat(b.percentage) - parseFloat(a.percentage))
+                const sorted = [...data.ancestry_results].sort((a: AncestryResult, b: AncestryResult) => parseFloat(b.percentage) - parseFloat(a.percentage))
                 const top = sorted.slice(0, 3)
                 categoryCards.push({
                   id: 'ancestry', title: 'Ancestry & Origins', icon: Users, gradient: 'from-indigo-500 to-blue-500',
-                  items: top.map((a: any) => ({ label: a.population, value: `${parseFloat(a.percentage).toFixed(1)}%` })),
+                  items: top.map((a: AncestryResult) => ({ label: a.population, value: `${parseFloat(a.percentage).toFixed(1)}%` })),
                   summary: top.length > 0 ? `Primary: ${top[0].population}` : 'Ancestry data available',
                   hasData: true,
                 })
@@ -1060,9 +1082,9 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
               // Carrier Status
               if (Array.isArray(data?.carrier_status) && data.carrier_status.length > 0) {
-                const carriers = data.carrier_status.filter((c: any) => c.carrier_status === 'carrier').length
-                const nonCarrier = data.carrier_status.filter((c: any) => c.carrier_status === 'non-carrier').length
-                const counseling = data.carrier_status.filter((c: any) => c.genetic_counseling_recommended).length
+                const carriers = data.carrier_status.filter((c: CarrierCondition) => c.carrier_status === 'carrier').length
+                const nonCarrier = data.carrier_status.filter((c: CarrierCondition) => c.carrier_status === 'non-carrier').length
+                const counseling = data.carrier_status.filter((c: CarrierCondition) => c.genetic_counseling_recommended).length
                 categoryCards.push({
                   id: 'carrier-status', title: 'Carrier Status', icon: AlertTriangle, gradient: 'from-orange-500 to-red-500',
                   items: [
@@ -1077,9 +1099,9 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
               // Methylation
               if (Array.isArray(data?.methylation_profiles) && data.methylation_profiles.length > 0) {
-                const impaired = data.methylation_profiles.filter((m: any) => m.methylation_capacity === 'impaired').length
-                const reduced = data.methylation_profiles.filter((m: any) => m.methylation_capacity === 'reduced').length
-                const normal = data.methylation_profiles.filter((m: any) => m.methylation_capacity === 'normal').length
+                const impaired = data.methylation_profiles.filter((m: MethylationProfile) => m.methylation_capacity === 'impaired').length
+                const reduced = data.methylation_profiles.filter((m: MethylationProfile) => m.methylation_capacity === 'reduced').length
+                const normal = data.methylation_profiles.filter((m: MethylationProfile) => m.methylation_capacity === 'normal').length
                 categoryCards.push({
                   id: 'methylation', title: 'Methylation', icon: Dna, gradient: 'from-cyan-500 to-teal-500',
                   items: [
@@ -1094,8 +1116,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
               // Detoxification
               if (Array.isArray(data?.detoxification_profiles) && data.detoxification_profiles.length > 0) {
-                const impaired = data.detoxification_profiles.filter((d: any) => d.detox_capacity === 'impaired' || d.detox_capacity === 'slow').length
-                const normal = data.detoxification_profiles.filter((d: any) => d.detox_capacity === 'normal').length
+                const impaired = data.detoxification_profiles.filter((d: DetoxProfile) => d.detox_capacity === 'impaired' || d.detox_capacity === 'slow').length
+                const normal = data.detoxification_profiles.filter((d: DetoxProfile) => d.detox_capacity === 'normal').length
                 categoryCards.push({
                   id: 'detox', title: 'Detoxification', icon: Zap, gradient: 'from-lime-500 to-green-500',
                   items: [
@@ -1109,10 +1131,10 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
               // Intelligence / Cognitive
               if (Array.isArray(data?.intelligence) && data.intelligence.length > 0) {
-                const topPercentile = data.intelligence.reduce((max: any, c: any) => c.percentile > (max?.percentile || 0) ? c : max, null)
+                const topPercentile = data.intelligence.reduce((max: IntelligenceTrait | null, c: IntelligenceTrait) => c.percentile > (max?.percentile || 0) ? c : max, null)
                 categoryCards.push({
                   id: 'intelligence', title: 'Intelligence', icon: Brain, gradient: 'from-purple-500 to-violet-500',
-                  items: data.intelligence.slice(0, 3).map((c: any) => ({
+                  items: data.intelligence.slice(0, 3).map((c: IntelligenceTrait) => ({
                     label: c.cognitive_ability || c.trait_name,
                     value: c.percentile ? `${c.percentile}th` : c.genetic_advantage || '—',
                   })),
@@ -1123,10 +1145,10 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
               // Personality
               if (Array.isArray(data?.personality_traits) && data.personality_traits.length > 0) {
-                const sorted = [...data.personality_traits].sort((a: any, b: any) => (b.score || 0) - (a.score || 0))
+                const sorted = [...data.personality_traits].sort((a: PersonalityTraitData, b: PersonalityTraitData) => (b.score || 0) - (a.score || 0))
                 categoryCards.push({
                   id: 'personality', title: 'Personality', icon: Palette, gradient: 'from-pink-500 to-rose-500',
-                  items: sorted.slice(0, 3).map((p: any) => ({
+                  items: sorted.slice(0, 3).map((p: PersonalityTraitData) => ({
                     label: p.trait || p.name,
                     value: p.score ? `${p.score}%` : p.confidence || '—',
                   })),
@@ -1138,7 +1160,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
               // Physical Traits
               if (Array.isArray(data?.physical_traits) && data.physical_traits.length > 0) {
                 const byCategory: Record<string, number> = {}
-                data.physical_traits.forEach((t: any) => { byCategory[t.trait_category || 'other'] = (byCategory[t.trait_category || 'other'] || 0) + 1 })
+                data.physical_traits.forEach((t: PhysicalTrait) => { byCategory[t.trait_category || 'other'] = (byCategory[t.trait_category || 'other'] || 0) + 1 })
                 categoryCards.push({
                   id: 'physical-traits', title: 'Physical Traits', icon: Target, gradient: 'from-sky-500 to-blue-500',
                   items: Object.entries(byCategory).slice(0, 3).map(([cat, count]) => ({
@@ -1151,9 +1173,9 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
               // Wellness
               if (Array.isArray(data?.wellness_traits) && data.wellness_traits.length > 0) {
-                const wellnessVariant = data.wellness_traits.filter((w: any) => w.value === 'variant_detected' || w.value === 'reduced').length
-                const wellnessImpaired = data.wellness_traits.filter((w: any) => w.value === 'impaired').length
-                const wellnessNormal = data.wellness_traits.filter((w: any) => w.value === 'normal').length
+                const wellnessVariant = data.wellness_traits.filter((w: WellnessTrait) => w.value === 'variant_detected' || w.value === 'reduced').length
+                const wellnessImpaired = data.wellness_traits.filter((w: WellnessTrait) => w.value === 'impaired').length
+                const wellnessNormal = data.wellness_traits.filter((w: WellnessTrait) => w.value === 'normal').length
                 categoryCards.push({
                   id: 'wellness', title: 'Wellness Reports', icon: Activity, gradient: 'from-emerald-500 to-green-500',
                   items: [
@@ -1168,8 +1190,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
               // Rare Mutations
               if (Array.isArray(data?.rare_mutations) && data.rare_mutations.length > 0) {
-                const pathogenic = data.rare_mutations.filter((m: any) => m.mutation_type === 'pathogenic').length
-                const likelyPath = data.rare_mutations.filter((m: any) => m.mutation_type === 'likely_pathogenic').length
+                const pathogenic = data.rare_mutations.filter((m: RareMutation) => m.mutation_type === 'pathogenic').length
+                const likelyPath = data.rare_mutations.filter((m: RareMutation) => m.mutation_type === 'likely_pathogenic').length
                 categoryCards.push({
                   id: 'rare-mutations', title: 'Rare Mutations', icon: AlertTriangle, gradient: 'from-red-500 to-rose-600',
                   items: [
@@ -1183,7 +1205,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
               // Uncommon Mutations
               if (Array.isArray(data?.uncommon_mutations) && data.uncommon_mutations.length > 0) {
-                const protective = data.uncommon_mutations.filter((m: any) => m.mutation_type === 'protective_rare').length
+                const protective = data.uncommon_mutations.filter((m: UncommonMutation) => m.mutation_type === 'protective_rare').length
                 categoryCards.push({
                   id: 'uncommon-mutations', title: 'Uncommon Mutations', icon: Dna, gradient: 'from-violet-500 to-purple-600',
                   items: [
@@ -1261,7 +1283,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                 <div className="space-y-3">
                   {quickInsights.map((insight, index) => {
                     const Icon = insight.icon
-                    const severity = index === 0 && Array.isArray(data?.health_risks) && data.health_risks.some((r: any) => r.risk_level === 'high')
+                    const severity = index === 0 && Array.isArray(data?.health_risks) && data.health_risks.some((r: HealthRisk) => r.risk_level === 'high')
                       ? 'High' : index === 0 ? 'Critical' : index === 1 ? 'Moderate' : 'Info'
                     const severityColor = severity === 'High' || severity === 'Critical'
                       ? isDarkMode ? 'bg-red-500/20 text-red-300 border-red-500/30' : 'bg-red-50 text-red-600 border-red-200'
@@ -1294,7 +1316,9 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                   })}
 
                   {/* Risk Breakdown - clickable */}
-                  {Array.isArray(data?.health_risks) && data.health_risks.length > 0 && (
+                  {Array.isArray(data?.health_risks) && data.health_risks.length > 0 && (() => {
+                    const risks = data.health_risks as HealthRisk[]
+                    return (
                     <div
                       className={`p-4 rounded-xl border ${theme.glassBorder} ${isDarkMode ? 'bg-slate-800/30' : 'bg-slate-50/50'} cursor-pointer hover:shadow-md transition-all`}
                       onClick={() => setActiveCategory('health')}
@@ -1308,7 +1332,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                       </div>
                       <div className="flex gap-4">
                         {['high', 'moderate', 'low'].map(level => {
-                          const count = data.health_risks.filter((r: any) => r.risk_level === level).length
+                          const count = risks.filter((r: HealthRisk) => r.risk_level === level).length
                           if (count === 0) return null
                           const colors: Record<string, string> = {
                             high: isDarkMode ? 'text-red-400' : 'text-red-600',
@@ -1324,7 +1348,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                         })}
                       </div>
                     </div>
-                  )}
+                    )
+                  })()}
 
                   {/* Drug response detail - clickable */}
                   {Array.isArray(data?.drug_responses) && data.drug_responses.length > 0 && (
@@ -1340,7 +1365,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                         <ChevronRight className={`h-3.5 w-3.5 ${theme.text.muted}`} />
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        {data.drug_responses.slice(0, 8).map((dr: any, i: number) => (
+                        {data.drug_responses.slice(0, 8).map((dr: DrugResponse, i: number) => (
                           <span key={i} className={`px-2.5 py-1 rounded-lg text-xs font-medium border ${theme.glassBorder} ${isDarkMode ? 'bg-purple-500/10 text-purple-300' : 'bg-purple-50 text-purple-700'}`}>
                             {dr.gene}{dr.drug ? ` → ${dr.drug}` : ''}
                           </span>
@@ -1620,21 +1645,25 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
               </div>
             </div>
 
-            {/* User Menu - Glassmorphism style */}
+            {/* User Menu */}
             <div className="relative">
               <button
                 onClick={() => setShowUserMenu(!showUserMenu)}
                 className={`flex items-center space-x-3 ${theme.glass} border ${theme.glassBorder} px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-300 ${theme.glassHover}`}
               >
-                <div className="w-7 h-7 bg-gradient-to-br from-teal-500 to-cyan-500 rounded-full flex items-center justify-center shadow-lg">
-                  <span className="text-white text-sm font-bold">V</span>
-                </div>
-                <span className={theme.text.primary}>Victor</span>
+                {currentAvatarUrl ? (
+                  <img src={currentAvatarUrl} alt="" className="w-7 h-7 rounded-full object-cover" />
+                ) : (
+                  <div className="w-7 h-7 bg-gradient-to-br from-teal-500 to-cyan-500 rounded-full flex items-center justify-center shadow-lg">
+                    <span className="text-white text-sm font-bold">{(currentUserName || 'U')[0].toUpperCase()}</span>
+                  </div>
+                )}
+                <span className={theme.text.primary}>{currentUserName}</span>
                 <ChevronDown className={`h-4 w-4 ${theme.text.secondary}`} />
               </button>
 
               {showUserMenu && (
-                <div className={`absolute right-0 mt-3 w-52 ${theme.glass} border ${theme.glassBorder} rounded-xl shadow-2xl py-2 z-50`}>
+                <div className={`absolute right-0 mt-3 w-52 rounded-xl shadow-2xl py-2 z-50 ${isDarkMode ? 'bg-slate-800 border border-slate-700' : 'bg-white border border-gray-200'}`}>
                   <button
                     onClick={() => { setIsDarkMode(!isDarkMode); setShowUserMenu(false) }}
                     className={`w-full text-left px-4 py-3 text-sm ${theme.text.primary} ${theme.glassHover} flex items-center space-x-3 transition-all duration-200`}

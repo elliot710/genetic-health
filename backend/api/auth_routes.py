@@ -93,6 +93,7 @@ async def get_me(current_user = Depends(get_current_user)):
 
 class ProfileUpdate(BaseModel):
     full_name: Optional[str] = None
+    avatar_url: Optional[str] = None
 
 
 @router.put("/me", response_model=UserResponse)
@@ -104,6 +105,14 @@ async def update_profile(
     """Update current user profile"""
     if update.full_name is not None:
         current_user.full_name = update.full_name
+    if update.avatar_url is not None:
+        # Validate avatar_url is a reasonable data URI or empty string to clear
+        if update.avatar_url == "":
+            current_user.avatar_url = None
+        elif update.avatar_url.startswith("data:image/") and len(update.avatar_url) <= 500_000:
+            current_user.avatar_url = update.avatar_url
+        else:
+            raise HTTPException(status_code=400, detail="Invalid avatar data")
     await db.commit()
     await db.refresh(current_user)
     return UserResponse.model_validate(current_user)

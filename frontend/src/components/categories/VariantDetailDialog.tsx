@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useEffect } from 'react'
-import { ExternalLink, Dna, FlaskConical, BookOpen, Activity, X, ChevronDown, ChevronUp } from 'lucide-react'
+import { ExternalLink, Dna, FlaskConical, BookOpen, Activity, X, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import {
   Dialog,
@@ -44,6 +44,7 @@ interface Publication {
 interface VariantDetails {
   found: boolean
   rsid: string
+  description?: string
   most_severe_consequence?: string
   allele_string?: string
   chromosome?: string
@@ -53,10 +54,39 @@ interface VariantDetails {
   clinical_significance?: string[]
   clinvar_ids?: string[]
   population_frequencies?: Record<string, PopulationFrequency>
-  clinvar?: { found: boolean; count: number; ids: string[] }
+  clinvar?: {
+    found: boolean
+    count: number
+    ids: string[]
+    entries?: Array<{
+      uid: string
+      title: string
+      accession: string
+      clinical_significance: string[]
+      conditions: string[]
+      variation_type: string
+    }>
+  }
   pharmacogenomics?: { found: boolean; data?: Record<string, unknown> }
   snpedia?: { found: boolean; title?: string; summary?: string }
   publications?: { count: number; items: Publication[] }
+  alpha_missense?: {
+    found: boolean
+    am_pathogenicity?: number
+    am_class?: string
+    protein_variant?: string
+    uniprot_id?: string
+    transcript_id?: string
+    gene_mean_pathogenicity?: number
+    isoform_count?: number
+    isoforms?: Array<{
+      transcript_id: string
+      protein_variant: string
+      am_pathogenicity: number
+      am_class: string
+    }>
+    disclaimer?: string
+  }
 }
 
 // ─── Props ──────────────────────────────────────────────────────
@@ -169,12 +199,20 @@ export default function VariantDetailDialog({
   return (
     <Dialog open={open} onOpenChange={() => {}}>
       <DialogPortal>
-        <DialogOverlay className="pointer-events-none" />
+        <DialogOverlay className="bg-black/60" />
+        {/* Scrollable wrapper — the outer div scrolls when content exceeds viewport */}
         <div
           role="dialog"
           aria-modal="true"
-          className={`fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-6 p-6 ${bg} ${border} border max-w-2xl max-h-[85vh] overflow-y-auto sm:max-w-2xl rounded-2xl`}
+          className="fixed inset-0 z-50 overflow-y-auto"
+          onPointerDown={(e) => { if (e.target === e.currentTarget) e.preventDefault() }}
         >
+          <div className="flex min-h-full items-center justify-center py-8 px-4"
+            onPointerDown={(e) => { if (e.target === e.currentTarget) e.preventDefault() }}
+          >
+          <div
+            className={`relative w-full max-w-4xl flex flex-col gap-6 p-6 ${bg} ${border} border rounded-2xl`}
+          >
         <DialogHeader>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -247,11 +285,23 @@ export default function VariantDetailDialog({
               </div>
             )}
 
+            {/* ── Variant Description ── */}
+            {details.description && (
+              <div className={`${cardBg} rounded-xl p-4 border ${border}`}>
+                <p className={`text-sm leading-relaxed ${textSecondary}`}>{details.description}</p>
+              </div>
+            )}
+
             {/* ── Clinical Significance ── */}
             {details.clinical_significance && details.clinical_significance.length > 0 && (
               <div>
                 <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
                   <Activity className="h-3.5 w-3.5" /> Clinical Significance
+                  {details.clinvar?.count ? (
+                    <Badge variant="outline" className="bg-orange-500/10 text-orange-400 border-orange-500/20 text-[10px] ml-1">
+                      {details.clinvar.count} ClinVar {details.clinvar.count === 1 ? 'report' : 'reports'}
+                    </Badge>
+                  ) : null}
                 </h4>
                 <div className="flex flex-wrap gap-1.5">
                   {details.clinical_significance.map((sig) => (
@@ -260,31 +310,72 @@ export default function VariantDetailDialog({
                     </Badge>
                   ))}
                 </div>
-                {details.clinvar_ids && details.clinvar_ids.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mt-2">
-                    {details.clinvar_ids.filter(id => id.startsWith('VCV')).slice(0, 3).map((id) => (
-                      <a
-                        key={id}
-                        href={`https://www.ncbi.nlm.nih.gov/clinvar/variation/${id.replace('VCV', '')}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-xs text-orange-400 hover:text-orange-300 transition-colors"
-                      >
-                        ClinVar {id} <ExternalLink className="h-3 w-3" />
-                      </a>
-                    ))}
-                    {details.clinvar?.ids?.map((id) => (
-                      <a
-                        key={`cv-${id}`}
-                        href={`https://www.ncbi.nlm.nih.gov/clinvar/variation/${id}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-xs text-orange-400 hover:text-orange-300 transition-colors"
-                      >
-                        ClinVar:{id} <ExternalLink className="h-3 w-3" />
-                      </a>
+
+                {/* ClinVar entries with conditions and links */}
+                {details.clinvar?.entries && details.clinvar.entries.length > 0 && (
+                  <div className={`mt-3 space-y-2 rounded-lg border ${isDarkMode ? 'border-orange-500/20 bg-orange-500/5' : 'border-orange-200 bg-orange-50/50'} p-3`}>
+                    <span className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider`}>ClinVar Reports</span>
+                    {details.clinvar.entries.map((entry) => (
+                      <div key={entry.uid} className={`flex items-start justify-between gap-2 text-xs ${isDarkMode ? 'border-b border-white/5 pb-1.5' : 'border-b border-gray-200/50 pb-1.5'} last:border-0`}>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex flex-wrap gap-1 mb-0.5">
+                            {entry.clinical_significance.map((sig) => (
+                              <Badge key={sig} variant="outline" className={`${clinSigColor(sig)} text-[10px]`}>
+                                {sig.replace(/_/g, ' ')}
+                              </Badge>
+                            ))}
+                          </div>
+                          {entry.conditions.length > 0 && (
+                            <span className={textSecondary}>{entry.conditions.join('; ')}</span>
+                          )}
+                        </div>
+                        <a
+                          href={`https://www.ncbi.nlm.nih.gov/clinvar/variation/${entry.uid}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-orange-400 hover:text-orange-300 shrink-0 transition-colors"
+                        >
+                          {entry.accession || entry.uid} <ExternalLink className="h-3 w-3" />
+                        </a>
+                      </div>
                     ))}
                   </div>
+                )}
+
+                {/* Fallback: Legacy VCV/ID links when no entries */}
+                {(!details.clinvar?.entries || details.clinvar.entries.length === 0) && (
+                  <>
+                    {details.clinvar_ids && details.clinvar_ids.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-2">
+                        {details.clinvar_ids.filter(id => id.startsWith('VCV')).slice(0, 3).map((id) => (
+                          <a
+                            key={id}
+                            href={`https://www.ncbi.nlm.nih.gov/clinvar/variation/${id.replace('VCV', '')}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-orange-400 hover:text-orange-300 transition-colors"
+                          >
+                            ClinVar {id} <ExternalLink className="h-3 w-3" />
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                    {details.clinvar?.ids && details.clinvar.ids.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-2">
+                        {details.clinvar.ids.map((id) => (
+                          <a
+                            key={`cv-${id}`}
+                            href={`https://www.ncbi.nlm.nih.gov/clinvar/variation/${id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-orange-400 hover:text-orange-300 transition-colors"
+                          >
+                            ClinVar:{id} <ExternalLink className="h-3 w-3" />
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             )}
@@ -381,7 +472,7 @@ export default function VariantDetailDialog({
                   {sortedFreqs.length > 6 && (
                     <button
                       type="button"
-                      onClick={(e) => { e.stopPropagation(); e.preventDefault(); setShowAllFreqs(!showAllFreqs) }}
+                      onClick={() => setShowAllFreqs(!showAllFreqs)}
                       className={`flex items-center gap-1 text-xs ${isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-500'} mt-1 transition-colors`}
                     >
                       {showAllFreqs ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
@@ -408,6 +499,113 @@ export default function VariantDetailDialog({
                   >
                     View on ClinPGx <ExternalLink className="h-3 w-3" />
                   </a>
+                </div>
+              </div>
+            )}
+
+            {/* ── AlphaMissense AI Prediction ── */}
+            {details.alpha_missense?.found && (
+              <div>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
+                  <AlertTriangle className="h-3.5 w-3.5 text-amber-400" /> AlphaMissense AI Prediction
+                  <Badge variant="outline" className="bg-amber-500/15 text-amber-400 border-amber-500/30 text-[10px] px-1.5 py-0 ml-1">
+                    AI
+                  </Badge>
+                </h4>
+                <div className={`${cardBg} rounded-xl p-3 border ${border} space-y-2.5`}>
+                  {/* Pathogenicity score bar */}
+                  {details.alpha_missense.am_pathogenicity != null && (
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className={`text-xs ${textSecondary}`}>Pathogenicity Score</span>
+                        <span className={`text-sm font-mono font-bold ${
+                          details.alpha_missense.am_pathogenicity > 0.564 ? 'text-red-400' :
+                          details.alpha_missense.am_pathogenicity < 0.34 ? 'text-green-400' : 'text-amber-400'
+                        }`}>
+                          {details.alpha_missense.am_pathogenicity.toFixed(4)}
+                        </span>
+                      </div>
+                      <div className="relative h-2 rounded-full bg-gradient-to-r from-green-500 via-amber-500 to-red-500 overflow-hidden">
+                        <div
+                          className="absolute top-0 h-full w-1 bg-white rounded-full shadow-md"
+                          style={{ left: `${Math.min(details.alpha_missense.am_pathogenicity * 100, 100)}%` }}
+                        />
+                      </div>
+                      <div className="flex justify-between mt-0.5">
+                        <span className={`text-[10px] ${textSecondary}`}>Benign (0)</span>
+                        <span className={`text-[10px] ${textSecondary}`}>Pathogenic (1)</span>
+                      </div>
+                    </div>
+                  )}
+                  {/* Classification badge */}
+                  {details.alpha_missense.am_class && (
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs ${textSecondary}`}>Classification:</span>
+                      <Badge variant="outline" className={`text-xs ${
+                        details.alpha_missense.am_class === 'likely_pathogenic' ? 'bg-red-500/15 text-red-400 border-red-500/30' :
+                        details.alpha_missense.am_class === 'likely_benign' ? 'bg-green-500/15 text-green-400 border-green-500/30' :
+                        'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                      }`}>
+                        {details.alpha_missense.am_class.replace(/_/g, ' ')}
+                      </Badge>
+                    </div>
+                  )}
+                  {/* Protein variant */}
+                  {details.alpha_missense.protein_variant && (
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs ${textSecondary}`}>Protein change:</span>
+                      <span className={`text-xs font-mono ${textPrimary}`}>{details.alpha_missense.protein_variant}</span>
+                    </div>
+                  )}
+                  {/* Gene-level mean pathogenicity */}
+                  {details.alpha_missense.gene_mean_pathogenicity != null && (
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs ${textSecondary}`}>Gene avg pathogenicity:</span>
+                      <span className={`text-xs font-mono ${
+                        details.alpha_missense.gene_mean_pathogenicity > 0.564 ? 'text-red-400' :
+                        details.alpha_missense.gene_mean_pathogenicity < 0.34 ? 'text-green-400' : 'text-amber-400'
+                      }`}>
+                        {details.alpha_missense.gene_mean_pathogenicity.toFixed(4)}
+                      </span>
+                    </div>
+                  )}
+                  {/* Isoform predictions */}
+                  {details.alpha_missense.isoforms && details.alpha_missense.isoforms.length > 1 && (
+                    <div>
+                      <span className={`text-xs ${textSecondary}`}>Isoform predictions ({details.alpha_missense.isoform_count}):</span>
+                      <div className="mt-1 space-y-1">
+                        {details.alpha_missense.isoforms.slice(0, 5).map((iso, i) => (
+                          <div key={i} className={`flex items-center gap-2 text-[11px] ${cardBg} rounded px-2 py-1`}>
+                            <span className={`font-mono ${textSecondary} truncate max-w-[140px]`} title={iso.transcript_id}>{iso.transcript_id}</span>
+                            <span className={`font-mono ${textSecondary}`}>{iso.protein_variant}</span>
+                            <span className={`font-mono ${
+                              iso.am_pathogenicity > 0.564 ? 'text-red-400' :
+                              iso.am_pathogenicity < 0.34 ? 'text-green-400' : 'text-amber-400'
+                            }`}>
+                              {iso.am_pathogenicity.toFixed(4)}
+                            </span>
+                            <Badge variant="outline" className={`text-[9px] px-1 py-0 ${
+                              iso.am_class === 'likely_pathogenic' ? 'bg-red-500/15 text-red-400 border-red-500/30' :
+                              iso.am_class === 'likely_benign' ? 'bg-green-500/15 text-green-400 border-green-500/30' :
+                              'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                            }`}>
+                              {iso.am_class.replace(/_/g, ' ')}
+                            </Badge>
+                          </div>
+                        ))}
+                        {details.alpha_missense.isoforms.length > 5 && (
+                          <span className={`text-[10px] ${textSecondary}`}>+ {details.alpha_missense.isoforms.length - 5} more isoforms</span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {/* Disclaimer */}
+                  <div className={`flex items-start gap-1.5 pt-1.5 border-t ${border}`}>
+                    <AlertTriangle className="h-3 w-3 text-amber-400 mt-0.5 flex-shrink-0" />
+                    <p className={`text-[10px] ${textSecondary} leading-relaxed`}>
+                      {details.alpha_missense.disclaimer || 'AlphaMissense predictions are AI-generated (DeepMind) and have NOT been clinically validated. Do not use for clinical decision-making.'}
+                    </p>
+                  </div>
                 </div>
               </div>
             )}
@@ -444,7 +642,7 @@ export default function VariantDetailDialog({
                 {!showPubs ? (
                   <button
                     type="button"
-                    onClick={(e) => { e.stopPropagation(); e.preventDefault(); setShowPubs(true) }}
+                    onClick={() => setShowPubs(true)}
                     className={`${cardBg} rounded-xl p-3 border ${border} w-full text-left hover:border-blue-500/30 transition-colors`}
                   >
                     <span className={`text-xs ${textPrimary}`}>
@@ -478,7 +676,7 @@ export default function VariantDetailDialog({
                     ))}
                     <button
                       type="button"
-                      onClick={(e) => { e.stopPropagation(); e.preventDefault(); setShowPubs(false) }}
+                      onClick={() => setShowPubs(false)}
                       className={`text-xs ${isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-500'} transition-colors`}
                     >
                       Collapse
@@ -525,6 +723,8 @@ export default function VariantDetailDialog({
             </div>
           </div>
         )}
+      </div>
+      </div>
       </div>
       </DialogPortal>
     </Dialog>

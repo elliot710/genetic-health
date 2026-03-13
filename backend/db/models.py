@@ -14,6 +14,7 @@ class User(Base):
     username = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     full_name = Column(String)
+    avatar_url = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
     is_verified = Column(Boolean, default=False)
     is_admin = Column(Boolean, default=False)
@@ -269,6 +270,7 @@ class SharedVariantAnnotation(Base):
     pharmgkb_data = Column(JSON)  # ClinPGx API response (column kept as pharmgkb_data for backward compat)
     snpedia_data = Column(JSON)  # Complete SNPedia API response
     litvar_data = Column(JSON)  # Complete LitVar/PubMed API response
+    alpha_missense_data = Column(JSON)  # AlphaMissense AI pathogenicity prediction (local data, NOT clinically validated)
     
     # Metadata for tracking and reuse
     first_annotated_at = Column(DateTime(timezone=True), server_default=func.now())

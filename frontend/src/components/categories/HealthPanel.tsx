@@ -21,6 +21,13 @@ interface VariantAnnotation {
   clinical_significance?: string
   allele_frequency?: string
   consequence?: string
+  alpha_missense?: {
+    found: boolean
+    am_pathogenicity?: number
+    am_class?: string
+    protein_variant?: string
+    disclaimer?: string
+  }
 }
 
 interface MappedHealthRisk {
@@ -300,10 +307,10 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
 
                                 {annotation && (
                                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs mb-2">
-                                    {annotation.clinical_significance && (
+                                    {annotation.clinical_significance && annotation.clinical_significance !== 'unknown' && (
                                       <div>
                                         <span className={`font-medium ${theme.textPrimary}`}>Significance:</span>
-                                        <div className={theme.textSecondary}>{annotation.clinical_significance}</div>
+                                        <div className={theme.textSecondary}>{annotation.clinical_significance.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())}</div>
                                       </div>
                                     )}
                                     {annotation.allele_frequency && (
@@ -318,10 +325,31 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                                         <div className={theme.textSecondary}>{annotation.consequence}</div>
                                       </div>
                                     )}
+                                    {annotation.alpha_missense?.found && (
+                                      <div>
+                                        <span className={`font-medium ${theme.textPrimary}`}>AI Pathogenicity:</span>
+                                        <div className="flex items-center gap-1.5">
+                                          <span className={`font-mono ${
+                                            (annotation.alpha_missense.am_pathogenicity ?? 0) > 0.564 ? 'text-red-400' :
+                                            (annotation.alpha_missense.am_pathogenicity ?? 0) < 0.34 ? 'text-green-400' : 'text-amber-400'
+                                          }`}>
+                                            {annotation.alpha_missense.am_pathogenicity?.toFixed(3)}
+                                          </span>
+                                          <Badge variant="outline" className={`text-[10px] px-1 py-0 ${
+                                            annotation.alpha_missense.am_class === 'likely_pathogenic' ? 'bg-red-500/15 text-red-400 border-red-500/30' :
+                                            annotation.alpha_missense.am_class === 'likely_benign' ? 'bg-green-500/15 text-green-400 border-green-500/30' :
+                                            'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                                          }`}>
+                                            {annotation.alpha_missense.am_class?.replace(/_/g, ' ')}
+                                          </Badge>
+                                        </div>
+                                        <div className={`text-[10px] ${theme.textSecondary} mt-0.5 italic`}>AI prediction — not clinically validated</div>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
 
-                                <VariantLinks rsid={variant} gene={risk.gene} token={token} isDarkMode={isDarkMode} />
+                                <VariantLinks rsid={variant} gene={risk.gene} token={token} isDarkMode={isDarkMode} alphaMissense={variant ? data?.alpha_missense_map?.[variant] : undefined} clinvarCount={variant ? data?.clinvar_count_map?.[variant] : undefined} />
                               </div>
                             )
                           })}

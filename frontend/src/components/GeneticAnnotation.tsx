@@ -1,13 +1,41 @@
 import React, { useState } from 'react';
 
+interface EnsemblAnnotation {
+  error?: string;
+  most_severe_consequence?: string;
+  minor_allele?: string;
+  clinical_significance?: string[];
+}
+
+interface ClinvarAnnotation {
+  error?: string;
+  found_entries?: number;
+  ids?: string[];
+}
+
+interface SnpediaAnnotation {
+  message?: string;
+  magnitude?: number;
+  summary?: string;
+  frequency?: number;
+  clinical_significance?: string;
+}
+
+interface ClinpgxAnnotation {
+  message?: string;
+  function?: string;
+  drugs?: string[];
+  clinical_annotation?: string;
+}
+
 interface AnnotationData {
   rsid: string;
   gene: string | null;
   annotations: {
-    ensembl?: any;
-    clinvar?: any;
-    snpedia?: any;
-    clinpgx?: any;
+    ensembl?: EnsemblAnnotation;
+    clinvar?: ClinvarAnnotation;
+    snpedia?: SnpediaAnnotation;
+    clinpgx?: ClinpgxAnnotation;
   };
   error?: string | null;
 }
@@ -162,10 +190,10 @@ export default function GeneticAnnotation({ token }: GeneticAnnotationProps) {
                     {annotation.annotations.ensembl.minor_allele && (
                       <div><strong>Minor Allele:</strong> {annotation.annotations.ensembl.minor_allele}</div>
                     )}
-                    {annotation.annotations.ensembl.clinical_significance?.length > 0 && (
+                    {(annotation.annotations.ensembl.clinical_significance?.length ?? 0) > 0 && (
                       <div>
                         <strong>Clinical Significance:</strong>{' '}
-                        {annotation.annotations.ensembl.clinical_significance.join(', ')}
+                        {annotation.annotations.ensembl.clinical_significance!.join(', ')}
                       </div>
                     )}
                   </div>
@@ -181,9 +209,9 @@ export default function GeneticAnnotation({ token }: GeneticAnnotationProps) {
                   </h4>
                   <div className="bg-white rounded-md p-4">
                     <div><strong>Found Entries:</strong> {annotation.annotations.clinvar.found_entries}</div>
-                    {annotation.annotations.clinvar.found_entries > 0 && (
+                    {(annotation.annotations.clinvar.found_entries ?? 0) > 0 && (
                       <div className="text-sm text-gray-600 mt-1">
-                        ClinVar IDs: {annotation.annotations.clinvar.ids.join(', ')}
+                        ClinVar IDs: {annotation.annotations.clinvar.ids?.join(', ')}
                       </div>
                     )}
                   </div>
@@ -200,7 +228,7 @@ export default function GeneticAnnotation({ token }: GeneticAnnotationProps) {
                   <div className="bg-white rounded-md p-4 space-y-2">
                     <div><strong>Magnitude:</strong> {annotation.annotations.snpedia.magnitude}/5</div>
                     <div><strong>Summary:</strong> {annotation.annotations.snpedia.summary}</div>
-                    <div><strong>Frequency:</strong> {(annotation.annotations.snpedia.frequency * 100).toFixed(1)}%</div>
+                    <div><strong>Frequency:</strong> {((annotation.annotations.snpedia.frequency ?? 0) * 100).toFixed(1)}%</div>
                     <div><strong>Clinical Significance:</strong> {annotation.annotations.snpedia.clinical_significance}</div>
                   </div>
                 </div>
@@ -215,7 +243,7 @@ export default function GeneticAnnotation({ token }: GeneticAnnotationProps) {
                   </h4>
                   <div className="bg-white rounded-md p-4 space-y-2">
                     <div><strong>Function:</strong> {annotation.annotations.clinpgx.function}</div>
-                    <div><strong>Associated Drugs:</strong> {annotation.annotations.clinpgx.drugs.join(', ')}</div>
+                    <div><strong>Associated Drugs:</strong> {annotation.annotations.clinpgx.drugs?.join(', ')}</div>
                     <div><strong>Clinical Annotation:</strong> {annotation.annotations.clinpgx.clinical_annotation}</div>
                   </div>
                 </div>

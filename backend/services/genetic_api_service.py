@@ -404,13 +404,13 @@ class OptimizedGeneticAPIService:
             return {'found': False, 'source': 'ensembl', 'error': str(e)}
     
     async def _get_clinvar_annotation(self, rsid: str) -> Optional[Dict[str, Any]]:
-        """Get ClinVar annotation."""
+        """Get ClinVar annotation with article/submission details."""
         try:
             params = {
                 'db': 'clinvar',
                 'term': f'{rsid}[RS]',
                 'retmode': 'json',
-                'retmax': 5
+                'retmax': 20
             }
             
             response = await self._make_request('clinvar', self.endpoints['clinvar'].url, params=params)
@@ -418,13 +418,79 @@ class OptimizedGeneticAPIService:
             if response.success and response.data:
                 search_result = response.data.get('esearchresult', {})
                 count = int(search_result.get('count', 0))
+                ids = search_result.get('idlist', [])
                 
-                return {
+                result = {
                     'found': count > 0,
                     'source': 'clinvar',
                     'count': count,
-                    'ids': search_result.get('idlist', [])
+                    'ids': ids,
+                    'entries': []
                 }
+                
+                # Fetch summaries for found IDs
+                if count > 0 and ids:
+                    try:
+                        summary_params = {
+                            'db': 'clinvar',
+                            'id': ','.join(ids[:10]),
+                            'retmode': 'json',
+                        }
+                        api_key = self.endpoints.get('clinvar', APIEndpoint(url='')).headers
+                        # Use the esummary URL
+                        esummary_url = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi'
+                        summary_resp = await self._make_request('clinvar', esummary_url, params=summary_params)
+                        
+                        if summary_resp.success and summary_resp.data:
+                            doc_sums = summary_resp.data.get('result', {})
+                            uid_list = doc_sums.get('uids', [])
+                            entries = []
+                            for uid in uid_list:
+                                doc = doc_sums.get(uid, {})
+                                if not doc:
+                                    continue
+                                clinical_significance = []
+                                # Extract from germline classification
+                                germ = doc.get('germline_classification', {})
+                                if isinstance(germ, dict) and germ.get('description'):
+                                    clinical_significance.append(germ['description'])
+                                # Also check clinical_significance field
+                                clin_sig = doc.get('clinical_significance', {})
+                                if isinstance(clin_sig, dict) and clin_sig.get('description'):
+                                    clinical_significance.append(clin_sig['description'])
+                                
+                                # Extract conditions/traits from top-level and germline trait_set
+                                conditions = []
+                                for source in [doc.get('trait_set', []),
+                                               germ.get('trait_set', []) if isinstance(germ, dict) else []]:
+                                    for trait_set in source:
+                                        if isinstance(trait_set, dict):
+                                            name = trait_set.get('trait_name', '')
+                                            if name and name not in conditions:
+                                                conditions.append(name)
+
+                                # Get variant type from variation_set if not at top level
+                                variation_type = doc.get('variation_type', '')
+                                if not variation_type:
+                                    for vs in doc.get('variation_set', []):
+                                        vt = vs.get('variant_type', '')
+                                        if vt:
+                                            variation_type = vt
+                                            break
+                                
+                                entries.append({
+                                    'uid': uid,
+                                    'title': doc.get('title', ''),
+                                    'accession': doc.get('accession', ''),
+                                    'clinical_significance': list(set(clinical_significance)),
+                                    'conditions': conditions,
+                                    'variation_type': variation_type,
+                                })
+                            result['entries'] = entries
+                    except Exception as e:
+                        logger.warning(f"ClinVar esummary failed for {rsid}: {e}")
+                
+                return result
             
             return {'found': False, 'source': 'clinvar', 'error': response.error}
             
@@ -627,7 +693,7 @@ class GeneticAPIService:
         clinvar = annotations.get('clinvar', {})
         if clinvar.get('found'):
             summary['sources'].append('clinvar')
-            summary['clinical_significance'] = 'reported_in_clinvar'
+            summary['clinical_significance'] = 'Reported in ClinVar'
             summary['clinvar_ids'] = clinvar.get('ids', [])
         
         # Extract Ensembl data
@@ -644,7 +710,7 @@ class GeneticAPIService:
                         summary['population_frequency'] = freq_data
                 consequences = vep.get('most_severe_consequence', '')
                 if consequences:
-                    summary['consequence'] = consequences
+                    summary['consequence'] = consequences.replace('_', ' ')
         
         # Extract ClinPGx data
         clinpgx = annotations.get('clinpgx', {})
@@ -656,6 +722,22 @@ class GeneticAPIService:
         if snpedia.get('found'):
             summary['sources'].append('snpedia')
         
+        # Extract AlphaMissense prediction from local data
+        ensembl = annotations.get('ensembl', {})
+        if ensembl.get('found') and ensembl.get('data'):
+            from backend.utils.alpha_missense import get_alpha_missense_service
+            e_data = ensembl['data']
+            e_entry = e_data[0] if isinstance(e_data, list) else e_data
+            chrom = e_entry.get('seq_region_name')
+            pos = e_entry.get('start')
+            allele_str = e_entry.get('allele_string', '')
+            parts = allele_str.split('/') if allele_str else []
+            if chrom and pos and len(parts) == 2 and len(parts[0]) == 1 and len(parts[1]) == 1:
+                am_svc = get_alpha_missense_service()
+                formatted = am_svc.lookup_comprehensive(str(chrom), int(pos), parts[0], parts[1])
+                if formatted:
+                    summary['alpha_missense'] = formatted
+
         return summary
 
     async def get_litvar_publications(self, rsid: str) -> Dict[str, Any]:

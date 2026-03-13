@@ -80,6 +80,7 @@ export interface CarrierCondition {
   inheritance_pattern?: string
   population_frequency?: string
   risk_level?: string
+  genetic_counseling_recommended?: boolean
 }
 
 export interface MethylationProfile {
@@ -204,6 +205,8 @@ export interface DashboardData {
     status: string
     upload_date: string
     filename: string
+    upload_info?: { filename?: string; [key: string]: unknown }
+    data_sources?: string[]
   }
   health_risks?: HealthRisk[] | { details?: HealthRisk[] }
   drug_responses?: DrugResponse[] | { details?: DrugResponse[] }
@@ -226,6 +229,13 @@ export interface DashboardData {
   intelligence?: IntelligenceTrait[]
   personality_traits?: PersonalityTraitData[]
   uncommon_mutations?: UncommonMutation[]
+  alpha_missense_map?: Record<string, { score?: number; classification?: string }>
+  clinvar_count_map?: Record<string, number>
+  real_data?: {
+    variants?: { rsid?: string; chromosome?: string; position?: number; genotype?: string }[]
+    analysis?: Record<string, unknown>
+    upload_result?: { filename?: string; [key: string]: unknown }
+  }
 }
 
 // ─── Common Panel Props ────────────────────────────────────────

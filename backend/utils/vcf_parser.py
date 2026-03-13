@@ -88,10 +88,14 @@ class VCFParser:
         # Skip comment lines and find header
         data_lines = []
         header_line = None
+        last_comment = None
         
         for line in lines:
             line = line.strip()
-            if line.startswith('#') or not line:
+            if not line:
+                continue
+            if line.startswith('#'):
+                last_comment = line
                 continue
             if header_line is None:
                 header_line = line
@@ -102,8 +106,23 @@ class VCFParser:
             print("No valid CSV data found")
             return []
         
-        # Parse CSV data
-        csv_reader = csv.DictReader(io.StringIO('\n'.join([header_line] + data_lines)))
+        # Detect delimiter: tab-separated (23andMe, AncestryDNA .txt) vs comma-separated
+        delimiter = ','
+        if '\t' in header_line and ',' not in header_line:
+            delimiter = '\t'
+            # Check if last comment line is a column header (e.g. "# rsid	chromosome	position	genotype")
+            if last_comment:
+                comment_text = last_comment.lstrip('#').strip()
+                if '\t' in comment_text:
+                    known_headers = {'rsid', 'chromosome', 'position', 'genotype', 'snp', 'chr', 'pos', 'allele1', 'allele2'}
+                    comment_cols = [c.strip().lower() for c in comment_text.split('\t')]
+                    if any(col in known_headers for col in comment_cols):
+                        # Use comment line as header, move first data line back to data
+                        data_lines.insert(0, header_line)
+                        header_line = comment_text
+        
+        # Parse data with detected delimiter
+        csv_reader = csv.DictReader(io.StringIO('\n'.join([header_line] + data_lines)), delimiter=delimiter)
         
         for row_num, row in enumerate(csv_reader):
             try:

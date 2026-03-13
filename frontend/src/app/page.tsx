@@ -27,6 +27,7 @@ interface User {
   username?: string
   full_name?: string
   is_admin?: boolean
+  avatar_url?: string | null
 }
 
 export default function Home() {
@@ -193,7 +194,7 @@ export default function Home() {
     }
   }, [token])
 
-  const handleProgressComplete = useCallback(async (results: any) => {
+  const handleProgressComplete = useCallback(async (results: Record<string, unknown>) => {
     console.log('Analysis progress completed:', results)
     setShowProgressLoader(false)
     
@@ -351,6 +352,8 @@ export default function Home() {
           analysisId={analysisId}
           onRefresh={loadExistingData}
           isAdmin={user?.is_admin || false}
+          userName={user?.full_name || user?.username}
+          userAvatarUrl={user?.avatar_url}
         />
       )}
     </main>

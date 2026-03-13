@@ -29,6 +29,7 @@ class AdminUserResponse(BaseModel):
     email: str
     username: str
     full_name: Optional[str] = None
+    avatar_url: Optional[str] = None
     is_active: bool
     is_verified: bool
     is_admin: bool
@@ -118,6 +119,7 @@ async def list_users(
             email=user.email,
             username=user.username,
             full_name=user.full_name,
+            avatar_url=user.avatar_url,
             is_active=user.is_active,
             is_verified=user.is_verified,
             is_admin=user.is_admin,

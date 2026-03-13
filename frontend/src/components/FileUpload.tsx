@@ -7,7 +7,7 @@ import { useDropzone } from 'react-dropzone'
 import { Upload, File, AlertCircle, CheckCircle } from 'lucide-react'
 
 interface FileUploadProps {
-  onAnalysisComplete: (data: any) => void
+  onAnalysisComplete: (data: Record<string, unknown>) => void
   token: string
 }
 
@@ -72,7 +72,7 @@ export default function FileUpload({ onAnalysisComplete, token }: FileUploadProp
         },
         health_risks: {
           overall_score: 85, // Will be updated when background analysis completes
-          risk_categories: analysisResult.health_risks?.reduce((acc: any, risk: any) => {
+          risk_categories: analysisResult.health_risks?.reduce((acc: Record<string, { score: number; variants: string[] }>, risk: { condition: string; risk_level: string; associated_variants?: string[] }) => {
             acc[risk.condition] = {
               score: risk.risk_level === 'high' ? 90 : risk.risk_level === 'moderate' ? 60 : 30,
               variants: risk.associated_variants || []
@@ -81,13 +81,13 @@ export default function FileUpload({ onAnalysisComplete, token }: FileUploadProp
           }, {}) || {}
         },
         drug_interactions: {
-          high_risk_genes: analysisResult.drug_responses?.filter((dr: any) => dr.response_type === 'poor_metabolizer').map((dr: any) => dr.gene) || [],
-          moderate_risk_genes: analysisResult.drug_responses?.filter((dr: any) => dr.response_type === 'intermediate_metabolizer').map((dr: any) => dr.gene) || [],
-          affected_drug_classes: [...new Set(analysisResult.drug_responses?.map((dr: any) => dr.drug) || [])]
+          high_risk_genes: analysisResult.drug_responses?.filter((dr: { response_type: string }) => dr.response_type === 'poor_metabolizer').map((dr: { gene: string }) => dr.gene) || [],
+          moderate_risk_genes: analysisResult.drug_responses?.filter((dr: { response_type: string }) => dr.response_type === 'intermediate_metabolizer').map((dr: { gene: string }) => dr.gene) || [],
+          affected_drug_classes: [...new Set(analysisResult.drug_responses?.map((dr: { drug: string }) => dr.drug) || [])]
         },
         recommendations: [
           `Successfully uploaded ${uploadResult.filename} with ${uploadResult.genetic_variants_found || uploadResult.total_rows} data points`,
-          ...(analysisResult.health_risks?.map((risk: any) => risk.recommendations).flat() || []),
+          ...(analysisResult.health_risks?.map((risk: { recommendations: string[] }) => risk.recommendations).flat() || []),
           "Genetic analysis is processing in the background - refresh for updated results",
           "Consult with a healthcare provider for personalized recommendations"
         ],

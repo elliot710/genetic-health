@@ -21,6 +21,7 @@ from ..db.models import (
 from ..core.exceptions import AnalysisNotFoundException
 from ..core.config import settings
 from .job_logs import JobLogCollector
+from ..utils.alpha_missense import get_alpha_missense_service, AlphaMissenseService
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,11 @@ class SharedVariantAnnotationService:
                         merged_data['sources_queried'].append(source)
                         merged_data['success_count'] += 1
 
+                # Include AlphaMissense data (local, not an API source)
+                am_data = getattr(annotation, 'alpha_missense_data', None)
+                if am_data is not None:
+                    merged_data['annotations']['alpha_missense'] = am_data
+
                 if merged_data['success_count'] > 0:
                     annotation_map[annotation.rsid] = merged_data
 
@@ -161,6 +167,21 @@ class SharedVariantAnnotationService:
             else:
                 status = 'completed'
 
+            # Look up AlphaMissense prediction from local data (comprehensive)
+            am_data = None
+            ensembl_ann = annotations.get('ensembl', {})
+            if ensembl_ann and ensembl_ann.get('found') and ensembl_ann.get('data'):
+                e_entry = ensembl_ann['data'][0] if isinstance(ensembl_ann['data'], list) else ensembl_ann['data']
+                chrom = e_entry.get('seq_region_name')
+                pos = e_entry.get('start')
+                allele_str = e_entry.get('allele_string', '')
+                parts = allele_str.split('/') if allele_str else []
+                if chrom and pos and len(parts) == 2:
+                    ref, alt = parts[0], parts[1]
+                    if len(ref) == 1 and len(alt) == 1:
+                        am_svc = get_alpha_missense_service()
+                        am_data = am_svc.lookup_comprehensive(str(chrom), int(pos), ref, alt)
+
             from sqlalchemy.dialects.postgresql import insert
             values = dict(
                 rsid=rsid,
@@ -169,6 +190,7 @@ class SharedVariantAnnotationService:
                 pharmgkb_data=annotations.get('clinpgx'),
                 snpedia_data=annotations.get('snpedia'),
                 litvar_data=annotations.get('litvar'),
+                alpha_missense_data=am_data,
                 annotation_status=status,
                 failed_sources=failed if failed else None,
                 total_api_calls=success_count,
@@ -177,21 +199,70 @@ class SharedVariantAnnotationService:
             if marker_id is not None:
                 values['marker_id'] = marker_id
             stmt = insert(SharedVariantAnnotation).values(**values)
+            # Build the conflict-update dict — always bump usage_count and
+            # back-fill any columns that were previously NULL.
+            conflict_set = dict(
+                usage_count=SharedVariantAnnotation.usage_count + 1,
+                last_updated_at=func.now(),
+                total_api_calls=func.greatest(
+                    SharedVariantAnnotation.total_api_calls,
+                    stmt.excluded.total_api_calls
+                ),
+            )
+            # Back-fill NULL data columns with new values (coalesce keeps existing)
+            for col_name, ann_key in [
+                ('ensembl_data', 'ensembl'),
+                ('clinvar_data', 'clinvar'),
+                ('pharmgkb_data', 'clinpgx'),
+                ('snpedia_data', 'snpedia'),
+                ('litvar_data', 'litvar'),
+            ]:
+                val = annotations.get(ann_key)
+                if val is not None:
+                    col = getattr(SharedVariantAnnotation, col_name)
+                    conflict_set[col_name] = func.coalesce(col, stmt.excluded[col_name])
+            if am_data:
+                conflict_set['alpha_missense_data'] = func.coalesce(
+                    SharedVariantAnnotation.alpha_missense_data,
+                    stmt.excluded.alpha_missense_data,
+                )
+
+            # Recalculate annotation_status & failed_sources after the merge.
+            # A source is "failed" only when its column is still NULL after
+            # merging old + new data.  found=false is a confirmed absence, not
+            # a failure.
+            merged_ensembl  = func.coalesce(SharedVariantAnnotation.ensembl_data,  stmt.excluded.ensembl_data)
+            merged_clinvar  = func.coalesce(SharedVariantAnnotation.clinvar_data,  stmt.excluded.clinvar_data)
+            merged_pharmgkb = func.coalesce(SharedVariantAnnotation.pharmgkb_data, stmt.excluded.pharmgkb_data)
+            merged_snpedia  = func.coalesce(SharedVariantAnnotation.snpedia_data,  stmt.excluded.snpedia_data)
+
+            # Status: 'completed' when all 4 core columns are non-NULL
+            from sqlalchemy import case, literal, cast, type_coerce
+            from sqlalchemy.types import Text
+            conflict_set['annotation_status'] = case(
+                (
+                    (merged_ensembl.isnot(None))
+                    & (merged_clinvar.isnot(None))
+                    & (merged_pharmgkb.isnot(None))
+                    & (merged_snpedia.isnot(None)),
+                    literal('completed')
+                ),
+                else_=literal('partial'),
+            )
+            # Clear failed_sources when completed
+            conflict_set['failed_sources'] = case(
+                (
+                    (merged_ensembl.isnot(None))
+                    & (merged_clinvar.isnot(None))
+                    & (merged_pharmgkb.isnot(None))
+                    & (merged_snpedia.isnot(None)),
+                    None
+                ),
+                else_=stmt.excluded.failed_sources,
+            )
             stmt = stmt.on_conflict_do_update(
                 index_elements=['rsid'],
-                set_=dict(
-                    usage_count=SharedVariantAnnotation.usage_count + 1,
-                    last_updated_at=func.now(),
-                    total_api_calls=func.greatest(
-                        SharedVariantAnnotation.total_api_calls,
-                        stmt.excluded.total_api_calls
-                    ),
-                    # Only upgrade status, never downgrade
-                    annotation_status=func.least(
-                        SharedVariantAnnotation.annotation_status,
-                        stmt.excluded.annotation_status
-                    ),
-                )
+                set_=conflict_set,
             ).returning(SharedVariantAnnotation.id)
 
             result = await self.session.execute(stmt)

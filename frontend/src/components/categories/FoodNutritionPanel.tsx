@@ -172,7 +172,7 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
                         ))}
                       </div>
                     )}
-                    <VariantLinks rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} />
+                    <VariantLinks rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} />
                   </div>
                 )}
               </div>

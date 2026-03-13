@@ -358,13 +358,15 @@ interface VariantLinksProps {
   gene?: string
   token?: string
   isDarkMode?: boolean
+  alphaMissense?: { score?: number; classification?: string } | null
+  clinvarCount?: number
 }
 
 /**
  * Compact research database links with optional "View Details" dialog.
  * When token is provided, shows a button to open the annotation dialog.
  */
-export function VariantLinks({ rsid, gene, token, isDarkMode = false }: VariantLinksProps) {
+export function VariantLinks({ rsid, gene, token, isDarkMode = false, alphaMissense, clinvarCount }: VariantLinksProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const validRsid = rsid && rsid !== 'Unknown' && rsid !== 'Multiple' && rsid.startsWith('rs')
   const validGene =
@@ -402,6 +404,28 @@ export function VariantLinks({ rsid, gene, token, isDarkMode = false }: VariantL
             <Search className="h-3 w-3" />
             Details
           </button>
+        )}
+        {alphaMissense && alphaMissense.score != null && (
+          <span
+            className={`inline-flex items-center gap-1 text-xs font-semibold rounded-md px-2 py-0.5 border ${
+              alphaMissense.classification === 'likely_pathogenic'
+                ? 'text-red-400 bg-red-500/10 border-red-500/20'
+                : alphaMissense.classification === 'ambiguous'
+                  ? 'text-yellow-400 bg-yellow-500/10 border-yellow-500/20'
+                  : 'text-green-400 bg-green-500/10 border-green-500/20'
+            }`}
+            title={`AlphaMissense: ${alphaMissense.score.toFixed(3)} — ${(alphaMissense.classification || '').replace(/_/g, ' ')}`}
+          >
+            AM {alphaMissense.score.toFixed(2)}
+          </span>
+        )}
+        {clinvarCount != null && clinvarCount > 0 && (
+          <span
+            className="inline-flex items-center gap-1 text-xs font-semibold rounded-md px-2 py-0.5 border text-orange-400 bg-orange-500/10 border-orange-500/20"
+            title={`${clinvarCount} ClinVar ${clinvarCount === 1 ? 'report' : 'reports'}`}
+          >
+            CV {clinvarCount}
+          </span>
         )}
         {links.map(({ name, url }) => (
           <a

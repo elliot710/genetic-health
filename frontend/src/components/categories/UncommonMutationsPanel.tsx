@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Search, ChevronRight } from 'lucide-react'
 import { Badge } from '../ui/badge'
+import type { CategoryPanelProps } from './types'
 import {
   useThemeClasses,
   CategoryHeader,
@@ -26,13 +27,7 @@ interface UncommonMutation {
   mutation_type?: string
 }
 
-interface UncommonMutationsPanelProps {
-  isDarkMode?: boolean
-  data?: Record<string, unknown>
-  token?: string
-}
-
-export default function UncommonMutationsPanel({ isDarkMode = false, data, token }: UncommonMutationsPanelProps) {
+export default function UncommonMutationsPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
   const theme = useThemeClasses(isDarkMode)
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
 
@@ -176,7 +171,7 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
                       )}
                     </div>
 
-                    <VariantLinks rsid={mutation.rsid} gene={mutation.gene} token={token} isDarkMode={isDarkMode} />
+                    <VariantLinks rsid={mutation.rsid} gene={mutation.gene} token={token} isDarkMode={isDarkMode} alphaMissense={mutation.rsid ? data?.alpha_missense_map?.[mutation.rsid] : undefined} clinvarCount={mutation.rsid ? data?.clinvar_count_map?.[mutation.rsid] : undefined} />
                   </div>
                 )}
               </div>

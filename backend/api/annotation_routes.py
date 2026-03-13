@@ -9,11 +9,81 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from backend.services.genetic_api_service import GeneticAPIService
 from backend.db.database import get_session
-from backend.db.models import SharedVariantAnnotation
+from backend.db.models import SharedVariantAnnotation, VariantLookupCache
+from backend.utils.alpha_missense import get_alpha_missense_service, AlphaMissenseService
 from .auth_routes import get_current_user
 from backend.db.schemas import User
 
 router = APIRouter(prefix="/api/annotations", tags=["annotations"])
+
+
+def _build_variant_description(rsid: str, response: Dict[str, Any]) -> str:
+    """Build a natural language description of a variant from annotation data."""
+    parts = []
+
+    # Determine variant type
+    consequence = response.get("most_severe_consequence", "")
+    variant_type_label = consequence if consequence else "variant"
+
+    # Gene info
+    gene = None
+    transcripts = response.get("transcripts", [])
+    if transcripts:
+        gene = transcripts[0].get("gene_symbol")
+
+    # HGVS name and conditions from ClinVar entries
+    hgvs_name = None
+    all_conditions: list[str] = []
+    clinvar_variation_type = None
+    clinvar_entries = response.get("clinvar", {}).get("entries", [])
+    for entry in clinvar_entries:
+        title = entry.get("title", "")
+        if title and not hgvs_name:
+            hgvs_name = title
+        vt = entry.get("variation_type", "")
+        if vt and not clinvar_variation_type:
+            clinvar_variation_type = vt
+        conditions = entry.get("conditions", [])
+        all_conditions.extend(c for c in conditions if c and c.lower() != "not provided" and c.lower() != "not specified")
+
+    all_conditions = list(dict.fromkeys(all_conditions))  # dedupe preserving order
+
+    # Prefer ClinVar variation type (e.g. "single nucleotide variant") over Ensembl consequence
+    if clinvar_variation_type:
+        variant_type_label = clinvar_variation_type
+
+    # Opening sentence
+    if gene and gene != "Unknown" and not gene.startswith("rs"):
+        parts.append(f"{rsid} is a {variant_type_label} in the {gene} gene")
+    else:
+        parts.append(f"{rsid} is a {variant_type_label}")
+
+    # HGVS nomenclature
+    if hgvs_name:
+        parts[-1] += f", specifically identified as {hgvs_name}."
+    else:
+        parts[-1] += "."
+
+    # Associated conditions
+    if all_conditions:
+        if len(all_conditions) == 1:
+            parts.append(f"This variant is associated with {all_conditions[0]}.")
+        else:
+            joined = ", ".join(all_conditions[:-1]) + " and " + all_conditions[-1]
+            parts.append(f"This variant is associated with {joined}.")
+
+    # Clinical significance
+    clin_sigs = response.get("clinical_significance", [])
+    if clin_sigs:
+        formatted = [s.replace("_", " ") for s in clin_sigs]
+        parts.append(f"Clinical assessments classify it as {', '.join(formatted)}.")
+
+    # Pharmacogenomic note
+    if response.get("pharmacogenomics", {}).get("found"):
+        parts.append("It has known pharmacogenomic associations that may affect drug response.")
+
+    return " ".join(parts) if len(parts) > 1 else parts[0] if parts else ""
+
 
 class VariantAnnotationRequest(BaseModel):
     rsid: str
@@ -214,10 +284,24 @@ async def get_variant_details(
     # Process ClinVar data
     clinvar = annotation.clinvar_data
     if clinvar and isinstance(clinvar, dict) and clinvar.get("found"):
+        clinvar_entries = clinvar.get("entries", [])
+        # Fall back to lookup cache if shared annotation has no entries
+        if not clinvar_entries:
+            try:
+                cache_result = await db.execute(
+                    select(VariantLookupCache).where(VariantLookupCache.variant_id == rsid)
+                )
+                cached = cache_result.scalar_one_or_none()
+                if cached and cached.response_data:
+                    cached_clinvar = cached.response_data.get("annotations", {}).get("clinvar", {})
+                    clinvar_entries = cached_clinvar.get("entries", [])
+            except Exception:
+                pass
         response["clinvar"] = {
             "found": True,
             "count": clinvar.get("count", 0),
             "ids": clinvar.get("ids", []),
+            "entries": clinvar_entries,
         }
 
     # Process ClinPGx data (stored in pharmgkb_data column for backward compat)
@@ -261,6 +345,16 @@ async def get_variant_details(
                 for p in pubs[:20]
             ],
         }
+
+    # Process AlphaMissense data (AI prediction, NOT clinically validated)
+    am_raw = annotation.alpha_missense_data
+    if am_raw and isinstance(am_raw, dict) and am_raw.get("found"):
+        formatted = AlphaMissenseService.format_result_for_display(am_raw)
+        if formatted:
+            response["alpha_missense"] = formatted
+
+    # Generate natural language variant description from combined sources (after all processing)
+    response["description"] = _build_variant_description(rsid, response)
 
     return response
 

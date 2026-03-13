@@ -2,11 +2,14 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { Search, Loader2, AlertCircle, CheckCircle, Info, ExternalLink, AlertTriangle, ChevronLeft, ChevronRight, Database, Globe, X, BarChart3, RefreshCw, Clock } from 'lucide-react'
+import type { getTheme } from '@/utils/theme'
+
+type Theme = ReturnType<typeof getTheme>
 
 interface VariantSearchProps {
   token?: string
   isDarkMode?: boolean
-  theme?: any
+  theme?: Theme
 }
 
 interface VariantResult {
@@ -23,6 +26,8 @@ interface VariantResult {
     gene: string | null
     consequence: string | null
     clinical_significance: string[]
+    clinvar_count?: number
+    alpha_missense?: { score?: number; classification?: string } | null
   } | null
 }
 
@@ -37,6 +42,67 @@ interface SearchResponse {
   page: number
   per_page: number
   pages: number
+}
+
+interface LookupBasicInfo {
+  gene_symbol?: string
+  most_severe_consequence?: string
+  allele_string?: string
+  chromosome?: string
+  start?: number
+  strand?: number
+  clinvar_count?: number
+}
+
+interface LookupAnnotationSource {
+  found?: boolean
+}
+
+interface PopulationEntry {
+  allele: string
+  frequency: number
+}
+
+interface AlphaMissenseIsoform {
+  transcript_id: string
+  protein_variant: string
+  am_pathogenicity: number
+  am_class: string
+}
+
+interface LookupResult {
+  variant_id: string
+  found: boolean
+  description?: string
+  cached?: boolean
+  cached_at?: string
+  basic_info: LookupBasicInfo
+  clinical_significance?: string[]
+  population_data?: {
+    minor_allele?: string
+    populations?: Record<string, PopulationEntry>
+  }
+  annotations?: Record<string, LookupAnnotationSource>
+  literature?: {
+    snpedia_found?: boolean
+    title?: string
+    wiki_text?: string
+  }
+  pharmacogenomics?: {
+    found?: boolean
+    data?: Record<string, unknown>
+  }
+  alpha_missense?: {
+    found?: boolean
+    am_pathogenicity?: number
+    am_class?: string
+    protein_variant?: string
+    gene_mean_pathogenicity?: number
+    isoforms?: AlphaMissenseIsoform[]
+    isoform_count?: number
+    disclaimer?: string
+  }
+  external_links?: Record<string, string>
 }
 
 export default function VariantSearch({ token, isDarkMode = false, theme }: VariantSearchProps) {
@@ -68,7 +134,7 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
   // External lookup state
   const [lookupTerm, setLookupTerm] = useState('')
   const [lookupLoading, setLookupLoading] = useState(false)
-  const [lookupResults, setLookupResults] = useState<any>(null)
+  const [lookupResults, setLookupResults] = useState<LookupResult | null>(null)
   const [lookupError, setLookupError] = useState('')
 
   useEffect(() => {
@@ -320,6 +386,8 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
                     <th className={`text-left py-3 px-3 ${t.text.secondary} font-semibold`}>Consequence</th>
                     <th className={`text-left py-3 px-3 ${t.text.secondary} font-semibold`}>Category</th>
                     <th className={`text-left py-3 px-3 ${t.text.secondary} font-semibold`}>Sources</th>
+                    <th className={`text-left py-3 px-3 ${t.text.secondary} font-semibold`}>AM</th>
+                    <th className={`text-left py-3 px-3 ${t.text.secondary} font-semibold`}>CV</th>
                     <th className={`text-left py-3 px-3 ${t.text.secondary} font-semibold`}>Actions</th>
                   </tr>
                 </thead>
@@ -340,6 +408,32 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
                         <div className="flex flex-wrap gap-1">
                           {v.annotation?.sources.map(s => sourceBadge(s)) || <span className={t.text.muted}>-</span>}
                         </div>
+                      </td>
+                      <td className="py-3 px-3">
+                        {v.annotation?.alpha_missense?.score != null ? (
+                          <span
+                            className={`inline-flex items-center text-xs font-semibold rounded px-1.5 py-0.5 border ${
+                              v.annotation.alpha_missense.classification === 'likely_pathogenic'
+                                ? 'text-red-400 bg-red-500/10 border-red-500/20'
+                                : v.annotation.alpha_missense.classification === 'ambiguous'
+                                  ? 'text-yellow-400 bg-yellow-500/10 border-yellow-500/20'
+                                  : 'text-green-400 bg-green-500/10 border-green-500/20'
+                            }`}
+                            title={`AlphaMissense: ${v.annotation.alpha_missense.score.toFixed(3)} — ${(v.annotation.alpha_missense.classification || '').replace(/_/g, ' ')}`}
+                          >
+                            {v.annotation.alpha_missense.score.toFixed(2)}
+                          </span>
+                        ) : <span className={t.text.muted}>-</span>}
+                      </td>
+                      <td className="py-3 px-3">
+                        {v.annotation?.clinvar_count ? (
+                          <span
+                            className="inline-flex items-center text-xs font-semibold rounded px-1.5 py-0.5 border text-orange-400 bg-orange-500/10 border-orange-500/20"
+                            title={`${v.annotation.clinvar_count} ClinVar ${v.annotation.clinvar_count === 1 ? 'report' : 'reports'}`}
+                          >
+                            {v.annotation.clinvar_count}
+                          </span>
+                        ) : <span className={t.text.muted}>-</span>}
                       </td>
                       <td className="py-3 px-3">
                         <button
@@ -537,21 +631,33 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
                   {lookupResults.annotations?.clinvar?.found && sourceBadge('clinvar')}
                   {lookupResults.annotations?.snpedia?.found && sourceBadge('snpedia')}
                   {lookupResults.annotations?.clinpgx?.found && sourceBadge('clinpgx')}
+                  {lookupResults.alpha_missense?.found && (
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${isDarkMode ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700'}`}>
+                      AlphaMissense
+                    </span>
+                  )}
                 </div>
               </div>
 
+              {/* Variant Description */}
+              {lookupResults.description && (
+                <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
+                  <p className={`text-sm leading-relaxed ${t.text.secondary}`}>{lookupResults.description}</p>
+                </div>
+              )}
+
               {/* Clinical Significance */}
-              {lookupResults.clinical_significance?.length > 0 && (
+              {(lookupResults.clinical_significance?.length ?? 0) > 0 && (
                 <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
                   <h4 className={`font-bold ${t.text.primary} mb-3 flex items-center gap-2`}>
                     <AlertTriangle className="h-4 w-4 text-amber-500" />
                     Clinical Significance
-                    {lookupResults.basic_info?.clinvar_count > 0 && (
-                      <span className={`text-xs font-normal ${t.text.muted}`}>({lookupResults.basic_info.clinvar_count} ClinVar entries)</span>
+                    {(lookupResults.basic_info?.clinvar_count ?? 0) > 0 && (
+                      <span className={`text-xs font-normal ${t.text.muted}`}>({lookupResults.basic_info!.clinvar_count} ClinVar entries)</span>
                     )}
                   </h4>
                   <div className="flex flex-wrap gap-2">
-                    {lookupResults.clinical_significance.map((sig: string, i: number) => {
+                    {lookupResults.clinical_significance!.map((sig: string, i: number) => {
                       const lower = sig.toLowerCase()
                       const color = lower.includes('pathogenic')
                         ? isDarkMode ? 'bg-red-500/20 text-red-300 border-red-500/30' : 'bg-red-50 text-red-700 border-red-200'
@@ -587,10 +693,10 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
                   </p>
                   <div className="space-y-2">
                     {(() => {
-                      const pops = lookupResults.population_data.populations as Record<string, { allele: string; frequency: number }>
+                      const pops = lookupResults.population_data!.populations as Record<string, PopulationEntry>
                       const sorted = Object.entries(pops)
                         .sort(([, a], [, b]) => b.frequency - a.frequency)
-                        .slice(0, 12)
+                        .slice(0, 6)
                       const maxFreq = sorted.length > 0 ? sorted[0][1].frequency : 1
 
                       const popLabels: Record<string, string> = {
@@ -619,9 +725,9 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
                       ))
                     })()}
                   </div>
-                  {Object.keys(lookupResults.population_data.populations).length > 12 && (
+                  {Object.keys(lookupResults.population_data?.populations || {}).length > 12 && (
                     <p className={`text-xs ${t.text.muted} mt-3`}>
-                      Showing top 12 of {Object.keys(lookupResults.population_data.populations).length} populations
+                      Showing top 6 of {Object.keys(lookupResults.population_data?.populations || {}).length} populations
                     </p>
                   )}
                 </div>
@@ -744,6 +850,122 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
                   <pre className={`text-xs ${t.text.secondary} whitespace-pre-wrap font-mono p-3 rounded-lg ${isDarkMode ? 'bg-slate-700/30' : 'bg-gray-100/60'}`}>
                     {JSON.stringify(lookupResults.pharmacogenomics.data, null, 2)}
                   </pre>
+                </div>
+              )}
+
+              {/* AlphaMissense AI Prediction */}
+              {lookupResults.alpha_missense?.found && (
+                <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
+                  <h4 className={`font-bold ${t.text.primary} mb-3 flex items-center gap-2`}>
+                    <AlertTriangle className="h-4 w-4 text-amber-500" />
+                    AlphaMissense AI Prediction
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${isDarkMode ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-amber-100 text-amber-700 border border-amber-200'}`}>
+                      AI
+                    </span>
+                  </h4>
+                  <div className="space-y-3">
+                    {/* Score and classification */}
+                    {lookupResults.alpha_missense.am_pathogenicity != null && (
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className={`text-sm ${t.text.secondary}`}>Pathogenicity Score</span>
+                          <span className={`text-lg font-mono font-bold ${
+                            lookupResults.alpha_missense.am_pathogenicity > 0.564 ? 'text-red-400' :
+                            lookupResults.alpha_missense.am_pathogenicity < 0.34 ? 'text-green-400' : 'text-amber-400'
+                          }`}>
+                            {lookupResults.alpha_missense.am_pathogenicity.toFixed(4)}
+                          </span>
+                        </div>
+                        <div className="relative h-3 rounded-full bg-gradient-to-r from-green-500 via-amber-500 to-red-500 overflow-hidden">
+                          <div
+                            className="absolute top-0 h-full w-1.5 bg-white rounded-full shadow-lg"
+                            style={{ left: `${Math.min(lookupResults.alpha_missense.am_pathogenicity * 100, 100)}%` }}
+                          />
+                        </div>
+                        <div className="flex justify-between mt-1">
+                          <span className={`text-xs ${t.text.muted}`}>Benign (0)</span>
+                          <span className={`text-xs ${t.text.muted}`}>Pathogenic (1)</span>
+                        </div>
+                      </div>
+                    )}
+                    {/* Classification + protein */}
+                    <div className="grid grid-cols-2 gap-3">
+                      {lookupResults.alpha_missense.am_class && (
+                        <div className={`p-2.5 rounded-lg ${isDarkMode ? 'bg-slate-700/30' : 'bg-gray-100/60'}`}>
+                          <div className={`text-xs ${t.text.muted} mb-1`}>Classification</div>
+                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                            lookupResults.alpha_missense.am_class === 'likely_pathogenic'
+                              ? isDarkMode ? 'bg-red-500/20 text-red-300' : 'bg-red-100 text-red-700'
+                              : lookupResults.alpha_missense.am_class === 'likely_benign'
+                                ? isDarkMode ? 'bg-green-500/20 text-green-300' : 'bg-green-100 text-green-700'
+                                : isDarkMode ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700'
+                          }`}>
+                            {lookupResults.alpha_missense.am_class.replace(/_/g, ' ')}
+                          </span>
+                        </div>
+                      )}
+                      {lookupResults.alpha_missense.protein_variant && (
+                        <div className={`p-2.5 rounded-lg ${isDarkMode ? 'bg-slate-700/30' : 'bg-gray-100/60'}`}>
+                          <div className={`text-xs ${t.text.muted} mb-1`}>Protein Change</div>
+                          <span className={`text-sm font-mono font-medium ${t.text.primary}`}>
+                            {lookupResults.alpha_missense.protein_variant}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                    {/* Gene-level mean pathogenicity */}
+                    {lookupResults.alpha_missense.gene_mean_pathogenicity != null && (
+                      <div className={`p-2.5 rounded-lg ${isDarkMode ? 'bg-slate-700/30' : 'bg-gray-100/60'}`}>
+                        <div className={`text-xs ${t.text.muted} mb-1`}>Gene Average Pathogenicity</div>
+                        <span className={`text-sm font-mono font-medium ${
+                          lookupResults.alpha_missense.gene_mean_pathogenicity > 0.564 ? 'text-red-400' :
+                          lookupResults.alpha_missense.gene_mean_pathogenicity < 0.34 ? 'text-green-400' : 'text-amber-400'
+                        }`}>
+                          {lookupResults.alpha_missense.gene_mean_pathogenicity.toFixed(4)}
+                        </span>
+                        <span className={`text-xs ${t.text.muted} ml-2`}>(mean across all missense variants in this gene)</span>
+                      </div>
+                    )}
+                    {/* Isoform predictions */}
+                    {lookupResults.alpha_missense.isoforms && lookupResults.alpha_missense.isoforms.length > 1 && (
+                      <div>
+                        <div className={`text-xs ${t.text.muted} mb-1.5`}>Isoform Predictions ({lookupResults.alpha_missense.isoform_count})</div>
+                        <div className="space-y-1">
+                          {lookupResults.alpha_missense.isoforms.slice(0, 6).map((iso: AlphaMissenseIsoform, i: number) => (
+                            <div key={i} className={`flex items-center gap-3 text-xs p-2 rounded-lg ${isDarkMode ? 'bg-slate-700/20' : 'bg-gray-50'}`}>
+                              <span className={`font-mono ${t.text.secondary} truncate max-w-[160px]`} title={iso.transcript_id}>{iso.transcript_id}</span>
+                              <span className={`font-mono ${t.text.primary}`}>{iso.protein_variant}</span>
+                              <span className={`font-mono font-medium ${
+                                iso.am_pathogenicity > 0.564 ? 'text-red-400' :
+                                iso.am_pathogenicity < 0.34 ? 'text-green-400' : 'text-amber-400'
+                              }`}>
+                                {iso.am_pathogenicity.toFixed(4)}
+                              </span>
+                              <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                iso.am_class === 'likely_pathogenic'
+                                  ? isDarkMode ? 'bg-red-500/20 text-red-300' : 'bg-red-100 text-red-700'
+                                  : iso.am_class === 'likely_benign'
+                                    ? isDarkMode ? 'bg-green-500/20 text-green-300' : 'bg-green-100 text-green-700'
+                                    : isDarkMode ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700'
+                              }`}>
+                                {iso.am_class.replace(/_/g, ' ')}
+                              </span>
+                            </div>
+                          ))}
+                          {lookupResults.alpha_missense.isoforms.length > 6 && (
+                            <span className={`text-xs ${t.text.muted}`}>+ {lookupResults.alpha_missense.isoforms.length - 6} more isoforms</span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    {/* Disclaimer */}
+                    <div className={`flex items-start gap-2 p-2.5 rounded-lg ${isDarkMode ? 'bg-amber-500/10 border border-amber-500/20' : 'bg-amber-50 border border-amber-200'}`}>
+                      <AlertTriangle className={`h-3.5 w-3.5 mt-0.5 flex-shrink-0 ${isDarkMode ? 'text-amber-400' : 'text-amber-600'}`} />
+                      <p className={`text-xs ${isDarkMode ? 'text-amber-300/80' : 'text-amber-700'} leading-relaxed`}>
+                        {lookupResults.alpha_missense.disclaimer || 'AlphaMissense predictions are AI-generated (DeepMind) and have NOT been clinically validated. Do not use for clinical decision-making.'}
+                      </p>
+                    </div>
+                  </div>
                 </div>
               )}
 

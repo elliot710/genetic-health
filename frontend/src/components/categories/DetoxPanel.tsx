@@ -168,6 +168,8 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                         gene={item.gene}
                         token={token}
                         isDarkMode={isDarkMode}
+                        alphaMissense={item.associated_variants?.[0] ? data?.alpha_missense_map?.[item.associated_variants[0]] : undefined}
+                        clinvarCount={item.associated_variants?.[0] ? data?.clinvar_count_map?.[item.associated_variants[0]] : undefined}
                       />
                     </div>
                   )}

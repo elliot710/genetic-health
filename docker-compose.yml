@@ -29,6 +29,7 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/genetic_health_db
       - NCBI_API_KEY=${NCBI_API_KEY}
+      - ALPHA_MISSENSE_DATA_DIR=/app/alpha-missense
     volumes:
       - .:/app
       - /app/.venv  # Exclude virtual environment from volume mount

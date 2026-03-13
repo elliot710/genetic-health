@@ -173,7 +173,7 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
                     <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{trait.description}</p>
-                    <VariantLinks rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} />
+                    <VariantLinks rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} />
                   </div>
                 )}
               </div>

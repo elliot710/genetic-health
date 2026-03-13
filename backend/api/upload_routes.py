@@ -97,10 +97,10 @@ async def upload_csv(
 ):
     """Upload CSV file and process genetic variants with comprehensive analysis."""
     try:
-        if not file.filename or not file.filename.endswith('.csv'):
+        if not file.filename or not (file.filename.endswith('.csv') or file.filename.endswith('.txt')):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only CSV files are supported"
+                detail="Only CSV and TXT files are supported"
             )
 
         # Read file content

@@ -35,6 +35,7 @@ interface AdminUser {
   email: string
   username: string
   full_name: string | null
+  avatar_url: string | null
   is_active: boolean
   is_verified: boolean
   is_admin: boolean
@@ -787,7 +788,16 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                   {users.map(user => (
                     <TableRow key={user.id}>
                       <TableCell className="font-medium">
-                        {user.full_name || user.username}
+                        <div className="flex items-center gap-2">
+                          {user.avatar_url ? (
+                            <img src={user.avatar_url} alt="" className="w-7 h-7 rounded-full object-cover flex-shrink-0" />
+                          ) : (
+                            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-teal-500 to-cyan-500 flex items-center justify-center flex-shrink-0">
+                              <span className="text-white text-xs font-bold">{(user.full_name || user.username)[0].toUpperCase()}</span>
+                            </div>
+                          )}
+                          {user.full_name || user.username}
+                        </div>
                       </TableCell>
                       <TableCell className="text-muted-foreground text-sm">{user.email}</TableCell>
                       <TableCell className="text-center">

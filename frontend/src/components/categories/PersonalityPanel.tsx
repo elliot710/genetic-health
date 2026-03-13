@@ -190,7 +190,7 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
                       </div>
                     )}
 
-                    <VariantLinks rsid={trait.gene?.startsWith('rs') ? trait.gene : undefined} gene={!trait.gene?.startsWith('rs') ? trait.gene : undefined} token={token} isDarkMode={isDarkMode} />
+                    <VariantLinks rsid={trait.gene?.startsWith('rs') ? trait.gene : undefined} gene={!trait.gene?.startsWith('rs') ? trait.gene : undefined} token={token} isDarkMode={isDarkMode} alphaMissense={trait.gene?.startsWith('rs') ? data?.alpha_missense_map?.[trait.gene] : undefined} clinvarCount={trait.gene?.startsWith('rs') ? data?.clinvar_count_map?.[trait.gene] : undefined} />
                   </div>
                 )}
               </div>

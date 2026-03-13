@@ -1,11 +1,12 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Eye, EyeOff, Mail, Lock, User, Dna, Sparkles, Shield, Sun, Moon } from 'lucide-react'
+import { Eye, EyeOff, Mail, Lock, User, Dna, Sparkles, Shield, Sun, Moon, CheckCircle } from 'lucide-react'
 import { getTheme } from '../utils/theme'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 
 interface AuthFormProps {
   onLogin: (token: string) => void
@@ -24,6 +25,7 @@ export default function AuthForm({ onLogin, isDarkMode: initialDarkMode = false,
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [showSuccessDialog, setShowSuccessDialog] = useState(false)
   
   // Local dark mode state for auth form - initialize consistently
   const [isDarkMode, setIsDarkMode] = useState(initialDarkMode)
@@ -82,7 +84,7 @@ export default function AuthForm({ onLogin, isDarkMode: initialDarkMode = false,
       } else {
         setIsLogin(true)
         setError('')
-        alert('Account created successfully! Please log in.')
+        setShowSuccessDialog(true)
       }
     } catch (err: unknown) {
       const error = err as Error
@@ -297,6 +299,33 @@ export default function AuthForm({ onLogin, isDarkMode: initialDarkMode = false,
           animation-delay: 4s;
         }
       `}</style>
+
+      {/* Success Dialog */}
+      <Dialog open={showSuccessDialog} onOpenChange={setShowSuccessDialog}>
+        <DialogContent className={`${theme.glass} border ${theme.glassBorder} backdrop-blur-xl sm:max-w-md`}>
+          <DialogHeader>
+            <div className="flex justify-center mb-2">
+              <div className={`p-3 rounded-full ${isDarkMode ? 'bg-emerald-500/20' : 'bg-emerald-50'}`}>
+                <CheckCircle className={`h-8 w-8 ${isDarkMode ? 'text-emerald-400' : 'text-emerald-500'}`} />
+              </div>
+            </div>
+            <DialogTitle className={`text-center text-lg ${theme.text.primary}`}>
+              Account Created Successfully
+            </DialogTitle>
+            <DialogDescription className={`text-center ${theme.text.secondary}`}>
+              Your account has been created. Please log in with your credentials.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="sm:justify-center">
+            <Button
+              onClick={() => setShowSuccessDialog(false)}
+              className={`px-8 ${theme.form.button.primary}`}
+            >
+              Sign In
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

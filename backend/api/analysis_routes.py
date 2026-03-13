@@ -688,6 +688,36 @@ async def get_dashboard_data(
              "mutation_type": r.mutation_type}
             for r in uncommon_rows
         ] if uncommon_rows else []
+
+        # AlphaMissense + ClinVar maps: rsid → data for all annotated variants
+        from ..db.models import AnalysisVariant, GeneticMarker, SharedVariantAnnotation
+        annotation_rows = (await db.execute(
+            select(
+                GeneticMarker.rsid,
+                SharedVariantAnnotation.alpha_missense_data,
+                SharedVariantAnnotation.clinvar_data,
+            )
+            .select_from(AnalysisVariant)
+            .join(GeneticMarker, AnalysisVariant.marker_id == GeneticMarker.id)
+            .join(SharedVariantAnnotation, SharedVariantAnnotation.marker_id == GeneticMarker.id)
+            .where(AnalysisVariant.analysis_id == primary_analysis.id)
+        )).all()
+        am_map: Dict[str, Any] = {}
+        cv_count_map: Dict[str, int] = {}
+        for row in annotation_rows:
+            am = row.alpha_missense_data
+            if isinstance(am, dict) and am.get('found'):
+                am_map[row.rsid] = {
+                    "score": am.get('am_pathogenicity'),
+                    "classification": am.get('am_class'),
+                }
+            cv = row.clinvar_data
+            if isinstance(cv, dict) and cv.get('found'):
+                count = cv.get('count', 0)
+                if count > 0:
+                    cv_count_map[row.rsid] = count
+        dashboard_data["alpha_missense_map"] = am_map
+        dashboard_data["clinvar_count_map"] = cv_count_map
         
         return dashboard_data
         

@@ -186,7 +186,7 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
                       </div>
                     )}
 
-                    <VariantLinks rsid={drug.variants?.[0]} gene={drug.gene} token={token} isDarkMode={isDarkMode} />
+                    <VariantLinks rsid={drug.variants?.[0]} gene={drug.gene} token={token} isDarkMode={isDarkMode} alphaMissense={drug.variants?.[0] ? data?.alpha_missense_map?.[drug.variants[0]] : undefined} clinvarCount={drug.variants?.[0] ? data?.clinvar_count_map?.[drug.variants[0]] : undefined} />
                   </div>
                 )}
               </div>
