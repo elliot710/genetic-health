@@ -321,7 +321,7 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                                   </div>
                                 )}
 
-                                <VariantLinks rsid={variant} gene={risk.gene} />
+                                <VariantLinks rsid={variant} gene={risk.gene} token={token} isDarkMode={isDarkMode} />
                               </div>
                             )
                           })}

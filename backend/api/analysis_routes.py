@@ -5,12 +5,12 @@ Fixed version with correct SQLAlchemy ORM usage patterns.
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, func as sa_func, outerjoin
+from sqlalchemy import select, update
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel
 
 from ..db.database import get_session
-from ..db.models import GeneticAnalysis, HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait, SportsPerformance, CognitiveProfile, PersonalityTrait, AncestryResult, CarrierStatus, WellnessMetric, MethylationProfile, DetoxificationProfile, RareMutation, UncommonMutation, AnalysisVariant, GeneticMarker
+from ..db.models import GeneticAnalysis, HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait, SportsPerformance, CognitiveProfile, PersonalityTrait, AncestryResult, CarrierStatus, WellnessMetric, MethylationProfile, DetoxificationProfile, RareMutation, UncommonMutation
 from ..core.container import ServiceManager
 from .auth_routes import get_current_user
 
@@ -445,28 +445,30 @@ async def get_dashboard_data(
         if not primary_analysis:
             primary_analysis = analyses[0]  # Use the most recent one
         
-        # Calculate totals from primary analysis only
-        total_variants = getattr(primary_analysis, 'total_variants', 0) or 0
-        processed_variants = getattr(primary_analysis, 'processed_variants', 0) or 0
+        # Calculate totals
+        total_variants = sum(getattr(a, 'total_variants', 0) or 0 for a in analyses)
+        processed_variants = sum(getattr(a, 'processed_variants', 0) or 0 for a in analyses)
         
-        # Count actual variant annotations for the primary analysis
+        # Count actual variant annotations for more accurate "analyzed" count
         from ..db.models import VariantAnnotation, SharedVariantAnnotation
-        analyzed_count = await db.execute(
-            select(sa_func.count(sa_func.distinct(VariantAnnotation.analysis_variant_id)))
-            .where(VariantAnnotation.analysis_id == primary_analysis.id)
+        annotation_result = await db.execute(
+            select(VariantAnnotation)
+            .join(GeneticAnalysis, VariantAnnotation.analysis_id == GeneticAnalysis.id)
+            .where(GeneticAnalysis.user_id == current_user.id)
         )
-        analyzed_variants = analyzed_count.scalar() or 0
+        analyzed_variants = len(annotation_result.scalars().all())
         
-        # Count insights (unique variants with meaningful annotation data)
-        insights_count = await db.execute(
-            select(sa_func.count(sa_func.distinct(VariantAnnotation.analysis_variant_id)))
+        # Count insights (annotations with meaningful data) using shared annotations
+        insights_result = await db.execute(
+            select(VariantAnnotation)
+            .join(GeneticAnalysis, VariantAnnotation.analysis_id == GeneticAnalysis.id)
             .join(SharedVariantAnnotation, VariantAnnotation.shared_annotation_id == SharedVariantAnnotation.id)
             .where(
-                VariantAnnotation.analysis_id == primary_analysis.id,
+                GeneticAnalysis.user_id == current_user.id,
                 SharedVariantAnnotation.ensembl_data.isnot(None)
             )
         )
-        insights_found = insights_count.scalar() or 0
+        insights_found = len(insights_result.scalars().all())
         
         # Get upload date safely
         upload_date = getattr(primary_analysis, 'upload_date', None)
@@ -485,40 +487,7 @@ async def get_dashboard_data(
             },
         }
 
-        # Only use completed analyses for category data
-        analysis_ids = [a.id for a in analyses if getattr(a, 'analysis_status', '') == 'completed']
-        if not analysis_ids:
-            analysis_ids = [primary_analysis.id]
-        
-        # Get real variant data for the overview page
-        variant_result = await db.execute(
-            select(
-                GeneticMarker.chromosome,
-                GeneticMarker.position,
-                GeneticMarker.rsid,
-                GeneticMarker.ref_allele,
-                GeneticMarker.alt_alleles,
-                AnalysisVariant.genotype
-            )
-            .join(GeneticMarker, AnalysisVariant.marker_id == GeneticMarker.id)
-            .where(AnalysisVariant.analysis_id == primary_analysis.id)
-            .order_by(GeneticMarker.chromosome, GeneticMarker.position)
-        )
-        variant_rows = variant_result.all()
-        
-        dashboard_data["real_data"] = {
-            "variants": [
-                {
-                    "chromosome": v.chromosome,
-                    "position": v.position,
-                    "rsid": v.rsid,
-                    "ref_allele": v.ref_allele,
-                    "alt_allele": v.alt_alleles,
-                    "genotype": v.genotype
-                }
-                for v in variant_rows
-            ]
-        }
+        analysis_ids = [a.id for a in analyses]
 
         # Health risks
         hr = await db.execute(
@@ -560,7 +529,8 @@ async def get_dashboard_data(
         sports_rows = sp.scalars().all()
         dashboard_data["sports_performance"] = [
             {"category": r.performance_category, "genetic_advantage": r.genetic_advantage,
-             "sport_recommendations": r.sport_recommendations, "training_advice": r.training_advice}
+             "sport_recommendations": r.sport_recommendations, "training_advice": r.training_advice,
+             "associated_variants": r.associated_variants or []}
             for r in sports_rows
         ]
 
@@ -571,7 +541,8 @@ async def get_dashboard_data(
         nutrition_rows = nt.scalars().all()
         dashboard_data["nutrition_traits"] = [
             {"nutrient": r.nutrient, "metabolism_type": r.metabolism_type,
-             "dietary_recommendations": r.dietary_recommendations, "sensitivity_level": r.sensitivity_level}
+             "dietary_recommendations": r.dietary_recommendations, "sensitivity_level": r.sensitivity_level,
+             "associated_variants": r.associated_variants or []}
             for r in nutrition_rows
         ]
 
@@ -646,8 +617,9 @@ async def get_dashboard_data(
         # Also provide wellness data under wellness_traits key for frontend compatibility
         dashboard_data["wellness_traits"] = [
             {"trait": r.metric_name, "category": "Wellness", "value": r.genetic_predisposition,
-             "gene": (r.associated_variants[0] if r.associated_variants and len(r.associated_variants) == 1 else "Multiple"),
-             "confidence": r.optimization_score or "Medium",
+             "gene": "Multiple", "confidence": r.optimization_score or "Medium",
+             "name": r.metric_name, "result": r.genetic_predisposition,
+             "marker": "Multiple genes",
              "associated_variants": r.associated_variants or [],
              "recommendations": r.lifestyle_recommendations}
             for r in wellness_rows
@@ -687,12 +659,15 @@ async def get_dashboard_data(
         )
         personality_rows = pp.scalars().all()
         dashboard_data["personality_traits"] = [
-            {"trait": r.trait_name,
+            {"trait": r.trait_name, "name": r.trait_name,
              "score": 70 if r.genetic_tendency == 'moderate' else (85 if r.genetic_tendency == 'high' else 55),
              "confidence": r.confidence_level,
              "gene": r.associated_variants[0] if r.associated_variants else "Multiple markers",
+             "marker": r.associated_variants[0] if r.associated_variants else "Multiple markers",
+             "associated_variants": r.associated_variants or [],
              "description": r.behavioral_insights[0] if r.behavioral_insights else "Genetic analysis based",
-             "characteristics": (r.behavioral_insights[1:] if r.behavioral_insights and len(r.behavioral_insights) > 1 else [])}
+             "summary": r.behavioral_insights[0] if r.behavioral_insights else "Genetic analysis based",
+             "characteristics": r.behavioral_insights or ["Trait-based behavior"]}
             for r in personality_rows
         ] if personality_rows else []
 

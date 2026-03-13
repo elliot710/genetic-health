@@ -5,7 +5,11 @@ Enhanced with NCBI E-utilities, LitVar, SNPedia, ClinVar, and Ensembl APIs
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from backend.services.genetic_api_service import GeneticAPIService
+from backend.db.database import get_session
+from backend.db.models import SharedVariantAnnotation
 from .auth_routes import get_current_user
 from backend.db.schemas import User
 
@@ -123,6 +127,143 @@ async def get_clinical_summary(
             return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Clinical summary failed: {str(e)}")
+
+@router.get("/variant-details/{rsid}")
+async def get_variant_details(
+    rsid: str,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get structured annotation details for a variant from the database.
+    Returns processed ensembl, clinvar, and publication data.
+    """
+    result = await db.execute(
+        select(SharedVariantAnnotation).where(SharedVariantAnnotation.rsid == rsid)
+    )
+    annotation = result.scalar_one_or_none()
+
+    if not annotation:
+        return {"found": False, "rsid": rsid}
+
+    response: Dict[str, Any] = {"found": True, "rsid": rsid}
+
+    # Process Ensembl data
+    ensembl = annotation.ensembl_data
+    if ensembl and isinstance(ensembl, dict) and ensembl.get("found"):
+        data = ensembl.get("data", [])
+        entry = data[0] if isinstance(data, list) and data else data if isinstance(data, dict) else None
+        if entry:
+            # Get most severe consequence
+            response["most_severe_consequence"] = (entry.get("most_severe_consequence") or "").replace("_", " ")
+            response["allele_string"] = entry.get("allele_string")
+            response["chromosome"] = entry.get("seq_region_name")
+            response["position"] = entry.get("start")
+
+            # Extract unique transcript consequences (deduplicated by gene+consequence)
+            tc_list = entry.get("transcript_consequences", [])
+            seen = set()
+            transcripts = []
+            for tc in tc_list:
+                if tc.get("biotype") != "protein_coding":
+                    continue
+                key = (tc.get("gene_symbol"), tuple(tc.get("consequence_terms", [])))
+                if key in seen:
+                    continue
+                seen.add(key)
+                transcripts.append({
+                    "gene_symbol": tc.get("gene_symbol"),
+                    "gene_id": tc.get("gene_id"),
+                    "transcript_id": tc.get("transcript_id"),
+                    "consequence_terms": [t.replace("_", " ") for t in tc.get("consequence_terms", [])],
+                    "impact": tc.get("impact"),
+                    "amino_acids": tc.get("amino_acids"),
+                    "codons": tc.get("codons"),
+                    "sift_prediction": tc.get("sift_prediction"),
+                    "sift_score": tc.get("sift_score"),
+                    "polyphen_prediction": tc.get("polyphen_prediction"),
+                    "polyphen_score": tc.get("polyphen_score"),
+                    "protein_position": f"{tc.get('protein_start', '')}" if tc.get("protein_start") else None,
+                })
+                if len(transcripts) >= 6:
+                    break
+            response["transcripts"] = transcripts
+            response["total_transcripts"] = len(tc_list)
+
+            # Extract clinical significance and population frequencies from colocated_variants
+            colocated = entry.get("colocated_variants", [])
+            clin_sigs = []
+            frequencies = {}
+            clinvar_ids = []
+            for cv in colocated:
+                if cv.get("clin_sig"):
+                    clin_sigs.extend(cv["clin_sig"])
+                if cv.get("var_synonyms", {}).get("ClinVar"):
+                    clinvar_ids.extend(cv["var_synonyms"]["ClinVar"])
+                freqs = cv.get("frequencies", {})
+                for allele, pops in freqs.items():
+                    for pop, freq in pops.items():
+                        if pop in ("gnomade", "gnomadg", "af") or pop.startswith("gnomade_") or pop.startswith("gnomadg_"):
+                            clean_pop = pop.replace("gnomade_", "gnomAD exomes: ").replace("gnomadg_", "gnomAD genomes: ").replace("gnomade", "gnomAD exomes (global)").replace("gnomadg", "gnomAD genomes (global)").replace("af", "1000 Genomes (global)")
+                            if clean_pop not in frequencies or freq > frequencies[clean_pop]["frequency"]:
+                                frequencies[clean_pop] = {"allele": allele, "frequency": freq}
+            response["clinical_significance"] = list(set(clin_sigs))
+            response["clinvar_ids"] = list(set(clinvar_ids))
+            response["population_frequencies"] = frequencies
+
+    # Process ClinVar data
+    clinvar = annotation.clinvar_data
+    if clinvar and isinstance(clinvar, dict) and clinvar.get("found"):
+        response["clinvar"] = {
+            "found": True,
+            "count": clinvar.get("count", 0),
+            "ids": clinvar.get("ids", []),
+        }
+
+    # Process PharmGKB data
+    pharmgkb = annotation.pharmgkb_data
+    if pharmgkb and isinstance(pharmgkb, dict) and pharmgkb.get("found"):
+        response["pharmacogenomics"] = {
+            "found": True,
+            "data": pharmgkb.get("data", {}),
+        }
+
+    # Process SNPedia data
+    snpedia = annotation.snpedia_data
+    if snpedia and isinstance(snpedia, dict) and snpedia.get("found"):
+        wiki_data = snpedia.get("data", {})
+        revisions = wiki_data.get("revisions", [])
+        wiki_text = revisions[0].get("*", "") if revisions else ""
+        # Extract a clean summary from wiki text
+        summary = ""
+        if wiki_text:
+            lines = [l.strip() for l in wiki_text.split("\n") if l.strip() and not l.strip().startswith("{{") and not l.strip().startswith("}}") and not l.strip().startswith("[[Category")]
+            summary = " ".join(lines[:3])[:500]
+        response["snpedia"] = {
+            "found": True,
+            "title": wiki_data.get("title", ""),
+            "summary": summary,
+        }
+
+    # Process LitVar / publications data
+    litvar = annotation.litvar_data
+    if litvar and isinstance(litvar, dict) and litvar.get("found"):
+        pubs = litvar.get("publications", [])
+        response["publications"] = {
+            "count": len(pubs),
+            "items": [
+                {
+                    "pmid": p.get("pmid"),
+                    "title": p.get("title"),
+                    "journal": p.get("journal"),
+                    "year": p.get("year"),
+                }
+                for p in pubs[:20]
+            ],
+        }
+
+    return response
+
 
 @router.get("/drug-response/{gene}")
 async def get_drug_response_info(

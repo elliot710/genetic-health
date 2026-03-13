@@ -183,7 +183,7 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
                       </div>
                     )}
 
-                    <VariantLinks rsid={rsid} gene={gene} />
+                    <VariantLinks rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} />
                   </div>
                 )}
               </div>

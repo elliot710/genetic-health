@@ -24,7 +24,7 @@ interface MappedCarrier {
   description: string
 }
 
-export default function CarrierStatusPanel({ isDarkMode = false, data }: CategoryPanelProps) {
+export default function CarrierStatusPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
   const theme = useThemeClasses(isDarkMode)
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
 
@@ -128,7 +128,7 @@ export default function CarrierStatusPanel({ isDarkMode = false, data }: Categor
                       </div>
                     )}
 
-                    <VariantLinks gene={condition.gene} />
+                    <VariantLinks gene={condition.gene} token={token} isDarkMode={isDarkMode} />
                   </div>
                 )}
               </div>

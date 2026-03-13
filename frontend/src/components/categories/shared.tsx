@@ -1,9 +1,10 @@
 'use client'
 
-import React from 'react'
-import { LucideIcon, AlertTriangle, CheckCircle, Flame, Info, ExternalLink } from 'lucide-react'
+import React, { useState } from 'react'
+import { LucideIcon, AlertTriangle, CheckCircle, Flame, Info, ExternalLink, Search } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card'
 import { Badge } from '../ui/badge'
+import VariantDetailDialog from './VariantDetailDialog'
 import {
   getGlassBackground,
   getGlassBorder,
@@ -355,13 +356,16 @@ const LINK_COLORS: Record<string, string> = {
 interface VariantLinksProps {
   rsid?: string
   gene?: string
+  token?: string
+  isDarkMode?: boolean
 }
 
 /**
- * Compact research database links. Only renders links for which
- * a valid rsid or gene is available.
+ * Compact research database links with optional "View Details" dialog.
+ * When token is provided, shows a button to open the annotation dialog.
  */
-export function VariantLinks({ rsid, gene }: VariantLinksProps) {
+export function VariantLinks({ rsid, gene, token, isDarkMode = false }: VariantLinksProps) {
+  const [dialogOpen, setDialogOpen] = useState(false)
   const validRsid = rsid && rsid !== 'Unknown' && rsid !== 'Multiple' && rsid.startsWith('rs')
   const validGene =
     gene &&
@@ -385,23 +389,45 @@ export function VariantLinks({ rsid, gene }: VariantLinksProps) {
     }
   }
 
-  if (links.length === 0) return null
+  if (links.length === 0 && !validRsid) return null
 
   return (
-    <div className="flex flex-wrap gap-2 pt-2">
-      {links.map(({ name, url }) => (
-        <a
-          key={name}
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={`inline-flex items-center gap-1 text-xs font-medium ${LINK_COLORS[name] || 'text-blue-400 hover:text-blue-300'} transition-colors`}
-        >
-          {name}
-          <ExternalLink className="h-3 w-3" />
-        </a>
-      ))}
-    </div>
+    <>
+      <div className="flex flex-wrap gap-2 pt-2 items-center">
+        {validRsid && token && (
+          <button
+            onClick={(e) => { e.stopPropagation(); setDialogOpen(true) }}
+            className="inline-flex items-center gap-1 text-xs font-semibold text-blue-400 hover:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 rounded-md px-2 py-0.5 transition-colors"
+          >
+            <Search className="h-3 w-3" />
+            Details
+          </button>
+        )}
+        {links.map(({ name, url }) => (
+          <a
+            key={name}
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className={`inline-flex items-center gap-1 text-xs font-medium ${LINK_COLORS[name] || 'text-blue-400 hover:text-blue-300'} transition-colors`}
+          >
+            {name}
+            <ExternalLink className="h-3 w-3" />
+          </a>
+        ))}
+      </div>
+      {validRsid && token && (
+        <VariantDetailDialog
+          rsid={rsid!}
+          gene={validGene ? gene : undefined}
+          token={token}
+          isDarkMode={isDarkMode}
+          open={dialogOpen}
+          onOpenChange={setDialogOpen}
+        />
+      )}
+    </>
   )
 }
 

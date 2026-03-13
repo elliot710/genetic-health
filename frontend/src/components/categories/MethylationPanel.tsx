@@ -16,7 +16,7 @@ import {
 } from './shared'
 import type { CategoryPanelProps, MethylationProfile } from './types'
 
-export default function MethylationPanel({ isDarkMode = false, data }: CategoryPanelProps) {
+export default function MethylationPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
   const [selectedGene, setSelectedGene] = useState<string | null>(null)
   const theme = useThemeClasses(isDarkMode)
 
@@ -114,7 +114,7 @@ export default function MethylationPanel({ isDarkMode = false, data }: CategoryP
                         ))}
                       </div>
                     )}
-                    <VariantLinks rsid={rsid} gene={item.gene} />
+                    <VariantLinks rsid={rsid} gene={item.gene} token={token} isDarkMode={isDarkMode} />
                   </div>
                 )}
               </div>

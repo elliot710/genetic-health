@@ -157,7 +157,7 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
                         ))}
                       </div>
                     )}
-                    <VariantLinks rsid={rsid} gene={gene} />
+                    <VariantLinks rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} />
                   </div>
                 )}
               </div>

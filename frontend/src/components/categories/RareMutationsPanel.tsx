@@ -17,7 +17,7 @@ import {
 } from './shared'
 import type { CategoryPanelProps, RareMutation } from './types'
 
-export default function RareMutationsPanel({ data, isDarkMode = false }: CategoryPanelProps) {
+export default function RareMutationsPanel({ data, isDarkMode = false, token }: CategoryPanelProps) {
   const [selectedMutation, setSelectedMutation] = useState<string | null>(null)
   const theme = useThemeClasses(isDarkMode)
 
@@ -186,7 +186,7 @@ export default function RareMutationsPanel({ data, isDarkMode = false }: Categor
                       )}
                     </div>
 
-                    <VariantLinks rsid={rsid} gene={gene} />
+                    <VariantLinks rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} />
                   </div>
                 )}
               </div>

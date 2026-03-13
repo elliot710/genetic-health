@@ -28,7 +28,7 @@ const PHASE_LABELS: Record<string, string> = {
 
 const PHASE_ORDER = ['phase1', 'phase2', 'phase3', 'antioxidant', 'peroxisomal', 'coenzyme_a']
 
-export default function DetoxPanel({ isDarkMode = false, data }: CategoryPanelProps) {
+export default function DetoxPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
   const [expandedGene, setExpandedGene] = useState<string | null>(null)
   const theme = useThemeClasses(isDarkMode)
 
@@ -118,7 +118,7 @@ export default function DetoxPanel({ isDarkMode = false, data }: CategoryPanelPr
               return (
                 <div
                   key={key}
-                  className={`${theme.glass} border ${theme.border} rounded-xl p-4 hover:border-green-500/50 transition-all duration-300 cursor-pointer`}
+                  className={`${theme.glass} border ${theme.border} rounded-xl p-5 hover:border-green-500/50 transition-all duration-300 cursor-pointer`}
                   onClick={() => setExpandedGene(isExpanded ? null : key)}
                 >
                   <div className="flex items-center justify-between">
@@ -166,6 +166,8 @@ export default function DetoxPanel({ isDarkMode = false, data }: CategoryPanelPr
                       <VariantLinks
                         rsid={item.associated_variants?.[0]}
                         gene={item.gene}
+                        token={token}
+                        isDarkMode={isDarkMode}
                       />
                     </div>
                   )}

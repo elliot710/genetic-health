@@ -176,7 +176,7 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
                       )}
                     </div>
 
-                    <VariantLinks rsid={mutation.rsid} gene={mutation.gene} />
+                    <VariantLinks rsid={mutation.rsid} gene={mutation.gene} token={token} isDarkMode={isDarkMode} />
                   </div>
                 )}
               </div>

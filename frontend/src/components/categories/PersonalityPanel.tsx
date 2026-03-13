@@ -170,7 +170,8 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
                 </div>
 
                 <div className="flex flex-wrap gap-1.5">
-                  <Badge variant="secondary" className="text-xs">{trait.gene}</Badge>
+                  {trait.gene?.startsWith('rs') && <Badge variant="secondary" className="text-xs">{trait.gene}</Badge>}
+                  {!trait.gene?.startsWith('rs') && trait.gene && trait.gene !== 'Multiple markers' && <Badge variant="outline" className="text-xs">{trait.gene}</Badge>}
                 </div>
 
                 {isExpanded && (
@@ -189,7 +190,7 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
                       </div>
                     )}
 
-                    <VariantLinks gene={trait.gene} />
+                    <VariantLinks rsid={trait.gene?.startsWith('rs') ? trait.gene : undefined} gene={!trait.gene?.startsWith('rs') ? trait.gene : undefined} token={token} isDarkMode={isDarkMode} />
                   </div>
                 )}
               </div>

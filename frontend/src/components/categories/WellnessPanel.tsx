@@ -126,7 +126,6 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
                 </div>
 
                 <div className="flex flex-wrap gap-1.5">
-                  <Badge variant="outline" className="text-xs">{trait.category}</Badge>
                   {trait.associated_variants && trait.associated_variants.length > 0
                     ? trait.associated_variants.map((v, i) => (
                         <Badge key={i} variant="secondary" className="text-xs">{v}</Badge>
@@ -135,6 +134,7 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
                         <Badge variant="secondary" className="text-xs">{trait.gene}</Badge>
                       )
                   }
+                  <Badge variant="outline" className="text-xs">{trait.category}</Badge>
                 </div>
 
                 {isExpanded && (
@@ -155,7 +155,7 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
                       </div>
                     )}
 
-                    <VariantLinks rsid={trait.associated_variants?.[0]} gene={trait.gene !== 'Multiple' ? trait.gene : undefined} />
+                    <VariantLinks rsid={trait.associated_variants?.[0]} gene={trait.gene !== 'Multiple' ? trait.gene : undefined} token={token} isDarkMode={isDarkMode} />
                   </div>
                 )}
               </div>

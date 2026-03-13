@@ -186,7 +186,7 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
                       </div>
                     )}
 
-                    <VariantLinks rsid={drug.variants?.[0]} gene={drug.gene} />
+                    <VariantLinks rsid={drug.variants?.[0]} gene={drug.gene} token={token} isDarkMode={isDarkMode} />
                   </div>
                 )}
               </div>
