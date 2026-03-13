@@ -24,7 +24,7 @@ router = APIRouter(prefix="/api/variants", tags=["variants"])
 class VariantLookupRequest(BaseModel):
     variant_id: str = Field(..., description="Variant identifier (e.g., rs12202969)")
     include_literature: bool = Field(default=True, description="Include literature search")
-    include_pharmgkb: bool = Field(default=True, description="Include PharmGKB data")
+    include_clinpgx: bool = Field(default=True, description="Include ClinPGx pharmacogenomic data")
     force_refresh: bool = Field(default=False, description="Force fetch from external sources even if cached")
 
 class VariantLookupResponse(BaseModel):
@@ -67,7 +67,7 @@ async def lookup_variant(
     - Basic variant information (name, consequence, allele frequencies)
     - Clinical significance from ClinVar
     - Population data from Ensembl
-    - Pharmacogenomic data from PharmGKB
+    - Pharmacogenomic data from ClinPGx
     - Literature evidence from PubMed/LitVar
     - External resource links
     
@@ -214,11 +214,11 @@ async def lookup_variant(
             
             # Process pharmacogenomics data
             pharmacogenomics = {}
-            pharmgkb_data = annotations.get('pharmgkb', {})
-            if pharmgkb_data and pharmgkb_data.get('found'):
+            clinpgx_data = annotations.get('clinpgx', {})
+            if clinpgx_data and clinpgx_data.get('found'):
                 pharmacogenomics = {
                     "found": True,
-                    "data": pharmgkb_data.get('data', {}),
+                    "data": clinpgx_data.get('data', {}),
                 }
             else:
                 pharmacogenomics = {"found": False}
@@ -331,7 +331,7 @@ def _generate_external_links(variant_id: str) -> Dict[str, str]:
         "dbSNP": f"https://www.ncbi.nlm.nih.gov/snp/{variant_id}",
         "Ensembl": f"https://www.ensembl.org/Homo_sapiens/Variation/Summary?v={variant_id}",
         "ClinVar": f"https://www.ncbi.nlm.nih.gov/clinvar/?term={variant_id}",
-        "PharmGKB": f"https://www.pharmgkb.org/variant/{variant_id}",
+        "ClinPGx": f"https://www.clinpgx.org/variant/{variant_id}",
         "SNPedia": f"https://www.snpedia.com/index.php/{variant_id}",
         "PubMed": f"https://pubmed.ncbi.nlm.nih.gov/?term={variant_id}"
     }
@@ -354,7 +354,7 @@ async def get_example_variants():
             {
                 "variant_id": "rs1695", 
                 "description": "GSTP1 gene variant affecting drug metabolism",
-                "expected_data": ["Ensembl", "PharmGKB", "ClinVar"]
+                "expected_data": ["Ensembl", "ClinPGx", "ClinVar"]
             },
             {
                 "variant_id": "rs429358",
@@ -375,7 +375,7 @@ async def get_example_variants():
         "data_sources": [
             "Ensembl REST API",
             "NCBI ClinVar",
-            "PharmGKB",
+            "ClinPGx",
             "PubMed/LitVar", 
             "SNPedia"
         ]
@@ -552,7 +552,7 @@ async def search_user_variants(
                     clinical_significance.extend(entry.get('clinical_significance', []))
 
             if r.pharmgkb_data and r.pharmgkb_data.get('found'):
-                sources.append('pharmgkb')
+                sources.append('clinpgx')
 
             if r.snpedia_data and r.snpedia_data.get('found'):
                 sources.append('snpedia')

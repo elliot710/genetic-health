@@ -311,7 +311,7 @@ def _determine_panels(
     if pharmacogenomics.get('found'):
         subcategory = _infer_subcategory(gene, consequence, clinical_sigs, pharmacogenomics, 'drug_responses')
         panels.setdefault('drug_responses', {
-            'description': f"{gene_label} - PharmGKB annotated variant",
+            'description': f"{gene_label} - ClinPGx annotated variant",
             'category': subcategory,
         })
 

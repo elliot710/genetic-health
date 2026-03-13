@@ -1,6 +1,7 @@
 """
 Genetic Health Analysis Toolkit - FastAPI Backend
 """
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -9,6 +10,13 @@ from .api.analysis_routes import router as analysis_router
 from .api.admin_routes import router as admin_router
 from .db.database import init_db
 from .services.analysis_queue import get_analysis_queue
+
+# Configure logging — show INFO from our services
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 # Create FastAPI app
 app = FastAPI(
@@ -66,6 +74,13 @@ async def health_check():
 async def startup_event():
     """Initialize database and analysis queue on startup"""
     await init_db()
+    
+    # Install per-job log handler on analysis-related loggers
+    from .services.job_logs import JobLogHandler
+    job_handler = JobLogHandler()
+    job_handler.setLevel(logging.INFO)
+    for name in ['backend.services.analysis_service', 'backend.services.genetic_api_service']:
+        logging.getLogger(name).addHandler(job_handler)
     
     # Start the analysis queue processor
     analysis_queue = get_analysis_queue()

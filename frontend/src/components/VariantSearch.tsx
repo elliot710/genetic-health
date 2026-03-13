@@ -148,7 +148,7 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
           'Content-Type': 'application/json',
           ...(token && { Authorization: `Bearer ${token}` })
         },
-        body: JSON.stringify({ variant_id: term, include_literature: true, include_pharmgkb: true, force_refresh: forceRefresh })
+        body: JSON.stringify({ variant_id: term, include_literature: true, include_clinpgx: true, force_refresh: forceRefresh })
       })
       if (!res.ok) {
         const err = await res.json()
@@ -177,7 +177,7 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
     const colors: Record<string, string> = {
       ensembl: isDarkMode ? 'bg-green-500/20 text-green-300' : 'bg-green-100 text-green-700',
       clinvar: isDarkMode ? 'bg-red-500/20 text-red-300' : 'bg-red-100 text-red-700',
-      pharmgkb: isDarkMode ? 'bg-purple-500/20 text-purple-300' : 'bg-purple-100 text-purple-700',
+      clinpgx: isDarkMode ? 'bg-purple-500/20 text-purple-300' : 'bg-purple-100 text-purple-700',
       snpedia: isDarkMode ? 'bg-orange-500/20 text-orange-300' : 'bg-orange-100 text-orange-700',
       litvar: isDarkMode ? 'bg-blue-500/20 text-blue-300' : 'bg-blue-100 text-blue-700',
     }
@@ -536,7 +536,7 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
                   {lookupResults.annotations?.ensembl?.found && sourceBadge('ensembl')}
                   {lookupResults.annotations?.clinvar?.found && sourceBadge('clinvar')}
                   {lookupResults.annotations?.snpedia?.found && sourceBadge('snpedia')}
-                  {lookupResults.annotations?.pharmgkb?.found && sourceBadge('pharmgkb')}
+                  {lookupResults.annotations?.clinpgx?.found && sourceBadge('clinpgx')}
                 </div>
               </div>
 
@@ -755,13 +755,13 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
                 </h4>
                 <div className="flex flex-wrap gap-2">
                   {[
-                    { label: 'dbSNP', url: `https://www.ncbi.nlm.nih.gov/snp/${lookupResults.variant_id}`, color: isDarkMode ? 'bg-blue-500/20 hover:bg-blue-500/30 text-blue-300' : 'bg-blue-100 hover:bg-blue-200 text-blue-800' },
-                    { label: 'Ensembl', url: `https://www.ensembl.org/Homo_sapiens/Variation/Summary?v=${lookupResults.variant_id}`, color: isDarkMode ? 'bg-green-500/20 hover:bg-green-500/30 text-green-300' : 'bg-green-100 hover:bg-green-200 text-green-800' },
-                    { label: 'ClinVar', url: `https://www.ncbi.nlm.nih.gov/clinvar/?term=${lookupResults.variant_id}`, color: isDarkMode ? 'bg-red-500/20 hover:bg-red-500/30 text-red-300' : 'bg-red-100 hover:bg-red-200 text-red-800' },
-                    { label: 'PharmGKB', url: `https://www.pharmgkb.org/variant/${lookupResults.variant_id}`, color: isDarkMode ? 'bg-purple-500/20 hover:bg-purple-500/30 text-purple-300' : 'bg-purple-100 hover:bg-purple-200 text-purple-800' },
-                    { label: 'SNPedia', url: `https://www.snpedia.com/index.php/${lookupResults.variant_id}`, color: isDarkMode ? 'bg-orange-500/20 hover:bg-orange-500/30 text-orange-300' : 'bg-orange-100 hover:bg-orange-200 text-orange-800' },
-                    { label: 'PubMed', url: `https://pubmed.ncbi.nlm.nih.gov/?term=${lookupResults.variant_id}`, color: isDarkMode ? 'bg-teal-500/20 hover:bg-teal-500/30 text-teal-300' : 'bg-teal-100 hover:bg-teal-200 text-teal-800' },
-                  ].map(link => (
+                    { label: 'dbSNP', url: `https://www.ncbi.nlm.nih.gov/snp/${lookupResults.variant_id}`, color: isDarkMode ? 'bg-blue-500/20 hover:bg-blue-500/30 text-blue-300' : 'bg-blue-100 hover:bg-blue-200 text-blue-800', show: true },
+                    { label: 'Ensembl', url: `https://www.ensembl.org/Homo_sapiens/Variation/Summary?v=${lookupResults.variant_id}`, color: isDarkMode ? 'bg-green-500/20 hover:bg-green-500/30 text-green-300' : 'bg-green-100 hover:bg-green-200 text-green-800', show: !!lookupResults.annotations?.ensembl?.found },
+                    { label: 'ClinVar', url: `https://www.ncbi.nlm.nih.gov/clinvar/?term=${lookupResults.variant_id}`, color: isDarkMode ? 'bg-red-500/20 hover:bg-red-500/30 text-red-300' : 'bg-red-100 hover:bg-red-200 text-red-800', show: !!lookupResults.annotations?.clinvar?.found },
+                    { label: 'ClinPGx', url: `https://www.clinpgx.org/variant/${lookupResults.variant_id}`, color: isDarkMode ? 'bg-purple-500/20 hover:bg-purple-500/30 text-purple-300' : 'bg-purple-100 hover:bg-purple-200 text-purple-800', show: !!lookupResults.pharmacogenomics?.found },
+                    { label: 'SNPedia', url: `https://www.snpedia.com/index.php/${lookupResults.variant_id}`, color: isDarkMode ? 'bg-orange-500/20 hover:bg-orange-500/30 text-orange-300' : 'bg-orange-100 hover:bg-orange-200 text-orange-800', show: !!lookupResults.literature?.snpedia_found },
+                    { label: 'PubMed', url: `https://pubmed.ncbi.nlm.nih.gov/?term=${lookupResults.variant_id}`, color: isDarkMode ? 'bg-teal-500/20 hover:bg-teal-500/30 text-teal-300' : 'bg-teal-100 hover:bg-teal-200 text-teal-800', show: true },
+                  ].filter(link => link.show).map(link => (
                     <a key={link.label} href={link.url} target="_blank" rel="noopener noreferrer"
                       className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 ${link.color}`}>
                       <ExternalLink className="h-3 w-3" />
@@ -789,7 +789,7 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
             <div className="text-center py-8">
               <Globe className={`h-12 w-12 mx-auto mb-4 ${t.text.secondary} opacity-50`} />
               <h3 className={`text-lg font-semibold ${t.text.primary} mb-2`}>Search External Databases</h3>
-              <p className={t.text.secondary}>Query Ensembl, ClinVar, PharmGKB, SNPedia, and PubMed</p>
+              <p className={t.text.secondary}>Query Ensembl, ClinVar, ClinPGx, SNPedia, and PubMed</p>
               <div className={`text-sm mt-4 ${t.text.secondary}`}>
                 <p className="mb-2">Examples:</p>
                 <div className="flex flex-wrap gap-2 justify-center">

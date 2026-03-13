@@ -29,11 +29,11 @@ RATE_LIMITS = {
     # Ensembl VEP API (generous rate limits)
     'ENSEMBL': 15.0,  # requests per second
     
-    # PharmGKB API (very conservative to avoid 429 errors)
-    'PHARMGKB': 0.9,  # requests per second
+    # ClinPGx API (formerly PharmGKB)
+    'CLINPGX': 2.0,  # requests per second
     
     # ClinVar API (NCBI-based, same as NCBI)
-    'CLINVAR': 7.0,  # requests per second
+    'CLINVAR': 3.0,  # requests per second
     
     # SNPedia API (MediaWiki based, conservative)
     'SNPEDIA': 2.0,  # requests per second
@@ -237,161 +237,98 @@ class APIEndpoints:
         )
     }
     
-    # PharmGKB API
-    PHARMGKB_BASE_URL = "https://api.pharmgkb.org"
-    PHARMGKB_ENDPOINTS = {
-        # Gene endpoints
-        "gene": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/gene/{{gene}}",
-            rate_limit=RATE_LIMITS['PHARMGKB'],
-            description="Get gene information"
-        ),
-        "gene_drugs": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/gene/{{gene}}/drugs",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
-            description="Get drugs associated with gene"
-        ),
-        "gene_annotations": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/gene/{{gene}}/clinicalAnnotations",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
-            description="Get clinical annotations for gene"
-        ),
-        "gene_variants": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/gene/{{gene}}/variants",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
-            description="Get variants in gene"
-        ),
-        "gene_haplotypes": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/gene/{{gene}}/haplotypes",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
-            description="Get haplotypes for gene"
-        ),
-        
+    # ClinPGx API (formerly PharmGKB)
+    CLINPGX_BASE_URL = "https://api.clinpgx.org/v1"
+    CLINPGX_ENDPOINTS = {
         # Variant endpoints
         "variant": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/variant/{{rsid}}",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
-            description="Get variant information"
+            url=f"{CLINPGX_BASE_URL}/data/variant/",
+            rate_limit=RATE_LIMITS['CLINPGX'],
+            headers={"Accept": "application/json"},
+            description="Search variant by symbol (rsid)"
         ),
-        "variant_annotations": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/variant/{{rsid}}/clinicalAnnotations",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
-            description="Get clinical annotations for variant"
+        "variant_by_id": APIEndpoint(
+            url=f"{CLINPGX_BASE_URL}/data/variant/{{variant_id}}",
+            rate_limit=RATE_LIMITS['CLINPGX'],
+            headers={"Accept": "application/json"},
+            description="Get variant by ClinPGx accession ID"
         ),
-        "variant_drug_labels": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/variant/{{rsid}}/drugLabels",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
-            description="Get drug labels for variant"
+        "variant_clinical_annotations": APIEndpoint(
+            url=f"{CLINPGX_BASE_URL}/data/clinicalAnnotation",
+            rate_limit=RATE_LIMITS['CLINPGX'],
+            headers={"Accept": "application/json"},
+            description="Get clinical annotations for variant by RSID fingerprint"
         ),
-        "variant_guidelines": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/variant/{{rsid}}/guidelines",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
-            description="Get guidelines for variant"
+        "variant_drug_annotations": APIEndpoint(
+            url=f"{CLINPGX_BASE_URL}/data/variantAnnotation",
+            rate_limit=RATE_LIMITS['CLINPGX'],
+            headers={"Accept": "application/json"},
+            description="Get drug variant annotations by RSID fingerprint"
         ),
-        
-        # Drug endpoints
-        "drug": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/drug/{{drug_id}}",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
-            description="Get drug information"
+        "variant_frequency": APIEndpoint(
+            url=f"{CLINPGX_BASE_URL}/report/variantFrequency",
+            rate_limit=RATE_LIMITS['CLINPGX'],
+            headers={"Accept": "application/json"},
+            description="Get variant frequency data"
         ),
-        "drug_search": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/drug/search",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
-            description="Search for drugs"
+
+        # Gene endpoints
+        "gene": APIEndpoint(
+            url=f"{CLINPGX_BASE_URL}/data/gene",
+            rate_limit=RATE_LIMITS['CLINPGX'],
+            headers={"Accept": "application/json"},
+            description="Search gene by HGNC symbol"
         ),
-        "drug_annotations": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/drug/{{drug_id}}/clinicalAnnotations",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
-            description="Get clinical annotations for drug"
+        "gene_by_id": APIEndpoint(
+            url=f"{CLINPGX_BASE_URL}/data/gene/{{gene_id}}",
+            rate_limit=RATE_LIMITS['CLINPGX'],
+            headers={"Accept": "application/json"},
+            description="Get gene by ClinPGx accession ID"
         ),
-        "drug_genes": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/drug/{{drug_id}}/genes",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
-            description="Get genes associated with drug"
+
+        # Guideline endpoints
+        "guideline_annotations": APIEndpoint(
+            url=f"{CLINPGX_BASE_URL}/data/guidelineAnnotation",
+            rate_limit=RATE_LIMITS['CLINPGX'],
+            headers={"Accept": "application/json"},
+            description="Get guideline annotations (e.g. CPIC)"
         ),
-        "drug_variants": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/drug/{{drug_id}}/variants",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
-            description="Get variants associated with drug"
+
+        # Drug/Chemical endpoints
+        "chemical": APIEndpoint(
+            url=f"{CLINPGX_BASE_URL}/data/chemical",
+            rate_limit=RATE_LIMITS['CLINPGX'],
+            headers={"Accept": "application/json"},
+            description="Search chemical/drug by name"
         ),
-        "drug_labels": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/drug/{{drug_id}}/drugLabels",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
+        "chemical_by_id": APIEndpoint(
+            url=f"{CLINPGX_BASE_URL}/data/chemical/{{chemical_id}}",
+            rate_limit=RATE_LIMITS['CLINPGX'],
+            headers={"Accept": "application/json"},
+            description="Get chemical/drug by ClinPGx accession ID"
+        ),
+
+        # Drug label endpoints
+        "labels": APIEndpoint(
+            url=f"{CLINPGX_BASE_URL}/data/label",
+            rate_limit=RATE_LIMITS['CLINPGX'],
+            headers={"Accept": "application/json"},
             description="Get drug labels"
         ),
-        
-        # Guideline endpoints
-        "guidelines": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/guideline",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
-            description="Get all guidelines"
-        ),
-        "guideline": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/guideline/{{guideline_id}}",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
-            description="Get specific guideline"
-        ),
-        
+
         # Clinical annotation endpoints
-        "annotations": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/clinicalAnnotation",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
-            description="Get all clinical annotations"
+        "clinical_annotation": APIEndpoint(
+            url=f"{CLINPGX_BASE_URL}/data/clinicalAnnotation",
+            rate_limit=RATE_LIMITS['CLINPGX'],
+            headers={"Accept": "application/json"},
+            description="Get clinical annotations"
         ),
-        "annotation": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/clinicalAnnotation/{{annotation_id}}",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
+        "clinical_annotation_by_id": APIEndpoint(
+            url=f"{CLINPGX_BASE_URL}/data/clinicalAnnotation/{{annotation_id}}",
+            rate_limit=RATE_LIMITS['CLINPGX'],
+            headers={"Accept": "application/json"},
             description="Get specific clinical annotation"
         ),
-        
-        # Haplotype endpoints
-        "haplotypes": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/haplotype",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
-            description="Get all haplotypes"
-        ),
-        "haplotype": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/haplotype/{{haplotype_id}}",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
-            description="Get specific haplotype"
-        ),
-        
-        # Phenotype endpoints
-        "phenotypes": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/phenotype",
-            rate_limit=RATE_LIMITS['PHARMGKB'],  # Reduced from 10.0 to RATE_LIMITS['PHARMGKB']
-            description="Get all phenotypes"
-        ),
-        "phenotype": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/phenotype/{{phenotype_id}}",
-            rate_limit=RATE_LIMITS['PHARMGKB'],
-            description="Get specific phenotype"
-        ),
-        
-        # Chemical endpoints
-        "chemicals": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/chemical",
-            rate_limit=RATE_LIMITS['PHARMGKB'],
-            description="Get all chemicals"
-        ),
-        "chemical": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/chemical/{{chemical_id}}",
-            rate_limit=RATE_LIMITS['PHARMGKB'],
-            description="Get specific chemical"
-        ),
-        
-        # Disease endpoints
-        "diseases": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/disease",
-            rate_limit=RATE_LIMITS['PHARMGKB'],
-            description="Get all diseases"
-        ),
-        "disease": APIEndpoint(
-            url=f"{PHARMGKB_BASE_URL}/v1/disease/{{disease_id}}",
-            rate_limit=RATE_LIMITS['PHARMGKB'],
-            description="Get specific disease"
-        )
     }
     
     # ClinVar via NCBI (specific configurations)
@@ -540,7 +477,7 @@ class APIEndpoints:
             "litvar": cls.LITVAR_ENDPOINTS,
             "snpedia": cls.SNPEDIA_ENDPOINTS,
             "ensembl": cls.ENSEMBL_ENDPOINTS,
-            "pharmgkb": cls.PHARMGKB_ENDPOINTS,
+            "clinpgx": cls.CLINPGX_ENDPOINTS,
             "clingen": cls.CLINGEN_ENDPOINTS,
             "gnomad": cls.GNOMAD_ENDPOINTS,
             "uniprot": cls.UNIPROT_ENDPOINTS,
@@ -563,7 +500,7 @@ class APIEndpoints:
             "litvar": cls.LITVAR_ENDPOINTS,
             "snpedia": cls.SNPEDIA_ENDPOINTS,
             "ensembl": cls.ENSEMBL_ENDPOINTS,
-            "pharmgkb": cls.PHARMGKB_ENDPOINTS,
+            "clinpgx": cls.CLINPGX_ENDPOINTS,
             "clingen": cls.CLINGEN_ENDPOINTS,
             "gnomad": cls.GNOMAD_ENDPOINTS,
             "uniprot": cls.UNIPROT_ENDPOINTS,
@@ -582,7 +519,7 @@ class APIEndpoints:
             "litvar": cls.LITVAR_ENDPOINTS,
             "snpedia": cls.SNPEDIA_ENDPOINTS,
             "ensembl": cls.ENSEMBL_ENDPOINTS,
-            "pharmgkb": cls.PHARMGKB_ENDPOINTS,
+            "clinpgx": cls.CLINPGX_ENDPOINTS,
             "clingen": cls.CLINGEN_ENDPOINTS,
             "gnomad": cls.GNOMAD_ENDPOINTS,
             "uniprot": cls.UNIPROT_ENDPOINTS,

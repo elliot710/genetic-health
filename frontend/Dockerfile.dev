@@ -1,13 +1,15 @@
 # Development Dockerfile for Next.js with hot reload
-FROM node:18-alpine
+FROM node:20-alpine
+
+RUN corepack enable && corepack prepare pnpm@latest --activate
 
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
+# Copy package files and lockfile
+COPY package.json pnpm-lock.yaml* ./
 
 # Install dependencies
-RUN npm install
+RUN pnpm install --frozen-lockfile || pnpm install
 
 # Copy source code
 COPY . .
@@ -16,4 +18,4 @@ COPY . .
 EXPOSE 3000
 
 # Start development server with hot reload
-CMD ["npm", "run", "dev"]
+CMD ["pnpm", "run", "dev"]

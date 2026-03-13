@@ -29,7 +29,7 @@ backend/
 ├── services/               # Business logic
 │   ├── analysis_service.py # Main analysis engine (ComprehensiveAnalysisService)
 │   ├── variant_registry.py # Single source of truth for rsid→condition and gene→condition maps
-│   ├── genetic_api_service.py # Multi-API hub (NCBI, Ensembl, PharmGKB, ClinVar, SNPedia, LitVar)
+│   ├── genetic_api_service.py # Multi-API hub (NCBI, Ensembl, ClinPGx, ClinVar, SNPedia, LitVar)
 │   ├── api_endpoints.py    # Centralized endpoint config + rate limits
 │   ├── analysis_queue.py   # Background task processing (singleton queue)
 │   ├── variant_uploader.py # VCF/CSV parsing, marker deduplication
@@ -119,7 +119,7 @@ docker compose logs -f frontend
 ### Deduplication Architecture (key design decision)
 - **genetic_markers** — global catalog of all variants (rsid, chr, pos, alleles). Never deleted.
 - **analysis_variants** — links user analysis → marker + user's genotype. Cascade-deleted with analysis.
-- **shared_variant_annotations** — external API results (ensembl_data, clinvar_data, pharmgkb_data, snpedia_data, litvar_data as JSON). Never deleted — accumulates as cache.
+- **shared_variant_annotations** — external API results (ensembl_data, clinvar_data, pharmgkb_data (stores ClinPGx data), snpedia_data, litvar_data as JSON). Never deleted — accumulates as cache.
 - **variant_annotations** — user-specific references to shared annotations.
 - **variant_lookup_cache** — external lookup response cache with usage counting.
 
@@ -136,7 +136,7 @@ health_risks, drug_responses, physical_traits, nutrition_traits, sports_performa
 ### Backend
 - **Auth**: All routes use `Depends(get_current_user)` except `/auth/login`, `/auth/register`, `/health`
 - **Services**: Injected via `core/container.py` ServiceContainer (singletons + factories)
-- **Rate Limiting**: Per-API in `api_endpoints.py` (NCBI: 10 req/s, PharmGKB: 0.9 req/s)
+- **Rate Limiting**: Per-API in `api_endpoints.py` (NCBI: 10 req/s, ClinPGx: 2.0 req/s)
 - **Analysis flow**: Upload → parse → store markers → background queue → external API calls → store results
 - **Annotation data path**: `shared_variant_annotations.ensembl_data` → accessed via `annotation_data.get('annotations', {}).get('ensembl', {})`
 - **Gene extraction**: `ensembl.data[0].transcript_consequences[0].gene_symbol`

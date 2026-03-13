@@ -48,7 +48,7 @@ async def annotate_single_variant(
     - Ensembl (population frequencies, consequences)
     - SNPedia (community annotations via MediaWiki API)
     - LitVar/PubMed (scientific literature)
-    - PharmGKB-style pharmacogenomic data
+    - ClinPGx pharmacogenomic data
     
     Examples of supported variants:
     - rs5443 (GNB3 gene - sildenafil response)
@@ -220,12 +220,12 @@ async def get_variant_details(
             "ids": clinvar.get("ids", []),
         }
 
-    # Process PharmGKB data
-    pharmgkb = annotation.pharmgkb_data
-    if pharmgkb and isinstance(pharmgkb, dict) and pharmgkb.get("found"):
+    # Process ClinPGx data (stored in pharmgkb_data column for backward compat)
+    clinpgx_raw = annotation.pharmgkb_data
+    if clinpgx_raw and isinstance(clinpgx_raw, dict) and clinpgx_raw.get("found"):
         response["pharmacogenomics"] = {
             "found": True,
-            "data": pharmgkb.get("data", {}),
+            "data": clinpgx_raw.get("data", {}),
         }
 
     # Process SNPedia data
@@ -282,7 +282,7 @@ async def get_drug_response_info(
     """
     try:
         async with GeneticAPIService() as api_service:
-            result = await api_service.get_pharmgkb_drug_info(gene)
+            result = await api_service.get_clinpgx_drug_info(gene)
             return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Drug response lookup failed: {str(e)}")
@@ -390,12 +390,12 @@ async def get_supported_apis():
                 "free": True
             },
             {
-                "name": "PharmGKB (enhanced simulation)",
-                "url": "https://www.pharmgkb.org",
-                "description": "Pharmacogenomic annotations and drug interactions",
+                "name": "ClinPGx API",
+                "url": "https://api.clinpgx.org",
+                "description": "Pharmacogenomic annotations and drug interactions (formerly PharmGKB)",
                 "data_types": ["drug_response", "dosing_guidelines", "clinical_annotations", "phenotypes"],
-                "note": "Enhanced curated data - full API requires subscription",
-                "free": "Limited"
+                "rate_limit": "2 requests per second",
+                "free": True
             }
         ],
         "new_features": [
@@ -469,7 +469,7 @@ async def get_annotation_examples():
                 "drugs": ["digoxin", "fexofenadine", "dabigatran"],
                 "clinical_significance": "drug transport - P-glycoprotein substrate clearance",
                 "frequency": "40-60%",
-                "available_data": ["Ensembl", "ClinVar", "PharmGKB"]
+                "available_data": ["Ensembl", "ClinVar", "ClinPGx"]
             }
         ],
         "high_impact": [

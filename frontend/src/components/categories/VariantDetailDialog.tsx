@@ -399,14 +399,14 @@ export default function VariantDetailDialog({
                   <FlaskConical className="h-3.5 w-3.5" /> Pharmacogenomics
                 </h4>
                 <div className={`${cardBg} rounded-xl p-3 border ${border}`}>
-                  <p className={`text-xs ${textPrimary}`}>PharmGKB data available for this variant.</p>
+                  <p className={`text-xs ${textPrimary}`}>ClinPGx pharmacogenomic data available for this variant.</p>
                   <a
-                    href={`https://www.pharmgkb.org/variant/${rsid}`}
+                    href={`https://www.clinpgx.org/variant/${rsid}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 text-xs text-purple-400 hover:text-purple-300 mt-1 transition-colors"
                   >
-                    View on PharmGKB <ExternalLink className="h-3 w-3" />
+                    View on ClinPGx <ExternalLink className="h-3 w-3" />
                   </a>
                 </div>
               </div>

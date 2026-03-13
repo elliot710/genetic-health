@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { Shield, Users, Settings, Plus, Trash2, Pencil, Check, X, ChevronRight, Download, Upload, Database, Lightbulb, RefreshCw, AlertTriangle, Minus, Info } from 'lucide-react'
+import { Shield, Users, Settings, Plus, Trash2, Pencil, Check, X, ChevronRight, Download, Upload, Database, Lightbulb, RefreshCw, AlertTriangle, Minus, Info, Activity, Play, Square, Clock, FileText } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -111,7 +111,7 @@ interface IncompleteAnnotation {
   total_api_calls: number
   ensembl: string  // "found" | "no_data" | "missing"
   clinvar: string
-  pharmgkb: string
+  clinpgx: string
   snpedia: string
   litvar: string
   first_annotated_at: string | null
@@ -123,6 +123,30 @@ interface IncompleteAnnotationSummary {
   total_annotations: number
   complete: number
   partial: number
+  failed: number
+}
+
+interface AdminJob {
+  id: number
+  user_id: number
+  user_email: string
+  username: string
+  filename: string
+  file_type: string
+  analysis_status: string
+  progress_percentage: number
+  total_variants: number
+  processed_variants: number
+  current_step: string | null
+  upload_date: string | null
+  estimated_completion: string | null
+}
+
+interface AdminJobsSummary {
+  total: number
+  pending: number
+  processing: number
+  completed: number
   failed: number
 }
 
@@ -208,6 +232,17 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const [retriggeringIds, setRetriggeringIds] = useState<Set<number>>(new Set())
   const [bulkRetriggering, setBulkRetriggering] = useState(false)
   const [retriggerFeedback, setRetriggerFeedback] = useState<{ id: number; message: string; type: 'success' | 'info' | 'error' } | null>(null)
+
+  // Jobs state
+  const [jobs, setJobs] = useState<AdminJob[]>([])
+  const [jobsSummary, setJobsSummary] = useState<AdminJobsSummary | null>(null)
+  const [jobsStatusFilter, setJobsStatusFilter] = useState<string>('all')
+  const [jobActionLoading, setJobActionLoading] = useState<number | null>(null)
+  const [viewingLogs, setViewingLogs] = useState<number | null>(null)
+  const [jobLogs, setJobLogs] = useState<{ ts: string; level: string; msg: string }[]>([])
+  const [logsLoading, setLogsLoading] = useState(false)
+  const logsEndRef = useRef<HTMLDivElement>(null)
+  const logsRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }), [token])
 
@@ -555,6 +590,97 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     setBulkRetriggering(false)
   }
 
+  // --- Jobs Management ---
+  const fetchJobsSummary = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/jobs/summary`, { headers })
+      if (res.ok) setJobsSummary(await res.json())
+    } catch { /* ignore */ }
+  }, [headers])
+
+  const fetchJobs = useCallback(async () => {
+    try {
+      const url = jobsStatusFilter === 'all' ? `${API}/jobs` : `${API}/jobs?status=${jobsStatusFilter}`
+      const res = await fetch(url, { headers })
+      if (res.ok) setJobs(await res.json())
+    } catch { /* ignore */ }
+  }, [headers, jobsStatusFilter])
+
+  useEffect(() => { fetchJobsSummary() }, [fetchJobsSummary])
+  useEffect(() => { fetchJobs() }, [fetchJobs])
+
+  // Auto-refresh jobs when any are processing
+  const jobsRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  useEffect(() => {
+    const hasActive = jobs.some(j => j.analysis_status === 'processing' || j.analysis_status === 'pending')
+    if (hasActive) {
+      jobsRefreshRef.current = setInterval(() => { fetchJobs(); fetchJobsSummary() }, 5000)
+    }
+    return () => { if (jobsRefreshRef.current) clearInterval(jobsRefreshRef.current) }
+  }, [jobs, fetchJobs, fetchJobsSummary])
+
+  const cancelJob = async (id: number) => {
+    setJobActionLoading(id)
+    try {
+      const res = await fetch(`${API}/jobs/${id}/cancel`, { method: 'POST', headers })
+      if (res.ok) { fetchJobs(); fetchJobsSummary() }
+    } catch { /* ignore */ }
+    setJobActionLoading(null)
+  }
+
+  const restartJob = async (id: number) => {
+    setJobActionLoading(id)
+    try {
+      const res = await fetch(`${API}/jobs/${id}/restart`, { method: 'POST', headers })
+      if (res.ok) { fetchJobs(); fetchJobsSummary() }
+    } catch { /* ignore */ }
+    setJobActionLoading(null)
+  }
+
+  const deleteJob = async (id: number) => {
+    if (!confirm('Delete this analysis job and all associated data? This cannot be undone.')) return
+    setJobActionLoading(id)
+    try {
+      const res = await fetch(`${API}/jobs/${id}`, { method: 'DELETE', headers })
+      if (res.ok) { fetchJobs(); fetchJobsSummary() }
+    } catch { /* ignore */ }
+    setJobActionLoading(null)
+  }
+
+  const fetchJobLogs = useCallback(async (id: number) => {
+    try {
+      const res = await fetch(`${API}/jobs/${id}/logs`, { headers })
+      if (res.ok) {
+        const data = await res.json()
+        setJobLogs(data.logs || [])
+      }
+    } catch { /* ignore */ }
+  }, [headers])
+
+  const openLogs = async (id: number) => {
+    setViewingLogs(id)
+    setJobLogs([])
+    setLogsLoading(true)
+    await fetchJobLogs(id)
+    setLogsLoading(false)
+  }
+
+  // Auto-refresh logs when viewing an active job
+  useEffect(() => {
+    if (viewingLogs == null) return
+    const job = jobs.find(j => j.id === viewingLogs)
+    const isActive = job?.analysis_status === 'processing' || job?.analysis_status === 'pending'
+    if (isActive) {
+      logsRefreshRef.current = setInterval(() => fetchJobLogs(viewingLogs), 3000)
+    }
+    return () => { if (logsRefreshRef.current) { clearInterval(logsRefreshRef.current); logsRefreshRef.current = null } }
+  }, [viewingLogs, jobs, fetchJobLogs])
+
+  // Auto-scroll logs to bottom
+  useEffect(() => {
+    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [jobLogs])
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -591,14 +717,14 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
       </div>
 
       <Tabs defaultValue="users" className="w-full">
-        <TabsList className="grid w-full max-w-3xl grid-cols-5">
+        <TabsList className="grid w-full max-w-4xl grid-cols-6">
           <TabsTrigger value="users" className="gap-2">
             <Users className="h-4 w-4" />
             Users
           </TabsTrigger>
           <TabsTrigger value="markers" className="gap-2">
             <Settings className="h-4 w-4" />
-            Panel Markers
+            Markers
           </TabsTrigger>
           <TabsTrigger value="registry" className="gap-2">
             <Database className="h-4 w-4" />
@@ -619,6 +745,15 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
             {incompleteSummary && (incompleteSummary.partial + incompleteSummary.failed) > 0 && (
               <Badge variant="secondary" className="ml-1 h-5 min-w-[20px] px-1 text-xs">
                 {incompleteSummary.partial + incompleteSummary.failed}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="jobs" className="gap-2 relative">
+            <Activity className="h-4 w-4" />
+            Jobs
+            {jobsSummary && (jobsSummary.processing + jobsSummary.pending) > 0 && (
+              <Badge className="ml-1 h-5 min-w-[20px] px-1 text-xs bg-blue-500 text-white">
+                {jobsSummary.processing + jobsSummary.pending}
               </Badge>
             )}
           </TabsTrigger>
@@ -1296,7 +1431,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                       <TableHead>Status</TableHead>
                       <TableHead>Ensembl</TableHead>
                       <TableHead>ClinVar</TableHead>
-                      <TableHead>PharmGKB</TableHead>
+                      <TableHead>ClinPGx</TableHead>
                       <TableHead>SNPedia</TableHead>
                       <TableHead>Failed Sources</TableHead>
                       <TableHead>Uses</TableHead>
@@ -1312,7 +1447,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                             {a.annotation_status}
                           </Badge>
                         </TableCell>
-                        {['ensembl', 'clinvar', 'pharmgkb', 'snpedia'].map(src => {
+                        {['ensembl', 'clinvar', 'clinpgx', 'snpedia'].map(src => {
                           const status = a[src as keyof typeof a] as string
                           return (
                             <TableCell key={src}>
@@ -1351,9 +1486,251 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
             </CardContent>
           </Card>
         </TabsContent>
+
+        {/* ===== JOBS TAB ===== */}
+        <TabsContent value="jobs" className="mt-6">
+          <Card className="glass-card">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Activity className="h-5 w-5" />
+                    Analysis Jobs
+                  </CardTitle>
+                  <CardDescription>
+                    {jobsSummary ? `${jobsSummary.total} total — ${jobsSummary.processing} processing, ${jobsSummary.pending} pending, ${jobsSummary.completed} completed, ${jobsSummary.failed} failed` : 'Loading...'}
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={jobsStatusFilter}
+                    onChange={e => setJobsStatusFilter(e.target.value)}
+                    className={`rounded-md border px-3 py-1.5 text-sm ${isDarkMode ? 'bg-white/5 border-white/10 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
+                  >
+                    <option value="all">All Statuses</option>
+                    <option value="processing">Processing</option>
+                    <option value="pending">Pending</option>
+                    <option value="completed">Completed</option>
+                    <option value="failed">Failed</option>
+                  </select>
+                  <Button size="sm" variant="outline" onClick={() => { fetchJobs(); fetchJobsSummary() }}>
+                    <RefreshCw className="h-3 w-3 mr-1" /> Refresh
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {/* Summary badges */}
+              {jobsSummary && (
+                <div className="flex gap-3 mb-4">
+                  <Badge className="bg-blue-500/20 text-blue-400 border-blue-500/30">
+                    <Clock className="h-3 w-3 mr-1" /> {jobsSummary.pending} Pending
+                  </Badge>
+                  <Badge className="bg-amber-500/20 text-amber-400 border-amber-500/30">
+                    <RefreshCw className="h-3 w-3 mr-1 animate-spin" /> {jobsSummary.processing} Processing
+                  </Badge>
+                  <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
+                    <Check className="h-3 w-3 mr-1" /> {jobsSummary.completed} Completed
+                  </Badge>
+                  <Badge className="bg-red-500/20 text-red-400 border-red-500/30">
+                    <X className="h-3 w-3 mr-1" /> {jobsSummary.failed} Failed
+                  </Badge>
+                </div>
+              )}
+
+              {jobs.length === 0 ? (
+                <div className="text-center py-10">
+                  <Activity className={`h-12 w-12 mx-auto mb-4 ${theme.text.muted}`} />
+                  <p className={theme.text.muted}>No analysis jobs found</p>
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>ID</TableHead>
+                      <TableHead>User</TableHead>
+                      <TableHead>File</TableHead>
+                      <TableHead className="text-center">Status</TableHead>
+                      <TableHead className="text-center">Progress</TableHead>
+                      <TableHead>Step</TableHead>
+                      <TableHead>Started</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {jobs.map(job => (
+                      <TableRow key={job.id}>
+                        <TableCell className="font-mono text-xs">#{job.id}</TableCell>
+                        <TableCell>
+                          <div className="text-sm font-medium">{job.username}</div>
+                          <div className={`text-xs ${theme.text.muted}`}>{job.user_email}</div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="text-sm">{job.filename}</div>
+                          <div className={`text-xs ${theme.text.muted}`}>{job.file_type.toUpperCase()} — {job.total_variants} variants</div>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Badge className={
+                            job.analysis_status === 'completed' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' :
+                            job.analysis_status === 'processing' ? 'bg-amber-500/20 text-amber-400 border-amber-500/30' :
+                            job.analysis_status === 'pending' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' :
+                            'bg-red-500/20 text-red-400 border-red-500/30'
+                          }>
+                            {job.analysis_status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          {job.analysis_status === 'processing' ? (
+                            <div className="flex flex-col items-center gap-1">
+                              <div className="w-20 h-2 rounded-full bg-gray-700/50 overflow-hidden">
+                                <div
+                                  className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-500"
+                                  style={{ width: `${job.progress_percentage}%` }}
+                                />
+                              </div>
+                              <span className="text-xs font-mono">{job.progress_percentage}%</span>
+                            </div>
+                          ) : job.analysis_status === 'completed' ? (
+                            <span className="text-xs font-mono text-emerald-400">100%</span>
+                          ) : (
+                            <span className={`text-xs ${theme.text.muted}`}>—</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <span className={`text-xs ${theme.text.muted}`}>
+                            {job.current_step ? job.current_step.replace(/_/g, ' ') : '—'}
+                          </span>
+                          {job.analysis_status === 'processing' && job.processed_variants > 0 && (
+                            <div className={`text-xs ${theme.text.muted}`}>
+                              {job.processed_variants}/{job.total_variants} variants
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <span className={`text-xs ${theme.text.muted}`}>
+                            {job.upload_date ? new Date(job.upload_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-xs text-violet-400 border-violet-500/30 hover:bg-violet-500/10"
+                              onClick={() => openLogs(job.id)}
+                            >
+                              <FileText className="h-3 w-3 mr-1" /> Logs
+                            </Button>
+                            {(job.analysis_status === 'processing' || job.analysis_status === 'pending') && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-xs text-amber-400 border-amber-500/30 hover:bg-amber-500/10"
+                                disabled={jobActionLoading === job.id}
+                                onClick={() => cancelJob(job.id)}
+                              >
+                                <Square className="h-3 w-3 mr-1" /> Cancel
+                              </Button>
+                            )}
+                            {(job.analysis_status === 'failed' || job.analysis_status === 'completed') && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-xs text-blue-400 border-blue-500/30 hover:bg-blue-500/10"
+                                disabled={jobActionLoading === job.id}
+                                onClick={() => restartJob(job.id)}
+                              >
+                                <Play className="h-3 w-3 mr-1" /> Restart
+                              </Button>
+                            )}
+                            {job.analysis_status !== 'processing' && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-xs text-red-400 border-red-500/30 hover:bg-red-500/10"
+                                disabled={jobActionLoading === job.id}
+                                onClick={() => deleteJob(job.id)}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </Button>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
       </Tabs>
 
       {/* ===== DIALOGS ===== */}
+
+      {/* Job Logs Dialog */}
+      <Dialog open={viewingLogs !== null} onOpenChange={(open) => { if (!open) setViewingLogs(null) }}>
+        <DialogContent className="sm:max-w-5xl max-h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              Job #{viewingLogs} — Logs
+            </DialogTitle>
+            <DialogDescription>
+              {(() => {
+                const job = jobs.find(j => j.id === viewingLogs)
+                if (!job) return 'Loading...'
+                return `${job.filename} — ${job.analysis_status} (${job.progress_percentage}%)`
+              })()}
+            </DialogDescription>
+          </DialogHeader>
+          <div className={`flex-1 overflow-auto rounded-lg border font-mono text-xs leading-5 p-3 min-h-[300px] max-h-[55vh] ${isDarkMode ? 'bg-black/60 border-white/10 text-gray-300' : 'bg-gray-950 border-gray-300 text-gray-300'}`}>
+            {logsLoading ? (
+              <div className="flex items-center justify-center py-10">
+                <RefreshCw className="h-5 w-5 animate-spin text-gray-500" />
+              </div>
+            ) : jobLogs.length === 0 ? (
+              <div className="text-center py-10 text-gray-500">
+                No logs available. Logs are captured while the job is running.
+              </div>
+            ) : (
+              <>
+                {jobLogs.map((entry, i) => (
+                  <div key={i} className="flex gap-2 hover:bg-white/5 px-1 rounded">
+                    <span className="text-gray-500 shrink-0">{entry.ts}</span>
+                    <span className={`shrink-0 w-14 ${
+                      entry.level === 'ERROR' ? 'text-red-400' :
+                      entry.level === 'WARNING' ? 'text-amber-400' :
+                      'text-blue-400'
+                    }`}>
+                      {entry.level}
+                    </span>
+                    <span className="break-all">{entry.msg}</span>
+                  </div>
+                ))}
+                <div ref={logsEndRef} />
+              </>
+            )}
+          </div>
+          <DialogFooter className="flex items-center justify-between sm:justify-between">
+            <div className="flex items-center gap-2">
+              {(() => {
+                const job = jobs.find(j => j.id === viewingLogs)
+                const isActive = job?.analysis_status === 'processing' || job?.analysis_status === 'pending'
+                return isActive ? (
+                  <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
+                    <RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Auto-refreshing
+                  </Badge>
+                ) : null
+              })()}
+              <span className={`text-xs ${theme.text.muted}`}>{jobLogs.length} entries</span>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => viewingLogs && fetchJobLogs(viewingLogs)}>
+              <RefreshCw className="h-3 w-3 mr-1" /> Refresh
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Add Marker Dialog */}
       <Dialog open={showAddMarker} onOpenChange={setShowAddMarker}>

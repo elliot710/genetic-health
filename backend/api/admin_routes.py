@@ -4,6 +4,7 @@ Admin API routes for user management and panel marker configuration.
 import asyncio
 import csv
 import io
+import logging
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, status
 from fastapi.responses import StreamingResponse
@@ -18,6 +19,7 @@ from ..db.models import User, PanelMarkerConfig, GeneticAnalysis, VariantMapping
 from .auth_routes import get_current_user
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+logger = logging.getLogger(__name__)
 
 
 # --- Pydantic schemas ---
@@ -861,7 +863,7 @@ class IncompleteAnnotationResponse(BaseModel):
     # Source status: "found" = has data, "no_data" = confirmed absence, "missing" = never queried/error
     ensembl: str = "missing"
     clinvar: str = "missing"
-    pharmgkb: str = "missing"
+    clinpgx: str = "missing"
     snpedia: str = "missing"
     litvar: str = "missing"
     first_annotated_at: Optional[datetime] = None
@@ -936,7 +938,7 @@ async def list_incomplete_annotations(
             total_api_calls=a.total_api_calls or 0,
             ensembl=_source_status(a.ensembl_data),
             clinvar=_source_status(a.clinvar_data),
-            pharmgkb=_source_status(a.pharmgkb_data),
+            clinpgx=_source_status(a.pharmgkb_data),
             snpedia=_source_status(a.snpedia_data),
             litvar=_source_status(a.litvar_data),
             first_annotated_at=a.first_annotated_at,
@@ -967,9 +969,12 @@ async def retrigger_annotation(
 
     # Determine which sources to retry (only null or not-yet-confirmed sources)
     sources_to_retry = []
-    ALL_SOURCES = ['ensembl', 'clinvar', 'pharmgkb', 'snpedia']
+    ALL_SOURCES = ['ensembl', 'clinvar', 'clinpgx', 'snpedia']
+    # Map source name to DB column name (clinpgx data stored in pharmgkb_data column)
+    SOURCE_TO_COLUMN = {'ensembl': 'ensembl', 'clinvar': 'clinvar', 'clinpgx': 'pharmgkb', 'snpedia': 'snpedia'}
     for src in ALL_SOURCES:
-        src_data = getattr(annotation, f'{src}_data', None)
+        col = SOURCE_TO_COLUMN.get(src, src)
+        src_data = getattr(annotation, f'{col}_data', None)
         if src_data is None:
             sources_to_retry.append(src)
         elif isinstance(src_data, dict) and not src_data.get('found', True) and not src_data.get('confirmed_no_data', False):
@@ -998,12 +1003,13 @@ async def retrigger_annotation(
                     still_failed.append(src)
                     continue
                 result_data = await method(annotation.rsid)
+                col = SOURCE_TO_COLUMN.get(src, src)
                 if result_data and isinstance(result_data, dict) and result_data.get('found', False):
-                    setattr(annotation, f'{src}_data', result_data)
+                    setattr(annotation, f'{col}_data', result_data)
                     updated.append(src)
                 else:
                     # API responded but no data — mark as confirmed absence
-                    setattr(annotation, f'{src}_data', {'found': False, 'confirmed_no_data': True, 'source': src})
+                    setattr(annotation, f'{col}_data', {'found': False, 'confirmed_no_data': True, 'source': src})
                     confirmed_no_data.append(src)
             except Exception as e:
                 still_failed.append(src)
@@ -1056,7 +1062,8 @@ async def retrigger_bulk_annotations(
     completed_count = 0
     still_incomplete = 0
 
-    ALL_SOURCES = ['ensembl', 'clinvar', 'pharmgkb', 'snpedia']
+    ALL_SOURCES = ['ensembl', 'clinvar', 'clinpgx', 'snpedia']
+    SOURCE_TO_COLUMN = {'ensembl': 'ensembl', 'clinvar': 'clinvar', 'clinpgx': 'pharmgkb', 'snpedia': 'snpedia'}
 
     try:
         for idx, ann in enumerate(annotations):
@@ -1066,7 +1073,8 @@ async def retrigger_bulk_annotations(
 
             sources_to_retry = []
             for src in ALL_SOURCES:
-                src_data = getattr(ann, f'{src}_data', None)
+                col = SOURCE_TO_COLUMN.get(src, src)
+                src_data = getattr(ann, f'{col}_data', None)
                 if src_data is None:
                     sources_to_retry.append(src)
                 elif isinstance(src_data, dict) and not src_data.get('found', True) and not src_data.get('confirmed_no_data', False):
@@ -1086,11 +1094,12 @@ async def retrigger_bulk_annotations(
                         still_failed.append(src)
                         continue
                     result_data = await method(ann.rsid)
+                    col = SOURCE_TO_COLUMN.get(src, src)
                     if result_data and isinstance(result_data, dict) and result_data.get('found', False):
-                        setattr(ann, f'{src}_data', result_data)
+                        setattr(ann, f'{col}_data', result_data)
                     else:
                         # API responded but no data — confirmed absence, not a failure
-                        setattr(ann, f'{src}_data', {'found': False, 'confirmed_no_data': True, 'source': src})
+                        setattr(ann, f'{col}_data', {'found': False, 'confirmed_no_data': True, 'source': src})
                 except Exception:
                     still_failed.append(src)
 
@@ -1110,3 +1119,198 @@ async def retrigger_bulk_annotations(
         "still_incomplete": still_incomplete,
         "total_processed": len(annotations),
     }
+
+
+# --- Job Management ---
+
+class AdminJobResponse(BaseModel):
+    id: int
+    user_id: int
+    user_email: str
+    username: str
+    filename: str
+    file_type: str
+    analysis_status: str
+    progress_percentage: int
+    total_variants: int
+    processed_variants: int
+    current_step: Optional[str] = None
+    upload_date: Optional[datetime] = None
+    estimated_completion: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AdminJobsSummary(BaseModel):
+    total: int
+    pending: int
+    processing: int
+    completed: int
+    failed: int
+
+
+@router.get("/jobs/summary", response_model=AdminJobsSummary)
+async def get_jobs_summary(
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Get summary counts of all analysis jobs by status."""
+    result = await db.execute(
+        select(
+            GeneticAnalysis.analysis_status,
+            func.count(GeneticAnalysis.id)
+        ).group_by(GeneticAnalysis.analysis_status)
+    )
+    counts = {row[0]: row[1] for row in result.all()}
+    total = sum(counts.values())
+    return AdminJobsSummary(
+        total=total,
+        pending=counts.get('pending', 0),
+        processing=counts.get('processing', 0),
+        completed=counts.get('completed', 0),
+        failed=counts.get('failed', 0),
+    )
+
+
+@router.get("/jobs", response_model=List[AdminJobResponse])
+async def list_jobs(
+    status_filter: Optional[str] = Query(None, alias="status"),
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """List all analysis jobs with user info. Optionally filter by status."""
+    query = (
+        select(GeneticAnalysis, User.email, User.username)
+        .join(User, GeneticAnalysis.user_id == User.id)
+        .order_by(GeneticAnalysis.upload_date.desc())
+    )
+    if status_filter and status_filter in ('pending', 'processing', 'completed', 'failed'):
+        query = query.where(GeneticAnalysis.analysis_status == status_filter)
+
+    result = await db.execute(query)
+    rows = result.all()
+    return [
+        AdminJobResponse(
+            id=analysis.id,
+            user_id=analysis.user_id,
+            user_email=email,
+            username=username,
+            filename=analysis.filename,
+            file_type=analysis.file_type,
+            analysis_status=analysis.analysis_status or 'pending',
+            progress_percentage=analysis.progress_percentage or 0,
+            total_variants=analysis.total_variants or 0,
+            processed_variants=analysis.processed_variants or 0,
+            current_step=analysis.current_step,
+            upload_date=analysis.upload_date,
+            estimated_completion=analysis.estimated_completion,
+        )
+        for analysis, email, username in rows
+    ]
+
+
+@router.post("/jobs/{job_id}/cancel")
+async def cancel_job(
+    job_id: int,
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Cancel a running or pending analysis job."""
+    from sqlalchemy import update
+    result = await db.execute(
+        select(GeneticAnalysis).where(GeneticAnalysis.id == job_id)
+    )
+    analysis = result.scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if analysis.analysis_status not in ('pending', 'processing'):
+        raise HTTPException(status_code=400, detail=f"Cannot cancel job with status '{analysis.analysis_status}'")
+
+    await db.execute(
+        update(GeneticAnalysis)
+        .where(GeneticAnalysis.id == job_id)
+        .values(analysis_status="failed", current_step="cancelled_by_admin")
+    )
+    await db.commit()
+    return {"detail": f"Job {job_id} cancelled"}
+
+
+@router.post("/jobs/{job_id}/restart")
+async def restart_job(
+    job_id: int,
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Restart a failed or completed analysis job."""
+    from sqlalchemy import update
+
+    result = await db.execute(
+        select(GeneticAnalysis).where(GeneticAnalysis.id == job_id)
+    )
+    analysis = result.scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if analysis.analysis_status == 'processing':
+        raise HTTPException(status_code=400, detail="Job is already processing")
+
+    await db.execute(
+        update(GeneticAnalysis)
+        .where(GeneticAnalysis.id == job_id)
+        .values(
+            analysis_status="processing",
+            progress_percentage=0,
+            processed_variants=0,
+            current_step="initializing",
+            estimated_completion=None,
+        )
+    )
+    await db.commit()
+
+    user_id = analysis.user_id
+
+    async def run_analysis():
+        try:
+            from ..core.container import ServiceManager
+            async with ServiceManager() as service_manager:
+                analysis_service = service_manager.get_analysis_service(user_id)
+                await analysis_service.process_analysis(job_id)
+        except Exception as e:
+            logger.error(f"Admin-restarted analysis {job_id} failed: {e}")
+
+    asyncio.create_task(run_analysis())
+    return {"detail": f"Job {job_id} restarted"}
+
+
+@router.delete("/jobs/{job_id}")
+async def delete_job(
+    job_id: int,
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Delete an analysis job and all its associated data (cascade)."""
+    result = await db.execute(
+        select(GeneticAnalysis).where(GeneticAnalysis.id == job_id)
+    )
+    analysis = result.scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if analysis.analysis_status == 'processing':
+        raise HTTPException(status_code=400, detail="Cannot delete a job that is currently processing. Cancel it first.")
+
+    await db.delete(analysis)
+    await db.commit()
+    return {"detail": f"Job {job_id} deleted"}
+
+
+@router.get("/jobs/{job_id}/logs")
+async def get_job_logs(
+    job_id: int,
+    last_n: Optional[int] = Query(None, description="Return only the last N log entries"),
+    admin: User = Depends(require_admin),
+):
+    """Get in-memory log entries for a specific analysis job."""
+    from ..services.job_logs import JobLogCollector
+    collector = JobLogCollector.get_instance()
+    logs = collector.get_logs(job_id, last_n=last_n)
+    return {"job_id": job_id, "count": len(logs), "logs": logs}

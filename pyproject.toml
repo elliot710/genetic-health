@@ -11,6 +11,7 @@ dependencies = [
     "aiohttp>=3.11.5",
     "alembic>=1.16.4",
     "asyncpg>=0.30.0",
+    "bcrypt>=4.0.0",
     "biopython>=1.85",
     "email-validator>=2.2.0",
     "fastapi>=0.116.1",

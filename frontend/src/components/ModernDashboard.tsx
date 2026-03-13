@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { 
   Apple, Brain, Dumbbell, Heart, Zap, Palette, 
-  ChevronDown, TrendingUp, AlertTriangle, CheckCircle, 
+  ChevronDown, ChevronRight, TrendingUp, AlertTriangle, CheckCircle, 
   Settings, Trash2, Info, Shield, Search,
   Upload, Dna, Activity, BarChart3, Sparkles, Target,
   Sun, Moon, Users, X, LogOut, Home,
@@ -683,7 +683,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
           insight: `${highRisk} high-risk genetic variants identified requiring attention`,
           icon: AlertTriangle,
           color: getThemeClass('text-red-600', isDarkMode),
-          bgColor: getThemeClass('bg-red-50', isDarkMode)
+          bgColor: getThemeClass('bg-red-50', isDarkMode),
+          navigateTo: 'health',
         })
       }
       
@@ -693,19 +694,100 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
           insight: `${moderateRisk} variants show moderate risk associations`,
           icon: Info,
           color: getThemeClass('text-amber-600', isDarkMode),
-          bgColor: getThemeClass('bg-amber-50', isDarkMode)
+          bgColor: getThemeClass('bg-amber-50', isDarkMode),
+          navigateTo: 'health',
         })
       }
     }
     
     if (Array.isArray(data?.drug_responses) && data.drug_responses.length > 0) {
+      const poor = data.drug_responses.filter((r: any) => r.response_type === 'poor').length
+      const rapid = data.drug_responses.filter((r: any) => r.response_type === 'rapid').length
+      const detail = poor > 0 || rapid > 0
+        ? ` — ${poor > 0 ? `${poor} poor metabolizer` : ''}${poor > 0 && rapid > 0 ? ', ' : ''}${rapid > 0 ? `${rapid} rapid metabolizer` : ''}`
+        : ''
       insights.push({
         category: 'Drug Metabolism',
-        insight: `${data.drug_responses.length} drug-gene interactions identified`,
+        insight: `${data.drug_responses.length} drug-gene interactions identified${detail}`,
         icon: Shield,
         color: getThemeClass('text-purple-600', isDarkMode),
-        bgColor: getThemeClass('bg-purple-50', isDarkMode)
+        bgColor: getThemeClass('bg-purple-50', isDarkMode),
+        navigateTo: 'drug-responses',
       })
+    }
+
+    // Rare mutations
+    if (Array.isArray(data?.rare_mutations) && data.rare_mutations.length > 0) {
+      const pathogenic = data.rare_mutations.filter((m: any) => m.mutation_type === 'pathogenic' || m.clinical_significance === 'very_high').length
+      insights.push({
+        category: 'Rare Mutations',
+        insight: `${data.rare_mutations.length} rare mutation${data.rare_mutations.length > 1 ? 's' : ''} detected${pathogenic > 0 ? ` — ${pathogenic} pathogenic` : ''}`,
+        icon: AlertTriangle,
+        color: getThemeClass('text-red-600', isDarkMode),
+        bgColor: getThemeClass('bg-red-50', isDarkMode),
+        navigateTo: 'rare-mutations',
+      })
+    }
+
+    // Carrier status
+    if (Array.isArray(data?.carrier_status) && data.carrier_status.length > 0) {
+      const carriers = data.carrier_status.filter((c: any) => c.carrier_status === 'carrier').length
+      const counseling = data.carrier_status.filter((c: any) => c.genetic_counseling_recommended).length
+      if (carriers > 0) {
+        insights.push({
+          category: 'Carrier Status',
+          insight: `Carrier for ${carriers} condition${carriers > 1 ? 's' : ''}${counseling > 0 ? ` — counseling recommended for ${counseling}` : ''}`,
+          icon: AlertTriangle,
+          color: getThemeClass('text-orange-600', isDarkMode),
+          bgColor: getThemeClass('bg-orange-50', isDarkMode),
+          navigateTo: 'carrier-status',
+        })
+      }
+    }
+
+    // Nutrition sensitivities
+    if (Array.isArray(data?.nutrition_traits) && data.nutrition_traits.length > 0) {
+      const sensitivities = data.nutrition_traits.filter((n: any) => n.metabolism_type === 'slow' || n.metabolism_type === 'deficient').length
+      if (sensitivities > 0) {
+        insights.push({
+          category: 'Nutrition',
+          insight: `${sensitivities} nutrient metabolism concern${sensitivities > 1 ? 's' : ''} detected`,
+          icon: Apple,
+          color: getThemeClass('text-orange-600', isDarkMode),
+          bgColor: getThemeClass('bg-orange-50', isDarkMode),
+          navigateTo: 'food-nutrition',
+        })
+      }
+    }
+
+    // Methylation
+    if (Array.isArray(data?.methylation_profiles) && data.methylation_profiles.length > 0) {
+      const impaired = data.methylation_profiles.filter((m: any) => m.methylation_capacity === 'impaired' || m.methylation_capacity === 'reduced').length
+      if (impaired > 0) {
+        insights.push({
+          category: 'Methylation',
+          insight: `${impaired} gene${impaired > 1 ? 's' : ''} with reduced methylation capacity`,
+          icon: Dna,
+          color: getThemeClass('text-teal-600', isDarkMode),
+          bgColor: getThemeClass('bg-teal-50', isDarkMode),
+          navigateTo: 'methylation',
+        })
+      }
+    }
+
+    // Sports performance
+    if (Array.isArray(data?.sports_performance) && data.sports_performance.length > 0) {
+      const highAdvantage = data.sports_performance.filter((s: any) => s.genetic_advantage === 'high').length
+      if (highAdvantage > 0) {
+        insights.push({
+          category: 'Athletic Potential',
+          insight: `High genetic advantage in ${highAdvantage} performance categor${highAdvantage > 1 ? 'ies' : 'y'}`,
+          icon: Dumbbell,
+          color: getThemeClass('text-green-600', isDarkMode),
+          bgColor: getThemeClass('bg-green-50', isDarkMode),
+          navigateTo: 'sports',
+        })
+      }
     }
     
     if (data?.real_data?.variants?.length > 0) {
@@ -717,7 +799,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
         insight: `${coverage}% of variants have reference IDs for clinical analysis`,
         icon: Target,
         color: getThemeClass('text-green-600', isDarkMode),
-        bgColor: getThemeClass('bg-green-50', isDarkMode)
+        bgColor: getThemeClass('bg-green-50', isDarkMode),
+        navigateTo: 'variant-search',
       })
     }
     
@@ -814,7 +897,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
               </div>
             )}
 
-            {/* Key Metrics Row - 6 columns */}
+            {/* Key Metrics Row - 6 columns, clickable */}
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
               {[
                 {
@@ -822,49 +905,51 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                   value: (data?.summary?.total_variants || data?.real_data?.variants?.length || 0).toLocaleString(),
                   icon: Dna,
                   gradient: 'from-blue-500 to-indigo-500',
-                  bgColor: getThemeClass('bg-blue-50', isDarkMode),
+                  navigateTo: 'variant-search',
                 },
                 {
                   label: 'Analyzed',
                   value: (data?.summary?.analyzed_variants || 0).toLocaleString(),
                   icon: FlaskConical,
                   gradient: 'from-violet-500 to-purple-500',
-                  bgColor: getThemeClass('bg-purple-50', isDarkMode),
+                  navigateTo: 'variant-search',
                 },
                 {
                   label: 'Health Risks',
                   value: Array.isArray(data?.health_risks) ? data.health_risks.length : 0,
                   icon: Heart,
                   gradient: 'from-rose-500 to-pink-500',
-                  bgColor: getThemeClass('bg-red-50', isDarkMode),
+                  navigateTo: 'health',
                 },
                 {
                   label: 'Drug Interactions',
                   value: Array.isArray(data?.drug_responses) ? data.drug_responses.length : 0,
                   icon: Pill,
                   gradient: 'from-amber-500 to-orange-500',
-                  bgColor: getThemeClass('bg-amber-50', isDarkMode),
+                  navigateTo: 'drug-responses',
                 },
                 {
-                  label: 'Chromosomes',
-                  value: data?.real_data?.variants ? [...new Set(data.real_data.variants.map((v: any) => v.chromosome))].length : 0,
-                  icon: Target,
-                  gradient: 'from-teal-500 to-emerald-500',
-                  bgColor: getThemeClass('bg-teal-50', isDarkMode),
+                  label: 'Carrier Conditions',
+                  value: Array.isArray(data?.carrier_status) ? data.carrier_status.filter((c: any) => c.carrier_status === 'carrier').length : 0,
+                  icon: AlertTriangle,
+                  gradient: 'from-orange-500 to-red-500',
+                  navigateTo: 'carrier-status',
                 },
                 {
-                  label: 'RS ID Coverage',
-                  value: data?.real_data?.variants
-                    ? `${Math.round((data.real_data.variants.filter((v: any) => v.rsid && v.rsid !== '-' && v.rsid !== 'nan').length / data.real_data.variants.length) * 100)}%`
-                    : '0%',
-                  icon: CheckCircle,
-                  gradient: 'from-green-500 to-emerald-500',
-                  bgColor: getThemeClass('bg-green-50', isDarkMode),
+                  label: 'Rare Mutations',
+                  value: Array.isArray(data?.rare_mutations) ? data.rare_mutations.length : 0,
+                  icon: Sparkles,
+                  gradient: 'from-red-500 to-rose-600',
+                  navigateTo: 'rare-mutations',
                 },
               ].map((m, i) => {
                 const Icon = m.icon
                 return (
-                  <div key={i} className={`${theme.glass} border ${theme.glassBorder} rounded-xl p-4 ${theme.glassHover} transition-all duration-300 group`}>
+                  <div
+                    key={i}
+                    className={`${theme.glass} border ${theme.glassBorder} rounded-xl p-4 cursor-pointer ${theme.glassHover} transition-all duration-300 group hover:shadow-lg hover:-translate-y-0.5`}
+                    onClick={() => setActiveCategory(m.navigateTo)}
+                  >
                     <div className="flex items-center gap-3">
                       <div className={`p-2 bg-gradient-to-br ${m.gradient} rounded-lg shadow-lg shadow-black/5 group-hover:scale-110 transition-transform`}>
                         <Icon className="h-4 w-4 text-white" />
@@ -879,6 +964,285 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
               })}
             </div>
 
+            {/* Category Highlights Grid */}
+            {(() => {
+              const categoryCards: {
+                id: string
+                title: string
+                icon: any
+                gradient: string
+                items: { label: string; value: string | number; color?: string }[]
+                summary: string
+                hasData: boolean
+              }[] = []
+
+              // Health
+              if (Array.isArray(data?.health_risks) && data.health_risks.length > 0) {
+                const high = data.health_risks.filter((r: any) => r.risk_level === 'high').length
+                const moderate = data.health_risks.filter((r: any) => r.risk_level === 'moderate').length
+                const low = data.health_risks.filter((r: any) => r.risk_level === 'low').length
+                const topCondition = data.health_risks.find((r: any) => r.risk_level === 'high')?.condition || data.health_risks[0]?.condition || ''
+                categoryCards.push({
+                  id: 'health', title: 'Health & Wellness', icon: Heart, gradient: 'from-rose-500 to-pink-500',
+                  items: [
+                    ...(high > 0 ? [{ label: 'High risk', value: high, color: isDarkMode ? 'text-red-400' : 'text-red-600' }] : []),
+                    ...(moderate > 0 ? [{ label: 'Moderate', value: moderate, color: isDarkMode ? 'text-amber-400' : 'text-amber-600' }] : []),
+                    ...(low > 0 ? [{ label: 'Low risk', value: low, color: isDarkMode ? 'text-green-400' : 'text-green-600' }] : []),
+                  ],
+                  summary: topCondition ? `Top: ${topCondition}` : `${data.health_risks.length} conditions analyzed`,
+                  hasData: true,
+                })
+              }
+
+              // Drug Responses
+              if (Array.isArray(data?.drug_responses) && data.drug_responses.length > 0) {
+                const poor = data.drug_responses.filter((r: any) => r.response_type === 'poor').length
+                const rapid = data.drug_responses.filter((r: any) => r.response_type === 'rapid').length
+                const normal = data.drug_responses.filter((r: any) => r.response_type === 'normal').length
+                const genes = [...new Set(data.drug_responses.map((r: any) => r.gene))].slice(0, 3)
+                categoryCards.push({
+                  id: 'drug-responses', title: 'Drug Responses', icon: Pill, gradient: 'from-amber-500 to-orange-500',
+                  items: [
+                    ...(poor > 0 ? [{ label: 'Poor metab.', value: poor, color: isDarkMode ? 'text-red-400' : 'text-red-600' }] : []),
+                    ...(rapid > 0 ? [{ label: 'Rapid metab.', value: rapid, color: isDarkMode ? 'text-amber-400' : 'text-amber-600' }] : []),
+                    ...(normal > 0 ? [{ label: 'Normal', value: normal, color: isDarkMode ? 'text-green-400' : 'text-green-600' }] : []),
+                  ],
+                  summary: genes.length > 0 ? `Genes: ${genes.join(', ')}` : `${data.drug_responses.length} interactions`,
+                  hasData: true,
+                })
+              }
+
+              // Nutrition
+              if (Array.isArray(data?.nutrition_traits) && data.nutrition_traits.length > 0) {
+                const slow = data.nutrition_traits.filter((n: any) => n.metabolism_type === 'slow' || n.metabolism_type === 'deficient').length
+                const fast = data.nutrition_traits.filter((n: any) => n.metabolism_type === 'fast').length
+                const normal = data.nutrition_traits.filter((n: any) => n.metabolism_type === 'normal').length
+                const notable = data.nutrition_traits.find((n: any) => n.metabolism_type === 'slow' || n.metabolism_type === 'deficient')
+                categoryCards.push({
+                  id: 'food-nutrition', title: 'Food & Nutrition', icon: Apple, gradient: 'from-green-500 to-emerald-500',
+                  items: [
+                    ...(slow > 0 ? [{ label: 'Slow/deficient', value: slow, color: isDarkMode ? 'text-red-400' : 'text-red-600' }] : []),
+                    ...(fast > 0 ? [{ label: 'Fast metab.', value: fast, color: isDarkMode ? 'text-amber-400' : 'text-amber-600' }] : []),
+                    ...(normal > 0 ? [{ label: 'Normal', value: normal, color: isDarkMode ? 'text-green-400' : 'text-green-600' }] : []),
+                  ],
+                  summary: notable ? `Watch: ${notable.nutrient}` : `${data.nutrition_traits.length} nutrients analyzed`,
+                  hasData: true,
+                })
+              }
+
+              // Sports Performance
+              if (Array.isArray(data?.sports_performance) && data.sports_performance.length > 0) {
+                const high = data.sports_performance.filter((s: any) => s.genetic_advantage === 'high').length
+                const moderate = data.sports_performance.filter((s: any) => s.genetic_advantage === 'moderate').length
+                const topCategory = data.sports_performance.find((s: any) => s.genetic_advantage === 'high')?.category
+                categoryCards.push({
+                  id: 'sports', title: 'Sports & Fitness', icon: Dumbbell, gradient: 'from-teal-500 to-emerald-500',
+                  items: [
+                    ...(high > 0 ? [{ label: 'High advantage', value: high, color: isDarkMode ? 'text-green-400' : 'text-green-600' }] : []),
+                    ...(moderate > 0 ? [{ label: 'Moderate', value: moderate, color: isDarkMode ? 'text-amber-400' : 'text-amber-600' }] : []),
+                  ],
+                  summary: topCategory ? `Strength: ${topCategory}` : `${data.sports_performance.length} categories`,
+                  hasData: true,
+                })
+              }
+
+              // Ancestry
+              if (Array.isArray(data?.ancestry_results) && data.ancestry_results.length > 0) {
+                const sorted = [...data.ancestry_results].sort((a: any, b: any) => parseFloat(b.percentage) - parseFloat(a.percentage))
+                const top = sorted.slice(0, 3)
+                categoryCards.push({
+                  id: 'ancestry', title: 'Ancestry & Origins', icon: Users, gradient: 'from-indigo-500 to-blue-500',
+                  items: top.map((a: any) => ({ label: a.population, value: `${parseFloat(a.percentage).toFixed(1)}%` })),
+                  summary: top.length > 0 ? `Primary: ${top[0].population}` : 'Ancestry data available',
+                  hasData: true,
+                })
+              }
+
+              // Carrier Status
+              if (Array.isArray(data?.carrier_status) && data.carrier_status.length > 0) {
+                const carriers = data.carrier_status.filter((c: any) => c.carrier_status === 'carrier').length
+                const nonCarrier = data.carrier_status.filter((c: any) => c.carrier_status === 'non-carrier').length
+                const counseling = data.carrier_status.filter((c: any) => c.genetic_counseling_recommended).length
+                categoryCards.push({
+                  id: 'carrier-status', title: 'Carrier Status', icon: AlertTriangle, gradient: 'from-orange-500 to-red-500',
+                  items: [
+                    ...(carriers > 0 ? [{ label: 'Carrier', value: carriers, color: isDarkMode ? 'text-orange-400' : 'text-orange-600' }] : []),
+                    ...(nonCarrier > 0 ? [{ label: 'Non-carrier', value: nonCarrier, color: isDarkMode ? 'text-green-400' : 'text-green-600' }] : []),
+                    ...(counseling > 0 ? [{ label: 'Counsel. rec.', value: counseling, color: isDarkMode ? 'text-red-400' : 'text-red-600' }] : []),
+                  ],
+                  summary: `${data.carrier_status.length} conditions screened`,
+                  hasData: true,
+                })
+              }
+
+              // Methylation
+              if (Array.isArray(data?.methylation_profiles) && data.methylation_profiles.length > 0) {
+                const impaired = data.methylation_profiles.filter((m: any) => m.methylation_capacity === 'impaired').length
+                const reduced = data.methylation_profiles.filter((m: any) => m.methylation_capacity === 'reduced').length
+                const normal = data.methylation_profiles.filter((m: any) => m.methylation_capacity === 'normal').length
+                categoryCards.push({
+                  id: 'methylation', title: 'Methylation', icon: Dna, gradient: 'from-cyan-500 to-teal-500',
+                  items: [
+                    ...(impaired > 0 ? [{ label: 'Impaired', value: impaired, color: isDarkMode ? 'text-red-400' : 'text-red-600' }] : []),
+                    ...(reduced > 0 ? [{ label: 'Reduced', value: reduced, color: isDarkMode ? 'text-amber-400' : 'text-amber-600' }] : []),
+                    ...(normal > 0 ? [{ label: 'Normal', value: normal, color: isDarkMode ? 'text-green-400' : 'text-green-600' }] : []),
+                  ],
+                  summary: `${data.methylation_profiles.length} genes profiled`,
+                  hasData: true,
+                })
+              }
+
+              // Detoxification
+              if (Array.isArray(data?.detoxification_profiles) && data.detoxification_profiles.length > 0) {
+                const impaired = data.detoxification_profiles.filter((d: any) => d.detox_capacity === 'impaired' || d.detox_capacity === 'slow').length
+                const normal = data.detoxification_profiles.filter((d: any) => d.detox_capacity === 'normal').length
+                categoryCards.push({
+                  id: 'detox', title: 'Detoxification', icon: Zap, gradient: 'from-lime-500 to-green-500',
+                  items: [
+                    ...(impaired > 0 ? [{ label: 'Impaired/Slow', value: impaired, color: isDarkMode ? 'text-red-400' : 'text-red-600' }] : []),
+                    ...(normal > 0 ? [{ label: 'Normal', value: normal, color: isDarkMode ? 'text-green-400' : 'text-green-600' }] : []),
+                  ],
+                  summary: `${data.detoxification_profiles.length} pathways analyzed`,
+                  hasData: true,
+                })
+              }
+
+              // Intelligence / Cognitive
+              if (Array.isArray(data?.intelligence) && data.intelligence.length > 0) {
+                const topPercentile = data.intelligence.reduce((max: any, c: any) => c.percentile > (max?.percentile || 0) ? c : max, null)
+                categoryCards.push({
+                  id: 'intelligence', title: 'Intelligence', icon: Brain, gradient: 'from-purple-500 to-violet-500',
+                  items: data.intelligence.slice(0, 3).map((c: any) => ({
+                    label: c.cognitive_ability || c.trait_name,
+                    value: c.percentile ? `${c.percentile}th` : c.genetic_advantage || '—',
+                  })),
+                  summary: topPercentile ? `Top: ${topPercentile.cognitive_ability || topPercentile.trait_name} (${topPercentile.percentile}th)` : `${data.intelligence.length} domains`,
+                  hasData: true,
+                })
+              }
+
+              // Personality
+              if (Array.isArray(data?.personality_traits) && data.personality_traits.length > 0) {
+                const sorted = [...data.personality_traits].sort((a: any, b: any) => (b.score || 0) - (a.score || 0))
+                categoryCards.push({
+                  id: 'personality', title: 'Personality', icon: Palette, gradient: 'from-pink-500 to-rose-500',
+                  items: sorted.slice(0, 3).map((p: any) => ({
+                    label: p.trait || p.name,
+                    value: p.score ? `${p.score}%` : p.confidence || '—',
+                  })),
+                  summary: sorted[0] ? `Strongest: ${sorted[0].trait || sorted[0].name}` : `${data.personality_traits.length} traits`,
+                  hasData: true,
+                })
+              }
+
+              // Physical Traits
+              if (Array.isArray(data?.physical_traits) && data.physical_traits.length > 0) {
+                const byCategory: Record<string, number> = {}
+                data.physical_traits.forEach((t: any) => { byCategory[t.trait_category || 'other'] = (byCategory[t.trait_category || 'other'] || 0) + 1 })
+                categoryCards.push({
+                  id: 'physical-traits', title: 'Physical Traits', icon: Target, gradient: 'from-sky-500 to-blue-500',
+                  items: Object.entries(byCategory).slice(0, 3).map(([cat, count]) => ({
+                    label: cat.charAt(0).toUpperCase() + cat.slice(1), value: count,
+                  })),
+                  summary: `${data.physical_traits.length} traits identified`,
+                  hasData: true,
+                })
+              }
+
+              // Wellness
+              if (Array.isArray(data?.wellness_traits) && data.wellness_traits.length > 0) {
+                const wellnessVariant = data.wellness_traits.filter((w: any) => w.value === 'variant_detected' || w.value === 'reduced').length
+                const wellnessImpaired = data.wellness_traits.filter((w: any) => w.value === 'impaired').length
+                const wellnessNormal = data.wellness_traits.filter((w: any) => w.value === 'normal').length
+                categoryCards.push({
+                  id: 'wellness', title: 'Wellness Reports', icon: Activity, gradient: 'from-emerald-500 to-green-500',
+                  items: [
+                    ...(wellnessImpaired > 0 ? [{ label: 'Impaired', value: wellnessImpaired, color: isDarkMode ? 'text-red-400' : 'text-red-600' }] : []),
+                    ...(wellnessVariant > 0 ? [{ label: 'Variant Detected', value: wellnessVariant, color: isDarkMode ? 'text-amber-400' : 'text-amber-600' }] : []),
+                    ...(wellnessNormal > 0 ? [{ label: 'Normal', value: wellnessNormal, color: isDarkMode ? 'text-green-400' : 'text-green-600' }] : []),
+                  ],
+                  summary: `${data.wellness_traits.length} wellness metrics`,
+                  hasData: true,
+                })
+              }
+
+              // Rare Mutations
+              if (Array.isArray(data?.rare_mutations) && data.rare_mutations.length > 0) {
+                const pathogenic = data.rare_mutations.filter((m: any) => m.mutation_type === 'pathogenic').length
+                const likelyPath = data.rare_mutations.filter((m: any) => m.mutation_type === 'likely_pathogenic').length
+                categoryCards.push({
+                  id: 'rare-mutations', title: 'Rare Mutations', icon: AlertTriangle, gradient: 'from-red-500 to-rose-600',
+                  items: [
+                    ...(pathogenic > 0 ? [{ label: 'Pathogenic', value: pathogenic, color: isDarkMode ? 'text-red-400' : 'text-red-600' }] : []),
+                    ...(likelyPath > 0 ? [{ label: 'Likely pathogenic', value: likelyPath, color: isDarkMode ? 'text-orange-400' : 'text-orange-600' }] : []),
+                  ],
+                  summary: `${data.rare_mutations.length} rare variants found`,
+                  hasData: true,
+                })
+              }
+
+              // Uncommon Mutations
+              if (Array.isArray(data?.uncommon_mutations) && data.uncommon_mutations.length > 0) {
+                const protective = data.uncommon_mutations.filter((m: any) => m.mutation_type === 'protective_rare').length
+                categoryCards.push({
+                  id: 'uncommon-mutations', title: 'Uncommon Mutations', icon: Dna, gradient: 'from-violet-500 to-purple-600',
+                  items: [
+                    { label: 'Total', value: data.uncommon_mutations.length },
+                    ...(protective > 0 ? [{ label: 'Protective', value: protective, color: isDarkMode ? 'text-green-400' : 'text-green-600' }] : []),
+                  ],
+                  summary: protective > 0 ? `${protective} protective variant${protective > 1 ? 's' : ''}` : `${data.uncommon_mutations.length} uncommon variants`,
+                  hasData: true,
+                })
+              }
+
+              return categoryCards.length > 0 ? (
+                <div>
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="p-2 bg-gradient-to-br from-blue-500/20 to-indigo-500/20 rounded-xl border border-blue-500/30">
+                      <BarChart3 className={`h-5 w-5 ${getThemeClass('text-blue-500', isDarkMode)}`} />
+                    </div>
+                    <div>
+                      <h3 className={`text-lg font-bold ${theme.text.primary}`}>Category Highlights</h3>
+                      <p className={`text-xs ${theme.text.muted}`}>Click any card to explore in detail</p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {categoryCards.map(card => {
+                      const Icon = card.icon
+                      return (
+                        <div
+                          key={card.id}
+                          className={`${theme.glass} border ${theme.glassBorder} rounded-xl p-5 cursor-pointer ${theme.glassHover} transition-all duration-300 group hover:shadow-lg hover:-translate-y-0.5`}
+                          onClick={() => setActiveCategory(card.id)}
+                        >
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-2.5">
+                              <div className={`p-2 bg-gradient-to-br ${card.gradient} rounded-lg shadow-lg shadow-black/5 group-hover:scale-110 transition-transform`}>
+                                <Icon className="h-4 w-4 text-white" />
+                              </div>
+                              <h4 className={`font-semibold text-sm ${theme.text.primary}`}>{card.title}</h4>
+                            </div>
+                            <ChevronRight className={`h-4 w-4 ${theme.text.muted} group-hover:translate-x-0.5 transition-transform`} />
+                          </div>
+                          {card.items.length > 0 && (
+                            <div className="flex flex-wrap gap-x-4 gap-y-1 mb-2">
+                              {card.items.map((item, idx) => (
+                                <div key={idx} className="flex items-baseline gap-1">
+                                  <span className={`text-base font-bold ${item.color || theme.text.primary}`}>{item.value}</span>
+                                  <span className={`text-xs ${theme.text.muted}`}>{item.label}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          <p className={`text-xs ${theme.text.secondary} truncate`}>{card.summary}</p>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : null
+            })()}
+
             {/* Two-Column: Insights + Categories */}
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
               {/* Genetic Insights */}
@@ -888,7 +1252,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                     <div className="p-2.5 bg-gradient-to-br from-teal-500/20 to-cyan-500/20 rounded-xl border border-teal-500/30">
                       <Sparkles className={`h-5 w-5 ${getThemeClass('text-blue-500', isDarkMode)}`} />
                     </div>
-                    <h3 className={`text-lg font-bold ${theme.text.primary}`}>Genetic Insights</h3>
+                    <h3 className={`text-lg font-bold ${theme.text.primary}`}>Key Insights</h3>
                   </div>
                   <span className={`px-2.5 py-1 ${theme.glass} border ${theme.glassBorder} rounded-full text-xs font-medium ${theme.text.secondary}`}>
                     {quickInsights.length} findings
@@ -905,7 +1269,11 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                         ? isDarkMode ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' : 'bg-amber-50 text-amber-600 border-amber-200'
                         : isDarkMode ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' : 'bg-emerald-50 text-emerald-600 border-emerald-200'
                     return (
-                      <div key={index} className={`flex items-start gap-4 p-4 rounded-xl border ${theme.glassBorder} ${theme.glassHover} transition-all`}>
+                      <div
+                        key={index}
+                        className={`flex items-start gap-4 p-4 rounded-xl border ${theme.glassBorder} ${theme.glassHover} transition-all ${insight.navigateTo ? 'cursor-pointer hover:shadow-md' : ''}`}
+                        onClick={() => insight.navigateTo && setActiveCategory(insight.navigateTo)}
+                      >
                         <div className={`p-2.5 ${insight.bgColor} rounded-lg flex-shrink-0`}>
                           <Icon className={`h-5 w-5 ${insight.color}`} />
                         </div>
@@ -918,16 +1286,25 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                           </div>
                           <p className={`text-sm ${theme.text.secondary} leading-relaxed`}>{insight.insight}</p>
                         </div>
+                        {insight.navigateTo && (
+                          <ChevronRight className={`h-4 w-4 ${theme.text.muted} flex-shrink-0 mt-1`} />
+                        )}
                       </div>
                     )
                   })}
 
-                  {/* Additional data-driven insights */}
+                  {/* Risk Breakdown - clickable */}
                   {Array.isArray(data?.health_risks) && data.health_risks.length > 0 && (
-                    <div className={`p-4 rounded-xl border ${theme.glassBorder} ${isDarkMode ? 'bg-slate-800/30' : 'bg-slate-50/50'}`}>
-                      <div className="flex items-center gap-2 mb-3">
-                        <FileText className={`h-4 w-4 ${getThemeClass('text-blue-500', isDarkMode)}`} />
-                        <span className={`text-xs font-semibold uppercase tracking-wider ${theme.text.muted}`}>Risk Breakdown</span>
+                    <div
+                      className={`p-4 rounded-xl border ${theme.glassBorder} ${isDarkMode ? 'bg-slate-800/30' : 'bg-slate-50/50'} cursor-pointer hover:shadow-md transition-all`}
+                      onClick={() => setActiveCategory('health')}
+                    >
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <FileText className={`h-4 w-4 ${getThemeClass('text-blue-500', isDarkMode)}`} />
+                          <span className={`text-xs font-semibold uppercase tracking-wider ${theme.text.muted}`}>Risk Breakdown</span>
+                        </div>
+                        <ChevronRight className={`h-3.5 w-3.5 ${theme.text.muted}`} />
                       </div>
                       <div className="flex gap-4">
                         {['high', 'moderate', 'low'].map(level => {
@@ -949,12 +1326,18 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                     </div>
                   )}
 
-                  {/* Drug response detail */}
+                  {/* Drug response detail - clickable */}
                   {Array.isArray(data?.drug_responses) && data.drug_responses.length > 0 && (
-                    <div className={`p-4 rounded-xl border ${theme.glassBorder} ${isDarkMode ? 'bg-slate-800/30' : 'bg-slate-50/50'}`}>
-                      <div className="flex items-center gap-2 mb-3">
-                        <Pill className={`h-4 w-4 ${getThemeClass('text-purple-500', isDarkMode)}`} />
-                        <span className={`text-xs font-semibold uppercase tracking-wider ${theme.text.muted}`}>Pharmacogenomic Highlights</span>
+                    <div
+                      className={`p-4 rounded-xl border ${theme.glassBorder} ${isDarkMode ? 'bg-slate-800/30' : 'bg-slate-50/50'} cursor-pointer hover:shadow-md transition-all`}
+                      onClick={() => setActiveCategory('drug-responses')}
+                    >
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <Pill className={`h-4 w-4 ${getThemeClass('text-purple-500', isDarkMode)}`} />
+                          <span className={`text-xs font-semibold uppercase tracking-wider ${theme.text.muted}`}>Pharmacogenomic Highlights</span>
+                        </div>
+                        <ChevronRight className={`h-3.5 w-3.5 ${theme.text.muted}`} />
                       </div>
                       <div className="flex flex-wrap gap-2">
                         {data.drug_responses.slice(0, 8).map((dr: any, i: number) => (
@@ -1074,11 +1457,14 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
       <header className={`${theme.glass} border-b ${theme.glassBorder} sticky top-0 z-30`}>
         <div className="flex items-center justify-between px-6 py-4">
           {/* Logo and Title */}
-          <div className="flex items-center space-x-4">
+          <button
+            onClick={() => { setActiveCategory('overview'); window.scrollTo(0, 0); }}
+            className="flex items-center space-x-4 cursor-pointer hover:opacity-80 transition-opacity"
+          >
             <div className="p-3 bg-gradient-to-br from-teal-500/80 to-cyan-500/80 backdrop-blur-xl rounded-xl border border-white/20 shadow-xl">
               <Dna className="h-7 w-7 text-white" />
             </div>
-            <div>
+            <div className="text-left">
               <h1 className={`text-xl font-bold ${theme.text.primary}`}>
                 Genetic Health Analysis Toolkit
               </h1>
@@ -1086,7 +1472,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                 {data?.summary?.total_variants || 0} DNA variants
               </p>
             </div>
-          </div>
+          </button>
 
           {/* Spacer for better layout */}
           <div className="flex-1"></div>

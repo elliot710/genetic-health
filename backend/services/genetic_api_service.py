@@ -160,10 +160,10 @@ class OptimizedGeneticAPIService:
                 rate_limit=10.0,  # Increased from 3.0 for speed
                 timeout=15.0
             ),
-                        'pharmgkb': APIEndpoint(
-                url='https://api.pharmgkb.org/v1/data/variant/{rsid}',
+                        'clinpgx': APIEndpoint(
+                url='https://api.clinpgx.org/v1/data/variant/',
                 timeout=15,
-                rate_limit=2.0,  # Reduced from 10.0 to avoid rate limiting
+                rate_limit=2.0,
                 headers={'Accept': 'application/json'}
             ),
             'snpedia': APIEndpoint(
@@ -339,7 +339,7 @@ class OptimizedGeneticAPIService:
         tasks = [
             self._get_ensembl_annotation(rsid),
             self._get_clinvar_annotation(rsid),
-            self._get_pharmgkb_annotation(rsid),
+            self._get_clinpgx_annotation(rsid),
             self._get_snpedia_annotation(rsid),
         ]
         
@@ -348,7 +348,7 @@ class OptimizedGeneticAPIService:
         annotation = {
             'rsid': rsid,
             'annotations': {},
-            'sources_queried': ['ensembl', 'clinvar', 'pharmgkb', 'snpedia'],
+            'sources_queried': ['ensembl', 'clinvar', 'clinpgx', 'snpedia'],
             'success_count': 0
         }
         
@@ -362,9 +362,9 @@ class OptimizedGeneticAPIService:
             annotation['annotations']['clinvar'] = results[1]
             annotation['success_count'] += 1
         
-        # Process PharmGKB result
+        # Process ClinPGx result
         if not isinstance(results[2], Exception) and results[2]:
-            annotation['annotations']['pharmgkb'] = results[2]
+            annotation['annotations']['clinpgx'] = results[2]
             annotation['success_count'] += 1
         
         # Process SNPedia result
@@ -432,24 +432,40 @@ class OptimizedGeneticAPIService:
             logger.error(f"ClinVar annotation error for {rsid}: {e}")
             return {'found': False, 'source': 'clinvar', 'error': str(e)}
     
-    async def _get_pharmgkb_annotation(self, rsid: str) -> Optional[Dict[str, Any]]:
-        """Get PharmGKB annotation."""
+    async def _get_clinpgx_annotation(self, rsid: str) -> Optional[Dict[str, Any]]:
+        """Get ClinPGx (formerly PharmGKB) annotation."""
         try:
-            url = self.endpoints['pharmgkb'].url.format(rsid=rsid)
-            response = await self._make_request('pharmgkb', url)
+            url = self.endpoints['clinpgx'].url
+            params = {'symbol': rsid, 'view': 'max'}
+            response = await self._make_request('clinpgx', url, params=params)
             
             if response.success and response.data:
-                return {
-                    'found': True,
-                    'source': 'pharmgkb',
-                    'data': response.data
-                }
+                # ClinPGx uses JSend format: {"status": "success", "data": [...]}
+                data = response.data
+                if isinstance(data, dict):
+                    payload = data.get('data', data)
+                else:
+                    payload = data
+                
+                # Check if we got actual variant data
+                has_data = False
+                if isinstance(payload, list) and len(payload) > 0:
+                    has_data = True
+                elif isinstance(payload, dict) and payload:
+                    has_data = True
+                
+                if has_data:
+                    return {
+                        'found': True,
+                        'source': 'clinpgx',
+                        'data': payload
+                    }
             
-            return {'found': False, 'source': 'pharmgkb', 'error': response.error}
+            return {'found': False, 'source': 'clinpgx', 'error': response.error}
             
         except Exception as e:
-            logger.error(f"PharmGKB annotation error for {rsid}: {e}")
-            return {'found': False, 'source': 'pharmgkb', 'error': str(e)}
+            logger.error(f"ClinPGx annotation error for {rsid}: {e}")
+            return {'found': False, 'source': 'clinpgx', 'error': str(e)}
     
     async def _get_snpedia_annotation(self, rsid: str) -> Optional[Dict[str, Any]]:
         """Get SNPedia annotation."""
@@ -630,10 +646,10 @@ class GeneticAPIService:
                 if consequences:
                     summary['consequence'] = consequences
         
-        # Extract PharmGKB data
-        pharmgkb = annotations.get('pharmgkb', {})
-        if pharmgkb.get('found'):
-            summary['sources'].append('pharmgkb')
+        # Extract ClinPGx data
+        clinpgx = annotations.get('clinpgx', {})
+        if clinpgx.get('found'):
+            summary['sources'].append('clinpgx')
         
         # Extract SNPedia data
         snpedia = annotations.get('snpedia', {})
@@ -649,13 +665,26 @@ class GeneticAPIService:
         # LitVar not implemented in optimized service, return empty result
         return {'rsid': rsid, 'publications': [], 'count': 0}
 
-    async def get_pharmgkb_drug_info(self, gene: str) -> Dict[str, Any]:
-        """Get pharmacogenomic info for a gene."""
+    async def get_clinpgx_drug_info(self, gene: str) -> Dict[str, Any]:
+        """Get pharmacogenomic info for a gene from ClinPGx."""
         if not self._initialized:
             await self.initialize()
-        # Delegate to PharmGKB annotation using gene as search term
-        result = await self.optimized_service._get_pharmgkb_annotation(gene)
-        return result or {'gene': gene, 'found': False, 'drug_responses': []}
+        # Query ClinPGx gene endpoint
+        try:
+            url = 'https://api.clinpgx.org/v1/data/gene'
+            params = {'symbol': gene, 'view': 'max'}
+            response = await self.optimized_service._make_request('clinpgx', url, params=params)
+            if response.success and response.data:
+                data = response.data
+                if isinstance(data, dict):
+                    payload = data.get('data', data)
+                else:
+                    payload = data
+                if payload:
+                    return {'gene': gene, 'found': True, 'source': 'clinpgx', 'data': payload}
+        except Exception as e:
+            logger.error(f"ClinPGx gene lookup error for {gene}: {e}")
+        return {'gene': gene, 'found': False, 'drug_responses': []}
 
     async def get_snpedia_info(self, rsid: str) -> Dict[str, Any]:
         """Get SNPedia info for a variant."""

@@ -17,12 +17,12 @@ export const getTheme = (isDarkMode: boolean) => ({
   
   // Glassmorphism with better contrast
   glass: isDarkMode ? 'bg-slate-800/60' : 'bg-white/70',
-  glassBorder: isDarkMode ? 'border-slate-600/60' : 'border-gray-300/60',
+  glassBorder: isDarkMode ? 'border-slate-600/60' : 'border-gray-300',
   glassHover: isDarkMode ? 'hover:bg-slate-700/70' : 'hover:bg-white/80',
   
   // Secondary glass for layered elements
   glassSecondary: isDarkMode ? 'bg-slate-700/50' : 'bg-white/50',
-  glassSecondaryBorder: isDarkMode ? 'border-slate-500/50' : 'border-gray-400/50',
+  glassSecondaryBorder: isDarkMode ? 'border-slate-500/50' : 'border-gray-300',
   
   // Text colors
   text: {
@@ -116,7 +116,7 @@ export const getTheme = (isDarkMode: boolean) => ({
   form: {
     input: {
       bg: isDarkMode ? 'bg-slate-700/70' : 'bg-white/80',
-      border: isDarkMode ? 'border-slate-500/60' : 'border-gray-300/60',
+      border: isDarkMode ? 'border-slate-500/60' : 'border-gray-300',
       text: isDarkMode ? 'text-gray-100' : 'text-gray-900',
       placeholder: isDarkMode ? 'placeholder-gray-400' : 'placeholder-gray-500',
       focus: 'focus:ring-2 focus:ring-teal-500/50 focus:border-teal-400',
@@ -227,14 +227,14 @@ export const getThemeClass = (baseClass: string, isDarkMode: boolean): string =>
 export const getGlassBackground = (isDarkMode: boolean): string => {
   return isDarkMode 
     ? 'bg-slate-800/40 backdrop-blur-xl border-slate-700/50' 
-    : 'bg-white/40 backdrop-blur-xl border-white/50';
+    : 'bg-white/40 backdrop-blur-xl border-gray-300';
 };
 
 /**
  * Get glass border class
  */
 export const getGlassBorder = (isDarkMode: boolean): string => {
-  return isDarkMode ? 'border-slate-700/50' : 'border-white/50';
+  return isDarkMode ? 'border-slate-700/50' : 'border-gray-300';
 };
 
 /**

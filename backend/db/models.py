@@ -266,7 +266,7 @@ class SharedVariantAnnotation(Base):
     # Raw API responses stored as JSON for future analysis
     ensembl_data = Column(JSON)  # Complete Ensembl API response
     clinvar_data = Column(JSON)  # Complete ClinVar API response
-    pharmgkb_data = Column(JSON)  # Complete PharmGKB API response
+    pharmgkb_data = Column(JSON)  # ClinPGx API response (column kept as pharmgkb_data for backward compat)
     snpedia_data = Column(JSON)  # Complete SNPedia API response
     litvar_data = Column(JSON)  # Complete LitVar/PubMed API response
     

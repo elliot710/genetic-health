@@ -7,7 +7,7 @@ interface AnnotationData {
     ensembl?: any;
     clinvar?: any;
     snpedia?: any;
-    pharmgkb?: any;
+    clinpgx?: any;
   };
   error?: string | null;
 }
@@ -206,17 +206,17 @@ export default function GeneticAnnotation({ token }: GeneticAnnotationProps) {
                 </div>
               )}
 
-              {/* PharmGKB Data */}
-              {annotation.annotations.pharmgkb && !annotation.annotations.pharmgkb.message && (
+              {/* ClinPGx Data */}
+              {annotation.annotations.clinpgx && !annotation.annotations.clinpgx.message && (
                 <div className="mb-6">
                   <h4 className="text-lg font-medium text-gray-800 mb-2 flex items-center">
                     <span className="w-3 h-3 bg-red-500 rounded-full mr-2"></span>
-                    PharmGKB
+                    ClinPGx
                   </h4>
                   <div className="bg-white rounded-md p-4 space-y-2">
-                    <div><strong>Function:</strong> {annotation.annotations.pharmgkb.function}</div>
-                    <div><strong>Associated Drugs:</strong> {annotation.annotations.pharmgkb.drugs.join(', ')}</div>
-                    <div><strong>Clinical Annotation:</strong> {annotation.annotations.pharmgkb.clinical_annotation}</div>
+                    <div><strong>Function:</strong> {annotation.annotations.clinpgx.function}</div>
+                    <div><strong>Associated Drugs:</strong> {annotation.annotations.clinpgx.drugs.join(', ')}</div>
+                    <div><strong>Clinical Annotation:</strong> {annotation.annotations.clinpgx.clinical_annotation}</div>
                   </div>
                 </div>
               )}

@@ -20,6 +20,7 @@ from ..db.models import (
 )
 from ..core.exceptions import AnalysisNotFoundException
 from ..core.config import settings
+from .job_logs import JobLogCollector
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,7 @@ class SharedVariantAnnotationService:
             result = await self.session.execute(
                 select(SharedVariantAnnotation).where(
                     SharedVariantAnnotation.rsid.in_(batch_rsids),
-                    SharedVariantAnnotation.annotation_status == 'completed'
+                    SharedVariantAnnotation.annotation_status.in_(['completed', 'partial'])
                 )
             )
 
@@ -102,8 +103,11 @@ class SharedVariantAnnotationService:
                     'success_count': 0
                 }
 
-                for source in ('ensembl', 'clinvar', 'pharmgkb', 'snpedia', 'litvar'):
+                for source in ('ensembl', 'clinvar', 'clinpgx', 'snpedia', 'litvar'):
                     data = getattr(annotation, f'{source}_data', None)
+                    if data is None and source == 'clinpgx':
+                        # DB column is still named pharmgkb_data for backward compat
+                        data = getattr(annotation, 'pharmgkb_data', None)
                     if data is not None:
                         merged_data['annotations'][source] = data
                         merged_data['sources_queried'].append(source)
@@ -138,7 +142,7 @@ class SharedVariantAnnotationService:
         """Save new annotation data to shared system and create user reference."""
         try:
             annotations = annotation_data.get('annotations', {})
-            sources_queried = annotation_data.get('sources_queried', ['ensembl', 'clinvar', 'pharmgkb', 'snpedia'])
+            sources_queried = annotation_data.get('sources_queried', ['ensembl', 'clinvar', 'clinpgx', 'snpedia'])
             success_count = annotation_data.get('success_count', 0)
 
             # Determine which sources failed (queried but threw errors / returned None)
@@ -162,7 +166,7 @@ class SharedVariantAnnotationService:
                 rsid=rsid,
                 ensembl_data=annotations.get('ensembl'),
                 clinvar_data=annotations.get('clinvar'),
-                pharmgkb_data=annotations.get('pharmgkb'),
+                pharmgkb_data=annotations.get('clinpgx'),
                 snpedia_data=annotations.get('snpedia'),
                 litvar_data=annotations.get('litvar'),
                 annotation_status=status,
@@ -278,6 +282,8 @@ class ComprehensiveAnalysisService:
     async def process_analysis(self, analysis_id: int, strategy: str = 'comprehensive') -> Dict[str, Any]:
         """Process genetic analysis with efficient annotation reuse and comprehensive insights."""
         start_time = time.time()
+        log_collector = JobLogCollector.get_instance()
+        log_collector.set_active_job(analysis_id)
 
         try:
             await self.initialize_services()
@@ -368,6 +374,7 @@ class ComprehensiveAnalysisService:
             }
 
         finally:
+            log_collector.clear_active_job()
             try:
                 if self.api_service:
                     await self.api_service.close()
