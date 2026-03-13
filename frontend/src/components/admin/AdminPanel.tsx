@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { Shield, Users, Settings, Plus, Trash2, Pencil, Check, X, ChevronRight, Download, Upload, Database } from 'lucide-react'
+import { Shield, Users, Settings, Plus, Trash2, Pencil, Check, X, ChevronRight, Download, Upload, Database, Lightbulb, RefreshCw, AlertTriangle, Minus, Info } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -26,6 +26,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import VariantDetailDialog from '@/components/categories/VariantDetailDialog'
 
 const API = 'http://localhost:8000/api/admin'
 
@@ -76,6 +77,55 @@ interface VariantMappingCategorySummary {
   total: number
 }
 
+interface PendingDiscoveryItem {
+  id: number
+  discovery_type: string
+  rsid: string
+  gene: string | null
+  panel_id: string | null
+  description: string | null
+  category: string | null
+  map_type: string | null
+  mapping_category: string | null
+  mapping_data: Record<string, unknown> | null
+  source_data: Record<string, unknown> | null
+  status: string
+  rejection_reason: string | null
+  lookup_count: number
+  created_at: string | null
+}
+
+interface DiscoverySummary {
+  total_pending: number
+  total_approved: number
+  total_rejected: number
+  panel_marker_pending: number
+  variant_mapping_pending: number
+}
+
+interface IncompleteAnnotation {
+  id: number
+  rsid: string
+  annotation_status: string | null
+  failed_sources: string[] | null
+  total_api_calls: number
+  ensembl: string  // "found" | "no_data" | "missing"
+  clinvar: string
+  pharmgkb: string
+  snpedia: string
+  litvar: string
+  first_annotated_at: string | null
+  last_updated_at: string | null
+  usage_count: number
+}
+
+interface IncompleteAnnotationSummary {
+  total_annotations: number
+  complete: number
+  partial: number
+  failed: number
+}
+
 const CATEGORY_LABELS: Record<string, string> = {
   health: 'Health Risks',
   drug: 'Drug Responses',
@@ -113,7 +163,7 @@ const PANEL_LABELS: Record<string, string> = {
   uncommon_mutations: 'Uncommon Mutations',
 }
 
-export default function AdminPanel({ token, theme }: AdminPanelProps) {
+export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps) {
   const [users, setUsers] = useState<AdminUser[]>([])
   const [panels, setPanels] = useState<PanelSummary[]>([])
   const [selectedPanel, setSelectedPanel] = useState<string | null>(null)
@@ -140,6 +190,24 @@ export default function AdminPanel({ token, theme }: AdminPanelProps) {
   const [editingMapping, setEditingMapping] = useState<VariantMapping | null>(null)
   const [editingDataStr, setEditingDataStr] = useState('')
   const [newMapping, setNewMapping] = useState({ category: '', map_type: 'rsid' as 'rsid' | 'gene', key: '', data: '{}' })
+
+  // Discoveries state
+  const [discoveries, setDiscoveries] = useState<PendingDiscoveryItem[]>([])
+  const [discoverySummary, setDiscoverySummary] = useState<DiscoverySummary | null>(null)
+  const [discoveryStatusFilter, setDiscoveryStatusFilter] = useState<string>('pending')
+  const [discoveryTypeFilter, setDiscoveryTypeFilter] = useState<string>('all')
+  const [reviewingId, setReviewingId] = useState<number | null>(null)
+  const [rejectReason, setRejectReason] = useState('')
+  const [showRejectDialog, setShowRejectDialog] = useState<PendingDiscoveryItem | null>(null)
+  const [selectedDiscoveryRsid, setSelectedDiscoveryRsid] = useState<{ rsid: string; gene?: string } | null>(null)
+
+  // Incomplete annotations state
+  const [incompleteAnnotations, setIncompleteAnnotations] = useState<IncompleteAnnotation[]>([])
+  const [incompleteSummary, setIncompleteSummary] = useState<IncompleteAnnotationSummary | null>(null)
+  const [incompleteFilter, setIncompleteFilter] = useState<string>('partial')
+  const [retriggeringIds, setRetriggeringIds] = useState<Set<number>>(new Set())
+  const [bulkRetriggering, setBulkRetriggering] = useState(false)
+  const [retriggerFeedback, setRetriggerFeedback] = useState<{ id: number; message: string; type: 'success' | 'info' | 'error' } | null>(null)
 
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }), [token])
 
@@ -377,6 +445,116 @@ export default function AdminPanel({ token, theme }: AdminPanelProps) {
     setTimeout(() => setImportResult(null), 5000)
   }
 
+  // --- Discoveries ---
+  const fetchDiscoverySummary = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/discoveries/summary`, { headers })
+      if (res.ok) setDiscoverySummary(await res.json())
+    } catch { /* ignore */ }
+  }, [headers])
+
+  const fetchDiscoveries = useCallback(async () => {
+    try {
+      const params = new URLSearchParams()
+      if (discoveryStatusFilter !== 'all') params.set('status_filter', discoveryStatusFilter)
+      if (discoveryTypeFilter !== 'all') params.set('discovery_type', discoveryTypeFilter)
+      const res = await fetch(`${API}/discoveries?${params}`, { headers })
+      if (res.ok) setDiscoveries(await res.json())
+    } catch { /* ignore */ }
+  }, [headers, discoveryStatusFilter, discoveryTypeFilter])
+
+  useEffect(() => { fetchDiscoverySummary() }, [fetchDiscoverySummary])
+  useEffect(() => { fetchDiscoveries() }, [fetchDiscoveries])
+
+  const reviewDiscovery = async (id: number, action: 'approve' | 'reject', reason?: string) => {
+    setReviewingId(id)
+    try {
+      const res = await fetch(`${API}/discoveries/${id}/review`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ action, rejection_reason: reason }),
+      })
+      if (res.ok) {
+        fetchDiscoveries()
+        fetchDiscoverySummary()
+      }
+    } catch { /* ignore */ }
+    setReviewingId(null)
+    setShowRejectDialog(null)
+    setRejectReason('')
+  }
+
+  const bulkReviewDiscoveries = async (action: 'approve' | 'reject') => {
+    const ids = discoveries.filter(d => d.status === 'pending').map(d => d.id)
+    if (!ids.length) return
+    try {
+      const res = await fetch(`${API}/discoveries/bulk-review?${ids.map(id => `discovery_ids=${id}`).join('&')}`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ action }),
+      })
+      if (res.ok) {
+        fetchDiscoveries()
+        fetchDiscoverySummary()
+      }
+    } catch { /* ignore */ }
+  }
+
+  // --- Incomplete Annotations ---
+  const fetchIncompleteSummary = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/annotations/incomplete/summary`, { headers })
+      if (res.ok) setIncompleteSummary(await res.json())
+    } catch { /* ignore */ }
+  }, [headers])
+
+  const fetchIncompleteAnnotations = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/annotations/incomplete?status_filter=${incompleteFilter}&limit=100`, { headers })
+      if (res.ok) setIncompleteAnnotations(await res.json())
+    } catch { /* ignore */ }
+  }, [headers, incompleteFilter])
+
+  useEffect(() => { fetchIncompleteSummary() }, [fetchIncompleteSummary])
+  useEffect(() => { fetchIncompleteAnnotations() }, [fetchIncompleteAnnotations])
+
+  const retriggerAnnotation = async (id: number) => {
+    setRetriggeringIds(prev => new Set(prev).add(id))
+    setRetriggerFeedback(null)
+    try {
+      const res = await fetch(`${API}/annotations/retrigger/${id}`, { method: 'POST', headers })
+      if (res.ok) {
+        const data = await res.json()
+        const noData = data.confirmed_no_data || []
+        const updated = data.updated_sources || []
+        const failed = data.still_failed || []
+        if (updated.length > 0) {
+          setRetriggerFeedback({ id, message: `Updated: ${updated.join(', ')}${noData.length ? `. No data available: ${noData.join(', ')}` : ''}`, type: 'success' })
+        } else if (noData.length > 0 && failed.length === 0) {
+          setRetriggerFeedback({ id, message: `Providers confirmed no data exists for: ${noData.join(', ')}. Marked complete.`, type: 'info' })
+        } else if (failed.length > 0) {
+          setRetriggerFeedback({ id, message: `Still failing: ${failed.join(', ')}${noData.length ? `. No data: ${noData.join(', ')}` : ''}`, type: 'error' })
+        }
+        await fetchIncompleteAnnotations()
+        await fetchIncompleteSummary()
+      }
+    } catch { /* ignore */ }
+    setRetriggeringIds(prev => { const s = new Set(prev); s.delete(id); return s })
+    setTimeout(() => setRetriggerFeedback(prev => prev?.id === id ? null : prev), 8000)
+  }
+
+  const retriggerAllIncomplete = async () => {
+    setBulkRetriggering(true)
+    try {
+      const res = await fetch(`${API}/annotations/retrigger-bulk?retrigger_all=true&limit=50`, {
+        method: 'POST', headers, body: JSON.stringify([]),
+      })
+      if (res.ok) {
+        await fetchIncompleteAnnotations()
+        await fetchIncompleteSummary()
+      }
+    } catch { /* ignore */ }
+    setBulkRetriggering(false)
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -413,7 +591,7 @@ export default function AdminPanel({ token, theme }: AdminPanelProps) {
       </div>
 
       <Tabs defaultValue="users" className="w-full">
-        <TabsList className="grid w-full max-w-lg grid-cols-3">
+        <TabsList className="grid w-full max-w-3xl grid-cols-5">
           <TabsTrigger value="users" className="gap-2">
             <Users className="h-4 w-4" />
             Users
@@ -424,7 +602,25 @@ export default function AdminPanel({ token, theme }: AdminPanelProps) {
           </TabsTrigger>
           <TabsTrigger value="registry" className="gap-2">
             <Database className="h-4 w-4" />
-            Variant Registry
+            Registry
+          </TabsTrigger>
+          <TabsTrigger value="discoveries" className="gap-2 relative">
+            <Lightbulb className="h-4 w-4" />
+            Discoveries
+            {discoverySummary && discoverySummary.total_pending > 0 && (
+              <Badge variant="destructive" className="ml-1 h-5 min-w-[20px] px-1 text-xs">
+                {discoverySummary.total_pending}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="annotations" className="gap-2 relative">
+            <AlertTriangle className="h-4 w-4" />
+            Incomplete
+            {incompleteSummary && (incompleteSummary.partial + incompleteSummary.failed) > 0 && (
+              <Badge variant="secondary" className="ml-1 h-5 min-w-[20px] px-1 text-xs">
+                {incompleteSummary.partial + incompleteSummary.failed}
+              </Badge>
+            )}
           </TabsTrigger>
         </TabsList>
 
@@ -906,6 +1102,255 @@ export default function AdminPanel({ token, theme }: AdminPanelProps) {
             </Card>
           </div>
         </TabsContent>
+
+        {/* ===== DISCOVERIES TAB ===== */}
+        <TabsContent value="discoveries" className="mt-6">
+          <Card className="glass-card">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Lightbulb className="h-5 w-5" />
+                    Pending Discoveries
+                  </CardTitle>
+                  <CardDescription>
+                    Auto-discovered markers from user lookups awaiting review
+                    {discoverySummary && (
+                      <span className="ml-2">
+                        — {discoverySummary.total_pending} pending, {discoverySummary.total_approved} approved, {discoverySummary.total_rejected} rejected
+                      </span>
+                    )}
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <select
+                    className="text-sm rounded-md border px-2 py-1 bg-background"
+                    value={discoveryStatusFilter}
+                    onChange={e => setDiscoveryStatusFilter(e.target.value)}
+                  >
+                    <option value="pending">Pending</option>
+                    <option value="approved">Approved</option>
+                    <option value="rejected">Rejected</option>
+                    <option value="all">All</option>
+                  </select>
+                  <select
+                    className="text-sm rounded-md border px-2 py-1 bg-background"
+                    value={discoveryTypeFilter}
+                    onChange={e => setDiscoveryTypeFilter(e.target.value)}
+                  >
+                    <option value="all">All Types</option>
+                    <option value="panel_marker">Panel Markers</option>
+                    <option value="variant_mapping">Variant Mappings</option>
+                  </select>
+                  {discoveryStatusFilter === 'pending' && discoveries.length > 0 && (
+                    <div className="flex gap-1 ml-2">
+                      <Button size="sm" variant="default" onClick={() => bulkReviewDiscoveries('approve')}>
+                        <Check className="h-3 w-3 mr-1" /> Approve All
+                      </Button>
+                      <Button size="sm" variant="destructive" onClick={() => bulkReviewDiscoveries('reject')}>
+                        <X className="h-3 w-3 mr-1" /> Reject All
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {discoveries.length === 0 ? (
+                <p className={`text-center py-8 ${theme.text.tertiary}`}>No discoveries found with current filters</p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Variant</TableHead>
+                      <TableHead>Gene</TableHead>
+                      <TableHead>Panel / Category</TableHead>
+                      <TableHead>Description</TableHead>
+                      <TableHead>Lookups</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {discoveries.map(d => (
+                      <TableRow key={d.id}>
+                        <TableCell>
+                          <Badge variant={d.discovery_type === 'panel_marker' ? 'default' : 'secondary'}>
+                            {d.discovery_type === 'panel_marker' ? 'Panel Marker' : 'Variant Mapping'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell
+                          className="font-mono text-sm cursor-pointer text-blue-500 hover:text-blue-400 hover:underline"
+                          onClick={() => setSelectedDiscoveryRsid({ rsid: d.rsid, gene: d.gene || undefined })}
+                        >{d.rsid}</TableCell>
+                        <TableCell>{d.gene || '—'}</TableCell>
+                        <TableCell>
+                          {d.discovery_type === 'panel_marker'
+                            ? PANEL_LABELS[d.panel_id || ''] || d.panel_id
+                            : CATEGORY_LABELS[d.mapping_category || ''] || d.mapping_category}
+                          {d.category && <span className={`ml-1 text-xs ${theme.text.tertiary}`}>({d.category})</span>}
+                        </TableCell>
+                        <TableCell className={`max-w-[200px] truncate text-sm ${theme.text.secondary}`}>
+                          {d.description || '—'}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline">{d.lookup_count}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={d.status === 'pending' ? 'outline' : d.status === 'approved' ? 'default' : 'destructive'}>
+                            {d.status}
+                          </Badge>
+                          {d.rejection_reason && (
+                            <p className={`text-xs mt-1 ${theme.text.tertiary}`}>{d.rejection_reason}</p>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {d.status === 'pending' && (
+                            <div className="flex items-center justify-end gap-1">
+                              <Button
+                                size="sm" variant="default"
+                                disabled={reviewingId === d.id}
+                                onClick={() => reviewDiscovery(d.id, 'approve')}
+                              >
+                                {reviewingId === d.id ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                              </Button>
+                              <Button
+                                size="sm" variant="destructive"
+                                disabled={reviewingId === d.id}
+                                onClick={() => setShowRejectDialog(d)}
+                              >
+                                <X className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ===== INCOMPLETE ANNOTATIONS TAB ===== */}
+        <TabsContent value="annotations" className="mt-6">
+          <Card className="glass-card">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <AlertTriangle className="h-5 w-5" />
+                    Incomplete Annotations
+                  </CardTitle>
+                  <CardDescription>
+                    Variants with missing data from external API sources
+                    {incompleteSummary && (
+                      <span className="ml-2">
+                        — {incompleteSummary.partial} partial, {incompleteSummary.failed} failed of {incompleteSummary.total_annotations} total
+                      </span>
+                    )}
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <select
+                    className="text-sm rounded-md border px-2 py-1 bg-background"
+                    value={incompleteFilter}
+                    onChange={e => setIncompleteFilter(e.target.value)}
+                  >
+                    <option value="partial">Partial</option>
+                    <option value="failed">Failed</option>
+                    <option value="all">All Incomplete</option>
+                  </select>
+                  <Button
+                    size="sm" variant="default"
+                    disabled={bulkRetriggering || incompleteAnnotations.length === 0}
+                    onClick={retriggerAllIncomplete}
+                  >
+                    {bulkRetriggering
+                      ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Retrying...</>
+                      : <><RefreshCw className="h-3 w-3 mr-1" /> Retry All (up to 50)</>}
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {retriggerFeedback && (
+                <div className={`mb-4 p-3 rounded-lg flex items-start gap-2 text-sm ${
+                  retriggerFeedback.type === 'success' ? 'bg-green-500/10 text-green-600 border border-green-500/20'
+                    : retriggerFeedback.type === 'info' ? 'bg-blue-500/10 text-blue-600 border border-blue-500/20'
+                    : 'bg-red-500/10 text-red-600 border border-red-500/20'
+                }`}>
+                  <Info className="h-4 w-4 mt-0.5 shrink-0" />
+                  <span>{retriggerFeedback.message}</span>
+                </div>
+              )}
+              {incompleteAnnotations.length === 0 ? (
+                <p className={`text-center py-8 ${theme.text.tertiary}`}>No incomplete annotations found</p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Variant</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Ensembl</TableHead>
+                      <TableHead>ClinVar</TableHead>
+                      <TableHead>PharmGKB</TableHead>
+                      <TableHead>SNPedia</TableHead>
+                      <TableHead>Failed Sources</TableHead>
+                      <TableHead>Uses</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {incompleteAnnotations.map(a => (
+                      <TableRow key={a.id}>
+                        <TableCell className="font-mono text-sm">{a.rsid}</TableCell>
+                        <TableCell>
+                          <Badge variant={a.annotation_status === 'partial' ? 'outline' : 'destructive'}>
+                            {a.annotation_status}
+                          </Badge>
+                        </TableCell>
+                        {['ensembl', 'clinvar', 'pharmgkb', 'snpedia'].map(src => {
+                          const status = a[src as keyof typeof a] as string
+                          return (
+                            <TableCell key={src}>
+                              {status === 'found'
+                                ? <Check className="h-4 w-4 text-green-500" />
+                                : status === 'no_data'
+                                  ? <span title="Provider has no data for this variant"><Minus className="h-4 w-4 text-yellow-500" /></span>
+                                  : <X className="h-4 w-4 text-red-400" />}
+                            </TableCell>
+                          )
+                        })}
+                        <TableCell>
+                          <div className="flex flex-wrap gap-1">
+                            {(a.failed_sources || []).map(src => (
+                              <Badge key={src} variant="destructive" className="text-xs">{src}</Badge>
+                            ))}
+                          </div>
+                        </TableCell>
+                        <TableCell>{a.usage_count}</TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            size="sm" variant="outline"
+                            disabled={retriggeringIds.has(a.id) || bulkRetriggering}
+                            onClick={() => retriggerAnnotation(a.id)}
+                          >
+                            {retriggeringIds.has(a.id)
+                              ? <RefreshCw className="h-3 w-3 animate-spin" />
+                              : <><RefreshCw className="h-3 w-3 mr-1" /> Retry</>}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
       </Tabs>
 
       {/* ===== DIALOGS ===== */}
@@ -1074,6 +1519,44 @@ export default function AdminPanel({ token, theme }: AdminPanelProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Reject Discovery Dialog */}
+      <Dialog open={!!showRejectDialog} onOpenChange={() => { setShowRejectDialog(null); setRejectReason('') }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reject Discovery</DialogTitle>
+            <DialogDescription>
+              Reject <strong>{showRejectDialog?.rsid}</strong> ({showRejectDialog?.discovery_type === 'panel_marker' ? 'Panel Marker' : 'Variant Mapping'})? Optionally provide a reason.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            <Label>Reason (optional)</Label>
+            <Input
+              value={rejectReason}
+              onChange={e => setRejectReason(e.target.value)}
+              placeholder="e.g. Not clinically relevant"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setShowRejectDialog(null); setRejectReason('') }}>Cancel</Button>
+            <Button variant="destructive" onClick={() => showRejectDialog && reviewDiscovery(showRejectDialog.id, 'reject', rejectReason || undefined)}>
+              Reject
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Variant Detail Dialog for Discoveries */}
+      {selectedDiscoveryRsid && (
+        <VariantDetailDialog
+          rsid={selectedDiscoveryRsid.rsid}
+          gene={selectedDiscoveryRsid.gene}
+          token={token}
+          isDarkMode={isDarkMode}
+          open={!!selectedDiscoveryRsid}
+          onOpenChange={(open) => { if (!open) setSelectedDiscoveryRsid(null) }}
+        />
+      )}
     </div>
   )
 }

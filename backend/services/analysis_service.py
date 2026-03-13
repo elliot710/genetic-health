@@ -138,6 +138,24 @@ class SharedVariantAnnotationService:
         """Save new annotation data to shared system and create user reference."""
         try:
             annotations = annotation_data.get('annotations', {})
+            sources_queried = annotation_data.get('sources_queried', ['ensembl', 'clinvar', 'pharmgkb', 'snpedia'])
+            success_count = annotation_data.get('success_count', 0)
+
+            # Determine which sources failed (queried but threw errors / returned None)
+            # A response with found=False means the API confirmed no data exists — that's not a failure
+            failed = []
+            for src in sources_queried:
+                src_data = annotations.get(src)
+                if src_data is None:
+                    # Source was queried but returned nothing (error/timeout)
+                    failed.append(src)
+                # found=False with a dict response = confirmed absence, NOT a failure
+
+            total_sources = len(sources_queried)
+            if failed:
+                status = 'partial' if success_count > 0 else 'failed'
+            else:
+                status = 'completed'
 
             from sqlalchemy.dialects.postgresql import insert
             values = dict(
@@ -147,8 +165,9 @@ class SharedVariantAnnotationService:
                 pharmgkb_data=annotations.get('pharmgkb'),
                 snpedia_data=annotations.get('snpedia'),
                 litvar_data=annotations.get('litvar'),
-                annotation_status='completed',
-                total_api_calls=annotation_data.get('success_count', 0),
+                annotation_status=status,
+                failed_sources=failed if failed else None,
+                total_api_calls=success_count,
                 usage_count=1
             )
             if marker_id is not None:
@@ -162,7 +181,12 @@ class SharedVariantAnnotationService:
                     total_api_calls=func.greatest(
                         SharedVariantAnnotation.total_api_calls,
                         stmt.excluded.total_api_calls
-                    )
+                    ),
+                    # Only upgrade status, never downgrade
+                    annotation_status=func.least(
+                        SharedVariantAnnotation.annotation_status,
+                        stmt.excluded.annotation_status
+                    ),
                 )
             ).returning(SharedVariantAnnotation.id)
 

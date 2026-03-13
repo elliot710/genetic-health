@@ -275,6 +275,7 @@ class SharedVariantAnnotation(Base):
     last_updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     annotation_status = Column(String, default='completed')  # 'pending', 'completed', 'failed', 'partial'
     total_api_calls = Column(Integer, default=0)  # Total API calls made for this variant
+    failed_sources = Column(JSON, default=list)  # List of API sources that failed, e.g. ['ensembl', 'pharmgkb']
     usage_count = Column(Integer, default=0)  # How many times this annotation has been used
     
     # Relationships

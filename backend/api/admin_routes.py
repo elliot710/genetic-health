@@ -1,6 +1,7 @@
 """
 Admin API routes for user management and panel marker configuration.
 """
+import asyncio
 import csv
 import io
 import yaml
@@ -13,7 +14,7 @@ from pydantic import BaseModel
 from datetime import datetime
 
 from ..db.database import get_session
-from ..db.models import User, PanelMarkerConfig, GeneticAnalysis, VariantMapping, PendingDiscovery
+from ..db.models import User, PanelMarkerConfig, GeneticAnalysis, VariantMapping, PendingDiscovery, SharedVariantAnnotation
 from .auth_routes import get_current_user
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -846,4 +847,266 @@ async def bulk_review_discoveries(
         "approved": approved,
         "rejected": rejected,
         "skipped": skipped,
+    }
+
+
+# --- Incomplete Annotations ---
+
+class IncompleteAnnotationResponse(BaseModel):
+    id: int
+    rsid: str
+    annotation_status: Optional[str] = None
+    failed_sources: Optional[list] = None
+    total_api_calls: int = 0
+    # Source status: "found" = has data, "no_data" = confirmed absence, "missing" = never queried/error
+    ensembl: str = "missing"
+    clinvar: str = "missing"
+    pharmgkb: str = "missing"
+    snpedia: str = "missing"
+    litvar: str = "missing"
+    first_annotated_at: Optional[datetime] = None
+    last_updated_at: Optional[datetime] = None
+    usage_count: int = 0
+
+    class Config:
+        from_attributes = True
+
+
+class IncompleteAnnotationSummary(BaseModel):
+    total_annotations: int
+    complete: int
+    partial: int
+    failed: int
+
+
+@router.get("/annotations/incomplete/summary", response_model=IncompleteAnnotationSummary)
+async def get_incomplete_summary(
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Get counts of incomplete annotations."""
+    result = await db.execute(
+        select(SharedVariantAnnotation.annotation_status, func.count().label("cnt"))
+        .group_by(SharedVariantAnnotation.annotation_status)
+    )
+    rows = {r[0]: r[1] for r in result.all()}
+    total = sum(rows.values())
+    return IncompleteAnnotationSummary(
+        total_annotations=total,
+        complete=rows.get('completed', 0),
+        partial=rows.get('partial', 0),
+        failed=rows.get('failed', 0),
+    )
+
+
+@router.get("/annotations/incomplete", response_model=List[IncompleteAnnotationResponse])
+async def list_incomplete_annotations(
+    status_filter: Optional[str] = Query('partial', pattern="^(partial|failed|all)$"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """List annotations with incomplete data from external sources."""
+    q = select(SharedVariantAnnotation)
+    if status_filter == 'all':
+        q = q.where(SharedVariantAnnotation.annotation_status.in_(['partial', 'failed']))
+    else:
+        q = q.where(SharedVariantAnnotation.annotation_status == status_filter)
+    q = q.order_by(SharedVariantAnnotation.usage_count.desc()).limit(limit).offset(offset)
+
+    result = await db.execute(q)
+    annotations = result.scalars().all()
+
+    def _source_status(data):
+        if data is None:
+            return "missing"
+        if isinstance(data, dict):
+            if data.get('found', False):
+                return "found"
+            return "no_data"  # confirmed absence
+        return "missing"
+
+    return [
+        IncompleteAnnotationResponse(
+            id=a.id,
+            rsid=a.rsid,
+            annotation_status=a.annotation_status,
+            failed_sources=a.failed_sources,
+            total_api_calls=a.total_api_calls or 0,
+            ensembl=_source_status(a.ensembl_data),
+            clinvar=_source_status(a.clinvar_data),
+            pharmgkb=_source_status(a.pharmgkb_data),
+            snpedia=_source_status(a.snpedia_data),
+            litvar=_source_status(a.litvar_data),
+            first_annotated_at=a.first_annotated_at,
+            last_updated_at=a.last_updated_at,
+            usage_count=a.usage_count or 0,
+        )
+        for a in annotations
+    ]
+
+
+@router.post("/annotations/retrigger/{annotation_id}")
+async def retrigger_annotation(
+    annotation_id: int,
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Re-trigger external API calls for failed sources of an incomplete annotation."""
+    result = await db.execute(
+        select(SharedVariantAnnotation).where(SharedVariantAnnotation.id == annotation_id)
+    )
+    annotation = result.scalar_one_or_none()
+    if not annotation:
+        raise HTTPException(status_code=404, detail="Annotation not found")
+
+    failed = annotation.failed_sources or []
+    if not failed and annotation.annotation_status == 'completed':
+        return {"detail": "Annotation is already complete", "updated_sources": []}
+
+    # Determine which sources to retry (only null or not-yet-confirmed sources)
+    sources_to_retry = []
+    ALL_SOURCES = ['ensembl', 'clinvar', 'pharmgkb', 'snpedia']
+    for src in ALL_SOURCES:
+        src_data = getattr(annotation, f'{src}_data', None)
+        if src_data is None:
+            sources_to_retry.append(src)
+        elif isinstance(src_data, dict) and not src_data.get('found', True) and not src_data.get('confirmed_no_data', False):
+            sources_to_retry.append(src)
+
+    if not sources_to_retry:
+        annotation.annotation_status = 'completed'
+        annotation.failed_sources = None
+        await db.commit()
+        return {"detail": "All sources already have data or confirmed no data", "updated_sources": [], "confirmed_no_data": [], "still_failed": [], "new_status": "completed"}
+
+    # Import and call the API service
+    from ..services.genetic_api_service import OptimizedGeneticAPIService
+    api_service = OptimizedGeneticAPIService()
+    await api_service.initialize()
+
+    updated = []
+    still_failed = []
+    confirmed_no_data = []
+
+    try:
+        for src in sources_to_retry:
+            try:
+                method = getattr(api_service, f'_get_{src}_annotation', None)
+                if not method:
+                    still_failed.append(src)
+                    continue
+                result_data = await method(annotation.rsid)
+                if result_data and isinstance(result_data, dict) and result_data.get('found', False):
+                    setattr(annotation, f'{src}_data', result_data)
+                    updated.append(src)
+                else:
+                    # API responded but no data — mark as confirmed absence
+                    setattr(annotation, f'{src}_data', {'found': False, 'confirmed_no_data': True, 'source': src})
+                    confirmed_no_data.append(src)
+            except Exception as e:
+                still_failed.append(src)
+    finally:
+        await api_service.close()
+
+    annotation.failed_sources = still_failed if still_failed else None
+    annotation.annotation_status = 'completed' if not still_failed else 'partial'
+    annotation.total_api_calls = (annotation.total_api_calls or 0) + len(updated) + len(confirmed_no_data)
+    await db.commit()
+
+    return {
+        "detail": f"Retrigger complete for {annotation.rsid}",
+        "updated_sources": updated,
+        "confirmed_no_data": confirmed_no_data,
+        "still_failed": still_failed,
+        "new_status": annotation.annotation_status,
+    }
+
+
+@router.post("/annotations/retrigger-bulk")
+async def retrigger_bulk_annotations(
+    annotation_ids: List[int] = [],
+    retrigger_all: bool = Query(False),
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Bulk re-trigger incomplete annotations. Either specific IDs or all partials."""
+    if retrigger_all:
+        result = await db.execute(
+            select(SharedVariantAnnotation)
+            .where(SharedVariantAnnotation.annotation_status.in_(['partial', 'failed']))
+            .order_by(SharedVariantAnnotation.usage_count.desc())
+            .limit(limit)
+        )
+        annotations = result.scalars().all()
+    elif annotation_ids:
+        result = await db.execute(
+            select(SharedVariantAnnotation).where(SharedVariantAnnotation.id.in_(annotation_ids))
+        )
+        annotations = result.scalars().all()
+    else:
+        return {"detail": "Provide annotation_ids or set retrigger_all=true", "completed": 0, "still_incomplete": 0}
+
+    from ..services.genetic_api_service import OptimizedGeneticAPIService
+    api_service = OptimizedGeneticAPIService()
+    await api_service.initialize()
+
+    completed_count = 0
+    still_incomplete = 0
+
+    ALL_SOURCES = ['ensembl', 'clinvar', 'pharmgkb', 'snpedia']
+
+    try:
+        for idx, ann in enumerate(annotations):
+            # Rate-limit between annotations to avoid overwhelming external APIs
+            if idx > 0:
+                await asyncio.sleep(0.5)
+
+            sources_to_retry = []
+            for src in ALL_SOURCES:
+                src_data = getattr(ann, f'{src}_data', None)
+                if src_data is None:
+                    sources_to_retry.append(src)
+                elif isinstance(src_data, dict) and not src_data.get('found', True) and not src_data.get('confirmed_no_data', False):
+                    sources_to_retry.append(src)
+
+            if not sources_to_retry:
+                ann.annotation_status = 'completed'
+                ann.failed_sources = None
+                completed_count += 1
+                continue
+
+            still_failed = []
+            for src in sources_to_retry:
+                try:
+                    method = getattr(api_service, f'_get_{src}_annotation', None)
+                    if not method:
+                        still_failed.append(src)
+                        continue
+                    result_data = await method(ann.rsid)
+                    if result_data and isinstance(result_data, dict) and result_data.get('found', False):
+                        setattr(ann, f'{src}_data', result_data)
+                    else:
+                        # API responded but no data — confirmed absence, not a failure
+                        setattr(ann, f'{src}_data', {'found': False, 'confirmed_no_data': True, 'source': src})
+                except Exception:
+                    still_failed.append(src)
+
+            ann.failed_sources = still_failed if still_failed else None
+            ann.annotation_status = 'completed' if not still_failed else 'partial'
+            if not still_failed:
+                completed_count += 1
+            else:
+                still_incomplete += 1
+    finally:
+        await api_service.close()
+
+    await db.commit()
+    return {
+        "detail": f"Bulk retrigger complete: {completed_count} now complete, {still_incomplete} still incomplete",
+        "completed": completed_count,
+        "still_incomplete": still_incomplete,
+        "total_processed": len(annotations),
     }
