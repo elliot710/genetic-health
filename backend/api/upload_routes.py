@@ -194,11 +194,16 @@ async def delete_all_user_data(
         analysis_ids = [analysis.id for analysis in analyses]
         deleted_count = len(analysis_ids)
         
-        # Delete in correct order to respect foreign key constraints
-        # All insight tables have CASCADE delete on analysis_id, so we just need to delete analyses
-        # and the system will automatically clean up user-specific data while preserving shared annotations
+        # Explicitly delete large child tables first for performance
+        # (CASCADE would handle it, but bulk DELETE is much faster for 600K+ rows)
+        await session.execute(
+            delete(VariantAnnotation).where(VariantAnnotation.analysis_id.in_(analysis_ids))
+        )
+        await session.execute(
+            delete(AnalysisVariant).where(AnalysisVariant.analysis_id.in_(analysis_ids))
+        )
         
-        # Delete analyses (this will cascade to all user-specific data)
+        # Delete analyses (remaining smaller tables cascade-delete automatically)
         await session.execute(
             delete(GeneticAnalysis).where(GeneticAnalysis.id.in_(analysis_ids))
         )

@@ -5,7 +5,7 @@ Fixed version with correct SQLAlchemy ORM usage patterns.
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel
 
@@ -451,16 +451,16 @@ async def get_dashboard_data(
         
         # Count actual variant annotations for more accurate "analyzed" count
         from ..db.models import VariantAnnotation, SharedVariantAnnotation
-        annotation_result = await db.execute(
-            select(VariantAnnotation)
+        analyzed_count_result = await db.execute(
+            select(func.count(VariantAnnotation.id))
             .join(GeneticAnalysis, VariantAnnotation.analysis_id == GeneticAnalysis.id)
             .where(GeneticAnalysis.user_id == current_user.id)
         )
-        analyzed_variants = len(annotation_result.scalars().all())
+        analyzed_variants = analyzed_count_result.scalar() or 0
         
         # Count insights (annotations with meaningful data) using shared annotations
-        insights_result = await db.execute(
-            select(VariantAnnotation)
+        insights_count_result = await db.execute(
+            select(func.count(VariantAnnotation.id))
             .join(GeneticAnalysis, VariantAnnotation.analysis_id == GeneticAnalysis.id)
             .join(SharedVariantAnnotation, VariantAnnotation.shared_annotation_id == SharedVariantAnnotation.id)
             .where(
@@ -468,7 +468,7 @@ async def get_dashboard_data(
                 SharedVariantAnnotation.ensembl_data.isnot(None)
             )
         )
-        insights_found = len(insights_result.scalars().all())
+        insights_found = insights_count_result.scalar() or 0
         
         # Get upload date safely
         upload_date = getattr(primary_analysis, 'upload_date', None)

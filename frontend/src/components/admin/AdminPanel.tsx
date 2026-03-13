@@ -242,6 +242,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const [viewingLogs, setViewingLogs] = useState<number | null>(null)
   const [jobLogs, setJobLogs] = useState<{ ts: string; level: string; msg: string }[]>([])
   const [logsLoading, setLogsLoading] = useState(false)
+  const [deleteConfirmJobId, setDeleteConfirmJobId] = useState<number | null>(null)
   const logsEndRef = useRef<HTMLDivElement>(null)
   const logsRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -639,7 +640,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   }
 
   const deleteJob = async (id: number) => {
-    if (!confirm('Delete this analysis job and all associated data? This cannot be undone.')) return
+    setDeleteConfirmJobId(null)
     setJobActionLoading(id)
     try {
       const res = await fetch(`${API}/jobs/${id}`, { method: 'DELETE', headers })
@@ -1659,7 +1660,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                                 variant="outline"
                                 className="h-7 px-2 text-xs text-red-400 border-red-500/30 hover:bg-red-500/10"
                                 disabled={jobActionLoading === job.id}
-                                onClick={() => deleteJob(job.id)}
+                                onClick={() => setDeleteConfirmJobId(job.id)}
                               >
                                 <Trash2 className="h-3 w-3" />
                               </Button>
@@ -1679,6 +1680,24 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
       {/* ===== DIALOGS ===== */}
 
       {/* Job Logs Dialog */}
+      {/* Delete Job Confirmation Dialog */}
+      <Dialog open={deleteConfirmJobId !== null} onOpenChange={(open) => { if (!open) setDeleteConfirmJobId(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Analysis Job</DialogTitle>
+            <DialogDescription>
+              Delete this analysis job and all associated data? This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteConfirmJobId(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => deleteConfirmJobId !== null && deleteJob(deleteConfirmJobId)}>
+              Delete Job
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={viewingLogs !== null} onOpenChange={(open) => { if (!open) setViewingLogs(null) }}>
         <DialogContent className="sm:max-w-5xl max-h-[85vh] flex flex-col">
           <DialogHeader>

@@ -293,7 +293,7 @@ class VariantAnnotation(Base):
     __tablename__ = "variant_annotations"
     
     id = Column(Integer, primary_key=True, index=True)
-    analysis_id = Column(Integer, ForeignKey("genetic_analyses.id", ondelete="CASCADE"), nullable=False)
+    analysis_id = Column(Integer, ForeignKey("genetic_analyses.id", ondelete="CASCADE"), nullable=False, index=True)
     analysis_variant_id = Column(Integer, ForeignKey("analysis_variants.id", ondelete="CASCADE"), nullable=False)
     shared_annotation_id = Column(Integer, ForeignKey("shared_variant_annotations.id"), nullable=True)  # Reference to shared annotation
     rsid = Column(String, nullable=False, index=True)
