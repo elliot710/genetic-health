@@ -863,10 +863,14 @@ DEFAULT_SOURCES = [
     {"source_name": "snpedia", "display_name": "SNPedia", "is_enabled": True, "description": "Community-curated variant wiki — genotype-phenotype associations and research summaries", "rate_limit": 2.0, "priority": 4},
     {"source_name": "alpha_missense", "display_name": "AlphaMissense", "is_enabled": True, "description": "AI-based missense pathogenicity predictions (local data, no API calls)", "rate_limit": None, "priority": 5},
     {"source_name": "clinvar_local", "display_name": "ClinVar Local", "is_enabled": True, "description": "Local ClinVar TSV + VCF data — variant summary, citations, cross-refs, gene stats, HGVS, conflicts, allele frequencies, molecular consequences, oncogenicity (no API calls)", "rate_limit": None, "priority": 6},
+    {"source_name": "gnomad", "display_name": "gnomAD", "is_enabled": True, "description": "Genome Aggregation Database — population allele frequencies, gene constraint metrics, variant filtering (local data + BigQuery fallback)", "rate_limit": None, "priority": 7},
+    {"source_name": "chembl", "display_name": "ChEMBL (BigQuery)", "is_enabled": True, "description": "Drug mechanisms, indications, and safety warnings for gene targets — via Google BigQuery public data (ebi_chembl v33)", "rate_limit": None, "priority": 8},
+    {"source_name": "fda_drug", "display_name": "FDA Drug Labels (BigQuery)", "is_enabled": True, "description": "FDA drug labels with CYP enzyme interaction data and pharmacokinetics — via Google BigQuery public data", "rate_limit": None, "priority": 9},
+    {"source_name": "alphafold", "display_name": "AlphaFold (BigQuery)", "is_enabled": True, "description": "DeepMind AlphaFold protein structure confidence scores (pLDDT) — via Google BigQuery public data", "rate_limit": None, "priority": 10},
 ]
 
 # Map source names to DB columns (clinpgx data stored in pharmgkb_data column)
-SOURCE_TO_COLUMN = {'ensembl': 'ensembl', 'clinvar': 'clinvar', 'clinpgx': 'pharmgkb', 'snpedia': 'snpedia', 'alpha_missense': 'alpha_missense', 'clinvar_local': 'clinvar_local'}
+SOURCE_TO_COLUMN = {'ensembl': 'ensembl', 'clinvar': 'clinvar', 'clinpgx': 'pharmgkb', 'snpedia': 'snpedia', 'alpha_missense': 'alpha_missense', 'clinvar_local': 'clinvar_local', 'gnomad': 'gnomad', 'chembl': 'chembl', 'fda_drug': 'fda_drug', 'alphafold': 'alphafold'}
 
 
 async def _ensure_source_configs(db: AsyncSession) -> List[AnnotationSourceConfig]:
@@ -882,7 +886,7 @@ async def _ensure_source_configs(db: AsyncSession) -> List[AnnotationSourceConfi
             db.add(AnnotationSourceConfig(**default))
 
     if len(existing_names) < len(DEFAULT_SOURCES):
-        await db.flush()
+        await db.commit()
         result = await db.execute(
             select(AnnotationSourceConfig).order_by(AnnotationSourceConfig.priority)
         )
@@ -1264,9 +1268,9 @@ async def retrigger_annotation(
 
     # Determine which sources to retry (only null or not-yet-confirmed sources)
     sources_to_retry = []
-    ALL_SOURCES = ['ensembl', 'clinvar', 'clinpgx', 'snpedia', 'alpha_missense', 'clinvar_local']
+    ALL_SOURCES = ['ensembl', 'clinvar', 'clinpgx', 'snpedia', 'alpha_missense', 'clinvar_local', 'gnomad']
     # Map source name to DB column name (clinpgx data stored in pharmgkb_data column)
-    SOURCE_TO_COLUMN = {'ensembl': 'ensembl', 'clinvar': 'clinvar', 'clinpgx': 'pharmgkb', 'snpedia': 'snpedia', 'alpha_missense': 'alpha_missense', 'clinvar_local': 'clinvar_local'}
+    SOURCE_TO_COLUMN = {'ensembl': 'ensembl', 'clinvar': 'clinvar', 'clinpgx': 'pharmgkb', 'snpedia': 'snpedia', 'alpha_missense': 'alpha_missense', 'clinvar_local': 'clinvar_local', 'gnomad': 'gnomad'}
     for src in ALL_SOURCES:
         col = SOURCE_TO_COLUMN.get(src, src)
         src_data = getattr(annotation, f'{col}_data', None)
@@ -1372,8 +1376,8 @@ async def retrigger_bulk_annotations(
     completed_count = 0
     still_incomplete = 0
 
-    ALL_SOURCES = ['ensembl', 'clinvar', 'clinpgx', 'snpedia', 'alpha_missense', 'clinvar_local']
-    SOURCE_TO_COLUMN = {'ensembl': 'ensembl', 'clinvar': 'clinvar', 'clinpgx': 'pharmgkb', 'snpedia': 'snpedia', 'alpha_missense': 'alpha_missense', 'clinvar_local': 'clinvar_local'}
+    ALL_SOURCES = ['ensembl', 'clinvar', 'clinpgx', 'snpedia', 'alpha_missense', 'clinvar_local', 'gnomad']
+    SOURCE_TO_COLUMN = {'ensembl': 'ensembl', 'clinvar': 'clinvar', 'clinpgx': 'pharmgkb', 'snpedia': 'snpedia', 'alpha_missense': 'alpha_missense', 'clinvar_local': 'clinvar_local', 'gnomad': 'gnomad'}
 
     try:
         for idx, ann in enumerate(annotations):
@@ -1659,3 +1663,214 @@ async def get_job_logs(
     collector = JobLogCollector.get_instance()
     logs = collector.get_logs(job_id, last_n=last_n)
     return {"job_id": job_id, "count": len(logs), "logs": logs}
+
+
+# ======================================================================
+# ClinVar ETL endpoints
+# ======================================================================
+
+@router.get("/clinvar-etl/status")
+async def clinvar_etl_status(admin: User = Depends(require_admin)):
+    """Get current ClinVar import status (row counts + file availability)."""
+    from ..services.clinvar_etl import ClinVarETL
+    etl = ClinVarETL()
+    return await etl.get_import_status()
+
+
+@router.post("/clinvar-etl/import")
+async def clinvar_etl_import(admin: User = Depends(require_admin)):
+    """Run full ClinVar ETL import (truncates + reimports all data).
+    This is a long-running operation — may take 5-15 minutes."""
+    from ..services.clinvar_etl import ClinVarETL
+    etl = ClinVarETL()
+    stats = await etl.run_full_import()
+    # Refresh the ClinVar local service cache count
+    from ..services.clinvar_local import get_clinvar_local_service
+    cv_svc = get_clinvar_local_service()
+    await cv_svc.ensure_loaded()
+    return stats
+
+
+# ======================================================================
+# Category Rules endpoints
+# ======================================================================
+
+class CategoryRuleCreate(BaseModel):
+    category: str
+    rule_type: str
+    rule_value: str
+    priority: int = 50
+    is_active: bool = True
+    mapping_data_template: Optional[dict] = None
+
+
+class CategoryRuleUpdate(BaseModel):
+    rule_value: Optional[str] = None
+    priority: Optional[int] = None
+    is_active: Optional[bool] = None
+    mapping_data_template: Optional[dict] = None
+
+
+@router.get("/category-rules")
+async def list_category_rules(
+    category: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """List all category rules, optionally filtered by category."""
+    from ..db.models import CategoryRule
+    q = select(CategoryRule).order_by(CategoryRule.category, CategoryRule.priority)
+    if category:
+        q = q.where(CategoryRule.category == category)
+    result = await db.execute(q)
+    rules = result.scalars().all()
+    return [
+        {
+            "id": r.id, "category": r.category, "rule_type": r.rule_type,
+            "rule_value": r.rule_value, "priority": r.priority,
+            "is_active": r.is_active, "mapping_data_template": r.mapping_data_template,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rules
+    ]
+
+
+@router.post("/category-rules")
+async def create_category_rule(
+    rule: CategoryRuleCreate,
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Create a new category rule."""
+    from ..db.models import CategoryRule
+    new_rule = CategoryRule(
+        category=rule.category,
+        rule_type=rule.rule_type,
+        rule_value=rule.rule_value,
+        priority=rule.priority,
+        is_active=rule.is_active,
+        mapping_data_template=rule.mapping_data_template,
+    )
+    db.add(new_rule)
+    await db.commit()
+    await db.refresh(new_rule)
+    return {"id": new_rule.id, "category": new_rule.category, "rule_type": new_rule.rule_type}
+
+
+@router.put("/category-rules/{rule_id}")
+async def update_category_rule(
+    rule_id: int,
+    update: CategoryRuleUpdate,
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Update a category rule."""
+    from ..db.models import CategoryRule
+    result = await db.execute(select(CategoryRule).where(CategoryRule.id == rule_id))
+    rule = result.scalar_one_or_none()
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    for field, value in update.model_dump(exclude_unset=True).items():
+        setattr(rule, field, value)
+    await db.commit()
+    return {"detail": "Rule updated"}
+
+
+@router.delete("/category-rules/{rule_id}")
+async def delete_category_rule(
+    rule_id: int,
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Delete a category rule."""
+    from ..db.models import CategoryRule
+    result = await db.execute(select(CategoryRule).where(CategoryRule.id == rule_id))
+    rule = result.scalar_one_or_none()
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    await db.delete(rule)
+    await db.commit()
+    return {"detail": "Rule deleted"}
+
+
+@router.post("/category-rules/seed")
+async def seed_rules(
+    force: bool = Query(False, description="Delete existing rules before seeding"),
+    admin: User = Depends(require_admin),
+):
+    """Seed default category rules (idempotent unless force=true)."""
+    from ..services.auto_categorizer import seed_category_rules
+    return await seed_category_rules(force=force)
+
+
+# ======================================================================
+# gnomAD ETL endpoints
+# ======================================================================
+
+@router.get("/gnomad-etl/status")
+async def gnomad_etl_status(admin: User = Depends(require_admin)):
+    """Get current gnomAD import status (row counts + file availability)."""
+    from ..services.gnomad_etl import GnomadETL
+    etl = GnomadETL()
+    return await etl.get_import_status()
+
+
+@router.post("/gnomad-etl/import")
+async def gnomad_etl_import(admin: User = Depends(require_admin)):
+    """Run full gnomAD ETL import (truncates + reimports all data).
+    This is a long-running operation — may take 30+ minutes for large files."""
+    from ..services.gnomad_etl import GnomadETL
+    etl = GnomadETL()
+    stats = await etl.run_full_import()
+    # Refresh the gnomAD local service cache count
+    from ..services.gnomad_local import get_gnomad_service
+    gnomad_svc = get_gnomad_service()
+    await gnomad_svc.ensure_loaded()
+    return stats
+
+
+# ======================================================================
+# gnomAD BigQuery backfill endpoints
+# ======================================================================
+
+@router.get("/gnomad-bigquery/status")
+async def gnomad_bigquery_status(admin: User = Depends(require_admin)):
+    """Get BigQuery backfill status — enrichment progress, BQ availability."""
+    from ..services.gnomad_backfill import GnomadBackfillService
+    svc = GnomadBackfillService()
+    return await svc.get_backfill_status()
+
+
+@router.post("/gnomad-bigquery/backfill")
+async def gnomad_bigquery_backfill(
+    batch_size: int = Query(200, ge=10, le=1000, description="Variants per BigQuery query"),
+    max_variants: int = Query(10000, ge=100, le=1000000, description="Max variants to process"),
+    chromosome: Optional[str] = Query(None, description="Only backfill this chromosome (1-22, X, Y)"),
+    admin: User = Depends(require_admin),
+):
+    """Run BigQuery backfill — enrich local CADD variants with population AFs.
+    This queries Google BigQuery and may incur costs. Uses 10 GB byte budget per query."""
+    from ..services.gnomad_backfill import GnomadBackfillService
+    svc = GnomadBackfillService()
+    return await svc.backfill(
+        batch_size=batch_size,
+        max_variants=max_variants,
+        chromosome=chromosome,
+    )
+
+
+# ======================================================================
+# Auto-categorization endpoint
+# ======================================================================
+
+@router.post("/auto-categorize")
+async def run_auto_categorize(
+    categories: Optional[str] = Query(None, description="Comma-separated category filter"),
+    admin: User = Depends(require_admin),
+):
+    """Run auto-categorization: evaluate active rules against ClinVar data to
+    generate VariantMapping rows. Optional category filter (comma-separated)."""
+    from ..services.auto_categorizer import AutoCategorizer
+    cat_list = [c.strip() for c in categories.split(",")] if categories else None
+    categorizer = AutoCategorizer()
+    return await categorizer.run(categories=cat_list)

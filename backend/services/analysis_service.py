@@ -119,6 +119,22 @@ class SharedVariantAnnotationService:
                 if am_data is not None:
                     merged_data['annotations']['alpha_missense'] = am_data
 
+                # Include ClinVar Local data (PG-backed, not an API source)
+                cv_local = getattr(annotation, 'clinvar_local_data', None)
+                if cv_local is not None:
+                    merged_data['annotations']['clinvar_local'] = cv_local
+
+                # Include gnomAD data (PG-backed, not an API source)
+                gnomad = getattr(annotation, 'gnomad_data', None)
+                if gnomad is not None:
+                    merged_data['annotations']['gnomad'] = gnomad
+
+                # Compute composite pathogenicity score
+                from .scoring_engine import get_scoring_engine
+                merged_data['pathogenicity_score'] = get_scoring_engine().score_variant(
+                    merged_data['annotations']
+                )
+
                 if merged_data['success_count'] > 0:
                     annotation_map[annotation.rsid] = merged_data
 
@@ -184,13 +200,21 @@ class SharedVariantAnnotationService:
                         am_svc = get_alpha_missense_service()
                         am_data = am_svc.lookup_comprehensive(str(chrom), int(pos), ref, alt)
 
-            # Look up ClinVar local data (all 11 TSV files)
+            # Look up ClinVar local data (PostgreSQL-backed)
             cv_local_data = None
             if enabled_sources is None or 'clinvar_local' in enabled_sources:
                 from .clinvar_local import get_clinvar_local_service
                 cv_svc = get_clinvar_local_service()
                 if cv_svc.is_loaded:
-                    cv_local_data = cv_svc.lookup(rsid)
+                    cv_local_data = await cv_svc.lookup(rsid)
+
+            # Look up gnomAD data (PG-backed with BigQuery fallback)
+            gnomad_data_val = None
+            if enabled_sources is None or 'gnomad' in enabled_sources:
+                from .gnomad_local import get_gnomad_service
+                gnomad_svc = get_gnomad_service()
+                if gnomad_svc.is_loaded:
+                    gnomad_data_val = await gnomad_svc.lookup(rsid)
 
             from sqlalchemy.dialects.postgresql import insert
             values = dict(
@@ -202,6 +226,7 @@ class SharedVariantAnnotationService:
                 litvar_data=annotations.get('litvar'),
                 alpha_missense_data=am_data,
                 clinvar_local_data=cv_local_data,
+                gnomad_data=gnomad_data_val,
                 annotation_status=status,
                 failed_sources=failed if failed else None,
                 total_api_calls=success_count,
@@ -241,6 +266,11 @@ class SharedVariantAnnotationService:
                 conflict_set['clinvar_local_data'] = func.coalesce(
                     SharedVariantAnnotation.clinvar_local_data,
                     stmt.excluded.clinvar_local_data,
+                )
+            if gnomad_data_val:
+                conflict_set['gnomad_data'] = func.coalesce(
+                    SharedVariantAnnotation.gnomad_data,
+                    stmt.excluded.gnomad_data,
                 )
 
             # Recalculate annotation_status & failed_sources after the merge.
@@ -349,20 +379,38 @@ class ComprehensiveAnalysisService:
     async def _load_enabled_sources(self) -> Optional[List[str]]:
         """Load enabled annotation sources from the database.
         Returns a list of enabled source names, or None if the table
-        doesn't exist yet / is empty (meaning use all sources)."""
+        doesn't exist yet / is empty (meaning use all sources).
+
+        Local sources (alpha_missense, clinvar_local) are always included
+        if not explicitly disabled, even if their config row doesn't exist yet."""
+        # Local sources that should always be enabled unless explicitly disabled
+        LOCAL_SOURCES = {'alpha_missense', 'clinvar_local', 'gnomad'}
         try:
             from ..db.database import async_session_factory
             async with async_session_factory() as session:
                 result = await session.execute(
-                    select(AnnotationSourceConfig.source_name).where(
-                        AnnotationSourceConfig.is_enabled == True
-                    )
+                    select(AnnotationSourceConfig.source_name, AnnotationSourceConfig.is_enabled)
                 )
-                names = [r[0] for r in result.all()]
-            if names:
-                logger.info(f"Enabled annotation sources: {names}")
-                return names
-            return None  # No rows → use all sources (table not seeded yet)
+                rows = result.all()
+            if not rows:
+                return None  # No rows → use all sources (table not seeded yet)
+
+            enabled = set()
+            explicitly_disabled = set()
+            for name, is_enabled in rows:
+                if is_enabled:
+                    enabled.add(name)
+                else:
+                    explicitly_disabled.add(name)
+
+            # Add local sources that aren't explicitly disabled
+            for src in LOCAL_SOURCES:
+                if src not in explicitly_disabled:
+                    enabled.add(src)
+
+            names = sorted(enabled)
+            logger.info(f"Enabled annotation sources: {names}")
+            return names
         except Exception as e:
             logger.warning(f"Could not load annotation source config: {e} — using all sources")
             return None
@@ -541,6 +589,11 @@ class ComprehensiveAnalysisService:
         existing_annotations = await annotation_service.get_existing_annotations(rsids)
         progress.reused_annotations = len(existing_annotations)
 
+        # Backfill local sources (ClinVar Local, AlphaMissense) for existing
+        # annotations that were created before those sources were added
+        enabled_sources = await self._load_enabled_sources()
+        await self._backfill_local_sources(existing_annotations, enabled_sources, variants_with_rsid)
+
         variants_needing_annotation = [
             v for v in variants_with_rsid
             if str(v.rsid) not in existing_annotations
@@ -559,8 +612,6 @@ class ComprehensiveAnalysisService:
         if variants_needing_annotation and self.api_service:
             batch_size = settings.api.batch_size
 
-            # Load enabled annotation sources from admin config
-            enabled_sources = await self._load_enabled_sources()
             total_batches = (len(variants_needing_annotation) + batch_size - 1) // batch_size
 
             for i in range(0, len(variants_needing_annotation), batch_size):
@@ -620,6 +671,86 @@ class ComprehensiveAnalysisService:
 
         logger.info(f"Annotation complete: {progress.reused_annotations} reused, {progress.new_annotations} new")
         return annotation_results
+
+    async def _backfill_local_sources(
+        self,
+        existing_annotations: Dict[str, Dict[str, Any]],
+        enabled_sources: Optional[List[str]],
+        variants: List[AnalysisVariant],
+    ):
+        """Backfill ClinVar Local (and AlphaMissense) data for existing annotations
+        that were created before those local sources were added."""
+        from ..db.database import async_session_factory
+
+        # --- ClinVar Local backfill ---
+        do_clinvar = enabled_sources is None or 'clinvar_local' in enabled_sources
+        if do_clinvar:
+            from .clinvar_local import get_clinvar_local_service
+            cv_svc = get_clinvar_local_service()
+            do_clinvar = cv_svc.is_loaded
+
+        missing_cv = []
+        if do_clinvar:
+            missing_cv = [
+                rsid for rsid, data in existing_annotations.items()
+                if 'clinvar_local' not in data.get('annotations', {})
+            ]
+
+        # --- gnomAD backfill ---
+        do_gnomad = enabled_sources is None or 'gnomad' in enabled_sources
+        gnomad_svc = None
+        if do_gnomad:
+            from .gnomad_local import get_gnomad_service
+            gnomad_svc = get_gnomad_service()
+            do_gnomad = gnomad_svc.is_loaded
+
+        missing_gnomad = []
+        if do_gnomad:
+            missing_gnomad = [
+                rsid for rsid, data in existing_annotations.items()
+                if 'gnomad' not in data.get('annotations', {})
+            ]
+
+        if not missing_cv and not missing_gnomad:
+            return
+
+        # ClinVar Local backfill
+        cv_updated = 0
+        if missing_cv:
+            logger.info(f"Backfilling ClinVar Local for {len(missing_cv)} existing annotations")
+            async with async_session_factory() as session:
+                for rsid in missing_cv:
+                    cv_data = await cv_svc.lookup(rsid)
+                    if cv_data and cv_data.get('found'):
+                        await session.execute(
+                            update(SharedVariantAnnotation)
+                            .where(SharedVariantAnnotation.rsid == rsid)
+                            .values(clinvar_local_data=cv_data)
+                        )
+                        existing_annotations[rsid]['annotations']['clinvar_local'] = cv_data
+                        cv_updated += 1
+                if cv_updated:
+                    await session.commit()
+            logger.info(f"Backfilled ClinVar Local data for {cv_updated}/{len(missing_cv)} annotations")
+
+        # gnomAD backfill
+        gnomad_updated = 0
+        if missing_gnomad and gnomad_svc:
+            logger.info(f"Backfilling gnomAD for {len(missing_gnomad)} existing annotations")
+            async with async_session_factory() as session:
+                for rsid in missing_gnomad:
+                    gn_data = await gnomad_svc.lookup(rsid)
+                    if gn_data and gn_data.get('found'):
+                        await session.execute(
+                            update(SharedVariantAnnotation)
+                            .where(SharedVariantAnnotation.rsid == rsid)
+                            .values(gnomad_data=gn_data)
+                        )
+                        existing_annotations[rsid]['annotations']['gnomad'] = gn_data
+                        gnomad_updated += 1
+                if gnomad_updated:
+                    await session.commit()
+            logger.info(f"Backfilled gnomAD data for {gnomad_updated}/{len(missing_gnomad)} annotations")
 
     async def _generate_comprehensive_insights(
         self,

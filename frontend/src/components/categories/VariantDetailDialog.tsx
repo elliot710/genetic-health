@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useEffect } from 'react'
-import { ExternalLink, Dna, FlaskConical, BookOpen, Activity, X, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react'
+import { ExternalLink, Dna, FlaskConical, BookOpen, Activity, X, ChevronDown, ChevronUp, AlertTriangle, Pill, Shield, Atom } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import {
   Dialog,
@@ -87,6 +87,106 @@ interface VariantDetails {
     }>
     disclaimer?: string
   }
+  gnomad?: {
+    found: boolean
+    source?: string
+    variant_id?: string
+    variant_type?: string
+    af?: number | null
+    ac?: number | null
+    an?: number | null
+    nhomalt?: number | null
+    filter_status?: string
+    gene?: string
+    consequence?: string
+    impact?: string
+    hgvsc?: string
+    hgvsp?: string
+    population_frequencies?: Record<string, { name: string; af: number }>
+    cadd?: {
+      raw?: number | null
+      phred?: number | null
+      interpretation?: string
+    }
+    predictions?: {
+      sift?: { category?: string; score?: number | null }
+      polyphen?: { category?: string; score?: number | null }
+    }
+    conservation?: {
+      primate?: number | null
+      mammal?: number | null
+      vertebrate?: number | null
+    }
+    splice_ai?: {
+      acceptor_gain?: number | null
+      acceptor_loss?: number | null
+      donor_gain?: number | null
+      donor_loss?: number | null
+      max_score?: number | null
+    }
+  }
+  pathogenicity_score?: {
+    composite_score: number
+    confidence: string
+    evidence_count: number
+    classification: string
+    sources: Record<string, { score: number; weight: number; label: string; raw_value: unknown }>
+    conflicts: string[]
+    total_weight: number
+  }
+  chembl?: {
+    gene?: string
+    found: boolean
+    source?: string
+    targets?: Array<{ tid: number; target_name: string; uniprot_id?: string }>
+    drugs?: Array<{
+      drug_name?: string
+      chembl_id?: string
+      max_phase?: number
+      first_approval?: number
+      mechanism_of_action?: string
+      action_type?: string
+      target_name?: string
+      uniprot_id?: string
+    }>
+    warnings?: Array<{
+      drug_name?: string
+      warning_type?: string
+      warning_class?: string
+      warning_description?: string
+      warning_year?: number
+    }>
+  }
+  fda_drug?: {
+    found: boolean
+    items?: Array<{
+      drug?: string
+      found: boolean
+      generic_name?: string
+      brand_name?: string
+      pharm_class?: string
+      route?: string
+      cyp_enzymes_mentioned?: string[]
+      drug_interactions?: string
+      indications?: string
+      pharmacokinetics?: string
+    }>
+  }
+  alphafold?: {
+    gene?: string
+    found: boolean
+    source?: string
+    entry_id?: string
+    uniprot_id?: string
+    protein_name?: string
+    global_confidence?: number
+    plddt_very_high?: number
+    plddt_confident?: number
+    plddt_low?: number
+    plddt_very_low?: number
+    model_date?: string
+    all_isoforms?: Array<{ entry_id?: string; uniprot_id?: string; confidence?: number }>
+  }
 }
 
 // ─── Props ──────────────────────────────────────────────────────
@@ -145,6 +245,45 @@ function formatPopName(name: string): string {
     .replace('ami', 'Amish')
     .replace('eur', 'European')
     .replace('sas', 'South Asian')
+}
+
+function classificationColor(cls: string): string {
+  switch (cls) {
+    case 'pathogenic': return 'text-red-400'
+    case 'likely_pathogenic': return 'text-orange-400'
+    case 'uncertain': return 'text-yellow-400'
+    case 'likely_benign': return 'text-blue-400'
+    case 'benign': return 'text-green-400'
+    default: return 'text-gray-400'
+  }
+}
+
+function classificationBg(cls: string): string {
+  switch (cls) {
+    case 'pathogenic': return 'bg-red-500/15 border-red-500/30'
+    case 'likely_pathogenic': return 'bg-orange-500/15 border-orange-500/30'
+    case 'uncertain': return 'bg-yellow-500/15 border-yellow-500/30'
+    case 'likely_benign': return 'bg-blue-500/15 border-blue-500/30'
+    case 'benign': return 'bg-green-500/15 border-green-500/30'
+    default: return 'bg-gray-500/15 border-gray-500/30'
+  }
+}
+
+function scoreBarColor(score: number): string {
+  if (score >= 0.8) return 'bg-red-500'
+  if (score >= 0.6) return 'bg-orange-500'
+  if (score >= 0.3) return 'bg-yellow-500'
+  if (score >= 0.15) return 'bg-blue-500'
+  return 'bg-green-500'
+}
+
+function confidenceBadge(conf: string): string {
+  switch (conf) {
+    case 'high': return 'bg-green-500/15 text-green-400 border-green-500/30'
+    case 'moderate': return 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30'
+    case 'low': return 'bg-orange-500/15 text-orange-400 border-orange-500/30'
+    default: return 'bg-gray-500/15 text-gray-400 border-gray-500/30'
+  }
 }
 
 // ─── Component ──────────────────────────────────────────────────
@@ -291,6 +430,79 @@ export default function VariantDetailDialog({
                 <p className={`text-sm leading-relaxed ${textSecondary}`}>{details.description}</p>
               </div>
             )}
+
+            {/* ── Composite Pathogenicity Score ── */}
+            {details.pathogenicity_score && details.pathogenicity_score.evidence_count > 0 && (() => {
+              const ps = details.pathogenicity_score
+              const pct = Math.round(ps.composite_score * 100)
+              const clsLabel = ps.classification.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+              const sourceEntries = Object.entries(ps.sources).sort(([,a], [,b]) => b.weight - a.weight)
+              return (
+                <div className={`${cardBg} rounded-xl p-4 border ${border}`}>
+                  <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-3 flex items-center gap-1.5`}>
+                    <Activity className="h-3.5 w-3.5" /> Composite Pathogenicity Score
+                    <Badge variant="outline" className={`${confidenceBadge(ps.confidence)} text-[10px] ml-1`}>
+                      {ps.confidence} confidence
+                    </Badge>
+                    <Badge variant="outline" className="bg-gray-500/10 text-gray-400 border-gray-500/20 text-[10px]">
+                      {ps.evidence_count} sources
+                    </Badge>
+                  </h4>
+
+                  {/* Score bar + classification */}
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="flex-1">
+                      <div className="h-3 rounded-full bg-gray-700/50 overflow-hidden relative">
+                        <div
+                          className={`h-full rounded-full ${scoreBarColor(ps.composite_score)} transition-all duration-500`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                    <span className={`text-lg font-bold font-mono ${classificationColor(ps.classification)}`}>
+                      {pct}%
+                    </span>
+                  </div>
+
+                  <div className={`inline-block rounded-lg px-3 py-1 border text-sm font-medium mb-3 ${classificationBg(ps.classification)} ${classificationColor(ps.classification)}`}>
+                    {clsLabel}
+                  </div>
+
+                  {/* Per-source breakdown */}
+                  <div className="space-y-1.5 mt-2">
+                    {sourceEntries.map(([src, info]) => (
+                      <div key={src} className="flex items-center gap-2 text-xs">
+                        <span className={`w-28 truncate ${textSecondary}`}>{src.replace(/_/g, ' ')}</span>
+                        <div className="flex-1 h-1.5 rounded-full bg-gray-700/40 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${scoreBarColor(info.score)}`}
+                            style={{ width: `${Math.round(info.score * 100)}%` }}
+                          />
+                        </div>
+                        <span className={`w-10 text-right font-mono ${textSecondary}`}>
+                          {(info.score * 100).toFixed(0)}%
+                        </span>
+                        <span className={`w-8 text-right font-mono text-[10px] ${textSecondary}`}>
+                          ×{info.weight}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Conflicts */}
+                  {ps.conflicts.length > 0 && (
+                    <div className="mt-3 space-y-1">
+                      {ps.conflicts.map((c, i) => (
+                        <div key={i} className="flex items-start gap-1.5 text-xs text-amber-400">
+                          <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+                          <span>{c}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
 
             {/* ── Clinical Significance ── */}
             {details.clinical_significance && details.clinical_significance.length > 0 && (
@@ -604,6 +816,499 @@ export default function VariantDetailDialog({
                     <AlertTriangle className="h-3 w-3 text-amber-400 mt-0.5 flex-shrink-0" />
                     <p className={`text-[10px] ${textSecondary} leading-relaxed`}>
                       {details.alpha_missense.disclaimer || 'AlphaMissense predictions are AI-generated (DeepMind) and have NOT been clinically validated. Do not use for clinical decision-making.'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── gnomAD Population Frequencies ── */}
+            {details.gnomad?.found && (
+              <div>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
+                  <Activity className="h-3.5 w-3.5" /> gnomAD
+                  {details.gnomad.source && (
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                      {details.gnomad.source.replace('gnomad_', '').replace('gnomad', 'local')}
+                    </Badge>
+                  )}
+                </h4>
+                <div className={`${cardBg} rounded-xl p-3 border ${border} space-y-2`}>
+                  {/* Global AF summary */}
+                  <div className="flex items-center justify-between">
+                    <span className={`text-xs ${textSecondary}`}>Global Allele Frequency</span>
+                    <span className={`text-sm font-mono font-semibold ${
+                      details.gnomad.af != null && details.gnomad.af < 0.001 ? 'text-red-400' :
+                      details.gnomad.af != null && details.gnomad.af < 0.01 ? 'text-amber-400' :
+                      'text-green-400'
+                    }`}>
+                      {details.gnomad.af != null ? formatFrequency(details.gnomad.af) : 'N/A'}
+                    </span>
+                  </div>
+
+                  {/* AC / AN / nhomalt */}
+                  <div className="grid grid-cols-3 gap-2">
+                    {details.gnomad.ac != null && (
+                      <div className={`text-center p-1.5 rounded-lg ${isDarkMode ? 'bg-white/5' : 'bg-gray-100'}`}>
+                        <div className={`text-[10px] ${textSecondary}`}>Allele Count</div>
+                        <div className={`text-xs font-mono ${textPrimary}`}>{details.gnomad.ac.toLocaleString()}</div>
+                      </div>
+                    )}
+                    {details.gnomad.an != null && (
+                      <div className={`text-center p-1.5 rounded-lg ${isDarkMode ? 'bg-white/5' : 'bg-gray-100'}`}>
+                        <div className={`text-[10px] ${textSecondary}`}>Allele Number</div>
+                        <div className={`text-xs font-mono ${textPrimary}`}>{details.gnomad.an.toLocaleString()}</div>
+                      </div>
+                    )}
+                    {details.gnomad.nhomalt != null && (
+                      <div className={`text-center p-1.5 rounded-lg ${isDarkMode ? 'bg-white/5' : 'bg-gray-100'}`}>
+                        <div className={`text-[10px] ${textSecondary}`}>Homozygotes</div>
+                        <div className={`text-xs font-mono ${textPrimary}`}>{details.gnomad.nhomalt.toLocaleString()}</div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Filter status */}
+                  {details.gnomad.filter_status && (
+                    <div className="flex items-center gap-1.5">
+                      <span className={`text-[10px] ${textSecondary}`}>Filter:</span>
+                      <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${
+                        details.gnomad.filter_status === 'PASS' ? 'bg-green-500/15 text-green-400 border-green-500/30' :
+                        'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                      }`}>
+                        {details.gnomad.filter_status}
+                      </Badge>
+                    </div>
+                  )}
+
+                  {/* CADD Pathogenicity Score */}
+                  {details.gnomad.cadd && details.gnomad.cadd.phred != null && (
+                    <div className={`pt-2 border-t ${border}`}>
+                      <div className={`text-[10px] font-semibold ${textSecondary} uppercase tracking-wider mb-1.5`}>
+                        CADD Pathogenicity
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className={`flex items-center justify-center w-12 h-12 rounded-full border-2 ${
+                          details.gnomad.cadd.phred >= 30 ? 'border-red-500 text-red-400' :
+                          details.gnomad.cadd.phred >= 20 ? 'border-orange-500 text-orange-400' :
+                          details.gnomad.cadd.phred >= 15 ? 'border-amber-500 text-amber-400' :
+                          details.gnomad.cadd.phred >= 10 ? 'border-yellow-500 text-yellow-400' :
+                          'border-green-500 text-green-400'
+                        }`}>
+                          <span className="text-sm font-bold">{details.gnomad.cadd.phred.toFixed(1)}</span>
+                        </div>
+                        <div className="flex-1">
+                          <div className={`text-xs font-medium ${textPrimary}`}>PHRED Score</div>
+                          {details.gnomad.cadd.interpretation && (
+                            <div className={`text-[10px] ${textSecondary}`}>{details.gnomad.cadd.interpretation}</div>
+                          )}
+                          {details.gnomad.cadd.raw != null && (
+                            <div className={`text-[10px] ${textSecondary}`}>Raw: {details.gnomad.cadd.raw.toFixed(4)}</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Functional Predictions (SIFT + PolyPhen) */}
+                  {details.gnomad.predictions && (
+                    <div className={`pt-2 border-t ${border}`}>
+                      <div className={`text-[10px] font-semibold ${textSecondary} uppercase tracking-wider mb-1.5`}>
+                        Functional Predictions
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        {details.gnomad.predictions.sift && (
+                          <div className={`p-1.5 rounded-lg ${isDarkMode ? 'bg-white/5' : 'bg-gray-100'}`}>
+                            <div className={`text-[10px] ${textSecondary}`}>SIFT</div>
+                            <Badge variant="outline" className={`text-[10px] px-1.5 py-0 mt-0.5 ${
+                              details.gnomad.predictions.sift.category?.toLowerCase() === 'deleterious' ? 'bg-red-500/15 text-red-400 border-red-500/30' :
+                              'bg-green-500/15 text-green-400 border-green-500/30'
+                            }`}>
+                              {details.gnomad.predictions.sift.category || 'N/A'}
+                            </Badge>
+                            {details.gnomad.predictions.sift.score != null && (
+                              <div className={`text-[10px] font-mono ${textSecondary} mt-0.5`}>{details.gnomad.predictions.sift.score.toFixed(3)}</div>
+                            )}
+                          </div>
+                        )}
+                        {details.gnomad.predictions.polyphen && (
+                          <div className={`p-1.5 rounded-lg ${isDarkMode ? 'bg-white/5' : 'bg-gray-100'}`}>
+                            <div className={`text-[10px] ${textSecondary}`}>PolyPhen</div>
+                            <Badge variant="outline" className={`text-[10px] px-1.5 py-0 mt-0.5 ${
+                              details.gnomad.predictions.polyphen.category?.toLowerCase().includes('damaging') ? 'bg-red-500/15 text-red-400 border-red-500/30' :
+                              details.gnomad.predictions.polyphen.category?.toLowerCase() === 'possibly_damaging' ? 'bg-amber-500/15 text-amber-400 border-amber-500/30' :
+                              'bg-green-500/15 text-green-400 border-green-500/30'
+                            }`}>
+                              {details.gnomad.predictions.polyphen.category?.replace(/_/g, ' ') || 'N/A'}
+                            </Badge>
+                            {details.gnomad.predictions.polyphen.score != null && (
+                              <div className={`text-[10px] font-mono ${textSecondary} mt-0.5`}>{details.gnomad.predictions.polyphen.score.toFixed(3)}</div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Conservation Scores (PhyloP) */}
+                  {details.gnomad.conservation && (
+                    <div className={`pt-2 border-t ${border}`}>
+                      <div className={`text-[10px] font-semibold ${textSecondary} uppercase tracking-wider mb-1.5`}>
+                        Conservation (PhyloP)
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        {details.gnomad.conservation.primate != null && (
+                          <div className={`text-center p-1.5 rounded-lg ${isDarkMode ? 'bg-white/5' : 'bg-gray-100'}`}>
+                            <div className={`text-[10px] ${textSecondary}`}>Primate</div>
+                            <div className={`text-xs font-mono font-medium ${
+                              details.gnomad.conservation.primate > 0 ? 'text-green-400' : 'text-gray-400'
+                            }`}>{details.gnomad.conservation.primate.toFixed(2)}</div>
+                          </div>
+                        )}
+                        {details.gnomad.conservation.mammal != null && (
+                          <div className={`text-center p-1.5 rounded-lg ${isDarkMode ? 'bg-white/5' : 'bg-gray-100'}`}>
+                            <div className={`text-[10px] ${textSecondary}`}>Mammal</div>
+                            <div className={`text-xs font-mono font-medium ${
+                              details.gnomad.conservation.mammal > 0 ? 'text-green-400' : 'text-gray-400'
+                            }`}>{details.gnomad.conservation.mammal.toFixed(2)}</div>
+                          </div>
+                        )}
+                        {details.gnomad.conservation.vertebrate != null && (
+                          <div className={`text-center p-1.5 rounded-lg ${isDarkMode ? 'bg-white/5' : 'bg-gray-100'}`}>
+                            <div className={`text-[10px] ${textSecondary}`}>Vertebrate</div>
+                            <div className={`text-xs font-mono font-medium ${
+                              details.gnomad.conservation.vertebrate > 0 ? 'text-green-400' : 'text-gray-400'
+                            }`}>{details.gnomad.conservation.vertebrate.toFixed(2)}</div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* SpliceAI Scores */}
+                  {details.gnomad.splice_ai && details.gnomad.splice_ai.max_score != null && details.gnomad.splice_ai.max_score > 0 && (
+                    <div className={`pt-2 border-t ${border}`}>
+                      <div className={`text-[10px] font-semibold ${textSecondary} uppercase tracking-wider mb-1.5`}>
+                        SpliceAI
+                        {details.gnomad.splice_ai.max_score >= 0.8 && (
+                          <Badge variant="outline" className="ml-1.5 text-[10px] px-1.5 py-0 bg-red-500/15 text-red-400 border-red-500/30">
+                            High Impact
+                          </Badge>
+                        )}
+                        {details.gnomad.splice_ai.max_score >= 0.5 && details.gnomad.splice_ai.max_score < 0.8 && (
+                          <Badge variant="outline" className="ml-1.5 text-[10px] px-1.5 py-0 bg-amber-500/15 text-amber-400 border-amber-500/30">
+                            Moderate Impact
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="space-y-1">
+                        {[
+                          { label: 'Acceptor Gain', value: details.gnomad.splice_ai.acceptor_gain },
+                          { label: 'Acceptor Loss', value: details.gnomad.splice_ai.acceptor_loss },
+                          { label: 'Donor Gain', value: details.gnomad.splice_ai.donor_gain },
+                          { label: 'Donor Loss', value: details.gnomad.splice_ai.donor_loss },
+                        ].filter(s => s.value != null && s.value > 0).map(s => (
+                          <div key={s.label} className="flex items-center gap-2">
+                            <span className={`text-[10px] ${textSecondary} w-24 text-right`}>{s.label}</span>
+                            <div className={`flex-1 h-3 rounded-full overflow-hidden ${isDarkMode ? 'bg-white/5' : 'bg-gray-200'}`}>
+                              <div
+                                className={`h-full rounded-full ${
+                                  s.value! >= 0.8 ? 'bg-linear-to-r from-red-500 to-red-400' :
+                                  s.value! >= 0.5 ? 'bg-linear-to-r from-amber-500 to-amber-400' :
+                                  'bg-linear-to-r from-blue-500 to-cyan-400'
+                                }`}
+                                style={{ width: `${Math.min(s.value! * 100, 100)}%` }}
+                              />
+                            </div>
+                            <span className={`text-[10px] font-mono ${textPrimary} w-10 text-right`}>
+                              {s.value!.toFixed(2)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Population frequency bars */}
+                  {details.gnomad.population_frequencies && Object.keys(details.gnomad.population_frequencies).length > 0 && (
+                    <div className={`pt-2 border-t ${border}`}>
+                      <div className={`text-[10px] font-semibold ${textSecondary} uppercase tracking-wider mb-1.5`}>
+                        Population Frequencies
+                      </div>
+                      <div className="space-y-1">
+                        {Object.entries(details.gnomad.population_frequencies)
+                          .sort(([, a], [, b]) => (b.af || 0) - (a.af || 0))
+                          .map(([code, pop]) => {
+                            const maxAf = Math.max(
+                              ...Object.values(details.gnomad!.population_frequencies!).map(p => p.af || 0),
+                              0.001
+                            )
+                            const barWidth = maxAf > 0 ? Math.max((pop.af / maxAf) * 100, 1) : 1
+                            return (
+                              <div key={code} className="flex items-center gap-2">
+                                <span className={`text-[10px] ${textSecondary} w-28 truncate text-right`}>
+                                  {pop.name}
+                                </span>
+                                <div className={`flex-1 h-3 rounded-full overflow-hidden ${isDarkMode ? 'bg-white/5' : 'bg-gray-200'}`}>
+                                  <div
+                                    className="h-full rounded-full bg-linear-to-r from-blue-500 to-cyan-400"
+                                    style={{ width: `${barWidth}%` }}
+                                  />
+                                </div>
+                                <span className={`text-[10px] font-mono ${textPrimary} w-16 text-right`}>
+                                  {formatFrequency(pop.af)}
+                                </span>
+                              </div>
+                            )
+                          })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Consequence info from gnomAD */}
+                  {(details.gnomad.consequence || details.gnomad.gene) && (
+                    <div className={`flex flex-wrap gap-1.5 pt-1.5 border-t ${border}`}>
+                      {details.gnomad.gene && (
+                        <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${isDarkMode ? 'border-white/20' : ''}`}>
+                          {details.gnomad.gene}
+                        </Badge>
+                      )}
+                      {details.gnomad.consequence && (
+                        <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${
+                          details.gnomad.impact === 'HIGH' ? 'bg-red-500/15 text-red-400 border-red-500/30' :
+                          details.gnomad.impact === 'MODERATE' ? 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30' :
+                          'bg-gray-500/15 text-gray-400 border-gray-500/30'
+                        }`}>
+                          {details.gnomad.consequence.replace(/_/g, ' ')}
+                        </Badge>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Link to gnomAD browser */}
+                  <a
+                    href={`https://gnomad.broadinstitute.org/variant/${details.gnomad.variant_id || rsid}?dataset=gnomad_r4`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                  >
+                    View on gnomAD Browser <ExternalLink className="h-3 w-3" />
+                  </a>
+                </div>
+              </div>
+            )}
+
+            {/* ── ChEMBL Drug Mechanisms ── */}
+            {details.chembl?.found && details.chembl.drugs && details.chembl.drugs.length > 0 && (
+              <div>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
+                  <Pill className="h-3.5 w-3.5" /> Drug Mechanisms
+                  <Badge variant="outline" className="bg-indigo-500/10 text-indigo-400 border-indigo-500/20 text-[10px] ml-1">
+                    ChEMBL
+                  </Badge>
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                    {details.chembl.drugs.length} drug{details.chembl.drugs.length !== 1 ? 's' : ''}
+                  </Badge>
+                </h4>
+                <div className={`${cardBg} rounded-xl p-3 border ${border} space-y-2`}>
+                  {details.chembl.drugs.slice(0, 8).map((drug, i) => (
+                    <div key={i} className={`flex items-start justify-between gap-2 text-xs ${i > 0 ? `border-t ${border} pt-2` : ''}`}>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className={`font-medium ${textPrimary}`}>{drug.drug_name || 'Unknown'}</span>
+                          {drug.max_phase != null && drug.max_phase >= 4 && (
+                            <Badge variant="outline" className="bg-green-500/15 text-green-400 border-green-500/30 text-[10px] px-1 py-0">
+                              Approved
+                            </Badge>
+                          )}
+                          {drug.max_phase != null && drug.max_phase > 0 && drug.max_phase < 4 && (
+                            <Badge variant="outline" className="bg-blue-500/15 text-blue-400 border-blue-500/30 text-[10px] px-1 py-0">
+                              Phase {drug.max_phase}
+                            </Badge>
+                          )}
+                          {drug.first_approval && (
+                            <span className={`text-[10px] ${textSecondary}`}>({drug.first_approval})</span>
+                          )}
+                        </div>
+                        {drug.mechanism_of_action && (
+                          <div className={`text-[10px] ${textSecondary} mt-0.5`}>{drug.mechanism_of_action}</div>
+                        )}
+                        {drug.target_name && (
+                          <div className={`text-[10px] ${textSecondary}`}>Target: {drug.target_name}</div>
+                        )}
+                      </div>
+                      {drug.chembl_id && (
+                        <a
+                          href={`https://www.ebi.ac.uk/chembl/compound_report_card/${drug.chembl_id}/`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 shrink-0 text-[10px] transition-colors"
+                        >
+                          {drug.chembl_id} <ExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                  {details.chembl.drugs.length > 8 && (
+                    <span className={`text-[10px] ${textSecondary}`}>+ {details.chembl.drugs.length - 8} more drugs</span>
+                  )}
+
+                  {/* Drug warnings */}
+                  {details.chembl.warnings && details.chembl.warnings.length > 0 && (
+                    <div className={`pt-2 border-t ${border}`}>
+                      <div className={`text-[10px] font-semibold ${textSecondary} uppercase tracking-wider mb-1.5 flex items-center gap-1`}>
+                        <AlertTriangle className="h-3 w-3 text-amber-400" /> Drug Warnings
+                      </div>
+                      {details.chembl.warnings.map((w, i) => (
+                        <div key={i} className="flex items-start gap-1.5 text-[10px] mb-1">
+                          <AlertTriangle className="h-3 w-3 text-amber-400 mt-0.5 shrink-0" />
+                          <div>
+                            <span className={`font-medium ${textPrimary}`}>{w.drug_name}</span>
+                            {w.warning_year && <span className={`${textSecondary} ml-1`}>({w.warning_year})</span>}
+                            {w.warning_description && <span className={`${textSecondary} ml-1`}>— {w.warning_description}</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* ── FDA Drug Interactions ── */}
+            {details.fda_drug?.found && details.fda_drug.items && details.fda_drug.items.length > 0 && (
+              <div>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
+                  <Shield className="h-3.5 w-3.5" /> FDA Drug Interactions
+                  <Badge variant="outline" className="bg-rose-500/10 text-rose-400 border-rose-500/20 text-[10px] ml-1">
+                    FDA
+                  </Badge>
+                </h4>
+                <div className={`${cardBg} rounded-xl p-3 border ${border} space-y-3`}>
+                  {details.fda_drug.items.slice(0, 5).map((item, i) => (
+                    <div key={i} className={`${i > 0 ? `border-t ${border} pt-2` : ''}`}>
+                      <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                        <span className={`text-xs font-medium ${textPrimary}`}>
+                          {item.generic_name || item.drug || 'Unknown'}
+                        </span>
+                        {item.brand_name && (
+                          <span className={`text-[10px] ${textSecondary}`}>({item.brand_name})</span>
+                        )}
+                        {item.route && (
+                          <Badge variant="outline" className={`text-[10px] px-1 py-0 ${isDarkMode ? 'border-white/20' : ''}`}>
+                            {item.route}
+                          </Badge>
+                        )}
+                      </div>
+                      {item.cyp_enzymes_mentioned && item.cyp_enzymes_mentioned.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mb-1">
+                          {item.cyp_enzymes_mentioned.map((cyp) => (
+                            <Badge key={cyp} variant="outline" className="bg-rose-500/15 text-rose-400 border-rose-500/30 text-[10px] px-1.5 py-0">
+                              {cyp}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
+                      {item.drug_interactions && (
+                        <p className={`text-[10px] ${textSecondary} leading-relaxed line-clamp-3`}>
+                          {item.drug_interactions}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── AlphaFold Protein Structure ── */}
+            {details.alphafold?.found && (
+              <div>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
+                  <Atom className="h-3.5 w-3.5" /> Protein Structure Confidence
+                  <Badge variant="outline" className="bg-teal-500/10 text-teal-400 border-teal-500/20 text-[10px] ml-1">
+                    AlphaFold
+                  </Badge>
+                </h4>
+                <div className={`${cardBg} rounded-xl p-3 border ${border} space-y-2`}>
+                  {details.alphafold.protein_name && (
+                    <div>
+                      <span className={`text-xs ${textPrimary} font-medium`}>{details.alphafold.protein_name}</span>
+                    </div>
+                  )}
+
+                  {/* Global confidence score */}
+                  {details.alphafold.global_confidence != null && (
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className={`text-xs ${textSecondary}`}>Global Confidence (pLDDT)</span>
+                        <span className={`text-sm font-mono font-bold ${
+                          details.alphafold.global_confidence >= 90 ? 'text-blue-400' :
+                          details.alphafold.global_confidence >= 70 ? 'text-cyan-400' :
+                          details.alphafold.global_confidence >= 50 ? 'text-yellow-400' : 'text-orange-400'
+                        }`}>
+                          {details.alphafold.global_confidence.toFixed(1)}
+                        </span>
+                      </div>
+                      <div className="h-2 rounded-full bg-gray-700/50 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full ${
+                            details.alphafold.global_confidence >= 90 ? 'bg-blue-500' :
+                            details.alphafold.global_confidence >= 70 ? 'bg-cyan-500' :
+                            details.alphafold.global_confidence >= 50 ? 'bg-yellow-500' : 'bg-orange-500'
+                          }`}
+                          style={{ width: `${Math.min(details.alphafold.global_confidence, 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* pLDDT breakdown */}
+                  {(details.alphafold.plddt_very_high != null || details.alphafold.plddt_confident != null) && (
+                    <div className="grid grid-cols-4 gap-1.5 mt-1">
+                      {[
+                        { label: 'Very High', value: details.alphafold.plddt_very_high, color: 'text-blue-400' },
+                        { label: 'Confident', value: details.alphafold.plddt_confident, color: 'text-cyan-400' },
+                        { label: 'Low', value: details.alphafold.plddt_low, color: 'text-yellow-400' },
+                        { label: 'Very Low', value: details.alphafold.plddt_very_low, color: 'text-orange-400' },
+                      ].map(({ label, value, color }) => value != null && (
+                        <div key={label} className={`text-center p-1.5 rounded-lg ${isDarkMode ? 'bg-white/5' : 'bg-gray-100'}`}>
+                          <div className={`text-[10px] ${textSecondary}`}>{label}</div>
+                          <div className={`text-xs font-mono font-medium ${color}`}>
+                            {(value * 100).toFixed(1)}%
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* UniProt + external links */}
+                  <div className="flex flex-wrap gap-2 pt-1.5">
+                    {details.alphafold.entry_id && (
+                      <a
+                        href={`https://alphafold.ebi.ac.uk/entry/${details.alphafold.entry_id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs text-teal-400 hover:text-teal-300 transition-colors"
+                      >
+                        AlphaFold DB <ExternalLink className="h-3 w-3" />
+                      </a>
+                    )}
+                    {details.alphafold.uniprot_id && (
+                      <a
+                        href={`https://www.uniprot.org/uniprot/${details.alphafold.uniprot_id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs text-teal-400 hover:text-teal-300 transition-colors"
+                      >
+                        UniProt <ExternalLink className="h-3 w-3" />
+                      </a>
+                    )}
+                  </div>
+
+                  <div className={`flex items-start gap-1.5 pt-1.5 border-t ${border}`}>
+                    <AlertTriangle className="h-3 w-3 text-amber-400 mt-0.5 shrink-0" />
+                    <p className={`text-[10px] ${textSecondary} leading-relaxed`}>
+                      AlphaFold predictions are AI-generated (DeepMind). Confidence scores reflect model certainty, not clinical validation.
                     </p>
                   </div>
                 </div>

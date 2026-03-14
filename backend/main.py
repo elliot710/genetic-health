@@ -88,21 +88,34 @@ async def startup_event():
     await analysis_queue.start()
     print("🚀 Analysis queue processor started")
 
-    # Pre-load ClinVar local data (runs in background threads)
+    # Check ClinVar PG availability (instant — just counts rows)
     from .services.clinvar_local import get_clinvar_local_service
     cv_svc = get_clinvar_local_service()
-    if cv_svc.available:
-        asyncio.create_task(_load_clinvar_local(cv_svc))
-
-
-async def _load_clinvar_local(cv_svc):
-    """Load ClinVar local data in background so it doesn't block startup."""
     ok = await cv_svc.ensure_loaded()
     if ok:
-        vcf_msg = f", {cv_svc.vcf_variant_count} VCF rsids" if cv_svc.vcf_variant_count else ""
-        print(f"✅ ClinVar local loaded: {cv_svc.variant_count} TSV rsids{vcf_msg}, files: {cv_svc.files_loaded}")
+        print(f"✅ ClinVar PG: {cv_svc.variant_count} rows available")
     else:
-        print("⚠️ ClinVar local data not loaded")
+        print("⚠️ ClinVar PG: table empty — run ETL import via admin panel")
+
+    # Check gnomAD PG availability (instant — just counts rows)
+    from .services.gnomad_local import get_gnomad_service
+    gnomad_svc = get_gnomad_service()
+    ok = await gnomad_svc.ensure_loaded()
+    if ok:
+        print(f"✅ gnomAD PG: {gnomad_svc.variant_count} variants, {gnomad_svc.constraint_count} gene constraints")
+    else:
+        print("⚠️ gnomAD PG: table empty — run ETL import via admin panel")
+
+    # Check gnomAD BigQuery availability
+    try:
+        from .services.gnomad_bigquery import get_gnomad_bigquery_service
+        bq_svc = get_gnomad_bigquery_service()
+        if await bq_svc.is_available():
+            print("✅ gnomAD BigQuery: credentials configured — fallback enabled")
+        else:
+            print("ℹ️ gnomAD BigQuery: not configured — set GOOGLE_APPLICATION_CREDENTIALS to enable")
+    except Exception as e:
+        print(f"ℹ️ gnomAD BigQuery: unavailable ({e})")
 
 @app.on_event("shutdown")
 async def shutdown_event():

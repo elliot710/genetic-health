@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from backend.services.genetic_api_service import GeneticAPIService
 from backend.db.database import get_session
-from backend.db.models import SharedVariantAnnotation, VariantLookupCache
+from backend.db.models import SharedVariantAnnotation, VariantLookupCache, AnnotationSourceConfig
 from backend.utils.alpha_missense import get_alpha_missense_service, AlphaMissenseService
 from .auth_routes import get_current_user
 from backend.db.schemas import User
@@ -353,8 +353,113 @@ async def get_variant_details(
         if formatted:
             response["alpha_missense"] = formatted
 
+    # Process gnomAD data (population frequencies + gene constraints + CADD scores)
+    gnomad_raw = annotation.gnomad_data
+    if gnomad_raw and isinstance(gnomad_raw, dict) and gnomad_raw.get("found"):
+        gnomad_resp: Dict[str, Any] = {
+            "found": True,
+            "source": gnomad_raw.get("source", "gnomad"),
+            "variant_id": gnomad_raw.get("variant_id"),
+            "variant_type": gnomad_raw.get("variant_type"),
+            "af": gnomad_raw.get("af"),
+            "ac": gnomad_raw.get("ac"),
+            "an": gnomad_raw.get("an"),
+            "nhomalt": gnomad_raw.get("nhomalt"),
+            "filter_status": gnomad_raw.get("filter_status"),
+            "gene": gnomad_raw.get("gene"),
+            "consequence": gnomad_raw.get("consequence"),
+            "impact": gnomad_raw.get("impact"),
+            "hgvsc": gnomad_raw.get("hgvsc"),
+            "hgvsp": gnomad_raw.get("hgvsp"),
+        }
+        pop_freqs = gnomad_raw.get("population_frequencies", {})
+        if pop_freqs:
+            gnomad_resp["population_frequencies"] = pop_freqs
+        # CADD pathogenicity scores
+        if gnomad_raw.get("cadd"):
+            gnomad_resp["cadd"] = gnomad_raw["cadd"]
+        # Functional predictions (SIFT, PolyPhen)
+        if gnomad_raw.get("predictions"):
+            gnomad_resp["predictions"] = gnomad_raw["predictions"]
+        # Conservation scores (PhyloP)
+        if gnomad_raw.get("conservation"):
+            gnomad_resp["conservation"] = gnomad_raw["conservation"]
+        # SpliceAI scores
+        if gnomad_raw.get("splice_ai"):
+            gnomad_resp["splice_ai"] = gnomad_raw["splice_ai"]
+        response["gnomad"] = gnomad_resp
+
     # Generate natural language variant description from combined sources (after all processing)
     response["description"] = _build_variant_description(rsid, response)
+
+    # Composite pathogenicity scoring (aggregates all evidence sources)
+    from backend.services.scoring_engine import get_scoring_engine
+    scoring_annotations = {}
+    # Feed raw annotation data (not the processed response) into the scoring engine
+    if annotation.ensembl_data:
+        scoring_annotations["ensembl"] = annotation.ensembl_data
+    if annotation.clinvar_data:
+        scoring_annotations["clinvar"] = annotation.clinvar_data
+    if annotation.clinvar_local_data:
+        scoring_annotations["clinvar_local"] = annotation.clinvar_local_data
+    if annotation.alpha_missense_data:
+        scoring_annotations["alpha_missense"] = annotation.alpha_missense_data
+    if annotation.gnomad_data:
+        scoring_annotations["gnomad"] = annotation.gnomad_data
+    response["pathogenicity_score"] = get_scoring_engine().score_variant(scoring_annotations)
+
+    # ── BigQuery enrichment (ChEMBL, FDA Drug, AlphaFold) ─────────
+    # Uses cached data from the annotation row when available;
+    # falls back to live BigQuery queries, then persists results.
+    gene_symbol = None
+    transcripts = response.get("transcripts", [])
+    if transcripts:
+        gene_symbol = transcripts[0].get("gene_symbol")
+
+    BQ_SOURCES = {"chembl", "fda_drug", "alphafold"}
+    bq_columns = {"chembl": "chembl_data", "fda_drug": "fda_drug_data", "alphafold": "alphafold_data"}
+
+    # Determine which BQ sources are enabled
+    try:
+        src_result = await db.execute(
+            select(AnnotationSourceConfig.source_name, AnnotationSourceConfig.is_enabled)
+            .where(AnnotationSourceConfig.source_name.in_(list(BQ_SOURCES)))
+        )
+        src_rows = src_result.all()
+        enabled_bq = {name for name, enabled in src_rows if enabled} if src_rows else BQ_SOURCES
+    except Exception:
+        enabled_bq = BQ_SOURCES  # table not seeded yet — enable all
+
+    # Check what's already cached
+    needs_fetch: set = set()
+    for src in enabled_bq:
+        col_attr = bq_columns[src]
+        cached = getattr(annotation, col_attr, None)
+        if cached and isinstance(cached, dict):
+            response[src] = cached
+        else:
+            needs_fetch.add(src)
+
+    # Fetch missing data from BigQuery and cache it
+    if needs_fetch and gene_symbol:
+        try:
+            from backend.services.bq_public import get_bq_public_service
+            bq_svc = get_bq_public_service()
+            enrichment = await bq_svc.enrich_variant(
+                gene_symbol=gene_symbol,
+                enabled_sources=needs_fetch,
+            )
+            dirty = False
+            for src, data in enrichment.items():
+                if src in bq_columns and data:
+                    setattr(annotation, bq_columns[src], data)
+                    response[src] = data
+                    dirty = True
+            if dirty:
+                await db.commit()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("BigQuery enrichment failed: %s", e)
 
     return response
 
