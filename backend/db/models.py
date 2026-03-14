@@ -271,6 +271,7 @@ class SharedVariantAnnotation(Base):
     snpedia_data = Column(JSON)  # Complete SNPedia API response
     litvar_data = Column(JSON)  # Complete LitVar/PubMed API response
     alpha_missense_data = Column(JSON)  # AlphaMissense AI pathogenicity prediction (local data, NOT clinically validated)
+    clinvar_local_data = Column(JSON)  # ClinVar local TSV data (variant_summary + citations + cross-refs + gene stats)
     
     # Metadata for tracking and reuse
     first_annotated_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -407,6 +408,23 @@ class VariantLookupCache(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     lookup_count = Column(Integer, default=1)
+
+
+class AnnotationSourceConfig(Base):
+    """Admin-configurable annotation sources. Controls which external APIs are
+    called during variant annotation, with the ability to enable/disable and
+    backfill later from newly-enabled sources."""
+    __tablename__ = "annotation_source_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source_name = Column(String, unique=True, nullable=False, index=True)  # 'ensembl', 'clinvar', 'clinpgx', 'snpedia'
+    display_name = Column(String, nullable=False)
+    is_enabled = Column(Boolean, default=True, nullable=False)
+    description = Column(String)
+    rate_limit = Column(Float)  # req/s — informational for the admin UI
+    priority = Column(Integer, default=0)  # Lower = higher priority
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
 
 class PendingDiscovery(Base):

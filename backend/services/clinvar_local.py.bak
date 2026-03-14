@@ -1,0 +1,575 @@
+"""
+Local ClinVar database for fast variant lookups without API calls.
+
+Uses NCBI's tab-delimited ClinVar data files (downloaded from
+https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/) and builds
+in-memory indices for instant rsid→annotation lookups.
+
+Integrates ALL 12 ClinVar tab-delimited files:
+  REQUIRED:
+  - variant_summary.txt.gz          (main variant data — rsid index)
+  OPTIONAL (enrich lookups if present):
+  - var_citations.txt                (allele→PubMed citations)
+  - gene_condition_source_id.txt     (gene→disease associations)
+  - cross_references.txt             (allele→external DB cross-refs)
+  - disease_names.txt                (concept_id→disease details)
+  - gene_specific_summary.txt        (gene-level ClinVar stats)
+  - hgvs4variation.txt.gz            (HGVS nomenclature per allele)
+  - allele_gene.txt.gz               (allele→gene detail mapping)
+  - submission_summary.txt.gz        (submission count per variation)
+  - summary_of_conflicting_interpretations.txt  (conflict flags)
+  - variation_allele.txt.gz          (variation→allele linking)
+  - organization_summary.txt         (submitter org metadata — skipped)
+
+Usage:
+    svc = get_clinvar_local_service()
+    await svc.ensure_loaded()
+    result = svc.lookup("rs1234")
+"""
+
+import asyncio
+import csv
+import gzip
+import logging
+import os
+import time
+from pathlib import Path
+from typing import Dict, List, Optional, Any, Set
+
+logger = logging.getLogger(__name__)
+
+CLINVAR_DATA_DIR = Path(os.environ.get(
+    "CLINVAR_DATA_DIR",
+    os.path.join(os.path.dirname(__file__), "..", "..", "data_sources", "clinvar"),
+))
+
+# External DB cross-references worth keeping (filter out noisy ones)
+_XREF_DBS_OF_INTEREST = frozenset({
+    "OMIM", "UniProtKB", "ClinGen", "MedGen", "Orphanet", "GeneReviews",
+    "GTR", "dbSNP", "dbVar", "PharmGKB",
+})
+
+
+class ClinVarLocalService:
+    """In-memory rsid→ClinVar index built from all local NCBI tab-delimited files."""
+
+    def __init__(self, data_dir: Optional[str] = None):
+        self._data_dir = Path(data_dir) if data_dir else CLINVAR_DATA_DIR
+
+        # --- Core index (variant_summary.txt.gz) ---
+        self._index: Dict[str, List[Dict[str, Any]]] = {}
+
+        # --- Supplementary indices ---
+        # allele_id → list of PubMed IDs (var_citations.txt)
+        self._citations: Dict[str, List[str]] = {}
+        # gene_symbol → list of condition dicts (gene_condition_source_id.txt)
+        self._gene_conditions: Dict[str, List[Dict[str, str]]] = {}
+        # allele_id → list of {database, id} (cross_references.txt)
+        self._cross_refs: Dict[str, List[Dict[str, str]]] = {}
+        # concept_id → disease info dict (disease_names.txt)
+        self._diseases: Dict[str, Dict[str, str]] = {}
+        # gene_symbol → gene-level stats dict (gene_specific_summary.txt)
+        self._gene_stats: Dict[str, Dict[str, Any]] = {}
+        # allele_id → HGVS expression dict (hgvs4variation.txt.gz)
+        self._hgvs: Dict[str, Dict[str, str]] = {}
+        # allele_id → gene detail dict (allele_gene.txt.gz)
+        self._allele_genes: Dict[str, Dict[str, str]] = {}
+        # variation_id → submission count (submission_summary.txt.gz)
+        self._submission_counts: Dict[str, int] = {}
+        # set of variation_ids with conflicting interpretations
+        self._conflicting_variations: Set[str] = set()
+        # variation_id → list of allele_ids (variation_allele.txt.gz)
+        self._variation_alleles: Dict[str, List[str]] = {}
+
+        self._loaded = False
+        self._load_lock = asyncio.Lock()
+        self._files_loaded: List[str] = []
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    @property
+    def available(self) -> bool:
+        """Check whether variant_summary.txt.gz exists."""
+        return (self._data_dir / "variant_summary.txt.gz").exists()
+
+    async def ensure_loaded(self) -> bool:
+        """Load all ClinVar data files into memory. Returns True on success."""
+        if self._loaded:
+            return True
+        async with self._load_lock:
+            if self._loaded:
+                return True
+            if not self.available:
+                logger.warning("ClinVar local: variant_summary.txt.gz not found at %s", self._data_dir)
+                return False
+            try:
+                total_start = time.time()
+
+                # Required: core variant index
+                await asyncio.to_thread(self._build_index)
+
+                # Optional supplementary files — load in parallel via threads
+                loaders = [
+                    self._load_citations,
+                    self._load_gene_conditions,
+                    self._load_cross_references,
+                    self._load_disease_names,
+                    self._load_gene_stats,
+                    self._load_hgvs,
+                    self._load_allele_genes,
+                    self._load_submission_counts,
+                    self._load_conflicting_interpretations,
+                    self._load_variation_alleles,
+                ]
+                await asyncio.gather(*(asyncio.to_thread(fn) for fn in loaders))
+
+                total_elapsed = time.time() - total_start
+                logger.info(
+                    "ClinVar local fully loaded in %.1fs — files: %s",
+                    total_elapsed, ", ".join(self._files_loaded),
+                )
+                self._loaded = True
+                return True
+            except Exception as e:
+                logger.error("ClinVar local DB failed to load: %s", e)
+                return False
+
+    def lookup(self, rsid: str) -> Optional[Dict[str, Any]]:
+        """Look up a single rsid. Returns comprehensive ClinVar annotation or None."""
+        if not self._loaded:
+            return None
+        entries = self._index.get(rsid)
+        if not entries:
+            return {"found": False, "source": "clinvar_local"}
+
+        clinical_significances = []
+        conditions = []
+        genes = []
+        variation_ids = set()
+        allele_ids = set()
+        result_entries = []
+
+        for e in entries:
+            clin_sig = e.get("clinical_significance", "")
+            if clin_sig and clin_sig not in clinical_significances:
+                clinical_significances.append(clin_sig)
+            cond = e.get("condition")
+            if cond and cond not in conditions and cond != "not provided":
+                conditions.append(cond)
+            gene = e.get("gene")
+            if gene and gene not in genes:
+                genes.append(gene)
+            vid = e.get("variation_id", "")
+            if vid:
+                variation_ids.add(str(vid))
+            aid = e.get("allele_id", "")
+            if aid:
+                allele_ids.add(str(aid))
+
+            # Per-entry HGVS and gene details
+            hgvs = self._hgvs.get(str(aid), {}) if aid else {}
+            allele_gene = self._allele_genes.get(str(aid), {}) if aid else {}
+
+            result_entries.append({
+                "uid": str(vid) if vid else "",
+                "allele_id": str(aid) if aid else "",
+                "title": f"{rsid} - {cond}" if cond else rsid,
+                "accession": e.get("rcv_accession", ""),
+                "clinical_significance": [clin_sig] if clin_sig else [],
+                "conditions": [cond] if cond and cond != "not provided" else [],
+                "variation_type": e.get("variation_type", ""),
+                "gene": gene or "",
+                "gene_name": allele_gene.get("gene_name", ""),
+                "review_status": e.get("review_status", ""),
+                "origin": e.get("origin", ""),
+                "chromosome": e.get("chromosome", ""),
+                "start": e.get("start", ""),
+                "stop": e.get("stop", ""),
+                "hgvs_nucleotide": hgvs.get("nucleotide_expression", ""),
+                "hgvs_protein": hgvs.get("protein_expression", ""),
+            })
+
+        # --- Enrich with PubMed citations (var_citations.txt) ---
+        pmids: List[str] = []
+        for aid in allele_ids:
+            pmids.extend(self._citations.get(aid, []))
+        pmids = list(dict.fromkeys(pmids))  # deduplicate, preserve order
+
+        # --- Enrich with cross-references (cross_references.txt) ---
+        cross_refs: List[Dict[str, str]] = []
+        seen_xrefs: Set[str] = set()
+        for aid in allele_ids:
+            for xr in self._cross_refs.get(aid, []):
+                key = f"{xr['database']}:{xr['id']}"
+                if key not in seen_xrefs:
+                    seen_xrefs.add(key)
+                    cross_refs.append(xr)
+
+        # --- Enrich with gene→condition mapping (gene_condition_source_id.txt) ---
+        gene_conditions: List[Dict[str, str]] = []
+        for gene in genes:
+            gene_conditions.extend(self._gene_conditions.get(gene, []))
+
+        # --- Enrich with gene-level stats (gene_specific_summary.txt) ---
+        gene_stats: List[Dict[str, Any]] = []
+        for gene in genes:
+            gs = self._gene_stats.get(gene)
+            if gs:
+                gene_stats.append({"gene": gene, **gs})
+
+        # --- Conflict flags (summary_of_conflicting_interpretations.txt) ---
+        has_conflicts = any(vid in self._conflicting_variations for vid in variation_ids)
+
+        # --- Submission counts (submission_summary.txt.gz) ---
+        total_submissions = sum(
+            self._submission_counts.get(vid, 0) for vid in variation_ids
+        )
+
+        # --- Disease details (disease_names.txt) ---
+        disease_details: List[Dict[str, str]] = []
+        seen_diseases: Set[str] = set()
+        for e in entries:
+            phenotype_ids = e.get("phenotype_ids", "")
+            if phenotype_ids:
+                for pid_part in phenotype_ids.split(","):
+                    pid_part = pid_part.strip()
+                    if pid_part and pid_part not in seen_diseases:
+                        dd = self._diseases.get(pid_part)
+                        if dd:
+                            seen_diseases.add(pid_part)
+                            disease_details.append(dd)
+
+        return {
+            "found": True,
+            "source": "clinvar_local",
+            "count": len(entries),
+            "ids": list(variation_ids)[:20],
+            "allele_ids": list(allele_ids)[:20],
+            "clinical_significances": clinical_significances,
+            "conditions": conditions,
+            "genes": genes,
+            "review_statuses": list({e.get("review_status", "") for e in entries} - {""}),
+            "has_conflicting_interpretations": has_conflicts,
+            "total_submissions": total_submissions,
+            "pubmed_ids": pmids[:50],
+            "cross_references": cross_refs[:30],
+            "gene_conditions": gene_conditions[:20],
+            "gene_stats": gene_stats,
+            "disease_details": disease_details[:10],
+            "entries": result_entries[:10],
+        }
+
+    def lookup_batch(self, rsids: List[str]) -> Dict[str, Optional[Dict[str, Any]]]:
+        """Batch lookup — returns a dict of rsid → annotation."""
+        return {rsid: self.lookup(rsid) for rsid in rsids}
+
+    @property
+    def is_loaded(self) -> bool:
+        return self._loaded
+
+    @property
+    def variant_count(self) -> int:
+        return len(self._index)
+
+    @property
+    def files_loaded(self) -> List[str]:
+        return list(self._files_loaded)
+
+    # ------------------------------------------------------------------
+    # Internal — file loaders
+    # ------------------------------------------------------------------
+
+    def _tsv_reader(self, fh):
+        """Create a csv.DictReader that skips ## comment lines."""
+        return csv.DictReader(
+            (line for line in fh if not line.startswith("##")),
+            delimiter="\t",
+        )
+
+    def _build_index(self):
+        """1/11 — Parse variant_summary.txt.gz and index by RS# (dbSNP)."""
+        fpath = self._data_dir / "variant_summary.txt.gz"
+        logger.info("Loading ClinVar variant_summary ...")
+        start = time.time()
+        index: Dict[str, List[Dict[str, Any]]] = {}
+        row_count = 0
+
+        with gzip.open(fpath, "rt", encoding="utf-8", errors="replace") as fh:
+            reader = csv.DictReader(fh, delimiter="\t")
+            for row in reader:
+                row_count += 1
+                rs_raw = row.get("RS# (dbSNP)", "").strip()
+                if not rs_raw or rs_raw == "-1" or rs_raw == "-":
+                    continue
+                rsid = f"rs{rs_raw}" if not rs_raw.startswith("rs") else rs_raw
+
+                entry = {
+                    "allele_id": row.get("AlleleID", ""),
+                    "variation_id": row.get("VariationID", ""),
+                    "variation_type": row.get("Type", ""),
+                    "clinical_significance": row.get("ClinicalSignificance", ""),
+                    "condition": row.get("PhenotypeList", ""),
+                    "phenotype_ids": row.get("PhenotypeIDS", ""),
+                    "rcv_accession": row.get("RCVaccession", ""),
+                    "gene": row.get("GeneSymbol", ""),
+                    "gene_id": row.get("GeneID", ""),
+                    "origin": row.get("Origin", ""),
+                    "assembly": row.get("Assembly", ""),
+                    "review_status": row.get("ReviewStatus", ""),
+                    "chromosome": row.get("Chromosome", ""),
+                    "start": row.get("Start", ""),
+                    "stop": row.get("Stop", ""),
+                }
+
+                if rsid in index:
+                    index[rsid].append(entry)
+                else:
+                    index[rsid] = [entry]
+
+        self._index = index
+        elapsed = time.time() - start
+        self._files_loaded.append("variant_summary.txt.gz")
+        logger.info(
+            "  variant_summary: %d unique rsids from %d rows in %.1fs",
+            len(index), row_count, elapsed,
+        )
+
+    def _load_citations(self):
+        """2/11 — var_citations.txt → allele_id→[pubmed_ids]."""
+        fpath = self._data_dir / "var_citations.txt"
+        if not fpath.exists():
+            return
+        start = time.time()
+        citations: Dict[str, List[str]] = {}
+        with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
+            for row in self._tsv_reader(fh):
+                aid = row.get("#AlleleID", row.get("AlleleID", "")).strip()
+                source = row.get("citation_source", "").strip()
+                cid = row.get("citation_id", "").strip()
+                if aid and source == "PubMed" and cid:
+                    citations.setdefault(aid, []).append(cid)
+        self._citations = citations
+        self._files_loaded.append("var_citations.txt")
+        logger.info("  var_citations: %d alleles in %.1fs", len(citations), time.time() - start)
+
+    def _load_gene_conditions(self):
+        """3/11 — gene_condition_source_id.txt → gene→[conditions]."""
+        fpath = self._data_dir / "gene_condition_source_id.txt"
+        if not fpath.exists():
+            return
+        start = time.time()
+        gene_cond: Dict[str, List[Dict[str, str]]] = {}
+        with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
+            for row in self._tsv_reader(fh):
+                genes_str = row.get("AssociatedGenes", "").strip()
+                disease = row.get("DiseaseName", "").strip()
+                source = row.get("SourceName", "").strip()
+                source_id = row.get("SourceID", "").strip()
+                disease_mim = row.get("DiseaseMIM", "").strip()
+                if not genes_str or not disease:
+                    continue
+                entry = {"disease": disease, "source": source, "source_id": source_id, "disease_mim": disease_mim}
+                for gene in genes_str.split(","):
+                    gene = gene.strip()
+                    if gene:
+                        gene_cond.setdefault(gene, []).append(entry)
+        self._gene_conditions = gene_cond
+        self._files_loaded.append("gene_condition_source_id.txt")
+        logger.info("  gene_conditions: %d genes in %.1fs", len(gene_cond), time.time() - start)
+
+    def _load_cross_references(self):
+        """4/11 — cross_references.txt → allele_id→[{database, id}]."""
+        fpath = self._data_dir / "cross_references.txt"
+        if not fpath.exists():
+            return
+        start = time.time()
+        xrefs: Dict[str, List[Dict[str, str]]] = {}
+        with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
+            for row in self._tsv_reader(fh):
+                aid = row.get("#AlleleID", row.get("AlleleID", "")).strip()
+                db = row.get("Database", "").strip()
+                xid = row.get("ID", "").strip()
+                if aid and db and xid and db in _XREF_DBS_OF_INTEREST:
+                    xrefs.setdefault(aid, []).append({"database": db, "id": xid})
+        self._cross_refs = xrefs
+        self._files_loaded.append("cross_references.txt")
+        logger.info("  cross_references: %d alleles in %.1fs", len(xrefs), time.time() - start)
+
+    def _load_disease_names(self):
+        """5/11 — disease_names.txt → concept_id→disease info."""
+        fpath = self._data_dir / "disease_names.txt"
+        if not fpath.exists():
+            return
+        start = time.time()
+        diseases: Dict[str, Dict[str, str]] = {}
+        with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
+            for row in self._tsv_reader(fh):
+                name = row.get("#DiseaseName", row.get("DiseaseName", "")).strip()
+                source = row.get("SourceName", "").strip()
+                concept_id = row.get("ConceptID", "").strip()
+                source_id = row.get("SourceID", "").strip()
+                disease_mim = row.get("DiseaseMIM", "").strip()
+                category = row.get("Category", "").strip()
+                if concept_id:
+                    diseases[concept_id] = {
+                        "name": name, "source": source, "concept_id": concept_id,
+                        "source_id": source_id, "disease_mim": disease_mim, "category": category,
+                    }
+                # Also index by MedGen-style keys like "C1234567"
+                if source_id and source_id != concept_id:
+                    diseases[source_id] = diseases.get(concept_id, {
+                        "name": name, "source": source, "concept_id": concept_id,
+                        "source_id": source_id, "disease_mim": disease_mim, "category": category,
+                    })
+        self._diseases = diseases
+        self._files_loaded.append("disease_names.txt")
+        logger.info("  disease_names: %d entries in %.1fs", len(diseases), time.time() - start)
+
+    def _load_gene_stats(self):
+        """6/11 — gene_specific_summary.txt → gene→stats."""
+        fpath = self._data_dir / "gene_specific_summary.txt"
+        if not fpath.exists():
+            return
+        start = time.time()
+        stats: Dict[str, Dict[str, Any]] = {}
+        with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
+            for row in self._tsv_reader(fh):
+                symbol = row.get("#Symbol", row.get("Symbol", "")).strip()
+                if not symbol:
+                    continue
+                def _int(v: str) -> int:
+                    v = v.strip()
+                    return int(v) if v and v != "-" else 0
+                stats[symbol] = {
+                    "gene_id": row.get("GeneID", "").strip(),
+                    "total_submissions": _int(row.get("Total_submissions", "0")),
+                    "total_alleles": _int(row.get("Total_alleles", "0")),
+                    "pathogenic_likely_pathogenic": _int(row.get("Alleles_reported_Pathogenic_Likely_pathogenic", "0")),
+                    "gene_mim": row.get("Gene_MIM_number", "").strip(),
+                    "uncertain": _int(row.get("Number_uncertain", "0")),
+                    "with_conflicts": _int(row.get("Number_with_conflicts", "0")),
+                }
+        self._gene_stats = stats
+        self._files_loaded.append("gene_specific_summary.txt")
+        logger.info("  gene_stats: %d genes in %.1fs", len(stats), time.time() - start)
+
+    def _load_hgvs(self):
+        """7/11 — hgvs4variation.txt.gz → allele_id→HGVS expressions.
+        
+        Keeps only the first (typically most relevant) expression per allele.
+        """
+        fpath = self._data_dir / "hgvs4variation.txt.gz"
+        if not fpath.exists():
+            return
+        start = time.time()
+        hgvs: Dict[str, Dict[str, str]] = {}
+        with gzip.open(fpath, "rt", encoding="utf-8", errors="replace") as fh:
+            for row in self._tsv_reader(fh):
+                aid = row.get("AlleleID", "").strip()
+                if not aid or aid == "-" or aid in hgvs:
+                    continue  # keep first entry per allele
+                nuc = row.get("NucleotideExpression", "").strip()
+                prot = row.get("ProteinExpression", "").strip()
+                if nuc or prot:
+                    hgvs[aid] = {
+                        "nucleotide_expression": nuc,
+                        "nucleotide_change": row.get("NucleotideChange", "").strip(),
+                        "protein_expression": prot,
+                        "protein_change": row.get("ProteinChange", "").strip(),
+                        "type": row.get("Type", "").strip(),
+                        "assembly": row.get("Assembly", "").strip(),
+                    }
+        self._hgvs = hgvs
+        self._files_loaded.append("hgvs4variation.txt.gz")
+        logger.info("  hgvs: %d alleles in %.1fs", len(hgvs), time.time() - start)
+
+    def _load_allele_genes(self):
+        """8/11 — allele_gene.txt.gz → allele_id→gene details."""
+        fpath = self._data_dir / "allele_gene.txt.gz"
+        if not fpath.exists():
+            return
+        start = time.time()
+        ag: Dict[str, Dict[str, str]] = {}
+        with gzip.open(fpath, "rt", encoding="utf-8", errors="replace") as fh:
+            for row in self._tsv_reader(fh):
+                aid = row.get("#AlleleID", row.get("AlleleID", "")).strip()
+                if not aid or aid in ag:
+                    continue  # keep first entry per allele
+                ag[aid] = {
+                    "gene_symbol": row.get("Symbol", "").strip(),
+                    "gene_name": row.get("Name", "").strip(),
+                    "gene_id": row.get("GeneID", "").strip(),
+                    "category": row.get("Category", "").strip(),
+                }
+        self._allele_genes = ag
+        self._files_loaded.append("allele_gene.txt.gz")
+        logger.info("  allele_genes: %d alleles in %.1fs", len(ag), time.time() - start)
+
+    def _load_submission_counts(self):
+        """9/11 — submission_summary.txt.gz → variation_id→count.
+        
+        Only counts submissions per variation (memory-efficient).
+        """
+        fpath = self._data_dir / "submission_summary.txt.gz"
+        if not fpath.exists():
+            return
+        start = time.time()
+        counts: Dict[str, int] = {}
+        with gzip.open(fpath, "rt", encoding="utf-8", errors="replace") as fh:
+            for row in self._tsv_reader(fh):
+                vid = row.get("#VariationID", row.get("VariationID", "")).strip()
+                if vid:
+                    counts[vid] = counts.get(vid, 0) + 1
+        self._submission_counts = counts
+        self._files_loaded.append("submission_summary.txt.gz")
+        logger.info("  submission_counts: %d variations in %.1fs", len(counts), time.time() - start)
+
+    def _load_conflicting_interpretations(self):
+        """10/11 — summary_of_conflicting_interpretations.txt → set of variation_ids."""
+        fpath = self._data_dir / "summary_of_conflicting_interpretations.txt"
+        if not fpath.exists():
+            return
+        start = time.time()
+        conflicts: Set[str] = set()
+        with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
+            for row in self._tsv_reader(fh):
+                vid = row.get("NCBI_Variation_ID", row.get("#NCBI_Variation_ID", "")).strip()
+                if vid:
+                    conflicts.add(vid)
+        self._conflicting_variations = conflicts
+        self._files_loaded.append("summary_of_conflicting_interpretations.txt")
+        logger.info("  conflicts: %d variations in %.1fs", len(conflicts), time.time() - start)
+
+    def _load_variation_alleles(self):
+        """11/11 — variation_allele.txt.gz → variation_id→[allele_ids]."""
+        fpath = self._data_dir / "variation_allele.txt.gz"
+        if not fpath.exists():
+            return
+        start = time.time()
+        va: Dict[str, List[str]] = {}
+        with gzip.open(fpath, "rt", encoding="utf-8", errors="replace") as fh:
+            for row in self._tsv_reader(fh):
+                vid = row.get("#VariationID", row.get("VariationID", "")).strip()
+                aid = row.get("AlleleID", "").strip()
+                if vid and aid:
+                    va.setdefault(vid, []).append(aid)
+        self._variation_alleles = va
+        self._files_loaded.append("variation_allele.txt.gz")
+        logger.info("  variation_alleles: %d variations in %.1fs", len(va), time.time() - start)
+
+
+# ------------------------------------------------------------------
+# Module-level singleton
+# ------------------------------------------------------------------
+
+_clinvar_local_instance: Optional[ClinVarLocalService] = None
+
+
+def get_clinvar_local_service() -> ClinVarLocalService:
+    """Return the singleton ClinVarLocalService instance."""
+    global _clinvar_local_instance
+    if _clinvar_local_instance is None:
+        _clinvar_local_instance = ClinVarLocalService()
+    return _clinvar_local_instance

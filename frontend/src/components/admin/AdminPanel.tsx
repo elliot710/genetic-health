@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { Shield, Users, Settings, Plus, Trash2, Pencil, Check, X, ChevronRight, Download, Upload, Database, Lightbulb, RefreshCw, AlertTriangle, Minus, Info, Activity, Play, Square, Clock, FileText } from 'lucide-react'
+import { Shield, Users, Settings, Plus, Trash2, Pencil, Check, X, ChevronRight, Download, Upload, Database, Lightbulb, RefreshCw, AlertTriangle, Minus, Info, Activity, Play, Square, Clock, FileText, Zap } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -151,6 +151,18 @@ interface AdminJobsSummary {
   failed: number
 }
 
+interface AnnotationSource {
+  id: number
+  source_name: string
+  display_name: string
+  is_enabled: boolean
+  description: string | null
+  rate_limit: number | null
+  priority: number
+  annotated_count: number
+  missing_count: number
+}
+
 const CATEGORY_LABELS: Record<string, string> = {
   health: 'Health Risks',
   drug: 'Drug Responses',
@@ -245,6 +257,13 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const [deleteConfirmJobId, setDeleteConfirmJobId] = useState<number | null>(null)
   const logsEndRef = useRef<HTMLDivElement>(null)
   const logsRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Annotation sources state
+  const [annotationSources, setAnnotationSources] = useState<AnnotationSource[]>([])
+  const [sourcesLoading, setSourcesLoading] = useState(false)
+  const [sourceToggling, setSourceToggling] = useState<string | null>(null)
+  const [backfillingSource, setBackfillingSource] = useState<string | null>(null)
+  const [backfillFeedback, setBackfillFeedback] = useState<{ source: string; message: string; type: 'success' | 'error' } | null>(null)
 
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }), [token])
 
@@ -683,6 +702,57 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [jobLogs])
 
+  // --- Annotation Sources ---
+  const fetchAnnotationSources = useCallback(async () => {
+    setSourcesLoading(true)
+    try {
+      const res = await fetch(`${API}/annotation-sources`, { headers })
+      if (res.ok) setAnnotationSources(await res.json())
+    } catch { /* ignore */ }
+    setSourcesLoading(false)
+  }, [headers])
+
+  useEffect(() => { fetchAnnotationSources() }, [fetchAnnotationSources])
+
+  const toggleSource = async (sourceName: string, enabled: boolean) => {
+    setSourceToggling(sourceName)
+    try {
+      const res = await fetch(`${API}/annotation-sources/${encodeURIComponent(sourceName)}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ is_enabled: enabled }),
+      })
+      if (res.ok) {
+        const updated = await res.json()
+        setAnnotationSources(prev => prev.map(s => s.source_name === sourceName ? updated : s))
+      }
+    } catch { /* ignore */ }
+    setSourceToggling(null)
+  }
+
+  const backfillSource = async (sourceName: string) => {
+    setBackfillingSource(sourceName)
+    setBackfillFeedback(null)
+    try {
+      const res = await fetch(`${API}/annotation-sources/${encodeURIComponent(sourceName)}/backfill?limit=100`, {
+        method: 'POST',
+        headers,
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setBackfillFeedback({ source: sourceName, message: data.detail, type: 'success' })
+        await fetchAnnotationSources()
+      } else {
+        const err = await res.json().catch(() => ({ detail: 'Backfill failed' }))
+        setBackfillFeedback({ source: sourceName, message: err.detail, type: 'error' })
+      }
+    } catch {
+      setBackfillFeedback({ source: sourceName, message: 'Network error during backfill', type: 'error' })
+    }
+    setBackfillingSource(null)
+    setTimeout(() => setBackfillFeedback(prev => prev?.source === sourceName ? null : prev), 10000)
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -719,7 +789,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
       </div>
 
       <Tabs defaultValue="users" className="w-full">
-        <TabsList className="grid w-full max-w-4xl grid-cols-6">
+        <TabsList className="grid w-full max-w-5xl grid-cols-7">
           <TabsTrigger value="users" className="gap-2">
             <Users className="h-4 w-4" />
             Users
@@ -740,6 +810,10 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                 {discoverySummary.total_pending}
               </Badge>
             )}
+          </TabsTrigger>
+          <TabsTrigger value="sources" className="gap-2">
+            <Zap className="h-4 w-4" />
+            Sources
           </TabsTrigger>
           <TabsTrigger value="annotations" className="gap-2 relative">
             <AlertTriangle className="h-4 w-4" />
@@ -1381,6 +1455,121 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
         </TabsContent>
 
         {/* ===== INCOMPLETE ANNOTATIONS TAB ===== */}
+        {/* ===== SOURCES TAB ===== */}
+        <TabsContent value="sources" className="mt-6">
+          <Card className="glass-card">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Zap className="h-5 w-5" />
+                    Annotation Sources
+                  </CardTitle>
+                  <CardDescription>
+                    Enable or disable external API sources used during variant annotation.
+                    Disabled sources are skipped during analysis — enable them later and use Backfill to populate missing data.
+                  </CardDescription>
+                </div>
+                <Button size="sm" variant="outline" onClick={fetchAnnotationSources} disabled={sourcesLoading}>
+                  <RefreshCw className={`h-3 w-3 mr-1 ${sourcesLoading ? 'animate-spin' : ''}`} /> Refresh
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {backfillFeedback && (
+                <div className={`mb-4 p-3 rounded-lg flex items-start gap-2 text-sm ${
+                  backfillFeedback.type === 'success' ? 'bg-green-500/10 text-green-600 border border-green-500/20'
+                    : 'bg-red-500/10 text-red-600 border border-red-500/20'
+                }`}>
+                  <Info className="h-4 w-4 mt-0.5 shrink-0" />
+                  <span>{backfillFeedback.message}</span>
+                </div>
+              )}
+              {annotationSources.length === 0 ? (
+                <p className={`text-center py-8 ${theme.text.tertiary}`}>
+                  {sourcesLoading ? 'Loading sources...' : 'No annotation sources configured'}
+                </p>
+              ) : (
+                <div className="space-y-4">
+                  {annotationSources.map(src => {
+                    const total = src.annotated_count + src.missing_count
+                    const pct = total > 0 ? Math.round((src.annotated_count / total) * 100) : 0
+                    return (
+                      <div
+                        key={src.source_name}
+                        className={`rounded-lg border p-4 transition-colors ${
+                          src.is_enabled
+                            ? isDarkMode ? 'border-white/10 bg-white/5' : 'border-gray-200 bg-gray-50'
+                            : isDarkMode ? 'border-white/5 bg-white/[0.02] opacity-60' : 'border-gray-100 bg-gray-25 opacity-60'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-4 flex-1">
+                            <Switch
+                              checked={src.is_enabled}
+                              onCheckedChange={(checked) => toggleSource(src.source_name, checked)}
+                              disabled={sourceToggling === src.source_name}
+                            />
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className={`font-medium ${theme.text.primary}`}>{src.display_name}</span>
+                                {src.rate_limit ? (
+                                  <Badge variant="outline" className="text-xs">
+                                    {src.rate_limit} req/s
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="outline" className="text-xs text-emerald-600 border-emerald-500/30">
+                                    Local
+                                  </Badge>
+                                )}
+                                <Badge variant={src.is_enabled ? 'default' : 'secondary'} className="text-xs">
+                                  {src.is_enabled ? 'Enabled' : 'Disabled'}
+                                </Badge>
+                              </div>
+                              {src.description && (
+                                <p className={`text-sm mt-1 ${theme.text.muted}`}>{src.description}</p>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3 ml-4">
+                            <div className="text-right min-w-[140px]">
+                              <div className="flex items-center gap-2 justify-end">
+                                <span className={`text-sm font-mono ${theme.text.secondary}`}>
+                                  {src.annotated_count.toLocaleString()} / {total.toLocaleString()}
+                                </span>
+                                <span className={`text-xs ${theme.text.muted}`}>({pct}%)</span>
+                              </div>
+                              <div className="w-32 h-1.5 rounded-full bg-gray-700/30 mt-1 overflow-hidden">
+                                <div
+                                  className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-500"
+                                  style={{ width: `${pct}%` }}
+                                />
+                              </div>
+                            </div>
+                            {src.missing_count > 0 && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={backfillingSource === src.source_name || !src.is_enabled}
+                                onClick={() => backfillSource(src.source_name)}
+                                title={!src.is_enabled ? 'Enable this source first' : `Backfill ${src.missing_count} variants from ${src.display_name}`}
+                              >
+                                {backfillingSource === src.source_name
+                                  ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Backfilling...</>
+                                  : <><Download className="h-3 w-3 mr-1" /> Backfill ({src.missing_count > 999 ? `${Math.round(src.missing_count / 1000)}k` : src.missing_count})</>}
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
         <TabsContent value="annotations" className="mt-6">
           <Card className="glass-card">
             <CardHeader>

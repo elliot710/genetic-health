@@ -16,7 +16,7 @@ from ..db.models import (
     HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait, SportsPerformance,
     CognitiveProfile, PersonalityTrait,
     WellnessMetric, MethylationProfile, DetoxificationProfile,
-    UncommonMutation, VariantMapping
+    UncommonMutation, VariantMapping, AnnotationSourceConfig
 )
 from ..core.exceptions import AnalysisNotFoundException
 from ..core.config import settings
@@ -143,7 +143,8 @@ class SharedVariantAnnotationService:
         annotation_data: Dict[str, Any],
         analysis_id: int,
         analysis_variant_id: int,
-        marker_id: int = None
+        marker_id: int = None,
+        enabled_sources: Optional[List[str]] = None
     ) -> bool:
         """Save new annotation data to shared system and create user reference."""
         try:
@@ -169,7 +170,8 @@ class SharedVariantAnnotationService:
 
             # Look up AlphaMissense prediction from local data (comprehensive)
             am_data = None
-            ensembl_ann = annotations.get('ensembl', {})
+            if enabled_sources is None or 'alpha_missense' in enabled_sources:
+                ensembl_ann = annotations.get('ensembl', {})
             if ensembl_ann and ensembl_ann.get('found') and ensembl_ann.get('data'):
                 e_entry = ensembl_ann['data'][0] if isinstance(ensembl_ann['data'], list) else ensembl_ann['data']
                 chrom = e_entry.get('seq_region_name')
@@ -182,6 +184,14 @@ class SharedVariantAnnotationService:
                         am_svc = get_alpha_missense_service()
                         am_data = am_svc.lookup_comprehensive(str(chrom), int(pos), ref, alt)
 
+            # Look up ClinVar local data (all 11 TSV files)
+            cv_local_data = None
+            if enabled_sources is None or 'clinvar_local' in enabled_sources:
+                from .clinvar_local import get_clinvar_local_service
+                cv_svc = get_clinvar_local_service()
+                if cv_svc.is_loaded:
+                    cv_local_data = cv_svc.lookup(rsid)
+
             from sqlalchemy.dialects.postgresql import insert
             values = dict(
                 rsid=rsid,
@@ -191,6 +201,7 @@ class SharedVariantAnnotationService:
                 snpedia_data=annotations.get('snpedia'),
                 litvar_data=annotations.get('litvar'),
                 alpha_missense_data=am_data,
+                clinvar_local_data=cv_local_data,
                 annotation_status=status,
                 failed_sources=failed if failed else None,
                 total_api_calls=success_count,
@@ -225,6 +236,11 @@ class SharedVariantAnnotationService:
                 conflict_set['alpha_missense_data'] = func.coalesce(
                     SharedVariantAnnotation.alpha_missense_data,
                     stmt.excluded.alpha_missense_data,
+                )
+            if cv_local_data:
+                conflict_set['clinvar_local_data'] = func.coalesce(
+                    SharedVariantAnnotation.clinvar_local_data,
+                    stmt.excluded.clinvar_local_data,
                 )
 
             # Recalculate annotation_status & failed_sources after the merge.
@@ -330,6 +346,27 @@ class ComprehensiveAnalysisService:
         self._registry = registry
         logger.info(f"Loaded {len(rows)} variant mappings from database across {len(registry)} categories")
 
+    async def _load_enabled_sources(self) -> Optional[List[str]]:
+        """Load enabled annotation sources from the database.
+        Returns a list of enabled source names, or None if the table
+        doesn't exist yet / is empty (meaning use all sources)."""
+        try:
+            from ..db.database import async_session_factory
+            async with async_session_factory() as session:
+                result = await session.execute(
+                    select(AnnotationSourceConfig.source_name).where(
+                        AnnotationSourceConfig.is_enabled == True
+                    )
+                )
+                names = [r[0] for r in result.all()]
+            if names:
+                logger.info(f"Enabled annotation sources: {names}")
+                return names
+            return None  # No rows → use all sources (table not seeded yet)
+        except Exception as e:
+            logger.warning(f"Could not load annotation source config: {e} — using all sources")
+            return None
+
     def _get_maps(self, category: str):
         """Return (rsid_map, gene_map) for a category from the loaded registry."""
         maps = self._registry.get(category, {'rsid': {}, 'gene': {}})
@@ -430,6 +467,17 @@ class ComprehensiveAnalysisService:
                     "processing_time": processing_time
                 }
 
+        except AnalysisCancelled as e:
+            logger.info(f"Analysis {analysis_id} was cancelled: {e}")
+            # Status already set by user action (paused/stopped) — don't overwrite
+            return {
+                "success": False,
+                "analysis_id": analysis_id,
+                "status": "cancelled",
+                "error": str(e),
+                "processing_time": time.time() - start_time
+            }
+
         except Exception as e:
             logger.error(f"Analysis {analysis_id} failed: {str(e)}")
             try:
@@ -511,16 +559,25 @@ class ComprehensiveAnalysisService:
         if variants_needing_annotation and self.api_service:
             batch_size = settings.api.batch_size
 
+            # Load enabled annotation sources from admin config
+            enabled_sources = await self._load_enabled_sources()
+            total_batches = (len(variants_needing_annotation) + batch_size - 1) // batch_size
+
             for i in range(0, len(variants_needing_annotation), batch_size):
+                # Check for cancellation every 3 batches
+                batch_num = i // batch_size
+                if batch_num % 3 == 0:
+                    await self._check_if_cancelled(analysis_id)
+
                 batch = variants_needing_annotation[i:i + batch_size]
                 batch_rsids = [str(v.rsid) for v in batch]
 
-                logger.info(f"Fetching annotations for batch {i//batch_size + 1}: {len(batch)} variants")
+                logger.info(f"Fetching annotations for batch {batch_num + 1}/{total_batches}: {len(batch)} variants")
 
                 await asyncio.sleep(0)
 
                 new_annotations = await self.api_service.batch_annotate_variants(
-                    batch_rsids, strategy='comprehensive'
+                    batch_rsids, strategy='comprehensive', enabled_sources=enabled_sources
                 )
 
                 await asyncio.sleep(0)
@@ -532,7 +589,8 @@ class ComprehensiveAnalysisService:
                     if annotation_data:
                         success = await annotation_service.save_annotation(
                             rsid, annotation_data, analysis_id, getattr(variant, 'id'),
-                            marker_id=getattr(variant, 'marker_id', None)
+                            marker_id=getattr(variant, 'marker_id', None),
+                            enabled_sources=enabled_sources
                         )
 
                         if success:
@@ -557,7 +615,8 @@ class ComprehensiveAnalysisService:
                 await self._update_progress(analysis_id, progress)
 
                 if i + batch_size < len(variants_needing_annotation):
-                    await asyncio.sleep(0.01)
+                    # Yield generously so FastAPI can serve HTTP requests
+                    await asyncio.sleep(0.05)
 
         logger.info(f"Annotation complete: {progress.reused_annotations} reused, {progress.new_annotations} new")
         return annotation_results
@@ -1179,6 +1238,14 @@ class ComprehensiveAnalysisService:
         try:
             from ..db.database import async_session_factory
             async with async_session_factory() as session:
+                # Never overwrite user-initiated statuses (paused/stopped)
+                result = await session.execute(
+                    select(GeneticAnalysis.analysis_status).where(GeneticAnalysis.id == analysis_id)
+                )
+                current_status = result.scalar_one_or_none()
+                if current_status in ('paused', 'stopped'):
+                    return
+
                 await session.execute(
                     update(GeneticAnalysis)
                     .where(GeneticAnalysis.id == analysis_id)

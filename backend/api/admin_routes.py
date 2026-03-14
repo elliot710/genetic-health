@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from datetime import datetime
 
 from ..db.database import get_session
-from ..db.models import User, PanelMarkerConfig, GeneticAnalysis, VariantMapping, PendingDiscovery, SharedVariantAnnotation
+from ..db.models import User, PanelMarkerConfig, GeneticAnalysis, VariantMapping, PendingDiscovery, SharedVariantAnnotation, AnnotationSourceConfig
 from .auth_routes import get_current_user
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -854,6 +854,295 @@ async def bulk_review_discoveries(
     }
 
 
+# --- Annotation Source Configuration ---
+
+DEFAULT_SOURCES = [
+    {"source_name": "ensembl", "display_name": "Ensembl VEP", "is_enabled": True, "description": "Variant Effect Predictor — gene consequences, transcript impact, regulatory annotations", "rate_limit": 15.0, "priority": 1},
+    {"source_name": "clinvar", "display_name": "ClinVar (NCBI)", "is_enabled": True, "description": "Clinical significance classifications, disease associations, review status", "rate_limit": 10.0, "priority": 2},
+    {"source_name": "clinpgx", "display_name": "ClinPGx", "is_enabled": True, "description": "Pharmacogenomic annotations — drug-gene interactions and dosing guidelines", "rate_limit": 1.0, "priority": 3},
+    {"source_name": "snpedia", "display_name": "SNPedia", "is_enabled": True, "description": "Community-curated variant wiki — genotype-phenotype associations and research summaries", "rate_limit": 2.0, "priority": 4},
+    {"source_name": "alpha_missense", "display_name": "AlphaMissense", "is_enabled": True, "description": "AI-based missense pathogenicity predictions (local data, no API calls)", "rate_limit": None, "priority": 5},
+    {"source_name": "clinvar_local", "display_name": "ClinVar Local", "is_enabled": True, "description": "Local ClinVar TSV + VCF data — variant summary, citations, cross-refs, gene stats, HGVS, conflicts, allele frequencies, molecular consequences, oncogenicity (no API calls)", "rate_limit": None, "priority": 6},
+]
+
+# Map source names to DB columns (clinpgx data stored in pharmgkb_data column)
+SOURCE_TO_COLUMN = {'ensembl': 'ensembl', 'clinvar': 'clinvar', 'clinpgx': 'pharmgkb', 'snpedia': 'snpedia', 'alpha_missense': 'alpha_missense', 'clinvar_local': 'clinvar_local'}
+
+
+async def _ensure_source_configs(db: AsyncSession) -> List[AnnotationSourceConfig]:
+    """Ensure all default sources exist in annotation_source_configs. Returns all configs."""
+    result = await db.execute(
+        select(AnnotationSourceConfig).order_by(AnnotationSourceConfig.priority)
+    )
+    existing = list(result.scalars().all())
+    existing_names = {s.source_name for s in existing}
+
+    for default in DEFAULT_SOURCES:
+        if default["source_name"] not in existing_names:
+            db.add(AnnotationSourceConfig(**default))
+
+    if len(existing_names) < len(DEFAULT_SOURCES):
+        await db.flush()
+        result = await db.execute(
+            select(AnnotationSourceConfig).order_by(AnnotationSourceConfig.priority)
+        )
+        existing = list(result.scalars().all())
+
+    return existing
+
+
+class AnnotationSourceResponse(BaseModel):
+    id: int
+    source_name: str
+    display_name: str
+    is_enabled: bool
+    description: Optional[str] = None
+    rate_limit: Optional[float] = None
+    priority: int = 0
+    annotated_count: int = 0  # How many variants have data from this source
+    missing_count: int = 0    # How many variants are missing data from this source
+
+    class Config:
+        from_attributes = True
+
+
+class AnnotationSourceUpdate(BaseModel):
+    is_enabled: Optional[bool] = None
+    priority: Optional[int] = None
+
+
+@router.get("/annotation-sources", response_model=List[AnnotationSourceResponse])
+async def get_annotation_sources(
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Get all annotation source configurations with stats."""
+    sources = await _ensure_source_configs(db)
+
+    # Count annotated/missing per source
+    total_result = await db.execute(select(func.count(SharedVariantAnnotation.id)))
+    total_annotations = total_result.scalar() or 0
+
+    responses = []
+    for src in sources:
+        col_name = SOURCE_TO_COLUMN.get(src.source_name, src.source_name)
+        col = getattr(SharedVariantAnnotation, f'{col_name}_data', None)
+        annotated = 0
+        if col is not None:
+            count_result = await db.execute(
+                select(func.count(SharedVariantAnnotation.id)).where(col.isnot(None))
+            )
+            annotated = count_result.scalar() or 0
+
+        responses.append(AnnotationSourceResponse(
+            id=src.id,
+            source_name=src.source_name,
+            display_name=src.display_name,
+            is_enabled=src.is_enabled,
+            description=src.description,
+            rate_limit=src.rate_limit,
+            priority=src.priority,
+            annotated_count=annotated,
+            missing_count=total_annotations - annotated,
+        ))
+
+    return responses
+
+
+@router.put("/annotation-sources/{source_name}", response_model=AnnotationSourceResponse)
+async def update_annotation_source(
+    source_name: str,
+    update: AnnotationSourceUpdate,
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Enable/disable an annotation source or change its priority."""
+    result = await db.execute(
+        select(AnnotationSourceConfig).where(AnnotationSourceConfig.source_name == source_name)
+    )
+    config = result.scalar_one_or_none()
+    if not config:
+        raise HTTPException(status_code=404, detail=f"Source '{source_name}' not found")
+
+    if update.is_enabled is not None:
+        config.is_enabled = update.is_enabled
+    if update.priority is not None:
+        config.priority = update.priority
+
+    await db.commit()
+    await db.refresh(config)
+
+    # Get counts for the response
+    col_name = SOURCE_TO_COLUMN.get(config.source_name, config.source_name)
+    col = getattr(SharedVariantAnnotation, f'{col_name}_data', None)
+    annotated = 0
+    if col is not None:
+        count_result = await db.execute(
+            select(func.count(SharedVariantAnnotation.id)).where(col.isnot(None))
+        )
+        annotated = count_result.scalar() or 0
+
+    total_result = await db.execute(select(func.count(SharedVariantAnnotation.id)))
+    total_annotations = total_result.scalar() or 0
+
+    return AnnotationSourceResponse(
+        id=config.id,
+        source_name=config.source_name,
+        display_name=config.display_name,
+        is_enabled=config.is_enabled,
+        description=config.description,
+        rate_limit=config.rate_limit,
+        priority=config.priority,
+        annotated_count=annotated,
+        missing_count=total_annotations - annotated,
+    )
+
+
+class BackfillResponse(BaseModel):
+    detail: str
+    source: str
+    total_to_backfill: int
+    completed: int
+    failed: int
+    confirmed_no_data: int
+
+
+@router.post("/annotation-sources/{source_name}/backfill", response_model=BackfillResponse)
+async def backfill_source(
+    source_name: str,
+    limit: int = Query(100, ge=1, le=1000, description="Max variants to backfill in one request"),
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Backfill annotations from a specific source for variants that don't have data from it yet.
+    Use this after enabling a previously-disabled source to populate existing variants."""
+    if source_name not in SOURCE_TO_COLUMN:
+        raise HTTPException(status_code=400, detail=f"Unknown source: {source_name}")
+
+    col_name = SOURCE_TO_COLUMN[source_name]
+    col = getattr(SharedVariantAnnotation, f'{col_name}_data')
+
+    # Find annotations missing data from this source
+    result = await db.execute(
+        select(SharedVariantAnnotation)
+        .where(col.is_(None))
+        .order_by(SharedVariantAnnotation.usage_count.desc())
+        .limit(limit)
+    )
+    annotations = result.scalars().all()
+
+    if not annotations:
+        return BackfillResponse(
+            detail=f"No variants need backfilling from {source_name}",
+            source=source_name, total_to_backfill=0,
+            completed=0, failed=0, confirmed_no_data=0,
+        )
+
+    from ..services.genetic_api_service import OptimizedGeneticAPIService
+    api_service = None
+    if source_name not in ('alpha_missense', 'clinvar_local'):
+        api_service = OptimizedGeneticAPIService()
+        await api_service.initialize()
+
+    completed = 0
+    failed = 0
+    confirmed_no_data = 0
+
+    try:
+        for idx, ann in enumerate(annotations):
+            if idx > 0 and source_name not in ('alpha_missense', 'clinvar_local'):
+                await asyncio.sleep(0.5)
+
+            try:
+                if source_name == 'alpha_missense':
+                    # Local lookup — needs Ensembl data for coordinates
+                    from ..utils.alpha_missense import get_alpha_missense_service
+                    ensembl_ann = ann.ensembl_data
+                    if ensembl_ann and isinstance(ensembl_ann, dict) and ensembl_ann.get('found') and ensembl_ann.get('data'):
+                        e_data = ensembl_ann['data']
+                        e_entry = e_data[0] if isinstance(e_data, list) else e_data
+                        chrom = e_entry.get('seq_region_name')
+                        pos = e_entry.get('start')
+                        allele_str = e_entry.get('allele_string', '')
+                        parts = allele_str.split('/') if allele_str else []
+                        if chrom and pos and len(parts) == 2 and len(parts[0]) == 1 and len(parts[1]) == 1:
+                            am_svc = get_alpha_missense_service()
+                            result_data = am_svc.lookup_comprehensive(str(chrom), int(pos), parts[0], parts[1])
+                            if result_data:
+                                ann.alpha_missense_data = result_data
+                                completed += 1
+                            else:
+                                ann.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense', 'reason': 'not_missense'}
+                                confirmed_no_data += 1
+                        else:
+                            ann.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense', 'reason': 'not_missense'}
+                            confirmed_no_data += 1
+                    else:
+                        # No Ensembl data to derive coordinates
+                        failed += 1
+                elif source_name == 'clinvar_local':
+                    from ..services.clinvar_local import get_clinvar_local_service
+                    cv_svc = get_clinvar_local_service()
+                    if cv_svc.is_loaded:
+                        result_data = cv_svc.lookup(ann.rsid)
+                        if result_data:
+                            ann.clinvar_local_data = result_data
+                            completed += 1
+                        else:
+                            ann.clinvar_local_data = {'found': False, 'confirmed_no_data': True, 'source': 'clinvar_local'}
+                            confirmed_no_data += 1
+                    else:
+                        failed += 1
+                else:
+                    method = getattr(api_service, f'_get_{source_name}_annotation', None)
+                    if not method:
+                        failed += 1
+                        continue
+                    result_data = await method(ann.rsid)
+                    if result_data and isinstance(result_data, dict) and result_data.get('found', False):
+                        setattr(ann, f'{col_name}_data', result_data)
+                        completed += 1
+                    else:
+                        setattr(ann, f'{col_name}_data', {'found': False, 'confirmed_no_data': True, 'source': source_name})
+                        confirmed_no_data += 1
+
+                # Update annotation status
+                all_cols = {s: SOURCE_TO_COLUMN[s] for s in SOURCE_TO_COLUMN}
+                has_any_null = False
+                has_any_failed = False
+                for s, c in all_cols.items():
+                    d = getattr(ann, f'{c}_data', None)
+                    if d is None:
+                        has_any_null = True
+                    elif isinstance(d, dict) and not d.get('found', True) and not d.get('confirmed_no_data', False):
+                        has_any_failed = True
+
+                if not has_any_null and not has_any_failed:
+                    ann.annotation_status = 'completed'
+                    ann.failed_sources = None
+                elif has_any_failed:
+                    ann.annotation_status = 'partial'
+                ann.total_api_calls = (ann.total_api_calls or 0) + 1
+
+            except Exception as e:
+                logger.error(f"Backfill {source_name} error for {ann.rsid}: {e}")
+                failed += 1
+    finally:
+        if api_service:
+            await api_service.close()
+
+    await db.commit()
+
+    return BackfillResponse(
+        detail=f"Backfill from {source_name}: {completed} updated, {confirmed_no_data} confirmed no data, {failed} failed",
+        source=source_name,
+        total_to_backfill=len(annotations),
+        completed=completed,
+        failed=failed,
+        confirmed_no_data=confirmed_no_data,
+    )
+
+
 # --- Incomplete Annotations ---
 
 class IncompleteAnnotationResponse(BaseModel):
@@ -868,6 +1157,8 @@ class IncompleteAnnotationResponse(BaseModel):
     clinpgx: str = "missing"
     snpedia: str = "missing"
     litvar: str = "missing"
+    alpha_missense: str = "missing"
+    clinvar_local: str = "missing"
     first_annotated_at: Optional[datetime] = None
     last_updated_at: Optional[datetime] = None
     usage_count: int = 0
@@ -943,6 +1234,8 @@ async def list_incomplete_annotations(
             clinpgx=_source_status(a.pharmgkb_data),
             snpedia=_source_status(a.snpedia_data),
             litvar=_source_status(a.litvar_data),
+            alpha_missense=_source_status(a.alpha_missense_data),
+            clinvar_local=_source_status(a.clinvar_local_data),
             first_annotated_at=a.first_annotated_at,
             last_updated_at=a.last_updated_at,
             usage_count=a.usage_count or 0,
@@ -971,9 +1264,9 @@ async def retrigger_annotation(
 
     # Determine which sources to retry (only null or not-yet-confirmed sources)
     sources_to_retry = []
-    ALL_SOURCES = ['ensembl', 'clinvar', 'clinpgx', 'snpedia']
+    ALL_SOURCES = ['ensembl', 'clinvar', 'clinpgx', 'snpedia', 'alpha_missense', 'clinvar_local']
     # Map source name to DB column name (clinpgx data stored in pharmgkb_data column)
-    SOURCE_TO_COLUMN = {'ensembl': 'ensembl', 'clinvar': 'clinvar', 'clinpgx': 'pharmgkb', 'snpedia': 'snpedia'}
+    SOURCE_TO_COLUMN = {'ensembl': 'ensembl', 'clinvar': 'clinvar', 'clinpgx': 'pharmgkb', 'snpedia': 'snpedia', 'alpha_missense': 'alpha_missense', 'clinvar_local': 'clinvar_local'}
     for src in ALL_SOURCES:
         col = SOURCE_TO_COLUMN.get(src, src)
         src_data = getattr(annotation, f'{col}_data', None)
@@ -1000,6 +1293,21 @@ async def retrigger_annotation(
     try:
         for src in sources_to_retry:
             try:
+                if src == 'clinvar_local':
+                    # Local lookup — just needs rsid
+                    from ..services.clinvar_local import get_clinvar_local_service
+                    cv_svc = get_clinvar_local_service()
+                    if cv_svc.is_loaded:
+                        result_data = cv_svc.lookup(annotation.rsid)
+                        if result_data and result_data.get('found'):
+                            annotation.clinvar_local_data = result_data
+                            updated.append(src)
+                        else:
+                            annotation.clinvar_local_data = {'found': False, 'confirmed_no_data': True, 'source': 'clinvar_local'}
+                            confirmed_no_data.append(src)
+                    else:
+                        still_failed.append(src)
+                    continue
                 method = getattr(api_service, f'_get_{src}_annotation', None)
                 if not method:
                     still_failed.append(src)
@@ -1064,8 +1372,8 @@ async def retrigger_bulk_annotations(
     completed_count = 0
     still_incomplete = 0
 
-    ALL_SOURCES = ['ensembl', 'clinvar', 'clinpgx', 'snpedia']
-    SOURCE_TO_COLUMN = {'ensembl': 'ensembl', 'clinvar': 'clinvar', 'clinpgx': 'pharmgkb', 'snpedia': 'snpedia'}
+    ALL_SOURCES = ['ensembl', 'clinvar', 'clinpgx', 'snpedia', 'alpha_missense', 'clinvar_local']
+    SOURCE_TO_COLUMN = {'ensembl': 'ensembl', 'clinvar': 'clinvar', 'clinpgx': 'pharmgkb', 'snpedia': 'snpedia', 'alpha_missense': 'alpha_missense', 'clinvar_local': 'clinvar_local'}
 
     try:
         for idx, ann in enumerate(annotations):
@@ -1091,6 +1399,41 @@ async def retrigger_bulk_annotations(
             still_failed = []
             for src in sources_to_retry:
                 try:
+                    if src == 'alpha_missense':
+                        # Local lookup — needs Ensembl data for coordinates
+                        from ..utils.alpha_missense import get_alpha_missense_service
+                        ensembl_ann = ann.ensembl_data
+                        if ensembl_ann and isinstance(ensembl_ann, dict) and ensembl_ann.get('found') and ensembl_ann.get('data'):
+                            e_data = ensembl_ann['data']
+                            e_entry = e_data[0] if isinstance(e_data, list) else e_data
+                            chrom = e_entry.get('seq_region_name')
+                            pos = e_entry.get('start')
+                            allele_str = e_entry.get('allele_string', '')
+                            parts = allele_str.split('/') if allele_str else []
+                            if chrom and pos and len(parts) == 2 and len(parts[0]) == 1 and len(parts[1]) == 1:
+                                am_svc = get_alpha_missense_service()
+                                result_data = am_svc.lookup_comprehensive(str(chrom), int(pos), parts[0], parts[1])
+                                if result_data:
+                                    ann.alpha_missense_data = result_data
+                                else:
+                                    ann.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense'}
+                            else:
+                                ann.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense', 'reason': 'not_missense'}
+                        else:
+                            still_failed.append(src)  # Need Ensembl data first
+                        continue
+                    if src == 'clinvar_local':
+                        from ..services.clinvar_local import get_clinvar_local_service
+                        cv_svc = get_clinvar_local_service()
+                        if cv_svc.is_loaded:
+                            result_data = cv_svc.lookup(ann.rsid)
+                            if result_data:
+                                ann.clinvar_local_data = result_data
+                            else:
+                                ann.clinvar_local_data = {'found': False, 'confirmed_no_data': True, 'source': 'clinvar_local'}
+                        else:
+                            still_failed.append(src)
+                        continue
                     method = getattr(api_service, f'_get_{src}_annotation', None)
                     if not method:
                         still_failed.append(src)

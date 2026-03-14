@@ -1,6 +1,7 @@
 """
 Genetic Health Analysis Toolkit - FastAPI Backend
 """
+import asyncio
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -86,6 +87,22 @@ async def startup_event():
     analysis_queue = get_analysis_queue()
     await analysis_queue.start()
     print("🚀 Analysis queue processor started")
+
+    # Pre-load ClinVar local data (runs in background threads)
+    from .services.clinvar_local import get_clinvar_local_service
+    cv_svc = get_clinvar_local_service()
+    if cv_svc.available:
+        asyncio.create_task(_load_clinvar_local(cv_svc))
+
+
+async def _load_clinvar_local(cv_svc):
+    """Load ClinVar local data in background so it doesn't block startup."""
+    ok = await cv_svc.ensure_loaded()
+    if ok:
+        vcf_msg = f", {cv_svc.vcf_variant_count} VCF rsids" if cv_svc.vcf_variant_count else ""
+        print(f"✅ ClinVar local loaded: {cv_svc.variant_count} TSV rsids{vcf_msg}, files: {cv_svc.files_loaded}")
+    else:
+        print("⚠️ ClinVar local data not loaded")
 
 @app.on_event("shutdown")
 async def shutdown_event():

@@ -11,7 +11,7 @@ class APIConfiguration:
     base_delay: float = 0.1
     max_retries: int = 3
     timeout: float = 30.0
-    batch_size: int = 5
+    batch_size: int = 50
     max_concurrent: int = 3
 
 

@@ -563,11 +563,17 @@ class OptimizedGeneticAPIService:
             logger.error(f"SNPedia annotation error for {rsid}: {e}")
             return {'found': False, 'source': 'snpedia', 'error': str(e)}
     
-    async def batch_annotate_variants(self, rsids: List[str], strategy: str = 'comprehensive') -> Dict[str, Optional[Dict[str, Any]]]:
+    async def batch_annotate_variants(self, rsids: List[str], strategy: str = 'comprehensive', enabled_sources: Optional[List[str]] = None) -> Dict[str, Optional[Dict[str, Any]]]:
         """Annotate multiple variants with each API source running independently.
         
         Each API (Ensembl, ClinVar, ClinPGx, SNPedia) processes all rsids at its
         own rate without blocking the others. Results are merged per-variant at the end.
+
+        Args:
+            rsids: List of rsid strings to annotate.
+            strategy: Annotation strategy (default 'comprehensive').
+            enabled_sources: If provided, only these sources will be queried.
+                             If None, all sources are used.
         """
         if not rsids:
             return {}
@@ -579,12 +585,22 @@ class OptimizedGeneticAPIService:
 
         # Run each API source independently — fast APIs finish first,
         # slow APIs (ClinPGx @ 2 req/s) don't block the rest
-        api_sources = [
+        all_api_sources = [
             ('ensembl', self._get_ensembl_annotation, 8),
             ('clinvar', self._get_clinvar_annotation, 5),
             ('clinpgx', self._get_clinpgx_annotation, 2),
             ('snpedia', self._get_snpedia_annotation, 2),
         ]
+
+        # Filter to enabled sources only
+        if enabled_sources is not None:
+            api_sources = [(n, f, c) for n, f, c in all_api_sources if n in enabled_sources]
+        else:
+            api_sources = all_api_sources
+
+        if not api_sources:
+            logger.warning("No annotation sources enabled — skipping annotation")
+            return {}
 
         source_tasks = [
             self._batch_single_api(valid_rsids, api_func, name, max_concurrent)
@@ -653,7 +669,7 @@ class OptimizedGeneticAPIService:
                     continue
                 rsid, data = item
                 results[rsid] = data
-            await asyncio.sleep(0)  # yield control
+            await asyncio.sleep(0.01)  # yield control to event loop
 
         return results
 

@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 # Default data directory — overridable via ALPHA_MISSENSE_DATA_DIR env var
 DATA_DIR = Path(os.environ.get(
     "ALPHA_MISSENSE_DATA_DIR",
-    os.path.join(os.path.dirname(__file__), "..", "..", "alpha-missense"),
+    os.path.join(os.path.dirname(__file__), "..", "..", "data_sources", "alpha_missense"),
 ))
 
 _VARIANT_HG38 = "AlphaMissense_hg38.tsv.gz"

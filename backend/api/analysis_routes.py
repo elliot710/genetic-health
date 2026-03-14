@@ -394,6 +394,18 @@ async def resume_analysis(
         )
 
 
+def _dedup_by(items: list, key: str) -> list:
+    """Deduplicate a list of dicts by a given key, keeping the first occurrence."""
+    seen: set = set()
+    result = []
+    for item in items:
+        val = item.get(key)
+        if val not in seen:
+            seen.add(val)
+            result.append(item)
+    return result
+
+
 @router.get("/dashboard-data")
 async def get_dashboard_data(
     db: AsyncSession = Depends(get_session),
@@ -494,102 +506,102 @@ async def get_dashboard_data(
             select(HealthRisk).where(HealthRisk.analysis_id.in_(analysis_ids))
         )
         health_rows = hr.scalars().all()
-        dashboard_data["health_risks"] = [
+        dashboard_data["health_risks"] = _dedup_by([
             {"condition": r.condition, "risk_level": r.risk_level, "risk_score": r.risk_score,
              "associated_variants": r.associated_variants, "recommendations": r.recommendations}
             for r in health_rows
-        ]
+        ], "condition")
 
         # Drug responses
         dr = await db.execute(
             select(DrugResponse).where(DrugResponse.analysis_id.in_(analysis_ids))
         )
         drug_rows = dr.scalars().all()
-        dashboard_data["drug_responses"] = [
+        dashboard_data["drug_responses"] = _dedup_by([
             {"gene": r.gene, "drug": r.drug, "response_type": r.response_type,
              "recommendations": r.recommendations, "variants_involved": r.variants_involved}
             for r in drug_rows
-        ]
+        ], "drug")
 
         # Ancestry
         ar = await db.execute(
             select(AncestryResult).where(AncestryResult.analysis_id.in_(analysis_ids))
         )
         ancestry_rows = ar.scalars().all()
-        dashboard_data["ancestry_results"] = [
+        dashboard_data["ancestry_results"] = _dedup_by([
             {"population": r.population, "percentage": r.percentage,
              "confidence": r.confidence, "geographic_origin": r.geographic_origin}
             for r in ancestry_rows
-        ]
+        ], "population")
 
         # Sports
         sp = await db.execute(
             select(SportsPerformance).where(SportsPerformance.analysis_id.in_(analysis_ids))
         )
         sports_rows = sp.scalars().all()
-        dashboard_data["sports_performance"] = [
+        dashboard_data["sports_performance"] = _dedup_by([
             {"category": r.performance_category, "genetic_advantage": r.genetic_advantage,
              "sport_recommendations": r.sport_recommendations, "training_advice": r.training_advice,
              "associated_variants": r.associated_variants or []}
             for r in sports_rows
-        ]
+        ], "category")
 
         # Nutrition
         nt = await db.execute(
             select(NutritionTrait).where(NutritionTrait.analysis_id.in_(analysis_ids))
         )
         nutrition_rows = nt.scalars().all()
-        dashboard_data["nutrition_traits"] = [
+        dashboard_data["nutrition_traits"] = _dedup_by([
             {"nutrient": r.nutrient, "metabolism_type": r.metabolism_type,
              "dietary_recommendations": r.dietary_recommendations, "sensitivity_level": r.sensitivity_level,
              "associated_variants": r.associated_variants or []}
             for r in nutrition_rows
-        ]
+        ], "nutrient")
 
         # Carrier status
         cs = await db.execute(
             select(CarrierStatus).where(CarrierStatus.analysis_id.in_(analysis_ids))
         )
         carrier_rows = cs.scalars().all()
-        dashboard_data["carrier_status"] = [
+        dashboard_data["carrier_status"] = _dedup_by([
             {"condition": r.condition, "carrier_status": r.carrier_status,
              "inheritance_pattern": r.inheritance_pattern,
              "genetic_counseling_recommended": r.genetic_counseling_recommended}
             for r in carrier_rows
-        ]
+        ], "condition")
 
         # Methylation profiles
         mp = await db.execute(
             select(MethylationProfile).where(MethylationProfile.analysis_id.in_(analysis_ids))
         )
         methylation_rows = mp.scalars().all()
-        dashboard_data["methylation_profiles"] = [
+        dashboard_data["methylation_profiles"] = _dedup_by([
             {"gene": r.gene, "variant": r.variant,
              "methylation_capacity": r.methylation_capacity,
              "supplement_recommendations": r.supplement_recommendations,
              "associated_variants": r.associated_variants}
             for r in methylation_rows
-        ]
+        ], "gene")
 
         # Detoxification profiles
         dp = await db.execute(
             select(DetoxificationProfile).where(DetoxificationProfile.analysis_id.in_(analysis_ids))
         )
         detox_rows = dp.scalars().all()
-        dashboard_data["detoxification_profiles"] = [
+        dashboard_data["detoxification_profiles"] = _dedup_by([
             {"detox_phase": r.detox_phase, "gene": r.gene,
              "detox_capacity": r.detox_capacity, "toxin_sensitivity": r.toxin_sensitivity,
              "support_recommendations": r.support_recommendations,
              "associated_variants": r.associated_variants}
             for r in detox_rows
-        ]
+        ], "gene")
 
         # Rare mutations
         rm = await db.execute(
             select(RareMutation).where(RareMutation.analysis_id.in_(analysis_ids))
         )
         rare_rows = rm.scalars().all()
-        dashboard_data["rare_mutations"] = [
+        dashboard_data["rare_mutations"] = _dedup_by([
             {"gene": r.gene, "mutation_type": r.mutation_type,
              "mutation_name": r.mutation_name,
              "clinical_significance": r.clinical_significance,
@@ -598,7 +610,7 @@ async def get_dashboard_data(
              "population_frequency": r.population_frequency,
              "associated_variants": r.associated_variants}
             for r in rare_rows
-        ]
+        ], "mutation_name")
 
         # Cognitive, Personality, Wellness, Physical Traits - metabolic/wellness
         wm = await db.execute(
@@ -606,16 +618,16 @@ async def get_dashboard_data(
         )
         wellness_rows = wm.scalars().all()
         dashboard_data["metabolic"] = {
-            "metrics": [
+            "metrics": _dedup_by([
                 {"metric_name": r.metric_name, "genetic_predisposition": r.genetic_predisposition,
                  "optimization_score": r.optimization_score,
                  "lifestyle_recommendations": r.lifestyle_recommendations}
                 for r in wellness_rows
-            ]
+            ], "metric_name")
         } if wellness_rows else {}
 
         # Also provide wellness data under wellness_traits key for frontend compatibility
-        dashboard_data["wellness_traits"] = [
+        dashboard_data["wellness_traits"] = _dedup_by([
             {"trait": r.metric_name, "category": "Wellness", "value": r.genetic_predisposition,
              "gene": "Multiple", "confidence": r.optimization_score or "Medium",
              "name": r.metric_name, "result": r.genetic_predisposition,
@@ -623,27 +635,27 @@ async def get_dashboard_data(
              "associated_variants": r.associated_variants or [],
              "recommendations": r.lifestyle_recommendations}
             for r in wellness_rows
-        ] if wellness_rows else []
+        ], "trait") if wellness_rows else []
 
         # Physical traits
         pt = await db.execute(
             select(PhysicalTrait).where(PhysicalTrait.analysis_id.in_(analysis_ids))
         )
         physical_rows = pt.scalars().all()
-        dashboard_data["physical_traits"] = [
+        dashboard_data["physical_traits"] = _dedup_by([
             {"trait_name": r.trait_name, "trait_category": r.trait_category,
              "genetic_result": r.genetic_result, "confidence": r.confidence,
              "associated_variants": r.associated_variants, "description": r.description,
              "category": r.trait_category}
             for r in physical_rows
-        ] if physical_rows else []
+        ], "trait_name") if physical_rows else []
 
         # Cognitive profiles (intelligence)
         cp = await db.execute(
             select(CognitiveProfile).where(CognitiveProfile.analysis_id.in_(analysis_ids))
         )
         cognitive_rows = cp.scalars().all()
-        dashboard_data["intelligence"] = [
+        dashboard_data["intelligence"] = _dedup_by([
             {"cognitive_ability": r.cognitive_domain, "trait_name": r.cognitive_domain,
              "genetic_advantage": r.genetic_score, "genetic_result": r.genetic_score,
              "percentile": r.percentile,
@@ -651,14 +663,14 @@ async def get_dashboard_data(
              "description": '; '.join(r.enhancement_suggestions) if r.enhancement_suggestions else '',
              "enhancement_suggestions": r.enhancement_suggestions}
             for r in cognitive_rows
-        ] if cognitive_rows else []
+        ], "trait_name") if cognitive_rows else []
 
         # Personality traits
         pp = await db.execute(
             select(PersonalityTrait).where(PersonalityTrait.analysis_id.in_(analysis_ids))
         )
         personality_rows = pp.scalars().all()
-        dashboard_data["personality_traits"] = [
+        dashboard_data["personality_traits"] = _dedup_by([
             {"trait": r.trait_name, "name": r.trait_name,
              "score": 70 if r.genetic_tendency == 'moderate' else (85 if r.genetic_tendency == 'high' else 55),
              "confidence": r.confidence_level,
@@ -669,14 +681,14 @@ async def get_dashboard_data(
              "summary": r.behavioral_insights[0] if r.behavioral_insights else "Genetic analysis based",
              "characteristics": r.behavioral_insights or ["Trait-based behavior"]}
             for r in personality_rows
-        ] if personality_rows else []
+        ], "trait") if personality_rows else []
 
         # Uncommon mutations
         um = await db.execute(
             select(UncommonMutation).where(UncommonMutation.analysis_id.in_(analysis_ids))
         )
         uncommon_rows = um.scalars().all()
-        dashboard_data["uncommon_mutations"] = [
+        dashboard_data["uncommon_mutations"] = _dedup_by([
             {"rsid": r.associated_variants[0] if r.associated_variants else r.mutation_name,
              "gene": r.gene, "effect": r.trait_association or r.mutation_name,
              "population_frequency": r.population_frequency or 0,
@@ -687,7 +699,7 @@ async def get_dashboard_data(
              "mutation_name": r.mutation_name,
              "mutation_type": r.mutation_type}
             for r in uncommon_rows
-        ] if uncommon_rows else []
+        ], "mutation_name") if uncommon_rows else []
 
         # AlphaMissense + ClinVar maps: rsid → data for all annotated variants
         from ..db.models import AnalysisVariant, GeneticMarker, SharedVariantAnnotation
