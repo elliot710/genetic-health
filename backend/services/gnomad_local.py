@@ -134,11 +134,36 @@ class GnomadLocalService:
         return {"found": False, "source": "gnomad", "chrom": chrom, "pos": pos}
 
     async def lookup_batch(self, rsids: List[str]) -> Dict[str, Optional[Dict[str, Any]]]:
-        """Batch lookup by rsIDs. Returns {rsid: result_or_none}."""
+        """Batch lookup by rsIDs using IN clause. Returns {rsid: result_or_none}."""
+        if not rsids:
+            return {}
         results: Dict[str, Optional[Dict[str, Any]]] = {}
+        batch_size = 500
         async with async_session_factory() as session:
-            for rsid in rsids:
-                results[rsid] = await self._lookup_by_rsid(session, rsid)
+            for i in range(0, len(rsids), batch_size):
+                chunk = rsids[i:i + batch_size]
+                result = await session.execute(
+                    select(GnomadVariant).where(GnomadVariant.rsid.in_(chunk))
+                )
+                rows = result.scalars().all()
+                # Group rows by rsid (multiple alt alleles possible)
+                by_rsid: Dict[str, list] = {}
+                for row in rows:
+                    by_rsid.setdefault(row.rsid, []).append(row)
+                for rsid_key in chunk:
+                    row_list = by_rsid.get(rsid_key)
+                    if not row_list:
+                        results[rsid_key] = None
+                    elif len(row_list) == 1:
+                        results[rsid_key] = self._format_variant(row_list[0], rsid=rsid_key)
+                    else:
+                        best = max(row_list, key=lambda r: r.af or 0)
+                        data = self._format_variant(best, rsid=rsid_key)
+                        data['other_alleles'] = [
+                            {"alt": r.alt, "af": r.af, "ac": r.ac}
+                            for r in row_list if r.id != best.id
+                        ]
+                        results[rsid_key] = data
         return results
 
     async def get_gene_constraint(self, gene: str) -> Optional[Dict[str, Any]]:

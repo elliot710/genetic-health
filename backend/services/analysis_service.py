@@ -78,11 +78,16 @@ class SharedVariantAnnotationService:
         batch_size = 500
         annotation_map = {}
 
-        logger.info(f"Checking for existing shared annotations for {len(rsids)} RSIDs in batches of {batch_size}")
+        total_batches = (len(rsids) + batch_size - 1) // batch_size
+        logger.info(f"Checking for existing shared annotations for {len(rsids)} RSIDs in {total_batches} batches")
+        lookup_start = time.time()
 
         for i in range(0, len(rsids), batch_size):
             batch_rsids = rsids[i:i + batch_size]
-            logger.info(f"📊 Processing annotation batch {i//batch_size + 1}/{(len(rsids) + batch_size - 1)//batch_size}: {len(batch_rsids)} RSIDs")
+            batch_num = i // batch_size + 1
+            if batch_num % 200 == 0 or batch_num == total_batches:
+                elapsed = time.time() - lookup_start
+                logger.info(f"📊 Annotation lookup batch {batch_num}/{total_batches} ({elapsed:.1f}s elapsed, {len(annotation_map)} found so far)")
 
             await asyncio.sleep(0)
 
@@ -150,7 +155,8 @@ class SharedVariantAnnotationService:
             )
 
         await self.session.commit()
-        logger.info(f"Found {len(annotation_map)} existing shared annotations for {len(rsids)} requested RSIDs")
+        elapsed = time.time() - lookup_start
+        logger.info(f"Found {len(annotation_map)} existing shared annotations for {len(rsids)} requested RSIDs ({elapsed:.1f}s)")
         return annotation_map
 
     async def save_annotation(
@@ -541,6 +547,7 @@ class ComprehensiveAnalysisService:
                 }
 
             logger.info(f"Starting comprehensive analysis for {len(variants)} variants")
+            logger.info(f"═══ Phase 1/4: Building gene map ═══")
 
             all_rsids = [str(v.rsid) for v in variants if v.rsid]
             await self._build_rsid_gene_map(variants)
@@ -564,21 +571,30 @@ class ComprehensiveAnalysisService:
                 progress.current_step = "annotating_variants"
                 await self._update_progress(analysis_id, progress)
 
+                logger.info(f"═══ Phase 2/4: Annotating variants ═══")
+                phase_start = time.time()
                 annotation_results = await self._annotate_variants_efficiently(
                     variants, analysis_id, annotation_service, progress
                 )
+                logger.info(f"═══ Phase 2/4 complete ({time.time() - phase_start:.1f}s) ═══")
 
                 # Bulk BigQuery enrichment — one call per unique gene
                 progress.current_step = "enriching_bigquery"
                 await self._update_progress(analysis_id, progress)
+                logger.info(f"═══ Phase 3/4: BigQuery enrichment ═══")
+                phase_start = time.time()
                 await self._bulk_enrich_bigquery(annotation_results, session)
+                logger.info(f"═══ Phase 3/4 complete ({time.time() - phase_start:.1f}s) ═══")
 
                 progress.current_step = "generating_insights"
                 await self._update_progress(analysis_id, progress)
+                logger.info(f"═══ Phase 4/4: Generating insights ═══")
+                phase_start = time.time()
 
                 insights_generated = await self._generate_comprehensive_insights(
                     variants, annotation_results, analysis_id, session, progress
                 )
+                logger.info(f"═══ Phase 4/4 complete ({time.time() - phase_start:.1f}s) ═══")
 
                 await session.commit()
 
@@ -814,9 +830,9 @@ class ComprehensiveAnalysisService:
         cv_updated = 0
         if missing_cv:
             logger.info(f"Backfilling ClinVar Local for {len(missing_cv)} existing annotations")
+            cv_results = await cv_svc.lookup_batch(missing_cv)
             async with async_session_factory() as session:
-                for rsid in missing_cv:
-                    cv_data = await cv_svc.lookup(rsid)
+                for rsid, cv_data in cv_results.items():
                     if cv_data and cv_data.get('found'):
                         await session.execute(
                             update(SharedVariantAnnotation)
@@ -829,13 +845,13 @@ class ComprehensiveAnalysisService:
                     await session.commit()
             logger.info(f"Backfilled ClinVar Local data for {cv_updated}/{len(missing_cv)} annotations")
 
-        # gnomAD backfill
+        # gnomAD backfill (local only — no BigQuery fallback)
         gnomad_updated = 0
         if missing_gnomad and gnomad_svc:
-            logger.info(f"Backfilling gnomAD for {len(missing_gnomad)} existing annotations")
+            logger.info(f"Backfilling gnomAD for {len(missing_gnomad)} existing annotations (local only)")
+            batch_results = await gnomad_svc.lookup_batch(missing_gnomad)
             async with async_session_factory() as session:
-                for rsid in missing_gnomad:
-                    gn_data = await gnomad_svc.lookup(rsid)
+                for rsid, gn_data in batch_results.items():
                     if gn_data and gn_data.get('found'):
                         await session.execute(
                             update(SharedVariantAnnotation)
@@ -880,8 +896,10 @@ class ComprehensiveAnalysisService:
                     from .bq_public import get_bq_public_service
                     bq_svc = get_bq_public_service()
                     bq_updated = 0
+                    bq_total = len(missing_bq)
+                    bq_start = time.time()
                     async with async_session_factory() as session:
-                        for rsid, (gene, needed) in missing_bq.items():
+                        for idx, (rsid, (gene, needed)) in enumerate(missing_bq.items(), 1):
                             bq_result = await bq_svc.enrich_variant(gene, needed)
                             update_vals = {}
                             for src, src_data in bq_result.items():
@@ -895,9 +913,12 @@ class ComprehensiveAnalysisService:
                                     .values(**update_vals)
                                 )
                                 bq_updated += 1
+                            if idx % 100 == 0 or idx == bq_total:
+                                elapsed = time.time() - bq_start
+                                logger.info(f"  BQ backfill progress: {idx}/{bq_total} ({bq_updated} enriched, {elapsed:.1f}s)")
                         if bq_updated:
                             await session.commit()
-                    logger.info(f"Backfilled BigQuery data for {bq_updated}/{len(missing_bq)} annotations")
+                    logger.info(f"Backfilled BigQuery data for {bq_updated}/{bq_total} annotations ({time.time() - bq_start:.1f}s)")
                 except Exception as e:
                     logger.warning(f"BigQuery backfill failed: {e}")
 
