@@ -250,8 +250,8 @@ export default function ModernFileUpload({ onAnalysisComplete, token, isDarkMode
           <div className={`text-center space-y-4 ${theme.success.text}`}>
             <CheckCircle className="h-12 w-12 mx-auto animate-pulse" />
             <div>
-              <p className="text-lg font-medium">Analysis complete!</p>
-              <p className={`text-sm ${theme.text.tertiary}`}>Redirecting to your results...</p>
+              <p className="text-lg font-medium">Upload complete!</p>
+              <p className={`text-sm ${theme.text.tertiary}`}>Analyzing your data...</p>
             </div>
           </div>
         )
