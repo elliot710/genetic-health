@@ -239,17 +239,24 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
     return <span className={`px-2 py-0.5 rounded text-xs font-medium ${color}`}>{label}</span>
   }
 
-  const sourceBadge = (source: string) => {
+  const sourceBadge = (source: string, label?: string) => {
     const colors: Record<string, string> = {
       ensembl: isDarkMode ? 'bg-green-500/20 text-green-300' : 'bg-green-100 text-green-700',
       clinvar: isDarkMode ? 'bg-red-500/20 text-red-300' : 'bg-red-100 text-red-700',
       clinpgx: isDarkMode ? 'bg-purple-500/20 text-purple-300' : 'bg-purple-100 text-purple-700',
       snpedia: isDarkMode ? 'bg-orange-500/20 text-orange-300' : 'bg-orange-100 text-orange-700',
       litvar: isDarkMode ? 'bg-blue-500/20 text-blue-300' : 'bg-blue-100 text-blue-700',
+      clinvar_local: isDarkMode ? 'bg-rose-500/20 text-rose-300' : 'bg-rose-100 text-rose-700',
+      gnomad_local: isDarkMode ? 'bg-teal-500/20 text-teal-300' : 'bg-teal-100 text-teal-700',
+      gnomad_constraint: isDarkMode ? 'bg-teal-500/20 text-teal-300' : 'bg-teal-100 text-teal-700',
+      ensembl_local: isDarkMode ? 'bg-emerald-500/20 text-emerald-300' : 'bg-emerald-100 text-emerald-700',
+      bq_chembl: isDarkMode ? 'bg-indigo-500/20 text-indigo-300' : 'bg-indigo-100 text-indigo-700',
+      bq_alphafold: isDarkMode ? 'bg-cyan-500/20 text-cyan-300' : 'bg-cyan-100 text-cyan-700',
+      bq_fda_drug: isDarkMode ? 'bg-pink-500/20 text-pink-300' : 'bg-pink-100 text-pink-700',
     }
     return (
       <span key={source} className={`px-2 py-0.5 rounded text-xs font-medium ${colors[source] || (isDarkMode ? 'bg-slate-500/20 text-slate-300' : 'bg-gray-100 text-gray-600')}`}>
-        {source}
+        {label || source}
       </span>
     )
   }
@@ -636,6 +643,13 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
                       AlphaMissense
                     </span>
                   )}
+                  {lookupResults.annotations?.clinvar_local && sourceBadge('clinvar_local', 'ClinVar DB')}
+                  {lookupResults.annotations?.gnomad_local?.found && sourceBadge('gnomad_local', 'gnomAD')}
+                  {lookupResults.annotations?.gnomad_constraint && sourceBadge('gnomad_constraint', 'Gene Constraint')}
+                  {lookupResults.annotations?.ensembl_local?.found && sourceBadge('ensembl_local', 'Ensembl DB')}
+                  {lookupResults.annotations?.bq_chembl?.found && sourceBadge('bq_chembl', 'ChEMBL')}
+                  {lookupResults.annotations?.bq_alphafold?.found && sourceBadge('bq_alphafold', 'AlphaFold')}
+                  {lookupResults.annotations?.bq_fda_drug?.found && sourceBadge('bq_fda_drug', 'FDA Drug')}
                 </div>
               </div>
 
@@ -969,6 +983,242 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
                 </div>
               )}
 
+              {/* ── ClinVar Local Conditions ── */}
+              {lookupResults.annotations?.clinvar_local && (() => {
+                const cv = lookupResults.annotations.clinvar_local as Record<string, unknown>
+                const conditions = (cv.conditions as string[]) || []
+                const genes = (cv.genes as string[]) || []
+                const clinsig = cv.clinical_significance as string | undefined
+                if (!conditions.length && !genes.length) return null
+                return (
+                  <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
+                    <h4 className={`font-bold ${t.text.primary} mb-3 flex items-center gap-2`}>
+                      <Database className="h-4 w-4 text-rose-500" />
+                      ClinVar Local Database
+                    </h4>
+                    {clinsig && (
+                      <div className={`text-sm mb-2 ${t.text.secondary}`}>
+                        Significance: <span className={`font-medium ${
+                          clinsig.toLowerCase().includes('pathogenic') ? 'text-red-400' :
+                          clinsig.toLowerCase().includes('benign') ? 'text-green-400' : t.text.primary
+                        }`}>{clinsig}</span>
+                      </div>
+                    )}
+                    {genes.length > 0 && (
+                      <div className={`text-sm mb-2 ${t.text.secondary}`}>
+                        Genes: <span className={`font-mono font-medium ${t.text.primary}`}>{genes.join(', ')}</span>
+                      </div>
+                    )}
+                    {conditions.length > 0 && (
+                      <div>
+                        <div className={`text-sm mb-1.5 ${t.text.secondary}`}>Associated conditions:</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {conditions.slice(0, 8).map((c: string) => (
+                            <span key={c} className={`px-2 py-0.5 rounded text-xs ${isDarkMode ? 'bg-rose-500/15 text-rose-300' : 'bg-rose-100 text-rose-700'}`}>
+                              {c}
+                            </span>
+                          ))}
+                          {conditions.length > 8 && (
+                            <span className={`text-xs ${t.text.muted}`}>+ {conditions.length - 8} more</span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+
+              {/* ── gnomAD Local Frequencies ── */}
+              {lookupResults.annotations?.gnomad_local?.found && (() => {
+                const gn = lookupResults.annotations.gnomad_local as Record<string, unknown>
+                const af = gn.af as number | undefined
+                const ac = gn.ac as number | undefined
+                const an = gn.an as number | undefined
+                const hom = gn.hom as number | undefined
+                return (
+                  <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
+                    <h4 className={`font-bold ${t.text.primary} mb-3 flex items-center gap-2`}>
+                      <BarChart3 className="h-4 w-4 text-teal-500" />
+                      gnomAD Frequencies
+                    </h4>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      {af != null && (
+                        <div>
+                          <div className={`text-xs ${t.text.muted}`}>Allele Freq</div>
+                          <div className={`text-sm font-mono font-medium ${
+                            af < 0.001 ? 'text-red-400' : af < 0.01 ? 'text-amber-400' : t.text.primary
+                          }`}>{af < 0.001 ? af.toExponential(2) : af.toFixed(4)}</div>
+                        </div>
+                      )}
+                      {ac != null && (
+                        <div>
+                          <div className={`text-xs ${t.text.muted}`}>Allele Count</div>
+                          <div className={`text-sm font-mono ${t.text.primary}`}>{ac.toLocaleString()}</div>
+                        </div>
+                      )}
+                      {an != null && (
+                        <div>
+                          <div className={`text-xs ${t.text.muted}`}>Allele Number</div>
+                          <div className={`text-sm font-mono ${t.text.primary}`}>{an.toLocaleString()}</div>
+                        </div>
+                      )}
+                      {hom != null && (
+                        <div>
+                          <div className={`text-xs ${t.text.muted}`}>Homozygotes</div>
+                          <div className={`text-sm font-mono ${t.text.primary}`}>{hom.toLocaleString()}</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/* ── Gene Constraint (gnomAD) ── */}
+              {lookupResults.annotations?.gnomad_constraint && (() => {
+                const gc = lookupResults.annotations.gnomad_constraint as Record<string, unknown>
+                const pli = gc.pli as number | undefined
+                const loeuf = gc.loeuf as number | undefined
+                const interp = gc.interpretation as string | undefined
+                return (
+                  <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
+                    <h4 className={`font-bold ${t.text.primary} mb-3 flex items-center gap-2`}>
+                      <BarChart3 className="h-4 w-4 text-teal-500" />
+                      Gene Constraint — {gc.gene as string}
+                    </h4>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                      {pli != null && (
+                        <div>
+                          <div className={`text-xs ${t.text.muted}`}>pLI</div>
+                          <div className={`text-sm font-mono font-medium ${
+                            pli > 0.9 ? 'text-red-400' : pli > 0.5 ? 'text-amber-400' : 'text-green-400'
+                          }`}>{pli.toFixed(3)}</div>
+                        </div>
+                      )}
+                      {loeuf != null && (
+                        <div>
+                          <div className={`text-xs ${t.text.muted}`}>LOEUF</div>
+                          <div className={`text-sm font-mono font-medium ${
+                            loeuf < 0.35 ? 'text-red-400' : loeuf < 0.6 ? 'text-amber-400' : 'text-green-400'
+                          }`}>{loeuf.toFixed(3)}</div>
+                        </div>
+                      )}
+                      {interp && (
+                        <div>
+                          <div className={`text-xs ${t.text.muted}`}>Interpretation</div>
+                          <div className={`text-sm font-medium ${t.text.primary}`}>{interp}</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/* ── Ensembl Local Gene Info ── */}
+              {lookupResults.annotations?.ensembl_local?.found && (() => {
+                const eg = lookupResults.annotations.ensembl_local as Record<string, unknown>
+                return (
+                  <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
+                    <h4 className={`font-bold ${t.text.primary} mb-3 flex items-center gap-2`}>
+                      <Database className="h-4 w-4 text-emerald-500" />
+                      Ensembl Gene — {eg.gene_symbol as string}
+                    </h4>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+                      <div>
+                        <div className={`text-xs ${t.text.muted}`}>Gene ID</div>
+                        <div className={`font-mono ${t.text.primary}`}>{eg.gene_id as string}</div>
+                      </div>
+                      <div>
+                        <div className={`text-xs ${t.text.muted}`}>Biotype</div>
+                        <div className={t.text.primary}>{(eg.biotype as string || '').replace(/_/g, ' ')}</div>
+                      </div>
+                      {eg.transcript_count && (
+                        <div>
+                          <div className={`text-xs ${t.text.muted}`}>Transcripts</div>
+                          <div className={t.text.primary}>{eg.transcript_count as number}</div>
+                        </div>
+                      )}
+                      {eg.chromosome && (
+                        <div className="col-span-2 sm:col-span-3">
+                          <div className={`text-xs ${t.text.muted}`}>Location</div>
+                          <div className={`font-mono ${t.text.primary}`}>
+                            chr{eg.chromosome as string}:{(eg.start as number)?.toLocaleString()}-{(eg.end as number)?.toLocaleString()} ({eg.strand === 1 ? '+' : '-'})
+                          </div>
+                        </div>
+                      )}
+                      {eg.description && (
+                        <div className="col-span-2 sm:col-span-3">
+                          <div className={`text-xs ${t.text.muted}`}>Description</div>
+                          <div className={`${t.text.secondary} text-xs`}>{eg.description as string}</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/* ── ChEMBL Drug Data ── */}
+              {lookupResults.annotations?.bq_chembl?.found && (() => {
+                const ch = lookupResults.annotations.bq_chembl as Record<string, unknown>
+                const drugs = (ch.drugs as Array<Record<string, unknown>>) || []
+                if (!drugs.length) return null
+                return (
+                  <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
+                    <h4 className={`font-bold ${t.text.primary} mb-3 flex items-center gap-2`}>
+                      <Database className="h-4 w-4 text-indigo-500" />
+                      ChEMBL Drug Targets ({drugs.length})
+                    </h4>
+                    <div className="space-y-2">
+                      {drugs.slice(0, 6).map((d, i) => (
+                        <div key={i} className={`flex items-center justify-between gap-3 px-3 py-2 rounded-lg ${isDarkMode ? 'bg-slate-800/40' : 'bg-gray-50'}`}>
+                          <div>
+                            <span className={`text-sm font-medium ${t.text.primary}`}>{d.drug_name as string}</span>
+                            {d.max_phase != null && (
+                              <span className={`ml-2 text-xs ${t.text.muted}`}>Phase {d.max_phase as number}</span>
+                            )}
+                          </div>
+                          {d.mechanism && (
+                            <span className={`text-xs ${t.text.secondary} truncate max-w-[200px]`}>{d.mechanism as string}</span>
+                          )}
+                        </div>
+                      ))}
+                      {drugs.length > 6 && (
+                        <span className={`text-xs ${t.text.muted}`}>+ {drugs.length - 6} more drugs</span>
+                      )}
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/* ── AlphaFold Structure ── */}
+              {lookupResults.annotations?.bq_alphafold?.found && (() => {
+                const af = lookupResults.annotations.bq_alphafold as Record<string, unknown>
+                return (
+                  <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
+                    <h4 className={`font-bold ${t.text.primary} mb-3 flex items-center gap-2`}>
+                      <Database className="h-4 w-4 text-cyan-500" />
+                      AlphaFold Structure
+                    </h4>
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      {af.uniprot_id && (
+                        <div>
+                          <div className={`text-xs ${t.text.muted}`}>UniProt ID</div>
+                          <div className={`font-mono ${t.text.primary}`}>{af.uniprot_id as string}</div>
+                        </div>
+                      )}
+                      {af.avg_plddt != null && (
+                        <div>
+                          <div className={`text-xs ${t.text.muted}`}>Avg. pLDDT</div>
+                          <div className={`font-mono font-medium ${
+                            (af.avg_plddt as number) > 90 ? 'text-green-400' :
+                            (af.avg_plddt as number) > 70 ? 'text-amber-400' : 'text-red-400'
+                          }`}>{(af.avg_plddt as number).toFixed(1)}</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })()}
+
               {/* External Links */}
               <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
                 <h4 className={`font-bold ${t.text.primary} mb-3 flex items-center gap-2`}>
@@ -1011,7 +1261,7 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
             <div className="text-center py-8">
               <Globe className={`h-12 w-12 mx-auto mb-4 ${t.text.secondary} opacity-50`} />
               <h3 className={`text-lg font-semibold ${t.text.primary} mb-2`}>Search External Databases</h3>
-              <p className={t.text.secondary}>Query Ensembl, ClinVar, ClinPGx, SNPedia, and PubMed</p>
+              <p className={t.text.secondary}>Query Ensembl, ClinVar, ClinPGx, SNPedia, gnomAD, ChEMBL, and local databases</p>
               <div className={`text-sm mt-4 ${t.text.secondary}`}>
                 <p className="mb-2">Examples:</p>
                 <div className="flex flex-wrap gap-2 justify-center">

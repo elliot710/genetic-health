@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Brain, BookOpen, Lightbulb, Target, Puzzle, ChevronRight, CheckCircle } from 'lucide-react'
 import { Badge } from '../ui/badge'
+import { PercentileBarChart } from './GenomicCharts'
 import {
   useThemeClasses,
   CategoryHeader,
@@ -12,6 +13,7 @@ import {
   advantageToSeverity,
   formatLabel,
   MasonryLayout,
+  cleanCondition,
 } from './shared'
 import type { CategoryPanelProps, IntelligenceTrait } from './types'
 
@@ -125,6 +127,12 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
     <div className="space-y-6">
       <CategoryHeader {...headerProps} />
 
+      {cognitiveTraits.filter(t => t.score > 0).length >= 2 && (
+        <SectionCard title="Cognitive Percentiles" theme={theme}>
+          <PercentileBarChart data={cognitiveTraits.filter(t => t.score > 0).map(t => ({ name: t.trait, percentile: t.score }))} isDarkMode={isDarkMode} height={Math.max(200, cognitiveTraits.filter(t => t.score > 0).length * 40)} />
+        </SectionCard>
+      )}
+
       <SectionCard title="Cognitive Abilities" theme={theme}>
         <MasonryLayout>
           {cognitiveTraits.map((trait, index) => {
@@ -144,7 +152,7 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
                     <div className="p-2 rounded-lg bg-purple-500/10">
                       <Icon className="h-5 w-5 text-purple-400" />
                     </div>
-                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{trait.trait}</h4>
+                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{cleanCondition(trait.trait)}</h4>
                     <StatusBadge
                       label={formatLabel(trait.result)}
                       severity={advantageToSeverity(trait.result)}
@@ -160,7 +168,7 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
-                    <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{trait.description}</p>
+                    <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{cleanCondition(trait.description)}</p>
 
                     {trait.score > 0 && (
                       <ScoreBar

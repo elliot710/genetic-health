@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react'
 import { Pill, Info, ChevronRight, CheckCircle } from 'lucide-react'
 import { Badge } from '../ui/badge'
+import { DrugResponseChart } from './GenomicCharts'
+import SmartInsights from '../SmartInsights'
 import {
   useThemeClasses,
   CategoryHeader,
@@ -143,6 +145,12 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
     <div className="space-y-6">
       <CategoryHeader {...headerProps} />
 
+      {drugResponses.length >= 3 && (
+        <SectionCard title="Response Distribution" theme={theme}>
+          <DrugResponseChart data={drugResponses.map(d => ({ gene: d.gene, drug: d.drug, response_type: d.response }))} isDarkMode={isDarkMode} height={220} />
+        </SectionCard>
+      )}
+
       <SectionCard title="Drug Interactions" theme={theme}>
         <MasonryLayout>
           {drugResponses.map((drug: MappedDrugResponse, index: number) => {
@@ -201,6 +209,8 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
         text="This pharmacogenomic information is for educational purposes only and should not replace professional medical advice. Always consult with your healthcare provider before making any changes to your medication regimen."
         theme={theme}
       />
+
+      <SmartInsights isDarkMode={isDarkMode} token={token} section="drug_responses" title="AI Drug Interaction Analysis" />
     </div>
   )
 }

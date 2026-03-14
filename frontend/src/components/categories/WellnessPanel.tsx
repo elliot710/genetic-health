@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Activity, ChevronRight, CheckCircle } from 'lucide-react'
 import { Badge } from '../ui/badge'
+import { WellnessScoreChart } from './GenomicCharts'
 import {
   useThemeClasses,
   CategoryHeader,
@@ -11,6 +12,7 @@ import {
   capacityToSeverity,
   formatLabel,
   MasonryLayout,
+  cleanCondition,
 } from './shared'
 import type { CategoryPanelProps } from './types'
 
@@ -103,6 +105,12 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
     <div className="space-y-6">
       <CategoryHeader {...headerProps} />
 
+      {wellnessTraits.length >= 3 && (
+        <SectionCard title="Wellness Scores Overview" theme={theme}>
+          <WellnessScoreChart data={wellnessTraits.map(t => ({ metric: t.name, score: t.value === 'normal' ? 80 : t.value === 'variant_detected' || t.value === 'reduced' ? 50 : t.value === 'impaired' ? 25 : 65 }))} isDarkMode={isDarkMode} height={220} />
+        </SectionCard>
+      )}
+
       <SectionCard title="Wellness Markers" theme={theme}>
         <MasonryLayout>
           {wellnessTraits.map((trait, index) => {
@@ -116,7 +124,7 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
               >
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-3">
-                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{trait.name}</h4>
+                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{cleanCondition(trait.name)}</h4>
                     <StatusBadge
                       label={formatLabel(trait.value)}
                       severity={capacityToSeverity(trait.value)}

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { Shield, Users, Settings, Plus, Trash2, Pencil, Check, X, ChevronRight, Download, Upload, Database, Lightbulb, RefreshCw, AlertTriangle, Minus, Info, Activity, Play, Square, Clock, FileText, Zap } from 'lucide-react'
+import { Shield, Users, Settings, Plus, Trash2, Pencil, Check, X, ChevronRight, Download, Upload, Database, Lightbulb, RefreshCw, AlertTriangle, Minus, Info, Activity, Play, Square, Clock, FileText, Zap, Sparkles } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -264,6 +264,11 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const [sourceToggling, setSourceToggling] = useState<string | null>(null)
   const [backfillingSource, setBackfillingSource] = useState<string | null>(null)
   const [backfillFeedback, setBackfillFeedback] = useState<{ source: string; message: string; type: 'success' | 'error' } | null>(null)
+  const [backfillLimits, setBackfillLimits] = useState<Record<string, string>>({})
+
+  // AI Insights state
+  const [insightsStatus, setInsightsStatus] = useState<{ provider: string; enabled: boolean; model: string; gemini_configured: boolean; openai_configured: boolean; anthropic_configured: boolean; cache_entries: number } | null>(null)
+  const [insightsToggling, setInsightsToggling] = useState(false)
 
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }), [token])
 
@@ -730,11 +735,11 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     setSourceToggling(null)
   }
 
-  const backfillSource = async (sourceName: string) => {
+  const backfillSource = async (sourceName: string, limit: number = 5000) => {
     setBackfillingSource(sourceName)
     setBackfillFeedback(null)
     try {
-      const res = await fetch(`${API}/annotation-sources/${encodeURIComponent(sourceName)}/backfill?limit=100`, {
+      const res = await fetch(`${API}/annotation-sources/${encodeURIComponent(sourceName)}/backfill?limit=${limit}`, {
         method: 'POST',
         headers,
       })
@@ -751,6 +756,28 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     }
     setBackfillingSource(null)
     setTimeout(() => setBackfillFeedback(prev => prev?.source === sourceName ? null : prev), 10000)
+  }
+
+  // AI Insights
+  const fetchInsightsStatus = useCallback(async () => {
+    try {
+      const res = await fetch('http://localhost:8000/api/insights/status', { headers })
+      if (res.ok) setInsightsStatus(await res.json())
+    } catch { /* ignore */ }
+  }, [headers])
+
+  useEffect(() => { fetchInsightsStatus() }, [fetchInsightsStatus])
+
+  const toggleInsights = async (enabled: boolean) => {
+    setInsightsToggling(true)
+    try {
+      const res = await fetch(`http://localhost:8000/api/insights/toggle?enabled=${enabled}`, {
+        method: 'POST',
+        headers,
+      })
+      if (res.ok) setInsightsStatus(await res.json())
+    } catch { /* ignore */ }
+    setInsightsToggling(false)
   }
 
   if (loading) {
@@ -1494,13 +1521,15 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                   {annotationSources.map(src => {
                     const total = src.annotated_count + src.missing_count
                     const pct = total > 0 ? Math.round((src.annotated_count / total) * 100) : 0
+                    const customLimit = backfillLimits[src.source_name]
+                    const effectiveLimit = customLimit ? Math.min(parseInt(customLimit) || src.missing_count, src.missing_count) : src.missing_count
                     return (
                       <div
                         key={src.source_name}
                         className={`rounded-lg border p-4 transition-colors ${
                           src.is_enabled
                             ? isDarkMode ? 'border-white/10 bg-white/5' : 'border-gray-200 bg-gray-50'
-                            : isDarkMode ? 'border-white/5 bg-white/[0.02] opacity-60' : 'border-gray-100 bg-gray-25 opacity-60'
+                            : isDarkMode ? 'border-white/5 bg-white/[0.02]' : 'border-gray-100 bg-gray-25'
                         }`}
                       >
                         <div className="flex items-center justify-between">
@@ -1510,7 +1539,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                               onCheckedChange={(checked) => toggleSource(src.source_name, checked)}
                               disabled={sourceToggling === src.source_name}
                             />
-                            <div className="flex-1">
+                            <div className={`flex-1 ${!src.is_enabled ? 'opacity-50' : ''}`}>
                               <div className="flex items-center gap-2">
                                 <span className={`font-medium ${theme.text.primary}`}>{src.display_name}</span>
                                 {src.rate_limit ? (
@@ -1531,7 +1560,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                               )}
                             </div>
                           </div>
-                          <div className="flex items-center gap-3 ml-4">
+                          <div className={`flex items-center gap-3 ml-4 ${!src.is_enabled ? 'opacity-50' : ''}`}>
                             <div className="text-right min-w-[140px]">
                               <div className="flex items-center gap-2 justify-end">
                                 <span className={`text-sm font-mono ${theme.text.secondary}`}>
@@ -1546,18 +1575,30 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                                 />
                               </div>
                             </div>
-                            {src.missing_count > 0 && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                disabled={backfillingSource === src.source_name || !src.is_enabled}
-                                onClick={() => backfillSource(src.source_name)}
-                                title={!src.is_enabled ? 'Enable this source first' : `Backfill ${src.missing_count} variants from ${src.display_name}`}
-                              >
-                                {backfillingSource === src.source_name
-                                  ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Backfilling...</>
-                                  : <><Download className="h-3 w-3 mr-1" /> Backfill ({src.missing_count > 999 ? `${Math.round(src.missing_count / 1000)}k` : src.missing_count})</>}
-                              </Button>
+                            {src.missing_count > 0 && src.is_enabled && (
+                              <div className="flex items-center gap-2">
+                                <Input
+                                  type="number"
+                                  min={1}
+                                  max={src.missing_count}
+                                  placeholder={String(src.missing_count)}
+                                  value={backfillLimits[src.source_name] ?? ''}
+                                  onChange={(e) => setBackfillLimits(prev => ({ ...prev, [src.source_name]: e.target.value }))}
+                                  className="w-20 h-8 text-xs text-center"
+                                  disabled={backfillingSource === src.source_name}
+                                />
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={backfillingSource === src.source_name}
+                                  onClick={() => backfillSource(src.source_name, effectiveLimit)}
+                                  title={`Backfill ${effectiveLimit.toLocaleString()} variants from ${src.display_name}`}
+                                >
+                                  {backfillingSource === src.source_name
+                                    ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Backfilling...</>
+                                    : <><Download className="h-3 w-3 mr-1" /> Backfill ({effectiveLimit > 999 ? `${Math.round(effectiveLimit / 1000)}k` : effectiveLimit})</>}
+                                </Button>
+                              </div>
                             )}
                           </div>
                         </div>
@@ -1565,6 +1606,81 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                     )
                   })}
                 </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* AI Insights Configuration */}
+          <Card className="glass-card mt-6">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Sparkles className="h-5 w-5" />
+                    AI Insights
+                  </CardTitle>
+                  <CardDescription>
+                    Enable or disable LLM-powered AI insights for all users. Requires an API key (Gemini, OpenAI, or Anthropic).
+                  </CardDescription>
+                </div>
+                <Button size="sm" variant="outline" onClick={fetchInsightsStatus}>
+                  <RefreshCw className="h-3 w-3 mr-1" /> Refresh
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {insightsStatus ? (
+                <div className="space-y-4">
+                  <div className={`rounded-lg border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-gray-200 bg-gray-50'}`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <Switch
+                          checked={insightsStatus.enabled}
+                          onCheckedChange={toggleInsights}
+                          disabled={insightsToggling}
+                        />
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className={`font-medium ${theme.text.primary}`}>AI-Powered Insights</span>
+                            <Badge variant={insightsStatus.enabled ? 'default' : 'secondary'} className="text-xs">
+                              {insightsStatus.enabled ? 'Enabled' : 'Disabled'}
+                            </Badge>
+                          </div>
+                          <p className={`text-sm mt-1 ${theme.text.muted}`}>
+                            When enabled, users can generate AI analysis of their genetic data on any dashboard panel.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className={`rounded-lg border p-3 ${isDarkMode ? 'border-white/10 bg-white/[0.03]' : 'border-gray-200 bg-gray-50'}`}>
+                      <p className={`text-xs uppercase tracking-wider ${theme.text.muted}`}>Provider</p>
+                      <p className={`text-sm font-medium mt-1 ${theme.text.primary}`}>{insightsStatus.provider}</p>
+                    </div>
+                    <div className={`rounded-lg border p-3 ${isDarkMode ? 'border-white/10 bg-white/[0.03]' : 'border-gray-200 bg-gray-50'}`}>
+                      <p className={`text-xs uppercase tracking-wider ${theme.text.muted}`}>Model</p>
+                      <p className={`text-sm font-medium mt-1 ${theme.text.primary}`}>{insightsStatus.model}</p>
+                    </div>
+                    <div className={`rounded-lg border p-3 ${isDarkMode ? 'border-white/10 bg-white/[0.03]' : 'border-gray-200 bg-gray-50'}`}>
+                      <p className={`text-xs uppercase tracking-wider ${theme.text.muted}`}>API Keys</p>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {insightsStatus.gemini_configured && <Badge className="text-[10px] bg-blue-500/20 text-blue-400 border-blue-500/30">Gemini</Badge>}
+                        {insightsStatus.openai_configured && <Badge className="text-[10px] bg-green-500/20 text-green-400 border-green-500/30">OpenAI</Badge>}
+                        {insightsStatus.anthropic_configured && <Badge className="text-[10px] bg-orange-500/20 text-orange-400 border-orange-500/30">Anthropic</Badge>}
+                        {!insightsStatus.gemini_configured && !insightsStatus.openai_configured && !insightsStatus.anthropic_configured && (
+                          <span className={`text-xs ${theme.text.muted}`}>None</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className={`rounded-lg border p-3 ${isDarkMode ? 'border-white/10 bg-white/[0.03]' : 'border-gray-200 bg-gray-50'}`}>
+                      <p className={`text-xs uppercase tracking-wider ${theme.text.muted}`}>Cached Insights</p>
+                      <p className={`text-sm font-medium mt-1 ${theme.text.primary}`}>{insightsStatus.cache_entries}</p>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <p className={`text-center py-8 ${theme.text.tertiary}`}>Loading AI Insights status...</p>
               )}
             </CardContent>
           </Card>

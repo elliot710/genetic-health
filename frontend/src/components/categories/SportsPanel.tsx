@@ -11,6 +11,7 @@ import {
   advantageToSeverity,
   formatLabel,
   MasonryLayout,
+  cleanCondition,
 } from './shared'
 import type { CategoryPanelProps, SportsPerformance } from './types'
 
@@ -129,7 +130,7 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
               >
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-3">
-                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{formatLabel(trait.trait)}</h4>
+                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{cleanCondition(trait.trait)}</h4>
                     <StatusBadge
                       label={formatLabel(trait.result || 'Detected')}
                       severity={advantageToSeverity(trait.result || 'moderate')}
@@ -145,7 +146,7 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
-                    <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{trait.description}</p>
+                    <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{cleanCondition(trait.description)}</p>
                     {trait.recommendation && (
                       <div className="space-y-2">
                         <span className={`text-xs font-semibold ${theme.textSecondary} uppercase tracking-wider`}>Recommendations</span>

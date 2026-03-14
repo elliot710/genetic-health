@@ -13,6 +13,10 @@ import re
 from ..services.genetic_api_service import GeneticAPIService
 from ..services.discovery_service import process_lookup_discoveries
 from ..utils.alpha_missense import get_alpha_missense_service
+from ..services.clinvar_local import get_clinvar_local_service
+from ..services.gnomad_local import get_gnomad_service
+from ..services.ensembl_local import get_ensembl_local_service
+from ..services.bq_public import BigQueryPublicService
 from ..db.database import get_session
 from ..db.models import (
     GeneticAnalysis, AnalysisVariant, GeneticMarker,
@@ -266,13 +270,91 @@ async def lookup_variant(
                         if formatted:
                             alpha_missense = formatted
 
+            # ── Local data source enrichment ─────────────────────────
+            import logging as _log
+            _logger = _log.getLogger(__name__)
+
+            # ClinVar local DB
+            try:
+                clinvar_local_svc = get_clinvar_local_service()
+                await clinvar_local_svc.ensure_loaded()
+                clinvar_local_result = await clinvar_local_svc.lookup(variant_id)
+                if clinvar_local_result:
+                    annotations['clinvar_local'] = clinvar_local_result
+                    # Supplement gene if not found from Ensembl remote
+                    if not basic_info.get('gene_symbol') and clinvar_local_result.get('genes'):
+                        basic_info['gene_symbol'] = clinvar_local_result['genes'][0]
+                    # Supplement clinical significance
+                    local_clinsig = clinvar_local_result.get('clinical_significance')
+                    if local_clinsig and local_clinsig not in clinical_significance:
+                        clinical_significance.append(local_clinsig)
+            except Exception as e:
+                _logger.debug("ClinVar local lookup failed for %s: %s", variant_id, e)
+
+            # gnomAD local DB (local only — no BQ fallback for speed)
+            try:
+                gnomad_svc = get_gnomad_service()
+                await gnomad_svc.ensure_loaded()
+                gnomad_result = await gnomad_svc.lookup(variant_id, local_only=True)
+                if gnomad_result and gnomad_result.get('found'):
+                    annotations['gnomad_local'] = gnomad_result
+            except Exception as e:
+                _logger.debug("gnomAD local lookup failed for %s: %s", variant_id, e)
+
+            # Ensembl local gene info (position-based)
+            gene_symbol = basic_info.get('gene_symbol')
+            try:
+                ensembl_local_svc = get_ensembl_local_service()
+                chrom = basic_info.get('chromosome') or (ensembl_entry.get('seq_region_name') if ensembl_entry else None)
+                pos_val = basic_info.get('start') or (ensembl_entry.get('start') if ensembl_entry else None)
+                if chrom and pos_val:
+                    ensembl_local_result = await ensembl_local_svc.lookup_gene_by_position(str(chrom), int(pos_val))
+                    if ensembl_local_result and ensembl_local_result.get('found'):
+                        annotations['ensembl_local'] = ensembl_local_result
+                        if not gene_symbol:
+                            gene_symbol = ensembl_local_result.get('gene_symbol')
+                            basic_info['gene_symbol'] = gene_symbol
+                # Also fetch full gene info if we have a symbol
+                if gene_symbol:
+                    gene_info = await ensembl_local_svc.lookup_gene(gene_symbol)
+                    if gene_info and gene_info.get('found'):
+                        annotations.setdefault('ensembl_local', {}).update(gene_info)
+            except Exception as e:
+                _logger.debug("Ensembl local lookup failed for %s: %s", variant_id, e)
+
+            # gnomAD gene constraint (if gene known)
+            if gene_symbol:
+                try:
+                    gnomad_svc = get_gnomad_service()
+                    constraint = await gnomad_svc.get_gene_constraint(gene_symbol)
+                    if constraint:
+                        annotations['gnomad_constraint'] = constraint
+                except Exception as e:
+                    _logger.debug("gnomAD constraint failed for %s: %s", gene_symbol, e)
+
+            # BigQuery enrichment: ChEMBL drugs, AlphaFold, FDA (if gene known)
+            if gene_symbol:
+                try:
+                    bq_svc = BigQueryPublicService()
+                    bq_data = await bq_svc.enrich_variant(
+                        gene_symbol, {"chembl", "alphafold", "fda_drug"}
+                    )
+                    for source_name, source_data in bq_data.items():
+                        if source_data and source_data.get('found', False):
+                            annotations[f'bq_{source_name}'] = source_data
+                except Exception as e:
+                    _logger.debug("BQ enrichment failed for %s: %s", gene_symbol, e)
+
             # Determine if variant was found
             found = any([
                 basic_info.get('name'),
                 clinical_significance,
                 population_data.get('minor_allele'),
                 pharmacogenomics.get('found'),
-                literature.get('snpedia_found')
+                literature.get('snpedia_found'),
+                annotations.get('clinvar_local'),
+                annotations.get('gnomad_local', {}).get('found'),
+                annotations.get('ensembl_local', {}).get('found'),
             ])
             
             # Build response data to cache

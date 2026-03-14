@@ -3,6 +3,7 @@
 import React, { useState, useMemo } from 'react'
 import { Dna, ChevronRight, CheckCircle } from 'lucide-react'
 import { Badge } from '../ui/badge'
+import { CapacityChart } from './GenomicCharts'
 import {
   useThemeClasses,
   CategoryHeader,
@@ -71,6 +72,12 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
   return (
     <div className="space-y-6">
       <CategoryHeader {...headerProps} />
+
+      {profiles.length >= 3 && (
+        <SectionCard title="Capacity Distribution" theme={theme}>
+          <CapacityChart data={profiles.map(p => ({ name: p.gene, capacity: p.methylation_capacity || 'normal' }))} isDarkMode={isDarkMode} height={200} />
+        </SectionCard>
+      )}
 
       <SectionCard title="Methylation Markers" theme={theme}>
         <MasonryLayout>

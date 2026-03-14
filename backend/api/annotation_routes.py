@@ -206,6 +206,7 @@ async def get_variant_details(
 ):
     """
     Get structured annotation details for a variant from the database.
+    Falls back to live API fetch when no cached annotation exists.
     Returns processed ensembl, clinvar, and publication data.
     """
     result = await db.execute(
@@ -214,7 +215,34 @@ async def get_variant_details(
     annotation = result.scalar_one_or_none()
 
     if not annotation:
-        return {"found": False, "rsid": rsid}
+        # Fall back: fetch live data from external APIs and persist it
+        try:
+            from backend.db.models import GeneticMarker
+            marker_result = await db.execute(
+                select(GeneticMarker).where(GeneticMarker.rsid == rsid)
+            )
+            marker = marker_result.scalar_one_or_none()
+
+            async with GeneticAPIService() as api_service:
+                live = await api_service.annotate_variant(rsid)
+            raw = live.get("annotations", {})
+
+            # Persist as a new SharedVariantAnnotation so future lookups are instant
+            new_ann = SharedVariantAnnotation(
+                rsid=rsid,
+                marker_id=marker.id if marker else None,
+                ensembl_data=raw.get("ensembl"),
+                clinvar_data=raw.get("clinvar"),
+                pharmgkb_data=raw.get("clinpgx"),
+                snpedia_data=raw.get("snpedia"),
+                litvar_data=raw.get("litvar"),
+            )
+            db.add(new_ann)
+            await db.commit()
+            await db.refresh(new_ann)
+            annotation = new_ann
+        except Exception:
+            return {"found": False, "rsid": rsid}
 
     response: Dict[str, Any] = {"found": True, "rsid": rsid}
 
@@ -321,7 +349,15 @@ async def get_variant_details(
         # Extract a clean summary from wiki text
         summary = ""
         if wiki_text:
-            lines = [l.strip() for l in wiki_text.split("\n") if l.strip() and not l.strip().startswith("{{") and not l.strip().startswith("}}") and not l.strip().startswith("[[Category")]
+            lines = [
+                l.strip() for l in wiki_text.split("\n")
+                if l.strip()
+                and not l.strip().startswith("{{")
+                and not l.strip().startswith("}}")
+                and not l.strip().startswith("[[Category")
+                and not l.strip().startswith("|")
+                and not l.strip().startswith("<")
+            ]
             summary = " ".join(lines[:3])[:500]
         response["snpedia"] = {
             "found": True,

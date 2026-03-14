@@ -406,6 +406,31 @@ def _dedup_by(items: list, key: str) -> list:
     return result
 
 
+def _clean_trait_name(raw: str) -> str:
+    """Clean up raw ClinVar condition strings used as trait names.
+    
+    If the name contains pipe delimiters or semicolons (raw ClinVar data),
+    extract the first meaningful condition name and capitalize it.
+    """
+    if not raw:
+        return "Unknown"
+    # If it doesn't look like raw ClinVar data, return as-is
+    if '|' not in raw and ';' not in raw:
+        return raw
+    # Split on pipe first, then semicolons
+    parts = raw.replace(';', '|').split('|')
+    # Filter out generic/useless entries
+    skip = {'not provided', 'not specified', 'see cases', 'not applicable'}
+    for part in parts:
+        cleaned = part.strip()
+        if cleaned and cleaned.lower() not in skip:
+            # Capitalize if all-uppercase (e.g., "MTHFR THERMOLABILE POLYMORPHISM")
+            if cleaned.isupper():
+                cleaned = cleaned.title()
+            return cleaned
+    return parts[0].strip().title() if parts else raw
+
+
 @router.get("/dashboard-data")
 async def get_dashboard_data(
     db: AsyncSession = Depends(get_session),
@@ -507,7 +532,7 @@ async def get_dashboard_data(
         )
         health_rows = hr.scalars().all()
         dashboard_data["health_risks"] = _dedup_by([
-            {"condition": r.condition, "risk_level": r.risk_level, "risk_score": r.risk_score,
+            {"condition": _clean_trait_name(r.condition), "risk_level": r.risk_level, "risk_score": r.risk_score,
              "associated_variants": r.associated_variants, "recommendations": r.recommendations}
             for r in health_rows
         ], "condition")
@@ -564,7 +589,7 @@ async def get_dashboard_data(
         )
         carrier_rows = cs.scalars().all()
         dashboard_data["carrier_status"] = _dedup_by([
-            {"condition": r.condition, "carrier_status": r.carrier_status,
+            {"condition": _clean_trait_name(r.condition), "carrier_status": r.carrier_status,
              "inheritance_pattern": r.inheritance_pattern,
              "genetic_counseling_recommended": r.genetic_counseling_recommended}
             for r in carrier_rows
@@ -603,9 +628,9 @@ async def get_dashboard_data(
         rare_rows = rm.scalars().all()
         dashboard_data["rare_mutations"] = _dedup_by([
             {"gene": r.gene, "mutation_type": r.mutation_type,
-             "mutation_name": r.mutation_name,
+             "mutation_name": _clean_trait_name(r.mutation_name),
              "clinical_significance": r.clinical_significance,
-             "disease_association": r.disease_association,
+             "disease_association": _clean_trait_name(r.disease_association) if r.disease_association else r.disease_association,
              "penetrance": r.penetrance,
              "population_frequency": r.population_frequency,
              "associated_variants": r.associated_variants}
@@ -628,9 +653,9 @@ async def get_dashboard_data(
 
         # Also provide wellness data under wellness_traits key for frontend compatibility
         dashboard_data["wellness_traits"] = _dedup_by([
-            {"trait": r.metric_name, "category": "Wellness", "value": r.genetic_predisposition,
+            {"trait": _clean_trait_name(r.metric_name), "category": "Wellness", "value": r.genetic_predisposition,
              "gene": "Multiple", "confidence": r.optimization_score or "Medium",
-             "name": r.metric_name, "result": r.genetic_predisposition,
+             "name": _clean_trait_name(r.metric_name), "result": r.genetic_predisposition,
              "marker": "Multiple genes",
              "associated_variants": r.associated_variants or [],
              "recommendations": r.lifestyle_recommendations}
@@ -643,10 +668,10 @@ async def get_dashboard_data(
         )
         physical_rows = pt.scalars().all()
         dashboard_data["physical_traits"] = _dedup_by([
-            {"trait_name": r.trait_name, "trait_category": r.trait_category,
+            {"trait_name": _clean_trait_name(r.trait_name), "trait_category": _clean_trait_name(r.trait_category),
              "genetic_result": r.genetic_result, "confidence": r.confidence,
              "associated_variants": r.associated_variants, "description": r.description,
-             "category": r.trait_category}
+             "category": _clean_trait_name(r.trait_category)}
             for r in physical_rows
         ], "trait_name") if physical_rows else []
 
@@ -656,7 +681,7 @@ async def get_dashboard_data(
         )
         cognitive_rows = cp.scalars().all()
         dashboard_data["intelligence"] = _dedup_by([
-            {"cognitive_ability": r.cognitive_domain, "trait_name": r.cognitive_domain,
+            {"cognitive_ability": _clean_trait_name(r.cognitive_domain), "trait_name": _clean_trait_name(r.cognitive_domain),
              "genetic_advantage": r.genetic_score, "genetic_result": r.genetic_score,
              "percentile": r.percentile,
              "associated_variants": r.associated_variants,
@@ -671,7 +696,7 @@ async def get_dashboard_data(
         )
         personality_rows = pp.scalars().all()
         dashboard_data["personality_traits"] = _dedup_by([
-            {"trait": r.trait_name, "name": r.trait_name,
+            {"trait": _clean_trait_name(r.trait_name), "name": _clean_trait_name(r.trait_name),
              "score": 70 if r.genetic_tendency == 'moderate' else (85 if r.genetic_tendency == 'high' else 55),
              "confidence": r.confidence_level,
              "gene": r.associated_variants[0] if r.associated_variants else "Multiple markers",
@@ -690,7 +715,7 @@ async def get_dashboard_data(
         uncommon_rows = um.scalars().all()
         dashboard_data["uncommon_mutations"] = _dedup_by([
             {"rsid": r.associated_variants[0] if r.associated_variants else r.mutation_name,
-             "gene": r.gene, "effect": r.trait_association or r.mutation_name,
+             "gene": r.gene, "effect": _clean_trait_name(r.trait_association or r.mutation_name),
              "population_frequency": r.population_frequency or 0,
              "effect_size": r.effect_size or "small",
              "research_status": r.research_status or "emerging",

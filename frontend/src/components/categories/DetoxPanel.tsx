@@ -3,6 +3,7 @@
 import React, { useState, useMemo } from 'react'
 import { Shield, ChevronRight, CheckCircle } from 'lucide-react'
 import { Badge } from '../ui/badge'
+import { CapacityChart } from './GenomicCharts'
 import {
   useThemeClasses,
   CategoryHeader,
@@ -102,6 +103,12 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
   return (
     <div className="space-y-6">
       <CategoryHeader {...headerProps} />
+
+      {profiles.length >= 3 && (
+        <SectionCard title="Detox Capacity Overview" theme={theme}>
+          <CapacityChart data={profiles.map(p => ({ name: p.gene, capacity: p.detox_capacity || 'normal' }))} isDarkMode={isDarkMode} height={200} />
+        </SectionCard>
+      )}
 
       {grouped.map(({ phase, items }) => (
         <SectionCard key={phase} title={formatPhase(phase)} theme={theme}>

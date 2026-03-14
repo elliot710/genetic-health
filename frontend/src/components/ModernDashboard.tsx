@@ -28,6 +28,9 @@ import MethylationPanel from './categories/MethylationPanel'
 import DetoxPanel from './categories/DetoxPanel'
 import RareMutationsPanel from './categories/RareMutationsPanel'
 import UncommonMutationsPanel from './categories/UncommonMutationsPanel'
+import { RiskDistributionChart, FunctionalCategoriesChart, OverviewSummaryPie } from './categories/GenomicCharts'
+import SmartInsights from './SmartInsights'
+import KnowledgeGraph from './KnowledgeGraph'
 import AdminPanel from './admin/AdminPanel'
 import SettingsPanel from './SettingsPanel'
 import VariantSearch from './VariantSearch'
@@ -390,6 +393,11 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
       id: 'variant-search',
       title: 'Variant Search',
       icon: Search,
+    },
+    {
+      id: 'knowledge-graph',
+      title: 'Knowledge Graph',
+      icon: Activity,
     },
   ]
 
@@ -891,6 +899,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
         return <UncommonMutationsPanel data={data} isDarkMode={isDarkMode} token={token} />
       case 'variant-search':
         return <VariantSearch token={token} isDarkMode={isDarkMode} theme={theme} />
+      case 'knowledge-graph':
+        return <KnowledgeGraph isDarkMode={isDarkMode} token={token} />
       case 'admin':
         return <AdminPanel token={token} isDarkMode={isDarkMode} theme={theme} />
       case 'settings':
@@ -1249,9 +1259,9 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                           {card.items.length > 0 && (
                             <div className="flex flex-wrap gap-x-4 gap-y-1 mb-2">
                               {card.items.map((item, idx) => (
-                                <div key={idx} className="flex items-baseline gap-1">
-                                  <span className={`text-base font-bold ${item.color || theme.text.primary}`}>{item.value}</span>
-                                  <span className={`text-xs ${theme.text.muted}`}>{item.label}</span>
+                                <div key={idx} className="flex items-baseline gap-1 max-w-full overflow-hidden">
+                                  <span className={`text-base font-bold shrink-0 ${item.color || theme.text.primary}`}>{item.value}</span>
+                                  <span className={`text-xs ${theme.text.muted} truncate`}>{item.label}</span>
                                 </div>
                               ))}
                             </div>
@@ -1266,6 +1276,40 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
             })()}
 
             {/* Two-Column: Insights + Categories */}
+            {/* Overview Charts Row */}
+            {(() => {
+              const pieCounts: { label: string; count: number; color: string }[] = []
+              if (Array.isArray(data?.health_risks) && data.health_risks.length > 0) pieCounts.push({ label: 'Health Risks', count: data.health_risks.length, color: '#ef4444' })
+              if (Array.isArray(data?.drug_responses) && data.drug_responses.length > 0) pieCounts.push({ label: 'Drug Responses', count: data.drug_responses.length, color: '#f59e0b' })
+              if (Array.isArray(data?.carrier_status) && data.carrier_status.length > 0) pieCounts.push({ label: 'Carrier Status', count: data.carrier_status.length, color: '#f97316' })
+              if (Array.isArray(data?.nutrition_traits) && data.nutrition_traits.length > 0) pieCounts.push({ label: 'Nutrition', count: data.nutrition_traits.length, color: '#22c55e' })
+              if (Array.isArray(data?.sports_performance) && data.sports_performance.length > 0) pieCounts.push({ label: 'Sports', count: data.sports_performance.length, color: '#14b8a6' })
+              if (Array.isArray(data?.personality_traits) && data.personality_traits.length > 0) pieCounts.push({ label: 'Personality', count: data.personality_traits.length, color: '#ec4899' })
+              if (Array.isArray(data?.intelligence) && data.intelligence.length > 0) pieCounts.push({ label: 'Intelligence', count: data.intelligence.length, color: '#8b5cf6' })
+              if (Array.isArray(data?.rare_mutations) && data.rare_mutations.length > 0) pieCounts.push({ label: 'Rare Mutations', count: data.rare_mutations.length, color: '#dc2626' })
+              if (Array.isArray(data?.wellness_traits) && data.wellness_traits.length > 0) pieCounts.push({ label: 'Wellness', count: data.wellness_traits.length, color: '#10b981' })
+              if (Array.isArray(data?.methylation_profiles) && data.methylation_profiles.length > 0) pieCounts.push({ label: 'Methylation', count: data.methylation_profiles.length, color: '#06b6d4' })
+              if (Array.isArray(data?.detoxification_profiles) && data.detoxification_profiles.length > 0) pieCounts.push({ label: 'Detox', count: data.detoxification_profiles.length, color: '#84cc16' })
+              if (pieCounts.length < 2) return null
+              return (
+                <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-6`}>
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="p-2.5 bg-gradient-to-br from-indigo-500/20 to-purple-500/20 rounded-xl border border-indigo-500/30">
+                      <Activity className={`h-5 w-5 ${getThemeClass('text-indigo-500', isDarkMode)}`} />
+                    </div>
+                    <div>
+                      <h3 className={`text-lg font-bold ${theme.text.primary}`}>Analysis Distribution</h3>
+                      <p className={`text-xs ${theme.text.muted}`}>Results breakdown across all categories</p>
+                    </div>
+                  </div>
+                  <OverviewSummaryPie counts={pieCounts} isDarkMode={isDarkMode} height={260} />
+                </div>
+              )
+            })()}
+
+            {/* Smart AI Insights */}
+            <SmartInsights isDarkMode={isDarkMode} token={token} section="overview" title="AI-Powered Analysis" />
+
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
               {/* Genetic Insights */}
               <div className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-6`}>
@@ -1315,7 +1359,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                     )
                   })}
 
-                  {/* Risk Breakdown - clickable */}
+                  {/* Risk Breakdown - with chart */}
                   {Array.isArray(data?.health_risks) && data.health_risks.length > 0 && (() => {
                     const risks = data.health_risks as HealthRisk[]
                     return (
@@ -1330,23 +1374,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                         </div>
                         <ChevronRight className={`h-3.5 w-3.5 ${theme.text.muted}`} />
                       </div>
-                      <div className="flex gap-4">
-                        {['high', 'moderate', 'low'].map(level => {
-                          const count = risks.filter((r: HealthRisk) => r.risk_level === level).length
-                          if (count === 0) return null
-                          const colors: Record<string, string> = {
-                            high: isDarkMode ? 'text-red-400' : 'text-red-600',
-                            moderate: isDarkMode ? 'text-amber-400' : 'text-amber-600',
-                            low: isDarkMode ? 'text-green-400' : 'text-green-600',
-                          }
-                          return (
-                            <div key={level} className="flex items-baseline gap-1.5">
-                              <span className={`text-lg font-bold ${colors[level]}`}>{count}</span>
-                              <span className={`text-xs ${theme.text.muted} capitalize`}>{level} risk</span>
-                            </div>
-                          )
-                        })}
-                      </div>
+                      <RiskDistributionChart data={risks} isDarkMode={isDarkMode} height={160} />
                     </div>
                     )
                   })()}
@@ -1393,52 +1421,15 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                   </div>
                 </div>
 
-                {variantCategories.length > 0 ? (() => {
-                  const maxCount = variantCategories[0]?.count || 1
-                  const totalCat = variantCategories.reduce((s, c) => s + c.count, 0)
-                  const categoryMeta: Record<string, { gradient: string, color: string }> = {
-                    'Intronic': { gradient: 'from-blue-500 to-blue-400', color: isDarkMode ? 'text-blue-300' : 'text-blue-600' },
-                    'Intergenic': { gradient: 'from-slate-500 to-slate-400', color: isDarkMode ? 'text-slate-300' : 'text-slate-600' },
-                    'Regulatory': { gradient: 'from-amber-500 to-orange-400', color: isDarkMode ? 'text-amber-300' : 'text-amber-600' },
-                    'Coding': { gradient: 'from-rose-500 to-red-400', color: isDarkMode ? 'text-rose-300' : 'text-rose-600' },
-                    'Non-coding': { gradient: 'from-teal-500 to-cyan-400', color: isDarkMode ? 'text-teal-300' : 'text-teal-600' },
-                    'Splicing': { gradient: 'from-purple-500 to-violet-400', color: isDarkMode ? 'text-purple-300' : 'text-purple-600' },
-                    'Unknown': { gradient: 'from-gray-500 to-gray-400', color: isDarkMode ? 'text-gray-400' : 'text-gray-500' },
-                  }
-                  return (
-                    <div className="space-y-3">
-                      {variantCategories.map((cat, i) => {
-                        const meta = categoryMeta[cat.name] || { gradient: 'from-gray-500 to-gray-400', color: isDarkMode ? 'text-gray-400' : 'text-gray-500' }
-                        const pct = totalCat > 0 ? ((cat.count / totalCat) * 100).toFixed(1) : '0'
-                        const barWidth = Math.max(2, (cat.count / maxCount) * 100)
-                        return (
-                          <div key={i} className={`p-3 rounded-xl border ${theme.glassBorder} ${theme.glassHover} transition-all group`}>
-                            <div className="flex items-center justify-between mb-2">
-                              <div className="flex items-center gap-2">
-                                <div className={`w-2.5 h-2.5 rounded-full bg-gradient-to-r ${meta.gradient}`} />
-                                <span className={`text-sm font-semibold ${theme.text.primary}`}>{cat.name}</span>
-                              </div>
-                              <div className="flex items-baseline gap-2">
-                                <span className={`text-sm font-bold ${meta.color}`}>{cat.count.toLocaleString()}</span>
-                                <span className={`text-xs ${theme.text.muted}`}>{pct}%</span>
-                              </div>
-                            </div>
-                            <div className={`w-full h-2 rounded-full ${isDarkMode ? 'bg-slate-700/50' : 'bg-gray-200/80'}`}>
-                              <div
-                                className={`h-2 rounded-full bg-gradient-to-r ${meta.gradient} transition-all duration-700 group-hover:opacity-90`}
-                                style={{ width: `${barWidth}%` }}
-                              />
-                            </div>
-                          </div>
-                        )
-                      })}
-                      <div className={`flex justify-between pt-2 border-t ${theme.glassBorder}`}>
-                        <span className={`text-xs font-medium ${theme.text.muted}`}>Total annotated</span>
-                        <span className={`text-xs font-bold ${theme.text.primary}`}>{totalCat.toLocaleString()} variants</span>
-                      </div>
+                {variantCategories.length > 0 ? (
+                  <div>
+                    <FunctionalCategoriesChart data={variantCategories} isDarkMode={isDarkMode} height={280} />
+                    <div className={`flex justify-between pt-3 mt-2 border-t ${theme.glassBorder}`}>
+                      <span className={`text-xs font-medium ${theme.text.muted}`}>Total annotated</span>
+                      <span className={`text-xs font-bold ${theme.text.primary}`}>{variantCategories.reduce((s, c) => s + c.count, 0).toLocaleString()} variants</span>
                     </div>
-                  )
-                })() : (
+                  </div>
+                ) : (
                   <div className={`text-center py-8 ${theme.text.muted}`}>
                     <BarChart3 className="h-10 w-10 mx-auto mb-3 opacity-30" />
                     <p className="text-sm">Category data loading...</p>

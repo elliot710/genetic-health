@@ -599,8 +599,14 @@ class OptimizedGeneticAPIService:
             api_sources = all_api_sources
 
         if not api_sources:
-            logger.warning("No annotation sources enabled — skipping annotation")
-            return {}
+            # No remote APIs enabled — return stubs so local sources
+            # (ClinVar Local, gnomAD, AlphaMissense) can still be populated
+            # by save_annotation downstream.
+            logger.info("No remote API sources enabled — returning stubs for local-source annotation")
+            return {
+                rsid: {'rsid': rsid, 'annotations': {}, 'sources_queried': [], 'success_count': 0}
+                for rsid in valid_rsids
+            }
 
         source_tasks = [
             self._batch_single_api(valid_rsids, api_func, name, max_concurrent)
@@ -629,7 +635,7 @@ class OptimizedGeneticAPIService:
                     annotation['annotations'][source_name] = source_data
                     annotation['success_count'] += 1
 
-            results[rsid] = annotation if annotation['success_count'] > 0 else None
+            results[rsid] = annotation
 
         return results
 

@@ -11,6 +11,7 @@ import {
   advantageToSeverity,
   formatLabel,
   MasonryLayout,
+  cleanCondition,
 } from './shared'
 import type { CategoryPanelProps, PhysicalTrait } from './types'
 
@@ -156,7 +157,7 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
               >
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-3">
-                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{trait.category}</h4>
+                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{cleanCondition(trait.category)}</h4>
                     <StatusBadge
                       label={formatLabel(trait.trait || 'Detected')}
                       severity={advantageToSeverity(trait.confidence || 'moderate')}
@@ -172,7 +173,7 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
-                    <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{trait.description}</p>
+                    <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{cleanCondition(trait.description)}</p>
                     <VariantLinks rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} />
                   </div>
                 )}

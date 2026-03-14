@@ -16,7 +16,7 @@ from ..db.models import (
     HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait, SportsPerformance,
     CognitiveProfile, PersonalityTrait,
     WellnessMetric, MethylationProfile, DetoxificationProfile,
-    UncommonMutation, VariantMapping, AnnotationSourceConfig
+    UncommonMutation, VariantMapping, AnnotationSourceConfig, ClinVarVariant
 )
 from ..core.exceptions import AnalysisNotFoundException
 from ..core.config import settings
@@ -160,7 +160,8 @@ class SharedVariantAnnotationService:
         analysis_id: int,
         analysis_variant_id: int,
         marker_id: int = None,
-        enabled_sources: Optional[List[str]] = None
+        enabled_sources: Optional[List[str]] = None,
+        rsid_gene_map: Optional[Dict[str, str]] = None
     ) -> bool:
         """Save new annotation data to shared system and create user reference."""
         try:
@@ -208,13 +209,19 @@ class SharedVariantAnnotationService:
                 if cv_svc.is_loaded:
                     cv_local_data = await cv_svc.lookup(rsid)
 
-            # Look up gnomAD data (PG-backed with BigQuery fallback)
+            # Look up gnomAD data (PG-only during bulk analysis — no BQ fallback)
             gnomad_data_val = None
             if enabled_sources is None or 'gnomad' in enabled_sources:
                 from .gnomad_local import get_gnomad_service
                 gnomad_svc = get_gnomad_service()
                 if gnomad_svc.is_loaded:
-                    gnomad_data_val = await gnomad_svc.lookup(rsid)
+                    gnomad_data_val = await gnomad_svc.lookup(rsid, local_only=True)
+
+            # BigQuery enrichment (ChEMBL, FDA Drug, AlphaFold) is deferred to
+            # backfill / on-demand variant-detail to avoid blocking bulk analysis.
+            chembl_data_val = None
+            fda_drug_data_val = None
+            alphafold_data_val = None
 
             from sqlalchemy.dialects.postgresql import insert
             values = dict(
@@ -227,6 +234,9 @@ class SharedVariantAnnotationService:
                 alpha_missense_data=am_data,
                 clinvar_local_data=cv_local_data,
                 gnomad_data=gnomad_data_val,
+                chembl_data=chembl_data_val,
+                fda_drug_data=fda_drug_data_val,
+                alphafold_data=alphafold_data_val,
                 annotation_status=status,
                 failed_sources=failed if failed else None,
                 total_api_calls=success_count,
@@ -271,6 +281,21 @@ class SharedVariantAnnotationService:
                 conflict_set['gnomad_data'] = func.coalesce(
                     SharedVariantAnnotation.gnomad_data,
                     stmt.excluded.gnomad_data,
+                )
+            if chembl_data_val:
+                conflict_set['chembl_data'] = func.coalesce(
+                    SharedVariantAnnotation.chembl_data,
+                    stmt.excluded.chembl_data,
+                )
+            if fda_drug_data_val:
+                conflict_set['fda_drug_data'] = func.coalesce(
+                    SharedVariantAnnotation.fda_drug_data,
+                    stmt.excluded.fda_drug_data,
+                )
+            if alphafold_data_val:
+                conflict_set['alphafold_data'] = func.coalesce(
+                    SharedVariantAnnotation.alphafold_data,
+                    stmt.excluded.alphafold_data,
                 )
 
             # Recalculate annotation_status & failed_sources after the merge.
@@ -344,6 +369,7 @@ class ComprehensiveAnalysisService:
         self.api_service = None
         self._initialized = False
         self._registry: Dict[str, Dict[str, Dict]] = {}  # category -> {rsid_map, gene_map}
+        self._rsid_gene_map: Dict[str, str] = {}  # rsid -> gene symbol from ClinVar DB
 
     async def initialize_services(self):
         """Initialize dependent services."""
@@ -375,6 +401,62 @@ class ComprehensiveAnalysisService:
 
         self._registry = registry
         logger.info(f"Loaded {len(rows)} variant mappings from database across {len(registry)} categories")
+
+    async def _build_rsid_gene_map(self, variants: List[AnalysisVariant]):
+        """Bulk-load rsid→gene from ClinVar DB + Ensembl local position-based lookup."""
+        from ..db.database import async_session_factory
+        gene_map: Dict[str, str] = {}
+        rsids = [str(v.rsid) for v in variants if v.rsid]
+
+        # Step 1: ClinVar DB lookup (fast, covers ~6% of variants)
+        batch_size = 1000
+        async with async_session_factory() as session:
+            for i in range(0, len(rsids), batch_size):
+                batch = rsids[i:i + batch_size]
+                result = await session.execute(
+                    select(ClinVarVariant.rsid, ClinVarVariant.gene)
+                    .where(
+                        ClinVarVariant.rsid.in_(batch),
+                        ClinVarVariant.gene.isnot(None),
+                        ClinVarVariant.gene != '',
+                        ClinVarVariant.gene != '-',
+                    )
+                    .distinct(ClinVarVariant.rsid)
+                )
+                for row in result:
+                    gene_map[row.rsid] = row.gene
+
+        clinvar_count = len(gene_map)
+        logger.info(f"ClinVar DB gene map: {clinvar_count} of {len(rsids)} rsids")
+
+        # Step 2: Ensembl local position-based lookup for remaining variants
+        unmapped = [
+            v for v in variants
+            if v.rsid and str(v.rsid) not in gene_map and v.chromosome and v.position
+        ]
+        if unmapped:
+            try:
+                from .ensembl_local import get_ensembl_local_service
+                ensembl_svc = get_ensembl_local_service()
+                if await ensembl_svc.ensure_loaded():
+                    positions = [
+                        (str(v.chromosome), int(v.position), str(v.rsid))
+                        for v in unmapped
+                    ]
+                    ensembl_genes = await ensembl_svc.batch_position_to_gene(positions)
+                    gene_map.update(ensembl_genes)
+                    logger.info(
+                        f"Ensembl local gene map: {len(ensembl_genes)} additional "
+                        f"(total {len(gene_map)}/{len(rsids)})"
+                    )
+            except Exception as e:
+                logger.debug(f"Ensembl local gene lookup skipped: {e}")
+
+        self._rsid_gene_map = gene_map
+        logger.info(
+            f"Built rsid→gene map: {len(gene_map)} of {len(rsids)} rsids "
+            f"(ClinVar: {clinvar_count}, Ensembl: {len(gene_map) - clinvar_count})"
+        )
 
     async def _load_enabled_sources(self) -> Optional[List[str]]:
         """Load enabled annotation sources from the database.
@@ -460,6 +542,9 @@ class ComprehensiveAnalysisService:
 
             logger.info(f"Starting comprehensive analysis for {len(variants)} variants")
 
+            all_rsids = [str(v.rsid) for v in variants if v.rsid]
+            await self._build_rsid_gene_map(variants)
+
             progress = AnalysisProgress(
                 total_variants=len(variants),
                 processed_variants=0,
@@ -482,6 +567,11 @@ class ComprehensiveAnalysisService:
                 annotation_results = await self._annotate_variants_efficiently(
                     variants, analysis_id, annotation_service, progress
                 )
+
+                # Bulk BigQuery enrichment — one call per unique gene
+                progress.current_step = "enriching_bigquery"
+                await self._update_progress(analysis_id, progress)
+                await self._bulk_enrich_bigquery(annotation_results, session)
 
                 progress.current_step = "generating_insights"
                 await self._update_progress(analysis_id, progress)
@@ -545,6 +635,11 @@ class ComprehensiveAnalysisService:
             try:
                 if self.api_service:
                     await self.api_service.close()
+            except Exception:
+                pass
+            try:
+                from .bq_public import get_bq_public_service
+                get_bq_public_service().clear_gene_cache()
             except Exception:
                 pass
 
@@ -641,7 +736,8 @@ class ComprehensiveAnalysisService:
                         success = await annotation_service.save_annotation(
                             rsid, annotation_data, analysis_id, getattr(variant, 'id'),
                             marker_id=getattr(variant, 'marker_id', None),
-                            enabled_sources=enabled_sources
+                            enabled_sources=enabled_sources,
+                            rsid_gene_map=self._rsid_gene_map
                         )
 
                         if success:
@@ -752,6 +848,166 @@ class ComprehensiveAnalysisService:
                     await session.commit()
             logger.info(f"Backfilled gnomAD data for {gnomad_updated}/{len(missing_gnomad)} annotations")
 
+        # --- BigQuery backfill (ChEMBL, FDA Drug, AlphaFold) ---
+        bq_source_names = {'chembl', 'fda_drug', 'alphafold'}
+        enabled_bq = bq_source_names & set(enabled_sources) if enabled_sources else bq_source_names
+        bq_col_map = {'chembl': 'chembl_data', 'fda_drug': 'fda_drug_data', 'alphafold': 'alphafold_data'}
+        if enabled_bq:
+            # Find annotations missing any enabled BQ source
+            missing_bq = {}
+            for rsid, data in existing_annotations.items():
+                anns = data.get('annotations', {})
+                missing_for_rsid = {s for s in enabled_bq if s not in anns}
+                if missing_for_rsid:
+                    # Need gene symbol from ensembl data
+                    ensembl_ann = anns.get('ensembl', {})
+                    gene = None
+                    if ensembl_ann and ensembl_ann.get('found') and ensembl_ann.get('data'):
+                        e_entry = ensembl_ann['data'][0] if isinstance(ensembl_ann['data'], list) else ensembl_ann['data']
+                        tcs = e_entry.get('transcript_consequences', [])
+                        if tcs:
+                            gene = tcs[0].get('gene_symbol')
+                    if not gene:
+                        cv = anns.get('clinvar_local', {})
+                        if cv and cv.get('found'):
+                            gene = cv.get('gene_symbol') or cv.get('gene')
+                    if gene:
+                        missing_bq[rsid] = (gene, missing_for_rsid)
+
+            if missing_bq:
+                logger.info(f"Backfilling BigQuery sources for {len(missing_bq)} existing annotations")
+                try:
+                    from .bq_public import get_bq_public_service
+                    bq_svc = get_bq_public_service()
+                    bq_updated = 0
+                    async with async_session_factory() as session:
+                        for rsid, (gene, needed) in missing_bq.items():
+                            bq_result = await bq_svc.enrich_variant(gene, needed)
+                            update_vals = {}
+                            for src, src_data in bq_result.items():
+                                if src in bq_col_map and src_data:
+                                    update_vals[bq_col_map[src]] = src_data
+                                    existing_annotations[rsid]['annotations'][src] = src_data
+                            if update_vals:
+                                await session.execute(
+                                    update(SharedVariantAnnotation)
+                                    .where(SharedVariantAnnotation.rsid == rsid)
+                                    .values(**update_vals)
+                                )
+                                bq_updated += 1
+                        if bq_updated:
+                            await session.commit()
+                    logger.info(f"Backfilled BigQuery data for {bq_updated}/{len(missing_bq)} annotations")
+                except Exception as e:
+                    logger.warning(f"BigQuery backfill failed: {e}")
+
+    async def _bulk_enrich_bigquery(
+        self,
+        annotation_results: Dict[str, AnnotationResult],
+        session: AsyncSession,
+    ):
+        """Bulk-enrich annotations with BigQuery data (ChEMBL, FDA Drug, AlphaFold).
+
+        Groups variants by gene, queries BQ once per unique gene, then
+        bulk-updates shared_variant_annotations and annotation_results in memory.
+        """
+        enabled_sources = await self._load_enabled_sources()
+        bq_source_names = {'chembl', 'fda_drug', 'alphafold'}
+        enabled_bq = bq_source_names & set(enabled_sources) if enabled_sources else bq_source_names
+        if not enabled_bq:
+            return
+
+        # Build gene → [rsids] mapping from all available sources
+        gene_to_rsids: Dict[str, List[str]] = {}
+        for rsid, ar in annotation_results.items():
+            gene = None
+            # 1. ClinVar DB map (fastest, 162 variants)
+            gene = self._rsid_gene_map.get(rsid)
+            # 2. ClinVar local annotation data
+            if not gene and ar.annotation_data:
+                cv = ar.annotation_data.get('annotations', {}).get('clinvar_local', {})
+                if cv and cv.get('found'):
+                    genes = cv.get('genes', [])
+                    gene = genes[0] if genes else None
+            # 3. gnomAD annotation data
+            if not gene and ar.annotation_data:
+                gn = ar.annotation_data.get('annotations', {}).get('gnomad', {})
+                if gn and gn.get('found') and gn.get('gene'):
+                    gene = gn['gene']
+            if gene:
+                gene_to_rsids.setdefault(gene, []).append(rsid)
+
+        if not gene_to_rsids:
+            logger.info("BigQuery enrichment: no genes found, skipping")
+            return
+
+        unique_genes = list(gene_to_rsids.keys())
+        logger.info(f"BigQuery enrichment: {len(unique_genes)} unique genes covering "
+                     f"{sum(len(v) for v in gene_to_rsids.values())} variants")
+
+        try:
+            from .bq_public import get_bq_public_service
+            bq_svc = get_bq_public_service()
+
+            bq_col_map = {'chembl': 'chembl_data', 'fda_drug': 'fda_drug_data', 'alphafold': 'alphafold_data'}
+            enriched_genes = 0
+            updated_variants = 0
+
+            for idx, gene in enumerate(unique_genes, 1):
+                logger.info(f"BQ enriching gene {idx}/{len(unique_genes)}: {gene}")
+                try:
+                    bq_result = await asyncio.wait_for(
+                        bq_svc.enrich_variant(gene, enabled_bq),
+                        timeout=90,
+                    )
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    logger.warning(f"BigQuery enrichment timed out for gene {gene}")
+                    continue
+                except Exception as e:
+                    logger.warning(f"BigQuery enrichment failed for gene {gene}: {e}")
+                    continue
+
+                # Check if any source returned data
+                update_vals = {}
+                mem_updates = {}
+                for src, src_data in bq_result.items():
+                    if src in bq_col_map and src_data and src_data.get('found'):
+                        update_vals[bq_col_map[src]] = src_data
+                        mem_updates[src] = src_data
+
+                if not update_vals:
+                    continue
+
+                enriched_genes += 1
+                rsids_for_gene = gene_to_rsids[gene]
+
+                # Bulk-update all shared_variant_annotations for this gene
+                await session.execute(
+                    update(SharedVariantAnnotation)
+                    .where(SharedVariantAnnotation.rsid.in_(rsids_for_gene))
+                    .values(**update_vals)
+                )
+
+                # Update in-memory annotation_results for insight generation
+                for rsid in rsids_for_gene:
+                    ar = annotation_results.get(rsid)
+                    if ar and ar.annotation_data:
+                        for src, src_data in mem_updates.items():
+                            ar.annotation_data.setdefault('annotations', {})[src] = src_data
+                        updated_variants += 1
+
+                # Yield after each gene to keep event loop responsive
+                await asyncio.sleep(0)
+
+            if enriched_genes:
+                await session.flush()
+
+            logger.info(f"BigQuery enrichment complete: {enriched_genes}/{len(unique_genes)} genes "
+                        f"enriched, {updated_variants} variants updated")
+
+        except Exception as e:
+            logger.warning(f"BigQuery bulk enrichment failed: {e}")
+
     async def _generate_comprehensive_insights(
         self,
         variants: List[AnalysisVariant],
@@ -802,30 +1058,50 @@ class ComprehensiveAnalysisService:
     # ------------------------------------------------------------------
 
     def _extract_gene_and_consequence(self, annotation_result: Optional[AnnotationResult]):
-        """Extract gene symbol and consequence from annotation data."""
+        """Extract gene symbol and consequence from annotation data.
+        Falls back to ClinVar DB rsid→gene map when Ensembl data is unavailable."""
         if not annotation_result or not annotation_result.annotation_data:
+            # Last resort: ClinVar DB map
+            if annotation_result and annotation_result.rsid:
+                gene = self._rsid_gene_map.get(annotation_result.rsid)
+                if gene:
+                    return gene, None, None
             return None, None, None
 
         try:
+            # 1. Try Ensembl
             ensembl_data = annotation_result.annotation_data.get('annotations', {}).get('ensembl', {})
-            if not ensembl_data:
-                return None, None, None
+            if ensembl_data:
+                data_list = ensembl_data.get('data', [])
+                if data_list:
+                    entry = data_list[0]
+                    transcript_consequences = entry.get('transcript_consequences', [])
+                    if transcript_consequences:
+                        tc = transcript_consequences[0]
+                        gene = tc.get('gene_symbol')
+                        if gene:
+                            consequence = tc.get('consequence_terms', [None])[0] if tc.get('consequence_terms') else None
+                            impact = tc.get('impact')
+                            return gene, consequence, impact
 
-            data_list = ensembl_data.get('data', [])
-            if not data_list:
-                return None, None, None
+            # 2. Try ClinVar local annotation data
+            cv_local = annotation_result.annotation_data.get('annotations', {}).get('clinvar_local', {})
+            if cv_local and cv_local.get('found'):
+                genes = cv_local.get('genes', [])
+                if genes:
+                    return genes[0], cv_local.get('molecular_consequence'), None
 
-            entry = data_list[0]
-            transcript_consequences = entry.get('transcript_consequences', [])
-            if not transcript_consequences:
-                return None, None, None
+            # 3. Try gnomAD annotation data
+            gnomad = annotation_result.annotation_data.get('annotations', {}).get('gnomad', {})
+            if gnomad and gnomad.get('found') and gnomad.get('gene'):
+                return gnomad['gene'], gnomad.get('consequence'), gnomad.get('impact')
 
-            tc = transcript_consequences[0]
-            gene = tc.get('gene_symbol')
-            consequence = tc.get('consequence_terms', [None])[0] if tc.get('consequence_terms') else None
-            impact = tc.get('impact')
+            # 4. Fallback: ClinVar DB rsid→gene map
+            gene = self._rsid_gene_map.get(annotation_result.rsid)
+            if gene:
+                return gene, None, None
 
-            return gene, consequence, impact
+            return None, None, None
         except (KeyError, IndexError, TypeError):
             return None, None, None
 
@@ -1289,12 +1565,13 @@ class ComprehensiveAnalysisService:
             if 0.001 <= freq <= 0.05 and gene:
                 effect_size = 'moderate' if consequence in ('missense_variant', 'stop_gained', 'frameshift_variant') else 'small'
                 research_status = 'well_established' if consequence == 'missense_variant' else 'emerging'
+                consequence_label = (consequence or 'variant').replace("_", " ")
 
                 uncommon_mutations.append(UncommonMutation(
                     analysis_id=analysis_id,
                     mutation_type='low_frequency_variant',
                     gene=gene,
-                    mutation_name=f'{gene} {consequence.replace("_", " ")}',
+                    mutation_name=f'{gene} {consequence_label}',
                     clinical_significance='moderate' if effect_size == 'moderate' else 'low',
                     trait_association=f'{gene} pathway variant',
                     effect_size=effect_size,

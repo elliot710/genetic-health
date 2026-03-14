@@ -11,6 +11,7 @@ import {
   sensitivityToSeverity,
   formatLabel,
   MasonryLayout,
+  cleanCondition,
 } from './shared'
 import type { CategoryPanelProps, NutritionTrait } from './types'
 
@@ -144,7 +145,7 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
                     <div className="p-2 rounded-lg bg-green-500/10">
                       <Icon className="h-5 w-5 text-green-400" />
                     </div>
-                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{trait.trait}</h4>
+                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{cleanCondition(trait.trait)}</h4>
                     <StatusBadge
                       label={formatLabel(trait.status)}
                       severity={sensitivityToSeverity(trait.sensitivity)}
@@ -160,7 +161,7 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
-                    <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{trait.description}</p>
+                    <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{cleanCondition(trait.description)}</p>
                     {trait.recommendations.length > 0 && (
                       <div className="space-y-2">
                         <span className={`text-xs font-semibold ${theme.textSecondary} uppercase tracking-wider`}>Dietary Recommendations</span>

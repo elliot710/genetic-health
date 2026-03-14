@@ -32,7 +32,9 @@ services:
       - ALPHA_MISSENSE_DATA_DIR=/app/data_sources/alpha_missense
       - CLINVAR_DATA_DIR=/app/data_sources/clinvar
       - GNOMAD_DATA_DIR=/app/data_sources/gnomad
+      - ENSEMBL_DATA_DIR=/app/data_sources/ensembl/homo_sapiens
       - GOOGLE_APPLICATION_CREDENTIALS=/app/genetic-health-490017-b854a959d61b.json
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
     volumes:
       - .:/app
       - /app/.venv  # Exclude virtual environment from volume mount

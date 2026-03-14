@@ -97,13 +97,16 @@ class GnomadLocalService:
     # Core lookups
     # ------------------------------------------------------------------
 
-    async def lookup(self, rsid: str) -> Optional[Dict[str, Any]]:
+    async def lookup(self, rsid: str, *, local_only: bool = False) -> Optional[Dict[str, Any]]:
         """Look up a variant by rsID. Tries local PG first, then BigQuery."""
         # Try local first
         async with async_session_factory() as session:
             result = await self._lookup_by_rsid(session, rsid)
             if result and result.get('found'):
                 return result
+
+        if local_only:
+            return {"found": False, "source": "gnomad", "rsid": rsid}
 
         # Fall back to BigQuery
         bq_result = await self._try_bigquery_rsid(rsid)

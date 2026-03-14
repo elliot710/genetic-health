@@ -1,16 +1,9 @@
 'use client'
 
 import React, { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { ExternalLink, Dna, FlaskConical, BookOpen, Activity, X, ChevronDown, ChevronUp, AlertTriangle, Pill, Shield, Atom } from 'lucide-react'
 import { Badge } from '../ui/badge'
-import {
-  Dialog,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogOverlay,
-  DialogPortal,
-} from '../ui/dialog'
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -298,14 +291,12 @@ export default function VariantDetailDialog({
 }: VariantDetailDialogProps) {
   const [details, setDetails] = useState<VariantDetails | null>(null)
   const [loading, setLoading] = useState(false)
-  const [showAllFreqs, setShowAllFreqs] = useState(false)
   const [showPubs, setShowPubs] = useState(false)
 
   useEffect(() => {
     if (!open || !rsid || !token) return
     setDetails(null)
     setLoading(true)
-    setShowAllFreqs(false)
     setShowPubs(false)
 
     fetch(`http://localhost:8000/api/annotations/variant-details/${rsid}`, {
@@ -323,51 +314,39 @@ export default function VariantDetailDialog({
   const textSecondary = isDarkMode ? 'text-gray-400' : 'text-gray-500'
   const cardBg = isDarkMode ? 'bg-white/5' : 'bg-gray-50'
 
-  // Sort population frequencies: globals first, then by frequency desc
-  const sortedFreqs = details?.population_frequencies
-    ? Object.entries(details.population_frequencies).sort(([a], [b]) => {
-        const aGlobal = a.includes('global') || a.includes('Global') ? 0 : 1
-        const bGlobal = b.includes('global') || b.includes('Global') ? 0 : 1
-        if (aGlobal !== bGlobal) return aGlobal - bGlobal
-        return (details.population_frequencies![b]?.frequency || 0) - (details.population_frequencies![a]?.frequency || 0)
-      })
-    : []
+  if (!open) return null
 
-  const displayFreqs = showAllFreqs ? sortedFreqs : sortedFreqs.slice(0, 6)
-
-  return (
-    <Dialog open={open} onOpenChange={() => {}}>
-      <DialogPortal>
-        <DialogOverlay className="bg-black/60" />
-        {/* Scrollable wrapper — the outer div scrolls when content exceeds viewport */}
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-50 overflow-y-auto"
-          onPointerDown={(e) => { if (e.target === e.currentTarget) e.preventDefault() }}
-        >
-          <div className="flex min-h-full items-center justify-center py-8 px-4"
-            onPointerDown={(e) => { if (e.target === e.currentTarget) e.preventDefault() }}
-          >
+  const modal = (
+    // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
+    <div onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+      {/* Backdrop */}
+      <div className="fixed inset-0 z-50 bg-black/60" aria-hidden="true" />
+      {/* Scrollable wrapper */}
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="fixed inset-0 z-50 overflow-y-auto overscroll-contain"
+      >
+        <div className="flex min-h-full items-center justify-center py-8 px-4">
           <div
-            className={`relative w-full max-w-4xl flex flex-col gap-6 p-6 ${bg} ${border} border rounded-2xl`}
+            className={`relative w-full max-w-6xl flex flex-col gap-6 p-6 ${bg} ${border} border rounded-2xl`}
           >
-        <DialogHeader>
+        <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="p-2 rounded-lg bg-gradient-to-br from-blue-500/20 to-purple-500/20 border border-blue-500/30">
                 <Dna className="h-5 w-5 text-blue-400" />
               </div>
               <div>
-                <DialogTitle className={`text-lg font-bold ${textPrimary}`}>
+                <h2 className={`text-lg font-bold ${textPrimary}`}>
                   {rsid}
                   {gene && gene !== 'Unknown' && !gene.startsWith('rs') && (
                     <span className={`ml-2 text-sm font-normal ${textSecondary}`}>({gene})</span>
                   )}
-                </DialogTitle>
-                <DialogDescription className={textSecondary}>
+                </h2>
+                <p className={textSecondary}>
                   {loading ? 'Loading annotation data…' : details?.most_severe_consequence || 'Variant annotation details'}
-                </DialogDescription>
+                </p>
               </div>
             </div>
             <button
@@ -377,7 +356,7 @@ export default function VariantDetailDialog({
               <X className={`h-4 w-4 ${textSecondary}`} />
             </button>
           </div>
-        </DialogHeader>
+        </div>
 
         {loading && (
           <div className="flex items-center justify-center py-12">
@@ -658,42 +637,7 @@ export default function VariantDetailDialog({
               </div>
             )}
 
-            {/* ── Population Frequencies ── */}
-            {sortedFreqs.length > 0 && (
-              <div>
-                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
-                  <Activity className="h-3.5 w-3.5" /> Population Frequencies
-                </h4>
-                <div className={`${cardBg} rounded-xl p-3 border ${border} space-y-1.5`}>
-                  {displayFreqs.map(([pop, data]) => {
-                    const pct = Math.min(data.frequency * 100, 100)
-                    const barWidth = Math.max(pct * 10, pct > 0 ? 2 : 0) // Scale up for visibility
-                    return (
-                      <div key={pop} className="flex items-center gap-3 text-xs">
-                        <span className={`${textSecondary} w-40 shrink-0 truncate`}>{formatPopName(pop)}</span>
-                        <div className="flex-1 h-1.5 rounded-full bg-white/5 overflow-hidden">
-                          <div
-                            className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-500 transition-all"
-                            style={{ width: `${Math.min(barWidth, 100)}%` }}
-                          />
-                        </div>
-                        <span className={`font-mono ${textPrimary} w-16 text-right`}>{formatFrequency(data.frequency)}</span>
-                      </div>
-                    )
-                  })}
-                  {sortedFreqs.length > 6 && (
-                    <button
-                      type="button"
-                      onClick={() => setShowAllFreqs(!showAllFreqs)}
-                      className={`flex items-center gap-1 text-xs ${isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-500'} mt-1 transition-colors`}
-                    >
-                      {showAllFreqs ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                      {showAllFreqs ? 'Show less' : `Show all ${sortedFreqs.length} populations`}
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
+
 
             {/* ── Pharmacogenomics ── */}
             {details.pharmacogenomics?.found && (
@@ -1431,7 +1375,8 @@ export default function VariantDetailDialog({
       </div>
       </div>
       </div>
-      </DialogPortal>
-    </Dialog>
+    </div>
   )
+
+  return typeof document !== 'undefined' ? createPortal(modal, document.body) : null
 }

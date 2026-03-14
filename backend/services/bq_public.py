@@ -29,14 +29,23 @@ class BigQueryPublicService:
     def __init__(self):
         self._client = None
         self._available: Optional[bool] = None
+        # Per-gene result cache — avoids re-querying BigQuery for variants
+        # that share the same gene during a single analysis run.
+        self._gene_cache: Dict[str, Dict[str, Any]] = {}
+
+    def clear_gene_cache(self):
+        """Clear the per-gene cache (call between analysis runs)."""
+        self._gene_cache.clear()
 
     async def _ensure_client(self) -> bool:
         if self._available is not None:
             return self._available
         try:
             from google.cloud import bigquery
+            logger.info("BQ public: initializing BigQuery client...")
             self._client = await asyncio.to_thread(bigquery.Client)
             self._available = True
+            logger.info("BQ public: client initialized successfully")
         except Exception as e:
             logger.info("BigQuery public datasets unavailable: %s", e)
             self._available = False
@@ -49,16 +58,20 @@ class BigQueryPublicService:
         if not await self._ensure_client():
             return []
         from google.cloud import bigquery
+        import time as _time
         job_config = bigquery.QueryJobConfig(
             maximum_bytes_billed=max_gb * 1024**3,
         )
         if params:
             job_config.query_parameters = params
         try:
+            t0 = _time.monotonic()
             result = await asyncio.to_thread(
                 self._client.query, sql, job_config=job_config
             )
             rows = await asyncio.to_thread(lambda: list(result))
+            elapsed = _time.monotonic() - t0
+            logger.info("BQ query returned %d rows in %.1fs", len(rows), elapsed)
             return [dict(r) for r in rows]
         except Exception as e:
             logger.warning("BigQuery query failed: %s", e)
@@ -77,7 +90,18 @@ class BigQueryPublicService:
 
         Returns ``{source_name: data_dict}`` only for sources in
         *enabled_sources* that yield results.
+        Uses per-gene caching so the same gene is only queried once.
         """
+        bq_sources = {"chembl", "fda_drug", "alphafold"}
+        requested = bq_sources & enabled_sources
+        if not requested:
+            return {}
+
+        cache_key = gene_symbol.upper()
+        if cache_key in self._gene_cache:
+            cached = self._gene_cache[cache_key]
+            return {k: v for k, v in cached.items() if k in requested}
+
         result: Dict[str, Any] = {}
 
         if "chembl" in enabled_sources:
@@ -100,6 +124,7 @@ class BigQueryPublicService:
         if "alphafold" in enabled_sources:
             result["alphafold"] = await self.lookup_alphafold_gene(gene_symbol)
 
+        self._gene_cache[cache_key] = result
         return result
 
     # ------------------------------------------------------------------

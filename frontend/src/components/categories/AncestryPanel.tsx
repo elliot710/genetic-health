@@ -1,6 +1,7 @@
 import React from 'react'
 import { Globe, MapPin, Users, Clock, Dna } from 'lucide-react'
 import { Badge } from '../ui/badge'
+import { AncestryDonutChart } from './GenomicCharts'
 import {
   useThemeClasses,
   CategoryHeader,
@@ -95,6 +96,11 @@ export default function AncestryPanel({ isDarkMode = false, data }: CategoryPane
       <CategoryHeader {...headerProps} />
 
       <SectionCard title="Ancestry Composition" theme={theme}>
+        {ancestryComposition.length >= 2 && (
+          <div className="mb-6">
+            <AncestryDonutChart data={ancestryComposition.map(r => ({ population: r.region, percentage: r.percentage }))} isDarkMode={isDarkMode} height={280} />
+          </div>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {ancestryComposition.map((region: AncestryRegion, index: number) => {
             const regionColor = getRegionColor(region.region)

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Brain, Heart, Users, Target, Zap, Palette, ChevronRight, CheckCircle } from 'lucide-react'
 import { Badge } from '../ui/badge'
+import { TraitRadarChart } from './GenomicCharts'
 import {
   useThemeClasses,
   CategoryHeader,
@@ -10,6 +11,7 @@ import {
   VariantLinks,
   advantageToSeverity,
   MasonryLayout,
+  cleanCondition,
 } from './shared'
 import type { CategoryPanelProps, DashboardData, PersonalityTraitData } from './types'
 import type { LucideIcon } from 'lucide-react'
@@ -142,6 +144,12 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
     <div className="space-y-6">
       <CategoryHeader {...headerProps} />
 
+      {personalityTraits.length >= 3 && (
+        <SectionCard title="Trait Overview" theme={theme}>
+          <TraitRadarChart data={personalityTraits.map(t => ({ label: t.trait, value: t.score, fullMark: 100 }))} isDarkMode={isDarkMode} height={300} fillColor={isDarkMode ? 'rgba(236,72,153,0.2)' : 'rgba(219,39,119,0.15)'} strokeColor={isDarkMode ? '#ec4899' : '#db2777'} />
+        </SectionCard>
+      )}
+
       <SectionCard title="Personality Profile" theme={theme}>
         <MasonryLayout>
           {personalityTraits.map((trait: PersonalityTrait, index: number) => {
@@ -160,7 +168,7 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
                     <div className={`p-2 rounded-lg ${trait.bgColor}`}>
                       <IconComponent className="h-5 w-5" />
                     </div>
-                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{trait.trait}</h4>
+                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{cleanCondition(trait.trait)}</h4>
                     <StatusBadge
                       label={`${trait.score}%`}
                       severity={advantageToSeverity(scoreLabel)}
@@ -176,7 +184,7 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
-                    <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{trait.description}</p>
+                    <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{cleanCondition(trait.description)}</p>
 
                     {trait.characteristics.length > 0 && (
                       <div className="space-y-2">

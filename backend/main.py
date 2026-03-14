@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .api import auth_routes, upload_routes, annotation_routes, variant_routes
 from .api.analysis_routes import router as analysis_router
 from .api.admin_routes import router as admin_router
+from .api.insights_routes import router as insights_router
 from .db.database import init_db
 from .services.analysis_queue import get_analysis_queue
 
@@ -42,6 +43,7 @@ app.include_router(upload_routes.router)
 app.include_router(annotation_routes.router)
 app.include_router(variant_routes.router)
 app.include_router(admin_router)
+app.include_router(insights_router)
 
 @app.get("/")
 async def root():

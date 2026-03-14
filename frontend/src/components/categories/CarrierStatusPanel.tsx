@@ -11,6 +11,7 @@ import {
   VariantLinks,
   carrierStatusToSeverity,
   MasonryLayout,
+  cleanCondition,
 } from './shared'
 import type { CategoryPanelProps, CarrierCondition } from './types'
 
@@ -101,7 +102,7 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
               >
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-3">
-                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{condition.condition}</h4>
+                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{cleanCondition(condition.condition)}</h4>
                     <StatusBadge
                       label={condition.status}
                       severity={carrierStatusToSeverity(condition.status)}
@@ -116,7 +117,7 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
-                    <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{condition.description}</p>
+                    <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{cleanCondition(condition.description)}</p>
 
                     <div className={`text-sm ${theme.textSecondary}`}>
                       <span className="font-medium">Inheritance:</span> {condition.inheritance}

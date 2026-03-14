@@ -1,7 +1,7 @@
 """
 Database models for user authentication and genetic data storage
 """
-from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey, JSON, Float, Index, BigInteger
+from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey, JSON, Float, Index, BigInteger, SmallInteger
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .database import Base
@@ -721,4 +721,28 @@ class GnomadGeneConstraint(Base):
 
     __table_args__ = (
         Index('ix_gnomad_gene_constraints_gene', 'gene'),
+    )
+
+
+class EnsemblGene(Base):
+    """Local Ensembl gene model derived from cDNA/ncRNA FASTA headers.
+    Used for position-based variant→gene mapping without hitting the Ensembl API."""
+    __tablename__ = "ensembl_genes"
+
+    id = Column(Integer, primary_key=True)
+    gene_id = Column(String, nullable=False, unique=True)            # ENSG00000211751.9
+    gene_symbol = Column(String, nullable=False, index=True)         # TRBC1
+    chromosome = Column(String, nullable=False)                      # 7
+    start_pos = Column(BigInteger, nullable=False)                   # Gene start (min of all transcripts)
+    end_pos = Column(BigInteger, nullable=False)                     # Gene end (max of all transcripts)
+    strand = Column(SmallInteger)                                    # 1 or -1
+    biotype = Column(String)                                         # protein_coding, lncRNA, etc.
+    description = Column(Text)                                       # Human-readable description
+    transcript_count = Column(Integer, default=0)                    # Number of known transcripts
+
+    imported_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index('ix_ensembl_genes_chr_range', 'chromosome', 'start_pos', 'end_pos'),
+        Index('ix_ensembl_genes_symbol', 'gene_symbol'),
     )

@@ -1014,7 +1014,7 @@ class BackfillResponse(BaseModel):
 @router.post("/annotation-sources/{source_name}/backfill", response_model=BackfillResponse)
 async def backfill_source(
     source_name: str,
-    limit: int = Query(100, ge=1, le=1000, description="Max variants to backfill in one request"),
+    limit: int = Query(100, ge=1, le=5000, description="Max variants to backfill in one request"),
     db: AsyncSession = Depends(get_session),
     admin: User = Depends(require_admin),
 ):
@@ -1088,7 +1088,7 @@ async def backfill_source(
                     from ..services.clinvar_local import get_clinvar_local_service
                     cv_svc = get_clinvar_local_service()
                     if cv_svc.is_loaded:
-                        result_data = cv_svc.lookup(ann.rsid)
+                        result_data = await cv_svc.lookup(ann.rsid)
                         if result_data:
                             ann.clinvar_local_data = result_data
                             completed += 1
@@ -1826,6 +1826,20 @@ async def gnomad_etl_import(admin: User = Depends(require_admin)):
     from ..services.gnomad_local import get_gnomad_service
     gnomad_svc = get_gnomad_service()
     await gnomad_svc.ensure_loaded()
+    return stats
+
+
+@router.post("/ensembl-etl/import")
+async def ensembl_etl_import(admin: User = Depends(require_admin)):
+    """Parse Ensembl cDNA/ncRNA FASTA headers and load gene models.
+    Usually completes in under 30 seconds."""
+    from ..services.ensembl_etl import EnsemblETL
+    etl = EnsemblETL()
+    stats = await etl.run_full_import()
+    from ..services.ensembl_local import get_ensembl_local_service
+    svc = get_ensembl_local_service()
+    svc._gene_count = None  # Reset cache so next ensure_loaded re-checks
+    await svc.ensure_loaded()
     return stats
 
 

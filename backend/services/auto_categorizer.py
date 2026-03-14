@@ -141,6 +141,27 @@ class AutoCategorizer:
             return {}
 
     # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _clean_condition(raw: str) -> str:
+        """Extract the first meaningful condition name from a raw ClinVar conditions string."""
+        if not raw:
+            return "Unknown"
+        if '|' not in raw and ';' not in raw:
+            return raw
+        parts = raw.replace(';', '|').split('|')
+        skip = {'not provided', 'not specified', 'see cases', 'not applicable'}
+        for part in parts:
+            cleaned = part.strip()
+            if cleaned and cleaned.lower() not in skip:
+                if cleaned.isupper():
+                    cleaned = cleaned.title()
+                return cleaned
+        return parts[0].strip().title() if parts else raw
+
+    # ------------------------------------------------------------------
     # Rule matchers
     # ------------------------------------------------------------------
 
@@ -165,16 +186,17 @@ class AutoCategorizer:
             rsid = row[0]
             data = {**template}
             cond = row[3] or f"{row[1] or 'Unknown'} variant"
-            data.setdefault("condition", cond)
+            clean = self._clean_condition(cond)
+            data.setdefault("condition", clean)
             data.setdefault("clinical_significance", row[2])
             data.setdefault("gene", row[1] or "")
             data.setdefault("source", "clinvar_auto")
             # Populate dedup-critical fields for category generators
-            data.setdefault("trait", cond)
-            data.setdefault("domain", cond)
-            data.setdefault("metric", cond)
-            data.setdefault("nutrient", cond)
-            data.setdefault("category", cond)
+            data.setdefault("trait", clean)
+            data.setdefault("domain", clean)
+            data.setdefault("metric", clean)
+            data.setdefault("nutrient", clean)
+            data.setdefault("category", clean)
             out[rsid] = {"map_type": "rsid", "data": data}
         return out
 
@@ -199,14 +221,15 @@ class AutoCategorizer:
             rsid = row[0]
             data = {**template}
             cond = row[3] or keyword
-            data.setdefault("condition", cond)
+            clean = self._clean_condition(cond)
+            data.setdefault("condition", clean)
             data.setdefault("clinical_significance", row[2] or "")
             data.setdefault("gene", row[1] or "")
             data.setdefault("source", "clinvar_auto")
             # Populate dedup-critical fields for category generators
-            data.setdefault("trait", cond)
-            data.setdefault("domain", cond)
-            data.setdefault("metric", cond)
+            data.setdefault("trait", clean)
+            data.setdefault("domain", clean)
+            data.setdefault("metric", clean)
             data.setdefault("nutrient", keyword.capitalize())
             data.setdefault("category", keyword.capitalize())
             out[rsid] = {"map_type": "rsid", "data": data}

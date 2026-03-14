@@ -13,8 +13,11 @@ import {
   riskToSeverity,
   getRiskBarColor,
   MasonryLayout,
+  cleanCondition,
 } from './shared'
 import { getThemeClass } from '../../utils/theme'
+import { RiskDistributionChart } from './GenomicCharts'
+import SmartInsights from '../SmartInsights'
 import type { CategoryPanelProps, HealthRisk } from './types'
 
 interface VariantAnnotation {
@@ -50,13 +53,7 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
   const [variantAnnotations, setVariantAnnotations] = useState<Record<string, VariantAnnotation>>({})
   const [loading, setLoading] = useState(false)
 
-  const cleanConditionName = (condition: string) => {
-    return condition
-      .replace(/Genetic Variant\s*\([^)]+\)\s*/gi, '')
-      .replace(/\([^)]*rs\d+[^)]*\)/gi, '')
-      .replace(/\s*\(Protein-affecting\)/gi, '')
-      .trim()
-  }
+
 
   const getVariantDescription = (rsid: string, condition: string, gene: string) => {
     const variantDescriptions: {[key: string]: string} = {
@@ -158,7 +155,7 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
     if (realHealthRisks.length > 0) {
       return realHealthRisks
         .map((risk: HealthRisk) => ({
-          condition: cleanConditionName(risk.condition),
+          condition: cleanCondition(risk.condition),
           risk: getRiskLevel(risk.risk_level),
           riskScore: risk.risk_level === 'high' ? 85 : risk.risk_level === 'moderate' ? 65 : risk.risk_level === 'low' ? 35 : 20,
           gene: risk.associated_variants?.[0] || 'Unknown',
@@ -178,7 +175,7 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
     if (healthRisksObj?.details && healthRisksObj.details.length > 0) {
       return healthRisksObj.details
         .map((risk: HealthRisk) => ({
-          condition: cleanConditionName(risk.condition),
+          condition: cleanCondition(risk.condition),
           risk: getRiskLevel(risk.risk_level),
           riskScore: risk.risk_level === 'high' ? 85 : risk.risk_level === 'moderate' ? 65 : risk.risk_level === 'low' ? 35 : 20,
           gene: risk.associated_variants?.[0] || 'Unknown',
@@ -250,6 +247,12 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
   return (
     <div className="space-y-6">
       <CategoryHeader {...headerProps} />
+
+      {healthRisks.length >= 3 && (
+        <SectionCard title="Risk Distribution" theme={theme}>
+          <RiskDistributionChart data={healthRisks.map(r => ({ condition: r.condition, risk_level: r.riskLevel, risk_score: r.riskScore }))} isDarkMode={isDarkMode} height={200} />
+        </SectionCard>
+      )}
 
       <SectionCard title="Health Risk Assessment" theme={theme}>
         <MasonryLayout>
@@ -412,6 +415,8 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
               text="This genetic analysis is for informational purposes only. Always consult with qualified healthcare providers before making medical decisions based on genetic information."
               theme={theme}
             />
+
+            <SmartInsights isDarkMode={isDarkMode} token={token} section="health" title="AI Health Analysis" />
           </div>
         </SectionCard>
       )}

@@ -506,6 +506,34 @@ export function DisclaimerCard({
   )
 }
 
+// ─── Condition / trait name cleaner ─────────────────────────────
+/**
+ * Clean raw ClinVar pipe/semicolon-delimited condition strings.
+ * Extracts the first meaningful name and title-cases all-uppercase entries.
+ */
+const SKIP_CONDITIONS = new Set([
+  'not provided', 'not specified', 'see cases', 'not applicable',
+])
+
+export function cleanCondition(raw?: string | null): string {
+  if (!raw) return 'Unknown'
+  if (!raw.includes('|') && !raw.includes(';')) return raw
+  const parts = raw.replace(/;/g, '|').split('|')
+  for (const part of parts) {
+    const trimmed = part.trim()
+    if (trimmed && !SKIP_CONDITIONS.has(trimmed.toLowerCase())) {
+      return trimmed === trimmed.toUpperCase() ? toTitleCase(trimmed) : trimmed
+    }
+  }
+  return parts[0]?.trim() ? toTitleCase(parts[0].trim()) : raw
+}
+
+function toTitleCase(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/\b\w/g, c => c.toUpperCase())
+}
+
 // ─── Format helpers ────────────────────────────────────────────
 
 export function formatLabel(value: string): string {

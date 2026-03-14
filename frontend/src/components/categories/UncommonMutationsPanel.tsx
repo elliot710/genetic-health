@@ -12,6 +12,7 @@ import {
   clinicalSignificanceToSeverity,
   formatLabel,
   MasonryLayout,
+  cleanCondition,
 } from './shared'
 
 interface UncommonMutation {
@@ -147,7 +148,7 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
-                    <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{mutation.effect}</p>
+                    <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{cleanCondition(mutation.effect)}</p>
 
                     {mutation.mutation_name && (
                       <div className={`text-sm ${theme.textSecondary}`}>

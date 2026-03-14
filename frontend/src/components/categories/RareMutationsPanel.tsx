@@ -14,6 +14,7 @@ import {
   clinicalSignificanceToSeverity,
   formatLabel,
   MasonryLayout,
+  cleanCondition,
 } from './shared'
 import type { CategoryPanelProps, RareMutation } from './types'
 
@@ -92,7 +93,7 @@ export default function RareMutationsPanel({ data, isDarkMode = false, token }: 
               >
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-3">
-                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{title}</h4>
+                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{cleanCondition(title)}</h4>
                     <StatusBadge
                       label={formatLabel(mutation.clinical_significance)}
                       severity={clinicalSignificanceToSeverity(mutation.clinical_significance)}
@@ -110,7 +111,7 @@ export default function RareMutationsPanel({ data, isDarkMode = false, token }: 
                 </div>
 
                 {mutation.disease_association && mutation.disease_association !== 'Under investigation' && (
-                  <p className={`text-sm ${theme.textSecondary} mt-1`}>{mutation.disease_association}</p>
+                  <p className={`text-sm ${theme.textSecondary} mt-1`}>{cleanCondition(mutation.disease_association)}</p>
                 )}
 
                 {isExpanded && (
@@ -123,7 +124,7 @@ export default function RareMutationsPanel({ data, isDarkMode = false, token }: 
                     )}
 
                     <p className={`text-sm ${theme.textSecondary}`}>
-                      {mutation.disease_association || mutation.effect || 'Under investigation'}
+                      {cleanCondition(mutation.disease_association || mutation.effect || 'Under investigation')}
                     </p>
 
                     <div className="flex items-center gap-4">
