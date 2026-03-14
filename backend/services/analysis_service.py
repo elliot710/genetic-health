@@ -14,8 +14,8 @@ from sqlalchemy import select, update, func
 from ..db.models import (
     GeneticAnalysis, AnalysisVariant, VariantAnnotation, SharedVariantAnnotation,
     HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait, SportsPerformance,
-    CognitiveProfile, PersonalityTrait,
-    WellnessMetric, MethylationProfile, DetoxificationProfile,
+    CognitiveProfile, PersonalityTrait, AncestryResult, CarrierStatus,
+    WellnessMetric, MethylationProfile, DetoxificationProfile, RareMutation,
     UncommonMutation, VariantMapping, AnnotationSourceConfig, ClinVarVariant
 )
 from ..core.exceptions import AnalysisNotFoundException
@@ -133,6 +133,12 @@ class SharedVariantAnnotationService:
                 gnomad = getattr(annotation, 'gnomad_data', None)
                 if gnomad is not None:
                     merged_data['annotations']['gnomad'] = gnomad
+
+                # Include BigQuery data (ChEMBL, FDA Drug, AlphaFold)
+                for bq_src, bq_col in (('chembl', 'chembl_data'), ('fda_drug', 'fda_drug_data'), ('alphafold', 'alphafold_data')):
+                    bq_data = getattr(annotation, bq_col, None)
+                    if bq_data is not None:
+                        merged_data['annotations'][bq_src] = bq_data
 
                 # Compute composite pathogenicity score
                 from .scoring_engine import get_scoring_engine
@@ -524,7 +530,12 @@ class ComprehensiveAnalysisService:
     # ------------------------------------------------------------------
 
     async def process_analysis(self, analysis_id: int, strategy: str = 'comprehensive') -> Dict[str, Any]:
-        """Process genetic analysis with efficient annotation reuse and comprehensive insights."""
+        """Process genetic analysis with efficient annotation reuse and comprehensive insights.
+
+        Resume-aware: if the analysis was interrupted mid-run, it detects the
+        last completed phase via ``current_step`` and skips work that was
+        already persisted to the database.
+        """
         start_time = time.time()
         log_collector = JobLogCollector.get_instance()
         log_collector.set_active_job(analysis_id)
@@ -546,11 +557,23 @@ class ComprehensiveAnalysisService:
                     "message": "No variants found"
                 }
 
-            logger.info(f"Starting comprehensive analysis for {len(variants)} variants")
-            logger.info(f"═══ Phase 1/4: Building gene map ═══")
+            # Determine resume point from prior run's current_step
+            resume_step = getattr(analysis, 'current_step', None) or 'initializing'
+            # Map step names to completed phase numbers
+            _completed_phases = {
+                'initializing': 0,
+                'annotating_variants': 0,   # Phase 2 was in progress (not done)
+                'enriching_bigquery': 1,     # Phase 2 done, Phase 3 in progress
+                'generating_insights': 2,    # Phases 2+3 done, Phase 4 in progress
+                'completed': 4,
+            }
+            last_completed_phase = _completed_phases.get(resume_step, 0)
+            is_resume = last_completed_phase > 0
+            if is_resume:
+                logger.info(f"Resuming analysis {analysis_id} from step '{resume_step}' "
+                            f"(phases 1-{last_completed_phase} already done)")
 
-            all_rsids = [str(v.rsid) for v in variants if v.rsid]
-            await self._build_rsid_gene_map(variants)
+            logger.info(f"Starting comprehensive analysis for {len(variants)} variants")
 
             progress = AnalysisProgress(
                 total_variants=len(variants),
@@ -561,65 +584,74 @@ class ComprehensiveAnalysisService:
                 current_step="initializing",
                 status="processing"
             )
-
             await self._update_progress(analysis_id, progress)
 
+            # ── Phase 1: Build gene map (always — cheap, in-memory only) ──
+            logger.info(f"═══ Phase 1/4: Building gene map ═══")
+            all_rsids = [str(v.rsid) for v in variants if v.rsid]
+            await self._build_rsid_gene_map(variants)
+
+            # ── Phase 2: Annotate variants ──
+            # Even on resume we re-load existing annotations from DB.  When
+            # Phase 2 was already completed the bulk of variants will be found
+            # in shared_variant_annotations and reused instantly.
             from ..db.database import async_session_factory
+
+            progress.current_step = "annotating_variants"
+            await self._update_progress(analysis_id, progress)
+            logger.info(f"═══ Phase 2/4: Annotating variants ═══")
+            phase_start = time.time()
+
             async with async_session_factory() as session:
                 annotation_service = SharedVariantAnnotationService(session)
-
-                progress.current_step = "annotating_variants"
-                await self._update_progress(analysis_id, progress)
-
-                logger.info(f"═══ Phase 2/4: Annotating variants ═══")
-                phase_start = time.time()
                 annotation_results = await self._annotate_variants_efficiently(
                     variants, analysis_id, annotation_service, progress
                 )
-                logger.info(f"═══ Phase 2/4 complete ({time.time() - phase_start:.1f}s) ═══")
+            logger.info(f"═══ Phase 2/4 complete ({time.time() - phase_start:.1f}s) ═══")
 
-                # Bulk BigQuery enrichment — one call per unique gene
-                progress.current_step = "enriching_bigquery"
-                await self._update_progress(analysis_id, progress)
-                logger.info(f"═══ Phase 3/4: BigQuery enrichment ═══")
-                phase_start = time.time()
-                await self._bulk_enrich_bigquery(annotation_results, session)
-                logger.info(f"═══ Phase 3/4 complete ({time.time() - phase_start:.1f}s) ═══")
+            # ── Phase 3: BigQuery enrichment (own session, periodic commits) ──
+            progress.current_step = "enriching_bigquery"
+            await self._update_progress(analysis_id, progress)
+            logger.info(f"═══ Phase 3/4: BigQuery enrichment ═══")
+            phase_start = time.time()
+            await self._bulk_enrich_bigquery(annotation_results, analysis_id)
+            logger.info(f"═══ Phase 3/4 complete ({time.time() - phase_start:.1f}s) ═══")
 
-                progress.current_step = "generating_insights"
-                await self._update_progress(analysis_id, progress)
-                logger.info(f"═══ Phase 4/4: Generating insights ═══")
-                phase_start = time.time()
+            # ── Phase 4: Generate insights (own session, committed at end) ──
+            progress.current_step = "generating_insights"
+            await self._update_progress(analysis_id, progress)
+            logger.info(f"═══ Phase 4/4: Generating insights ═══")
+            phase_start = time.time()
 
+            async with async_session_factory() as session:
                 insights_generated = await self._generate_comprehensive_insights(
                     variants, annotation_results, analysis_id, session, progress
                 )
-                logger.info(f"═══ Phase 4/4 complete ({time.time() - phase_start:.1f}s) ═══")
-
                 await session.commit()
+            logger.info(f"═══ Phase 4/4 complete ({time.time() - phase_start:.1f}s) ═══")
 
-                progress.current_step = "completed"
-                progress.status = "completed"
-                progress.processed_variants = len(variants)
-                await self._update_progress(analysis_id, progress)
+            progress.current_step = "completed"
+            progress.status = "completed"
+            progress.processed_variants = len(variants)
+            await self._update_progress(analysis_id, progress)
 
-                processing_time = time.time() - start_time
+            processing_time = time.time() - start_time
 
-                logger.info(f"Analysis {analysis_id} completed in {processing_time:.2f}s")
-                logger.info(f"Annotations: {progress.reused_annotations} reused, {progress.new_annotations} new")
-                logger.info(f"Insights generated: {insights_generated}")
+            logger.info(f"Analysis {analysis_id} completed in {processing_time:.2f}s")
+            logger.info(f"Annotations: {progress.reused_annotations} reused, {progress.new_annotations} new")
+            logger.info(f"Insights generated: {insights_generated}")
 
-                return {
-                    "success": True,
-                    "analysis_id": analysis_id,
-                    "status": "completed",
-                    "processed_variants": len(variants),
-                    "total_variants": len(variants),
-                    "reused_annotations": progress.reused_annotations,
-                    "new_annotations": progress.new_annotations,
-                    "insights_generated": insights_generated,
-                    "processing_time": processing_time
-                }
+            return {
+                "success": True,
+                "analysis_id": analysis_id,
+                "status": "completed",
+                "processed_variants": len(variants),
+                "total_variants": len(variants),
+                "reused_annotations": progress.reused_annotations,
+                "new_annotations": progress.new_annotations,
+                "insights_generated": insights_generated,
+                "processing_time": processing_time
+            }
 
         except AnalysisCancelled as e:
             logger.info(f"Analysis {analysis_id} was cancelled: {e}")
@@ -720,7 +752,23 @@ class ComprehensiveAnalysisService:
                 annotation_data=annotation_data, source='existing'
             )
 
-        if variants_needing_annotation and self.api_service:
+        # Determine if any remote APIs would actually be called
+        remote_api_names = {'ensembl', 'clinvar', 'clinpgx', 'snpedia'}
+        remote_enabled = remote_api_names & set(enabled_sources or [])
+
+        # If the only remote API is 'ensembl' (we have local ensembl data) or none,
+        # use bulk local annotation — 100x+ faster than per-variant HTTP calls
+        use_bulk_local = not remote_enabled or remote_enabled <= {'ensembl'}
+
+        if variants_needing_annotation and use_bulk_local:
+            logger.info(f"Using bulk local annotation path (remote APIs: {remote_enabled or 'none'})")
+            new_results = await self._bulk_annotate_locally(
+                variants_needing_annotation, analysis_id,
+                annotation_service, progress, enabled_sources
+            )
+            annotation_results.update(new_results)
+
+        elif variants_needing_annotation and self.api_service:
             batch_size = settings.api.batch_size
 
             total_batches = (len(variants_needing_annotation) + batch_size - 1) // batch_size
@@ -922,15 +970,183 @@ class ComprehensiveAnalysisService:
                 except Exception as e:
                     logger.warning(f"BigQuery backfill failed: {e}")
 
+    async def _bulk_annotate_locally(
+        self,
+        variants: List[AnalysisVariant],
+        analysis_id: int,
+        annotation_service: SharedVariantAnnotationService,
+        progress: AnalysisProgress,
+        enabled_sources: Optional[List[str]],
+    ) -> Dict[str, AnnotationResult]:
+        """Annotate variants using only local data sources — no HTTP API calls.
+
+        Uses batch SQL (IN-clause) for ClinVar and gnomAD lookups, then bulk-
+        upserts shared_variant_annotations and creates variant_annotation links.
+        ~100x faster than per-variant remote API annotation.
+        """
+        from ..db.database import async_session_factory
+        from sqlalchemy.dialects.postgresql import insert
+
+        # Deduplicate rsids — multiple analysis_variants can share the same rsid
+        rsid_to_variants: Dict[str, List[AnalysisVariant]] = {}
+        for v in variants:
+            rsid_to_variants.setdefault(str(v.rsid), []).append(v)
+
+        unique_rsids = list(rsid_to_variants.keys())
+        total = len(unique_rsids)
+        logger.info(f"Bulk local annotation: {total} unique RSIDs ({len(variants)} variants)")
+        bulk_start = time.time()
+
+        # --- Step 1: Batch ClinVar local lookups ---
+        cv_map: Dict[str, Optional[Dict]] = {}
+        if enabled_sources is None or 'clinvar_local' in enabled_sources:
+            from .clinvar_local import get_clinvar_local_service
+            cv_svc = get_clinvar_local_service()
+            if cv_svc.is_loaded:
+                t0 = time.time()
+                cv_map = await cv_svc.lookup_batch(unique_rsids)
+                cv_found = sum(1 for v in cv_map.values() if v and v.get('found'))
+                logger.info(f"  ClinVar local batch: {cv_found}/{total} found ({time.time() - t0:.1f}s)")
+
+        # --- Step 2: Batch gnomAD local lookups ---
+        gn_map: Dict[str, Optional[Dict]] = {}
+        if enabled_sources is None or 'gnomad' in enabled_sources:
+            from .gnomad_local import get_gnomad_service
+            gnomad_svc = get_gnomad_service()
+            if gnomad_svc.is_loaded:
+                t0 = time.time()
+                gn_map = await gnomad_svc.lookup_batch(unique_rsids)
+                gn_found = sum(1 for v in gn_map.values() if v and v.get('found'))
+                logger.info(f"  gnomAD local batch: {gn_found}/{total} found ({time.time() - t0:.1f}s)")
+
+        await asyncio.sleep(0)
+
+        # --- Step 3: Bulk upsert shared_variant_annotations + create variant_annotations ---
+        annotation_results: Dict[str, AnnotationResult] = {}
+        batch_size = 500
+        saved_count = 0
+
+        for i in range(0, len(unique_rsids), batch_size):
+            chunk_rsids = unique_rsids[i:i + batch_size]
+
+            async with async_session_factory() as session:
+                for rsid in chunk_rsids:
+                    cv_data = cv_map.get(rsid)
+                    cv_val = cv_data if cv_data and cv_data.get('found') else None
+                    gn_data = gn_map.get(rsid)
+                    gn_val = gn_data if gn_data and gn_data.get('found') else None
+
+                    # Get marker_id from first variant with this rsid
+                    first_variant = rsid_to_variants[rsid][0]
+                    marker_id = getattr(first_variant, 'marker_id', None)
+
+                    # Upsert shared annotation
+                    values = dict(
+                        rsid=rsid,
+                        clinvar_local_data=cv_val,
+                        gnomad_data=gn_val,
+                        annotation_status='partial',
+                        total_api_calls=0,
+                        usage_count=1,
+                    )
+                    if marker_id is not None:
+                        values['marker_id'] = marker_id
+
+                    stmt = insert(SharedVariantAnnotation).values(**values)
+                    conflict_set = dict(
+                        usage_count=SharedVariantAnnotation.usage_count + 1,
+                        last_updated_at=func.now(),
+                    )
+                    if cv_val:
+                        conflict_set['clinvar_local_data'] = func.coalesce(
+                            SharedVariantAnnotation.clinvar_local_data,
+                            stmt.excluded.clinvar_local_data,
+                        )
+                    if gn_val:
+                        conflict_set['gnomad_data'] = func.coalesce(
+                            SharedVariantAnnotation.gnomad_data,
+                            stmt.excluded.gnomad_data,
+                        )
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=['rsid'],
+                        set_=conflict_set,
+                    ).returning(SharedVariantAnnotation.id)
+
+                    result = await session.execute(stmt)
+                    shared_id = result.scalar_one()
+
+                    # Create variant_annotation links for ALL analysis_variants with this rsid
+                    for v in rsid_to_variants[rsid]:
+                        session.add(VariantAnnotation(
+                            analysis_id=analysis_id,
+                            analysis_variant_id=getattr(v, 'id'),
+                            shared_annotation_id=shared_id,
+                            rsid=rsid,
+                        ))
+
+                    # Build in-memory annotation result
+                    ann_data: Dict[str, Any] = {
+                        'rsid': rsid,
+                        'annotations': {},
+                        'sources_queried': [],
+                        'success_count': 0,
+                    }
+                    if cv_val:
+                        ann_data['annotations']['clinvar_local'] = cv_val
+                        ann_data['success_count'] += 1
+                    if gn_val:
+                        ann_data['annotations']['gnomad'] = gn_val
+                        ann_data['success_count'] += 1
+
+                    from .scoring_engine import get_scoring_engine
+                    ann_data['pathogenicity_score'] = get_scoring_engine().score_variant(
+                        ann_data['annotations']
+                    )
+
+                    annotation_results[rsid] = AnnotationResult(
+                        rsid=rsid, was_reused=False,
+                        annotation_data=ann_data, source='local'
+                    )
+                    saved_count += 1
+
+                await session.commit()
+
+            # Progress + logging
+            progress.annotated_variants += sum(
+                len(rsid_to_variants[r]) for r in chunk_rsids
+            )
+            progress.new_annotations += len(chunk_rsids)
+            progress.processed_variants = progress.annotated_variants
+            await self._update_progress(analysis_id, progress)
+
+            chunk_num = i // batch_size + 1
+            total_chunks = (total + batch_size - 1) // batch_size
+            if chunk_num % 20 == 0 or chunk_num == total_chunks:
+                elapsed = time.time() - bulk_start
+                logger.info(
+                    f"  Bulk annotation: {saved_count}/{total} RSIDs "
+                    f"({progress.annotated_variants} variants, {elapsed:.1f}s)"
+                )
+
+            await asyncio.sleep(0)
+
+        elapsed = time.time() - bulk_start
+        logger.info(f"Bulk local annotation complete: {saved_count} RSIDs in {elapsed:.1f}s")
+        return annotation_results
+
     async def _bulk_enrich_bigquery(
         self,
         annotation_results: Dict[str, AnnotationResult],
-        session: AsyncSession,
+        analysis_id: int,
     ):
         """Bulk-enrich annotations with BigQuery data (ChEMBL, FDA Drug, AlphaFold).
 
         Groups variants by gene, queries BQ once per unique gene, then
         bulk-updates shared_variant_annotations and annotation_results in memory.
+
+        Uses its own session and commits every 50 genes so progress is
+        persisted incrementally.  On resume, genes whose BQ columns are
+        already populated in the DB are skipped.
         """
         enabled_sources = await self._load_enabled_sources()
         bq_source_names = {'chembl', 'fda_drug', 'alphafold'}
@@ -938,19 +1154,18 @@ class ComprehensiveAnalysisService:
         if not enabled_bq:
             return
 
+        bq_col_map = {'chembl': 'chembl_data', 'fda_drug': 'fda_drug_data', 'alphafold': 'alphafold_data'}
+
         # Build gene → [rsids] mapping from all available sources
         gene_to_rsids: Dict[str, List[str]] = {}
         for rsid, ar in annotation_results.items():
             gene = None
-            # 1. ClinVar DB map (fastest, 162 variants)
             gene = self._rsid_gene_map.get(rsid)
-            # 2. ClinVar local annotation data
             if not gene and ar.annotation_data:
                 cv = ar.annotation_data.get('annotations', {}).get('clinvar_local', {})
                 if cv and cv.get('found'):
                     genes = cv.get('genes', [])
                     gene = genes[0] if genes else None
-            # 3. gnomAD annotation data
             if not gene and ar.annotation_data:
                 gn = ar.annotation_data.get('annotations', {}).get('gnomad', {})
                 if gn and gn.get('found') and gn.get('gene'):
@@ -963,68 +1178,146 @@ class ComprehensiveAnalysisService:
             return
 
         unique_genes = list(gene_to_rsids.keys())
-        logger.info(f"BigQuery enrichment: {len(unique_genes)} unique genes covering "
+        total_genes = len(unique_genes)
+        logger.info(f"BigQuery enrichment: {total_genes} unique genes covering "
                      f"{sum(len(v) for v in gene_to_rsids.values())} variants")
+
+        # ── Determine which genes are already enriched in the DB ──
+        from ..db.database import async_session_factory
+        already_enriched: set = set()
+        try:
+            # Collect all rsids that map to genes
+            all_gene_rsids = []
+            for rsids_list in gene_to_rsids.values():
+                all_gene_rsids.extend(rsids_list)
+
+            async with async_session_factory() as session:
+                # Check which rsids already have ALL enabled BQ columns filled
+                bq_columns = [getattr(SharedVariantAnnotation, bq_col_map[s]) for s in enabled_bq]
+                from sqlalchemy import and_
+                filters = [col.isnot(None) for col in bq_columns]
+
+                result = await session.execute(
+                    select(SharedVariantAnnotation.rsid)
+                    .where(
+                        SharedVariantAnnotation.rsid.in_(all_gene_rsids),
+                        and_(*filters)
+                    )
+                )
+                enriched_rsids = set(r[0] for r in result.all())
+
+            # A gene is "already enriched" if ALL its rsids have BQ data
+            for gene, rsids_for_gene in gene_to_rsids.items():
+                if all(r in enriched_rsids for r in rsids_for_gene):
+                    already_enriched.add(gene)
+
+            if already_enriched:
+                logger.info(f"BigQuery enrichment: skipping {len(already_enriched)} already-enriched genes")
+
+                # Load existing BQ data into in-memory annotation_results
+                async with async_session_factory() as session:
+                    for gene in already_enriched:
+                        rsids_for_gene = gene_to_rsids[gene]
+                        result = await session.execute(
+                            select(SharedVariantAnnotation)
+                            .where(SharedVariantAnnotation.rsid.in_(rsids_for_gene))
+                        )
+                        for sa in result.scalars().all():
+                            ar = annotation_results.get(sa.rsid)
+                            if ar and ar.annotation_data:
+                                for src, col in bq_col_map.items():
+                                    data = getattr(sa, col, None)
+                                    if data:
+                                        ar.annotation_data.setdefault('annotations', {})[src] = data
+        except Exception as e:
+            logger.warning(f"BQ enrichment skip-check failed (will re-enrich all): {e}")
+
+        genes_to_process = [g for g in unique_genes if g not in already_enriched]
+        if not genes_to_process:
+            logger.info("BigQuery enrichment: all genes already enriched — nothing to do")
+            return
+
+        logger.info(f"BigQuery enrichment: processing {len(genes_to_process)}/{total_genes} genes")
 
         try:
             from .bq_public import get_bq_public_service
             bq_svc = get_bq_public_service()
 
-            bq_col_map = {'chembl': 'chembl_data', 'fda_drug': 'fda_drug_data', 'alphafold': 'alphafold_data'}
             enriched_genes = 0
             updated_variants = 0
+            commit_interval = 50  # Commit every N genes
 
-            for idx, gene in enumerate(unique_genes, 1):
-                logger.info(f"BQ enriching gene {idx}/{len(unique_genes)}: {gene}")
-                try:
-                    bq_result = await asyncio.wait_for(
-                        bq_svc.enrich_variant(gene, enabled_bq),
-                        timeout=90,
+            session = async_session_factory()
+            await session.__aenter__()
+
+            try:
+                for idx, gene in enumerate(genes_to_process, 1):
+                    # Check for cancellation periodically
+                    if idx % 20 == 0:
+                        await self._check_if_cancelled(analysis_id)
+
+                    if idx % 100 == 0 or idx == len(genes_to_process):
+                        logger.info(f"BQ enriching gene {idx}/{len(genes_to_process)}: {gene} "
+                                    f"({enriched_genes} enriched, {updated_variants} variants updated)")
+                    try:
+                        bq_result = await asyncio.wait_for(
+                            bq_svc.enrich_variant(gene, enabled_bq),
+                            timeout=90,
+                        )
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        logger.warning(f"BigQuery enrichment timed out for gene {gene}")
+                        continue
+                    except Exception as e:
+                        logger.warning(f"BigQuery enrichment failed for gene {gene}: {e}")
+                        continue
+
+                    update_vals = {}
+                    mem_updates = {}
+                    for src, src_data in bq_result.items():
+                        if src in bq_col_map and src_data and src_data.get('found'):
+                            update_vals[bq_col_map[src]] = src_data
+                            mem_updates[src] = src_data
+
+                    if not update_vals:
+                        # Periodic commit even when no data, to flush pending updates
+                        if idx % commit_interval == 0 and enriched_genes > 0:
+                            await session.commit()
+                        await asyncio.sleep(0)
+                        continue
+
+                    enriched_genes += 1
+                    rsids_for_gene = gene_to_rsids[gene]
+
+                    await session.execute(
+                        update(SharedVariantAnnotation)
+                        .where(SharedVariantAnnotation.rsid.in_(rsids_for_gene))
+                        .values(**update_vals)
                     )
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    logger.warning(f"BigQuery enrichment timed out for gene {gene}")
-                    continue
-                except Exception as e:
-                    logger.warning(f"BigQuery enrichment failed for gene {gene}: {e}")
-                    continue
 
-                # Check if any source returned data
-                update_vals = {}
-                mem_updates = {}
-                for src, src_data in bq_result.items():
-                    if src in bq_col_map and src_data and src_data.get('found'):
-                        update_vals[bq_col_map[src]] = src_data
-                        mem_updates[src] = src_data
+                    for rsid in rsids_for_gene:
+                        ar = annotation_results.get(rsid)
+                        if ar and ar.annotation_data:
+                            for src, src_data in mem_updates.items():
+                                ar.annotation_data.setdefault('annotations', {})[src] = src_data
+                            updated_variants += 1
 
-                if not update_vals:
-                    continue
+                    # Periodic commit to persist progress
+                    if idx % commit_interval == 0:
+                        await session.commit()
+                        logger.info(f"  BQ commit checkpoint at gene {idx}/{len(genes_to_process)}")
 
-                enriched_genes += 1
-                rsids_for_gene = gene_to_rsids[gene]
+                    await asyncio.sleep(0)
 
-                # Bulk-update all shared_variant_annotations for this gene
-                await session.execute(
-                    update(SharedVariantAnnotation)
-                    .where(SharedVariantAnnotation.rsid.in_(rsids_for_gene))
-                    .values(**update_vals)
-                )
+                # Final commit
+                if enriched_genes:
+                    await session.commit()
 
-                # Update in-memory annotation_results for insight generation
-                for rsid in rsids_for_gene:
-                    ar = annotation_results.get(rsid)
-                    if ar and ar.annotation_data:
-                        for src, src_data in mem_updates.items():
-                            ar.annotation_data.setdefault('annotations', {})[src] = src_data
-                        updated_variants += 1
+            finally:
+                await session.__aexit__(None, None, None)
 
-                # Yield after each gene to keep event loop responsive
-                await asyncio.sleep(0)
-
-            if enriched_genes:
-                await session.flush()
-
-            logger.info(f"BigQuery enrichment complete: {enriched_genes}/{len(unique_genes)} genes "
-                        f"enriched, {updated_variants} variants updated")
+            logger.info(f"BigQuery enrichment complete: {enriched_genes}/{len(genes_to_process)} genes "
+                        f"enriched, {updated_variants} variants updated "
+                        f"({len(already_enriched)} skipped as already enriched)")
 
         except Exception as e:
             logger.warning(f"BigQuery bulk enrichment failed: {e}")
@@ -1037,7 +1330,26 @@ class ComprehensiveAnalysisService:
         session: AsyncSession,
         progress: AnalysisProgress
     ) -> int:
-        """Generate comprehensive insights for all categories."""
+        """Generate comprehensive insights for all categories.
+
+        Deletes any existing insights for this analysis first so that
+        resume does not produce duplicates.
+        """
+        # Clean up any partial insights from a previous interrupted run
+        insight_tables = [
+            HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait,
+            SportsPerformance, CognitiveProfile, PersonalityTrait,
+            AncestryResult, CarrierStatus, WellnessMetric,
+            MethylationProfile, DetoxificationProfile, RareMutation,
+            UncommonMutation,
+        ]
+        from sqlalchemy import delete
+        for tbl in insight_tables:
+            await session.execute(
+                delete(tbl).where(tbl.analysis_id == analysis_id)
+            )
+        await session.flush()
+
         insights_generated = 0
 
         generators = [

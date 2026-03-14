@@ -170,6 +170,7 @@ class BigQueryPublicService:
         targets = {r["tid"]: r for r in rows}
 
         # Step 2: drug mechanisms for those targets
+        # tid is INT64 in target_dictionary but compared via parameterized array
         drugs = await self._query(
             """
             SELECT DISTINCT
@@ -181,7 +182,7 @@ class BigQueryPublicService:
             WHERE dm.tid IN UNNEST(@tids) AND md.pref_name IS NOT NULL
             LIMIT 50
             """,
-            params=[bq.ArrayQueryParameter("tids", "INT64", tids)],
+            params=[bq.ArrayQueryParameter("tids", "INT64", [int(t) for t in tids])],
         )
 
         for d in drugs:

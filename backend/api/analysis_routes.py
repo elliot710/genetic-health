@@ -354,10 +354,10 @@ async def resume_analysis(
             raise HTTPException(status_code=404, detail="Analysis not found")
         
         current_status = getattr(analysis, 'analysis_status', 'pending')
-        if current_status not in ['paused', 'stopped']:
+        if current_status not in ['paused', 'stopped', 'failed', 'processing']:
             raise HTTPException(
                 status_code=400,
-                detail=f"Cannot resume analysis with status '{current_status}'. Only paused/stopped analysis can be resumed."
+                detail=f"Cannot resume analysis with status '{current_status}'. Only paused/stopped/failed/processing analyses can be resumed."
             )
         
         # Update status to processing

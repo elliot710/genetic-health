@@ -90,6 +90,28 @@ async def startup_event():
     await analysis_queue.start()
     print("🚀 Analysis queue processor started")
 
+    # Detect and re-queue stale analyses left in 'processing' state
+    # (e.g. from a server restart or container hot-reload)
+    try:
+        from .db.database import async_session_factory
+        from sqlalchemy import select, update as sa_update
+        from .db.models import GeneticAnalysis
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(GeneticAnalysis.id, GeneticAnalysis.user_id, GeneticAnalysis.current_step)
+                .where(GeneticAnalysis.analysis_status == 'processing')
+            )
+            stale = result.all()
+            if stale:
+                for analysis_id, user_id, step in stale:
+                    print(f"🔄 Re-queuing stale analysis {analysis_id} (was at step: {step})")
+                    await analysis_queue.enqueue_analysis(analysis_id, user_id)
+                print(f"🔄 Re-queued {len(stale)} stale analyses for resume")
+            else:
+                print("✅ No stale analyses found")
+    except Exception as e:
+        print(f"⚠️ Stale analysis check failed: {e}")
+
     # Check ClinVar PG availability (instant — just counts rows)
     from .services.clinvar_local import get_clinvar_local_service
     cv_svc = get_clinvar_local_service()
