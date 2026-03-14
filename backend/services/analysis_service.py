@@ -687,7 +687,7 @@ class ComprehensiveAnalysisService:
                 pass
             try:
                 from .bq_public import get_bq_public_service
-                get_bq_public_service().clear_gene_cache()
+                get_bq_public_service().clear_gene_cache(analysis_id)
             except Exception:
                 pass
 
@@ -948,7 +948,7 @@ class ComprehensiveAnalysisService:
                     bq_start = time.time()
                     async with async_session_factory() as session:
                         for idx, (rsid, (gene, needed)) in enumerate(missing_bq.items(), 1):
-                            bq_result = await bq_svc.enrich_variant(gene, needed)
+                            bq_result = await bq_svc.enrich_variant(gene, needed, analysis_id=analysis_id)
                             update_vals = {}
                             for src, src_data in bq_result.items():
                                 if src in bq_col_map and src_data:
@@ -1193,18 +1193,23 @@ class ComprehensiveAnalysisService:
 
             async with async_session_factory() as session:
                 # Check which rsids already have ALL enabled BQ columns filled
+                # Batch to stay under PostgreSQL's 32767 parameter limit
                 bq_columns = [getattr(SharedVariantAnnotation, bq_col_map[s]) for s in enabled_bq]
                 from sqlalchemy import and_
                 filters = [col.isnot(None) for col in bq_columns]
 
-                result = await session.execute(
-                    select(SharedVariantAnnotation.rsid)
-                    .where(
-                        SharedVariantAnnotation.rsid.in_(all_gene_rsids),
-                        and_(*filters)
+                BATCH_SIZE = 30000
+                enriched_rsids: set = set()
+                for batch_start in range(0, len(all_gene_rsids), BATCH_SIZE):
+                    batch = all_gene_rsids[batch_start:batch_start + BATCH_SIZE]
+                    result = await session.execute(
+                        select(SharedVariantAnnotation.rsid)
+                        .where(
+                            SharedVariantAnnotation.rsid.in_(batch),
+                            and_(*filters)
+                        )
                     )
-                )
-                enriched_rsids = set(r[0] for r in result.all())
+                    enriched_rsids.update(r[0] for r in result.all())
 
             # A gene is "already enriched" if ALL its rsids have BQ data
             for gene, rsids_for_gene in gene_to_rsids.items():
@@ -1261,7 +1266,7 @@ class ComprehensiveAnalysisService:
                                     f"({enriched_genes} enriched, {updated_variants} variants updated)")
                     try:
                         bq_result = await asyncio.wait_for(
-                            bq_svc.enrich_variant(gene, enabled_bq),
+                            bq_svc.enrich_variant(gene, enabled_bq, analysis_id=analysis_id),
                             timeout=90,
                         )
                     except (asyncio.TimeoutError, asyncio.CancelledError):

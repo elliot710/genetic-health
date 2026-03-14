@@ -869,8 +869,8 @@ DEFAULT_SOURCES = [
     {"source_name": "alphafold", "display_name": "AlphaFold (BigQuery)", "is_enabled": True, "description": "DeepMind AlphaFold protein structure confidence scores (pLDDT) — via Google BigQuery public data", "rate_limit": None, "priority": 10},
 ]
 
-# Map source names to DB columns (clinpgx data stored in pharmgkb_data column)
-SOURCE_TO_COLUMN = {'ensembl': 'ensembl', 'clinvar': 'clinvar', 'clinpgx': 'pharmgkb', 'snpedia': 'snpedia', 'alpha_missense': 'alpha_missense', 'clinvar_local': 'clinvar_local', 'gnomad': 'gnomad', 'chembl': 'chembl', 'fda_drug': 'fda_drug', 'alphafold': 'alphafold'}
+# Shared source-to-column mapping — single source of truth
+from ..services.annotation_constants import SOURCE_TO_COLUMN
 
 
 async def _ensure_source_configs(db: AsyncSession) -> List[AnnotationSourceConfig]:
@@ -1163,6 +1163,10 @@ class IncompleteAnnotationResponse(BaseModel):
     litvar: str = "missing"
     alpha_missense: str = "missing"
     clinvar_local: str = "missing"
+    gnomad: str = "missing"
+    chembl: str = "missing"
+    fda_drug: str = "missing"
+    alphafold: str = "missing"
     first_annotated_at: Optional[datetime] = None
     last_updated_at: Optional[datetime] = None
     usage_count: int = 0
@@ -1207,6 +1211,8 @@ async def list_incomplete_annotations(
     admin: User = Depends(require_admin),
 ):
     """List annotations with incomplete data from external sources."""
+    from ..services.annotation_constants import source_status
+
     q = select(SharedVariantAnnotation)
     if status_filter == 'all':
         q = q.where(SharedVariantAnnotation.annotation_status.in_(['partial', 'failed']))
@@ -1217,15 +1223,6 @@ async def list_incomplete_annotations(
     result = await db.execute(q)
     annotations = result.scalars().all()
 
-    def _source_status(data):
-        if data is None:
-            return "missing"
-        if isinstance(data, dict):
-            if data.get('found', False):
-                return "found"
-            return "no_data"  # confirmed absence
-        return "missing"
-
     return [
         IncompleteAnnotationResponse(
             id=a.id,
@@ -1233,13 +1230,17 @@ async def list_incomplete_annotations(
             annotation_status=a.annotation_status,
             failed_sources=a.failed_sources,
             total_api_calls=a.total_api_calls or 0,
-            ensembl=_source_status(a.ensembl_data),
-            clinvar=_source_status(a.clinvar_data),
-            clinpgx=_source_status(a.pharmgkb_data),
-            snpedia=_source_status(a.snpedia_data),
-            litvar=_source_status(a.litvar_data),
-            alpha_missense=_source_status(a.alpha_missense_data),
-            clinvar_local=_source_status(a.clinvar_local_data),
+            ensembl=source_status(a.ensembl_data),
+            clinvar=source_status(a.clinvar_data),
+            clinpgx=source_status(a.pharmgkb_data),
+            snpedia=source_status(a.snpedia_data),
+            litvar=source_status(a.litvar_data),
+            alpha_missense=source_status(a.alpha_missense_data),
+            clinvar_local=source_status(a.clinvar_local_data),
+            gnomad=source_status(a.gnomad_data),
+            chembl=source_status(a.chembl_data),
+            fda_drug=source_status(a.fda_drug_data),
+            alphafold=source_status(a.alphafold_data),
             first_annotated_at=a.first_annotated_at,
             last_updated_at=a.last_updated_at,
             usage_count=a.usage_count or 0,
@@ -1255,6 +1256,8 @@ async def retrigger_annotation(
     admin: User = Depends(require_admin),
 ):
     """Re-trigger external API calls for failed sources of an incomplete annotation."""
+    from ..services.annotation_constants import get_missing_sources, SOURCE_TO_COLUMN
+
     result = await db.execute(
         select(SharedVariantAnnotation).where(SharedVariantAnnotation.id == annotation_id)
     )
@@ -1262,73 +1265,17 @@ async def retrigger_annotation(
     if not annotation:
         raise HTTPException(status_code=404, detail="Annotation not found")
 
-    failed = annotation.failed_sources or []
-    if not failed and annotation.annotation_status == 'completed':
+    if not annotation.failed_sources and annotation.annotation_status == 'completed':
         return {"detail": "Annotation is already complete", "updated_sources": []}
 
-    # Determine which sources to retry (only null or not-yet-confirmed sources)
-    sources_to_retry = []
-    ALL_SOURCES = ['ensembl', 'clinvar', 'clinpgx', 'snpedia', 'alpha_missense', 'clinvar_local', 'gnomad']
-    # Map source name to DB column name (clinpgx data stored in pharmgkb_data column)
-    SOURCE_TO_COLUMN = {'ensembl': 'ensembl', 'clinvar': 'clinvar', 'clinpgx': 'pharmgkb', 'snpedia': 'snpedia', 'alpha_missense': 'alpha_missense', 'clinvar_local': 'clinvar_local', 'gnomad': 'gnomad'}
-    for src in ALL_SOURCES:
-        col = SOURCE_TO_COLUMN.get(src, src)
-        src_data = getattr(annotation, f'{col}_data', None)
-        if src_data is None:
-            sources_to_retry.append(src)
-        elif isinstance(src_data, dict) and not src_data.get('found', True) and not src_data.get('confirmed_no_data', False):
-            sources_to_retry.append(src)
-
+    sources_to_retry = get_missing_sources(annotation)
     if not sources_to_retry:
         annotation.annotation_status = 'completed'
         annotation.failed_sources = None
         await db.commit()
         return {"detail": "All sources already have data or confirmed no data", "updated_sources": [], "confirmed_no_data": [], "still_failed": [], "new_status": "completed"}
 
-    # Import and call the API service
-    from ..services.genetic_api_service import OptimizedGeneticAPIService
-    api_service = OptimizedGeneticAPIService()
-    await api_service.initialize()
-
-    updated = []
-    still_failed = []
-    confirmed_no_data = []
-
-    try:
-        for src in sources_to_retry:
-            try:
-                if src == 'clinvar_local':
-                    # Local lookup — just needs rsid
-                    from ..services.clinvar_local import get_clinvar_local_service
-                    cv_svc = get_clinvar_local_service()
-                    if cv_svc.is_loaded:
-                        result_data = cv_svc.lookup(annotation.rsid)
-                        if result_data and result_data.get('found'):
-                            annotation.clinvar_local_data = result_data
-                            updated.append(src)
-                        else:
-                            annotation.clinvar_local_data = {'found': False, 'confirmed_no_data': True, 'source': 'clinvar_local'}
-                            confirmed_no_data.append(src)
-                    else:
-                        still_failed.append(src)
-                    continue
-                method = getattr(api_service, f'_get_{src}_annotation', None)
-                if not method:
-                    still_failed.append(src)
-                    continue
-                result_data = await method(annotation.rsid)
-                col = SOURCE_TO_COLUMN.get(src, src)
-                if result_data and isinstance(result_data, dict) and result_data.get('found', False):
-                    setattr(annotation, f'{col}_data', result_data)
-                    updated.append(src)
-                else:
-                    # API responded but no data — mark as confirmed absence
-                    setattr(annotation, f'{col}_data', {'found': False, 'confirmed_no_data': True, 'source': src})
-                    confirmed_no_data.append(src)
-            except Exception as e:
-                still_failed.append(src)
-    finally:
-        await api_service.close()
+    updated, confirmed_no_data, still_failed = await _retrigger_sources(annotation, sources_to_retry)
 
     annotation.failed_sources = still_failed if still_failed else None
     annotation.annotation_status = 'completed' if not still_failed else 'partial'
@@ -1353,6 +1300,8 @@ async def retrigger_bulk_annotations(
     admin: User = Depends(require_admin),
 ):
     """Bulk re-trigger incomplete annotations. Either specific IDs or all partials."""
+    from ..services.annotation_constants import get_missing_sources
+
     if retrigger_all:
         result = await db.execute(
             select(SharedVariantAnnotation)
@@ -1369,97 +1318,30 @@ async def retrigger_bulk_annotations(
     else:
         return {"detail": "Provide annotation_ids or set retrigger_all=true", "completed": 0, "still_incomplete": 0}
 
-    from ..services.genetic_api_service import OptimizedGeneticAPIService
-    api_service = OptimizedGeneticAPIService()
-    await api_service.initialize()
-
     completed_count = 0
     still_incomplete = 0
 
-    ALL_SOURCES = ['ensembl', 'clinvar', 'clinpgx', 'snpedia', 'alpha_missense', 'clinvar_local', 'gnomad']
-    SOURCE_TO_COLUMN = {'ensembl': 'ensembl', 'clinvar': 'clinvar', 'clinpgx': 'pharmgkb', 'snpedia': 'snpedia', 'alpha_missense': 'alpha_missense', 'clinvar_local': 'clinvar_local', 'gnomad': 'gnomad'}
+    for idx, ann in enumerate(annotations):
+        # Rate-limit between annotations to avoid overwhelming external APIs
+        if idx > 0:
+            await asyncio.sleep(0.5)
 
-    try:
-        for idx, ann in enumerate(annotations):
-            # Rate-limit between annotations to avoid overwhelming external APIs
-            if idx > 0:
-                await asyncio.sleep(0.5)
+        sources_to_retry = get_missing_sources(ann)
 
-            sources_to_retry = []
-            for src in ALL_SOURCES:
-                col = SOURCE_TO_COLUMN.get(src, src)
-                src_data = getattr(ann, f'{col}_data', None)
-                if src_data is None:
-                    sources_to_retry.append(src)
-                elif isinstance(src_data, dict) and not src_data.get('found', True) and not src_data.get('confirmed_no_data', False):
-                    sources_to_retry.append(src)
+        if not sources_to_retry:
+            ann.annotation_status = 'completed'
+            ann.failed_sources = None
+            completed_count += 1
+            continue
 
-            if not sources_to_retry:
-                ann.annotation_status = 'completed'
-                ann.failed_sources = None
-                completed_count += 1
-                continue
+        _updated, _confirmed, still_failed = await _retrigger_sources(ann, sources_to_retry)
 
-            still_failed = []
-            for src in sources_to_retry:
-                try:
-                    if src == 'alpha_missense':
-                        # Local lookup — needs Ensembl data for coordinates
-                        from ..utils.alpha_missense import get_alpha_missense_service
-                        ensembl_ann = ann.ensembl_data
-                        if ensembl_ann and isinstance(ensembl_ann, dict) and ensembl_ann.get('found') and ensembl_ann.get('data'):
-                            e_data = ensembl_ann['data']
-                            e_entry = e_data[0] if isinstance(e_data, list) else e_data
-                            chrom = e_entry.get('seq_region_name')
-                            pos = e_entry.get('start')
-                            allele_str = e_entry.get('allele_string', '')
-                            parts = allele_str.split('/') if allele_str else []
-                            if chrom and pos and len(parts) == 2 and len(parts[0]) == 1 and len(parts[1]) == 1:
-                                am_svc = get_alpha_missense_service()
-                                result_data = am_svc.lookup_comprehensive(str(chrom), int(pos), parts[0], parts[1])
-                                if result_data:
-                                    ann.alpha_missense_data = result_data
-                                else:
-                                    ann.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense'}
-                            else:
-                                ann.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense', 'reason': 'not_missense'}
-                        else:
-                            still_failed.append(src)  # Need Ensembl data first
-                        continue
-                    if src == 'clinvar_local':
-                        from ..services.clinvar_local import get_clinvar_local_service
-                        cv_svc = get_clinvar_local_service()
-                        if cv_svc.is_loaded:
-                            result_data = cv_svc.lookup(ann.rsid)
-                            if result_data:
-                                ann.clinvar_local_data = result_data
-                            else:
-                                ann.clinvar_local_data = {'found': False, 'confirmed_no_data': True, 'source': 'clinvar_local'}
-                        else:
-                            still_failed.append(src)
-                        continue
-                    method = getattr(api_service, f'_get_{src}_annotation', None)
-                    if not method:
-                        still_failed.append(src)
-                        continue
-                    result_data = await method(ann.rsid)
-                    col = SOURCE_TO_COLUMN.get(src, src)
-                    if result_data and isinstance(result_data, dict) and result_data.get('found', False):
-                        setattr(ann, f'{col}_data', result_data)
-                    else:
-                        # API responded but no data — confirmed absence, not a failure
-                        setattr(ann, f'{col}_data', {'found': False, 'confirmed_no_data': True, 'source': src})
-                except Exception:
-                    still_failed.append(src)
-
-            ann.failed_sources = still_failed if still_failed else None
-            ann.annotation_status = 'completed' if not still_failed else 'partial'
-            if not still_failed:
-                completed_count += 1
-            else:
-                still_incomplete += 1
-    finally:
-        await api_service.close()
+        ann.failed_sources = still_failed if still_failed else None
+        ann.annotation_status = 'completed' if not still_failed else 'partial'
+        if not still_failed:
+            completed_count += 1
+        else:
+            still_incomplete += 1
 
     await db.commit()
     return {
@@ -1468,6 +1350,153 @@ async def retrigger_bulk_annotations(
         "still_incomplete": still_incomplete,
         "total_processed": len(annotations),
     }
+
+
+async def _retrigger_sources(
+    annotation,
+    sources_to_retry: list,
+) -> tuple[list, list, list]:
+    """Retry missing annotation sources for a single SharedVariantAnnotation.
+
+    Returns (updated, confirmed_no_data, still_failed) lists of source names.
+    Handles remote APIs, local lookups, and BigQuery sources.
+    """
+    from ..services.annotation_constants import SOURCE_TO_COLUMN, REMOTE_API_SOURCES, BQ_SOURCES
+
+    updated: list = []
+    confirmed_no_data: list = []
+    still_failed: list = []
+
+    # Partition sources by type
+    remote_sources = [s for s in sources_to_retry if s in REMOTE_API_SOURCES]
+    bq_sources = [s for s in sources_to_retry if s in BQ_SOURCES]
+    local_sources = [s for s in sources_to_retry if s not in REMOTE_API_SOURCES and s not in BQ_SOURCES]
+
+    # --- Local sources (no external service needed) ---
+    for src in local_sources:
+        try:
+            if src == 'clinvar_local':
+                from ..services.clinvar_local import get_clinvar_local_service
+                cv_svc = get_clinvar_local_service()
+                if cv_svc.is_loaded:
+                    result_data = await cv_svc.lookup(annotation.rsid)
+                    if result_data and result_data.get('found'):
+                        annotation.clinvar_local_data = result_data
+                        updated.append(src)
+                    else:
+                        annotation.clinvar_local_data = {'found': False, 'confirmed_no_data': True, 'source': 'clinvar_local'}
+                        confirmed_no_data.append(src)
+                else:
+                    still_failed.append(src)
+            elif src == 'gnomad':
+                from ..services.gnomad_local import get_gnomad_service
+                gnomad_svc = get_gnomad_service()
+                if gnomad_svc.is_loaded:
+                    result_data = await gnomad_svc.lookup(annotation.rsid)
+                    if result_data and result_data.get('found'):
+                        annotation.gnomad_data = result_data
+                        updated.append(src)
+                    else:
+                        annotation.gnomad_data = {'found': False, 'confirmed_no_data': True, 'source': 'gnomad'}
+                        confirmed_no_data.append(src)
+                else:
+                    still_failed.append(src)
+            elif src == 'alpha_missense':
+                from ..utils.alpha_missense import get_alpha_missense_service
+                ensembl_ann = annotation.ensembl_data
+                if ensembl_ann and isinstance(ensembl_ann, dict) and ensembl_ann.get('found') and ensembl_ann.get('data'):
+                    e_data = ensembl_ann['data']
+                    e_entry = e_data[0] if isinstance(e_data, list) else e_data
+                    chrom = e_entry.get('seq_region_name')
+                    pos = e_entry.get('start')
+                    allele_str = e_entry.get('allele_string', '')
+                    parts = allele_str.split('/') if allele_str else []
+                    if chrom and pos and len(parts) == 2 and len(parts[0]) == 1 and len(parts[1]) == 1:
+                        am_svc = get_alpha_missense_service()
+                        result_data = am_svc.lookup_comprehensive(str(chrom), int(pos), parts[0], parts[1])
+                        if result_data:
+                            annotation.alpha_missense_data = result_data
+                            updated.append(src)
+                        else:
+                            annotation.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense'}
+                            confirmed_no_data.append(src)
+                    else:
+                        annotation.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense', 'reason': 'not_missense'}
+                        confirmed_no_data.append(src)
+                else:
+                    still_failed.append(src)  # Need Ensembl data first
+        except Exception:
+            still_failed.append(src)
+
+    # --- Remote API sources ---
+    if remote_sources:
+        from ..services.genetic_api_service import OptimizedGeneticAPIService
+        api_service = OptimizedGeneticAPIService()
+        await api_service.initialize()
+        try:
+            for src in remote_sources:
+                try:
+                    method = getattr(api_service, f'_get_{src}_annotation', None)
+                    if not method:
+                        still_failed.append(src)
+                        continue
+                    result_data = await method(annotation.rsid)
+                    col = SOURCE_TO_COLUMN.get(src, src)
+                    if result_data and isinstance(result_data, dict) and result_data.get('found', False):
+                        setattr(annotation, f'{col}_data', result_data)
+                        updated.append(src)
+                    else:
+                        setattr(annotation, f'{col}_data', {'found': False, 'confirmed_no_data': True, 'source': src})
+                        confirmed_no_data.append(src)
+                except Exception:
+                    still_failed.append(src)
+        finally:
+            await api_service.close()
+
+    # --- BigQuery sources (need a gene symbol from Ensembl data) ---
+    if bq_sources:
+        gene_symbol = _extract_gene_symbol(annotation)
+        if gene_symbol:
+            try:
+                from ..services.bq_public import get_bq_public_service
+                bq_svc = get_bq_public_service()
+                bq_result = await bq_svc.enrich_variant(gene_symbol, set(bq_sources))
+                for src in bq_sources:
+                    col = SOURCE_TO_COLUMN.get(src, src)
+                    src_data = bq_result.get(src)
+                    if src_data and isinstance(src_data, dict) and src_data.get('found', False):
+                        setattr(annotation, f'{col}_data', src_data)
+                        updated.append(src)
+                    else:
+                        setattr(annotation, f'{col}_data', {'found': False, 'confirmed_no_data': True, 'source': src})
+                        confirmed_no_data.append(src)
+            except Exception:
+                still_failed.extend(bq_sources)
+        else:
+            # No gene symbol available — can't query BQ
+            for src in bq_sources:
+                still_failed.append(src)
+
+    return updated, confirmed_no_data, still_failed
+
+
+def _extract_gene_symbol(annotation) -> Optional[str]:
+    """Extract gene symbol from an annotation's Ensembl or ClinVar local data."""
+    # Try Ensembl first
+    ensembl_ann = annotation.ensembl_data
+    if ensembl_ann and isinstance(ensembl_ann, dict) and ensembl_ann.get('found') and ensembl_ann.get('data'):
+        e_data = ensembl_ann['data']
+        e_entry = e_data[0] if isinstance(e_data, list) else e_data
+        tcs = e_entry.get('transcript_consequences', [])
+        if tcs:
+            gene = tcs[0].get('gene_symbol')
+            if gene:
+                return gene
+    # Fallback to ClinVar local
+    cv = annotation.clinvar_local_data
+    if cv and isinstance(cv, dict) and cv.get('found'):
+        return cv.get('gene_symbol') or cv.get('gene')
+    return None
 
 
 # --- Job Management ---

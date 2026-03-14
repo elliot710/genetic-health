@@ -29,13 +29,21 @@ class BigQueryPublicService:
     def __init__(self):
         self._client = None
         self._available: Optional[bool] = None
-        # Per-gene result cache — avoids re-querying BigQuery for variants
-        # that share the same gene during a single analysis run.
-        self._gene_cache: Dict[str, Dict[str, Any]] = {}
+        # Per-analysis-run gene caches, keyed by analysis_id.
+        # Each analysis run gets its own cache to avoid cross-contamination
+        # when multiple analyses run concurrently.
+        self._gene_caches: Dict[int, Dict[str, Dict[str, Any]]] = {}
+        self._cache_lock = asyncio.Lock()
 
-    def clear_gene_cache(self):
-        """Clear the per-gene cache (call between analysis runs)."""
-        self._gene_cache.clear()
+    def get_gene_cache(self, analysis_id: int) -> Dict[str, Dict[str, Any]]:
+        """Get or create a per-analysis gene cache."""
+        if analysis_id not in self._gene_caches:
+            self._gene_caches[analysis_id] = {}
+        return self._gene_caches[analysis_id]
+
+    def clear_gene_cache(self, analysis_id: int = 0):
+        """Clear the per-gene cache for a specific analysis run."""
+        self._gene_caches.pop(analysis_id, None)
 
     async def _ensure_client(self) -> bool:
         if self._available is not None:
@@ -85,21 +93,25 @@ class BigQueryPublicService:
         self,
         gene_symbol: str,
         enabled_sources: Set[str],
+        analysis_id: int = 0,
     ) -> Dict[str, Any]:
         """Fetch ChEMBL / FDA / AlphaFold data for a gene.
 
         Returns ``{source_name: data_dict}`` only for sources in
         *enabled_sources* that yield results.
-        Uses per-gene caching so the same gene is only queried once.
+        Uses per-analysis caching so the same gene is only queried once
+        within a single analysis run, without cross-contamination between
+        concurrent analyses.
         """
         bq_sources = {"chembl", "fda_drug", "alphafold"}
         requested = bq_sources & enabled_sources
         if not requested:
             return {}
 
+        gene_cache = self.get_gene_cache(analysis_id)
         cache_key = gene_symbol.upper()
-        if cache_key in self._gene_cache:
-            cached = self._gene_cache[cache_key]
+        if cache_key in gene_cache:
+            cached = gene_cache[cache_key]
             return {k: v for k, v in cached.items() if k in requested}
 
         result: Dict[str, Any] = {}
@@ -124,7 +136,7 @@ class BigQueryPublicService:
         if "alphafold" in enabled_sources:
             result["alphafold"] = await self.lookup_alphafold_gene(gene_symbol)
 
-        self._gene_cache[cache_key] = result
+        self._gene_caches.setdefault(analysis_id, {})[cache_key] = result
         return result
 
     # ------------------------------------------------------------------

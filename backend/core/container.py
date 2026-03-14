@@ -18,6 +18,7 @@ class ServiceContainer:
         self._services: Dict[str, Any] = {}
         self._factories: Dict[str, Callable] = {}
         self._singletons: Dict[str, Any] = {}
+        self._transients: set = set()  # factory names that should NOT be cached
         self._initialized: bool = False
     
     def register_singleton(self, service_name: str, instance: Any):
@@ -34,6 +35,13 @@ class ServiceContainer:
             return service_class(*args, **kwargs)
         self._factories[service_name] = factory
     
+    def register_transient(self, service_name: str, service_class: Type[T], *args, **kwargs) -> None:
+        """Register a class that creates a new instance on every get() call (not cached)."""
+        def factory():
+            return service_class(*args, **kwargs)
+        self._factories[service_name] = factory
+        self._transients.add(service_name)
+    
     def get(self, service_name: str) -> Any:
         """Get a service instance."""
         # Check singletons first
@@ -43,8 +51,9 @@ class ServiceContainer:
         # Check if we have a factory
         if service_name in self._factories:
             instance = self._factories[service_name]()
-            # Store as singleton after first creation
-            self._singletons[service_name] = instance
+            # Only promote to singleton if not registered as transient
+            if service_name not in self._transients:
+                self._singletons[service_name] = instance
             return instance
         
         raise ValueError(f"Service '{service_name}' not registered")
@@ -127,8 +136,9 @@ def setup_services():
     from ..services.health_insights import HealthInsights
     from ..services.drug_response import DrugResponseAnalyzer
     
-    # Register services
-    container.register_class('api_service', OptimizedGeneticAPIService)
+    # Register services — API service is transient (new instance per consumer)
+    # to avoid shared in-memory cache leaking data between users
+    container.register_transient('api_service', OptimizedGeneticAPIService)
     container.register_class('health_insights', HealthInsights)
     container.register_class('drug_response', DrugResponseAnalyzer)
     
