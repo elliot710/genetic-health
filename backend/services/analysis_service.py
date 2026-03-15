@@ -5,7 +5,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Callable
+from typing import ClassVar, Dict, List, Optional, Any, Callable
 from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -33,7 +33,14 @@ class AnalysisCancelled(Exception):
 
 @dataclass
 class AnalysisProgress:
-    """Enhanced progress tracking for comprehensive analysis."""
+    """Enhanced progress tracking for comprehensive analysis.
+
+    Progress is split across four phases with time-based weights:
+      Phase 1 (gene map):        0% –  2%   (fast)
+      Phase 2 (annotation):      2% – 30%   (minutes)
+      Phase 3 (BQ enrichment):  30% – 90%   (hours for large datasets)
+      Phase 4 (insights):       90% – 100%  (moderate)
+    """
     total_variants: int
     processed_variants: int
     annotated_variants: int
@@ -42,12 +49,20 @@ class AnalysisProgress:
     current_step: str
     status: str
     estimated_completion: Optional[datetime] = None
+    phase: int = 1
+    phase_progress: float = 0.0  # 0.0 – 1.0 within current phase
+
+    # Phase weights (must sum to 100)
+    _PHASE_OFFSETS: ClassVar[Dict[int, int]] = {1: 0, 2: 2, 3: 30, 4: 90}
+    _PHASE_WEIGHTS: ClassVar[Dict[int, int]] = {1: 2, 2: 28, 3: 60, 4: 10}
 
     @property
     def progress_percentage(self) -> int:
         if self.total_variants == 0:
             return 0
-        return min(100, int((self.processed_variants / self.total_variants) * 100))
+        offset = self._PHASE_OFFSETS.get(self.phase, 0)
+        weight = self._PHASE_WEIGHTS.get(self.phase, 0)
+        return min(99, int(offset + weight * self.phase_progress))
 
 
 @dataclass
@@ -582,7 +597,9 @@ class ComprehensiveAnalysisService:
                 new_annotations=0,
                 reused_annotations=0,
                 current_step="initializing",
-                status="processing"
+                status="processing",
+                phase=1,
+                phase_progress=0.0,
             )
             await self._update_progress(analysis_id, progress)
 
@@ -590,6 +607,8 @@ class ComprehensiveAnalysisService:
             logger.info(f"═══ Phase 1/4: Building gene map ═══")
             all_rsids = [str(v.rsid) for v in variants if v.rsid]
             await self._build_rsid_gene_map(variants)
+            progress.phase = 1
+            progress.phase_progress = 1.0
 
             # ── Phase 2: Annotate variants ──
             # Even on resume we re-load existing annotations from DB.  When
@@ -597,6 +616,8 @@ class ComprehensiveAnalysisService:
             # in shared_variant_annotations and reused instantly.
             from ..db.database import async_session_factory
 
+            progress.phase = 2
+            progress.phase_progress = 0.0
             progress.current_step = "annotating_variants"
             await self._update_progress(analysis_id, progress)
             logger.info(f"═══ Phase 2/4: Annotating variants ═══")
@@ -607,17 +628,23 @@ class ComprehensiveAnalysisService:
                 annotation_results = await self._annotate_variants_efficiently(
                     variants, analysis_id, annotation_service, progress
                 )
+            progress.phase_progress = 1.0
             logger.info(f"═══ Phase 2/4 complete ({time.time() - phase_start:.1f}s) ═══")
 
             # ── Phase 3: BigQuery enrichment (own session, periodic commits) ──
+            progress.phase = 3
+            progress.phase_progress = 0.0
             progress.current_step = "enriching_bigquery"
             await self._update_progress(analysis_id, progress)
             logger.info(f"═══ Phase 3/4: BigQuery enrichment ═══")
             phase_start = time.time()
-            await self._bulk_enrich_bigquery(annotation_results, analysis_id)
+            await self._bulk_enrich_bigquery(annotation_results, analysis_id, progress)
+            progress.phase_progress = 1.0
             logger.info(f"═══ Phase 3/4 complete ({time.time() - phase_start:.1f}s) ═══")
 
             # ── Phase 4: Generate insights (own session, committed at end) ──
+            progress.phase = 4
+            progress.phase_progress = 0.0
             progress.current_step = "generating_insights"
             await self._update_progress(analysis_id, progress)
             logger.info(f"═══ Phase 4/4: Generating insights ═══")
@@ -633,7 +660,9 @@ class ComprehensiveAnalysisService:
             progress.current_step = "completed"
             progress.status = "completed"
             progress.processed_variants = len(variants)
-            await self._update_progress(analysis_id, progress)
+            progress.phase = 4
+            progress.phase_progress = 1.0
+            await self._update_progress(analysis_id, progress, force_percentage=100)
 
             processing_time = time.time() - start_time
 
@@ -823,6 +852,7 @@ class ComprehensiveAnalysisService:
 
                 progress.annotated_variants += len(batch)
                 progress.processed_variants = progress.annotated_variants
+                progress.phase_progress = progress.processed_variants / max(1, progress.total_variants)
                 await self._update_progress(analysis_id, progress)
 
                 if i + batch_size < len(variants_needing_annotation):
@@ -1117,6 +1147,7 @@ class ComprehensiveAnalysisService:
             )
             progress.new_annotations += len(chunk_rsids)
             progress.processed_variants = progress.annotated_variants
+            progress.phase_progress = progress.processed_variants / max(1, progress.total_variants)
             await self._update_progress(analysis_id, progress)
 
             chunk_num = i // batch_size + 1
@@ -1138,6 +1169,7 @@ class ComprehensiveAnalysisService:
         self,
         annotation_results: Dict[str, AnnotationResult],
         analysis_id: int,
+        progress: Optional[AnalysisProgress] = None,
     ):
         """Bulk-enrich annotations with BigQuery data (ChEMBL, FDA Drug, AlphaFold).
 
@@ -1256,10 +1288,14 @@ class ComprehensiveAnalysisService:
             await session.__aenter__()
 
             try:
+                total_to_process = len(genes_to_process)
                 for idx, gene in enumerate(genes_to_process, 1):
-                    # Check for cancellation periodically
+                    # Check for cancellation and update progress periodically
                     if idx % 20 == 0:
                         await self._check_if_cancelled(analysis_id)
+                        if progress:
+                            progress.phase_progress = idx / total_to_process
+                            await self._update_progress(analysis_id, progress)
 
                     if idx % 100 == 0 or idx == len(genes_to_process):
                         logger.info(f"BQ enriching gene {idx}/{len(genes_to_process)}: {gene} "
@@ -1374,10 +1410,12 @@ class ComprehensiveAnalysisService:
             self._generate_uncommon_mutations
         ]
 
-        for generator in generators:
+        total_generators = len(generators)
+        for gen_idx, generator in enumerate(generators):
             await self._check_if_cancelled(analysis_id)
             try:
                 progress.current_step = f"generating_{generator.__name__.replace('_generate_', '')}"
+                progress.phase_progress = gen_idx / total_generators
                 await self._update_progress(analysis_id, progress)
 
                 count = await generator(variants, annotation_results, analysis_id, session)
@@ -1980,7 +2018,8 @@ class ComprehensiveAnalysisService:
     # Progress / status persistence
     # ------------------------------------------------------------------
 
-    async def _update_progress(self, analysis_id: int, progress: AnalysisProgress):
+    async def _update_progress(self, analysis_id: int, progress: AnalysisProgress,
+                               *, force_percentage: Optional[int] = None):
         try:
             from ..db.database import async_session_factory
             async with async_session_factory() as session:
@@ -1992,11 +2031,13 @@ class ComprehensiveAnalysisService:
                 if current_status in ('paused', 'stopped'):
                     return
 
+                pct = force_percentage if force_percentage is not None else progress.progress_percentage
+
                 await session.execute(
                     update(GeneticAnalysis)
                     .where(GeneticAnalysis.id == analysis_id)
                     .values(
-                        progress_percentage=progress.progress_percentage,
+                        progress_percentage=pct,
                         processed_variants=progress.processed_variants,
                         current_step=progress.current_step,
                         analysis_status=progress.status,

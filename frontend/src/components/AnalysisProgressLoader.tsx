@@ -244,7 +244,7 @@ export default function AnalysisProgressLoader({
           <div className="mb-6">
             <div className={`flex items-center text-sm ${theme.text.tertiary}`}>
               <ChevronRight className="w-4 h-4 mr-2" />
-              {progress.current_step}
+              {(progress.current_step || '').replace(/_/g, ' ')}
             </div>
           </div>
 
