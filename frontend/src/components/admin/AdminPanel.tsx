@@ -115,6 +115,12 @@ interface IncompleteAnnotation {
   clinpgx: string
   snpedia: string
   litvar: string
+  alpha_missense: string
+  clinvar_local: string
+  gnomad: string
+  chembl: string
+  fda_drug: string
+  alphafold: string
   first_annotated_at: string | null
   last_updated_at: string | null
   usage_count: number
@@ -125,6 +131,8 @@ interface IncompleteAnnotationSummary {
   complete: number
   partial: number
   failed: number
+  enabled_sources: string[]   // all enabled sources (table columns)
+  active_sources: string[]    // high-coverage sources (used for counts)
 }
 
 interface AdminJob {
@@ -175,6 +183,27 @@ const CATEGORY_LABELS: Record<string, string> = {
   methylation: 'Methylation',
   detox: 'Detoxification',
   carrier: 'Carrier Status',
+}
+
+function formatCompactNumber(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
+  if (n >= 10_000) return `${Math.round(n / 1000)}K`
+  if (n >= 1_000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}K`
+  return String(n)
+}
+
+const SOURCE_DISPLAY_NAMES: Record<string, string> = {
+  ensembl: 'Ensembl',
+  clinvar: 'ClinVar',
+  clinpgx: 'ClinPGx',
+  snpedia: 'SNPedia',
+  litvar: 'LitVar',
+  alpha_missense: 'AlphaMiss',
+  clinvar_local: 'ClinVar DB',
+  gnomad: 'gnomAD',
+  chembl: 'ChEMBL',
+  fda_drug: 'FDA Drug',
+  alphafold: 'AlphaFold',
 }
 
 interface AdminPanelProps {
@@ -847,7 +876,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
             Incomplete
             {incompleteSummary && (incompleteSummary.partial + incompleteSummary.failed) > 0 && (
               <Badge variant="secondary" className="ml-1 h-5 min-w-[20px] px-1 text-xs">
-                {incompleteSummary.partial + incompleteSummary.failed}
+                {formatCompactNumber(incompleteSummary.partial + incompleteSummary.failed)}
               </Badge>
             )}
           </TabsTrigger>
@@ -1740,15 +1769,16 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
               {incompleteAnnotations.length === 0 ? (
                 <p className={`text-center py-8 ${theme.text.tertiary}`}>No incomplete annotations found</p>
               ) : (
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>Variant</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Ensembl</TableHead>
-                      <TableHead>ClinVar</TableHead>
-                      <TableHead>ClinPGx</TableHead>
-                      <TableHead>SNPedia</TableHead>
+                      {(incompleteSummary?.enabled_sources ?? []).map(src => (
+                        <TableHead key={src} className="text-center px-2">
+                          {SOURCE_DISPLAY_NAMES[src] || src}
+                        </TableHead>
+                      ))}
                       <TableHead>Failed Sources</TableHead>
                       <TableHead>Uses</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
@@ -1758,20 +1788,15 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                     {incompleteAnnotations.map(a => (
                       <TableRow key={a.id}>
                         <TableCell className="font-mono text-sm">{a.rsid}</TableCell>
-                        <TableCell>
-                          <Badge variant={a.annotation_status === 'partial' ? 'outline' : 'destructive'}>
-                            {a.annotation_status}
-                          </Badge>
-                        </TableCell>
-                        {['ensembl', 'clinvar', 'clinpgx', 'snpedia'].map(src => {
-                          const status = a[src as keyof typeof a] as string
+                        {(incompleteSummary?.enabled_sources ?? []).map(src => {
+                          const status = (a as Record<string, unknown>)[src] as string | undefined
                           return (
-                            <TableCell key={src}>
+                            <TableCell key={src} className="text-center px-2">
                               {status === 'found'
-                                ? <Check className="h-4 w-4 text-green-500" />
+                                ? <Check className="h-4 w-4 text-green-500 mx-auto" />
                                 : status === 'no_data'
-                                  ? <span title="Provider has no data for this variant"><Minus className="h-4 w-4 text-yellow-500" /></span>
-                                  : <X className="h-4 w-4 text-red-400" />}
+                                  ? <span title="Source has no data for this variant"><Minus className="h-4 w-4 text-yellow-500 mx-auto" /></span>
+                                  : <X className="h-4 w-4 text-red-400 mx-auto" />}
                             </TableCell>
                           )
                         })}
@@ -1798,6 +1823,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               )}
             </CardContent>
           </Card>

@@ -1,7 +1,7 @@
 """
 Database models for user authentication and genetic data storage
 """
-from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey, JSON, Float, Index, BigInteger, SmallInteger
+from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey, JSON, Float, Index, BigInteger, SmallInteger, ARRAY
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .database import Base
@@ -745,4 +745,34 @@ class EnsemblGene(Base):
     __table_args__ = (
         Index('ix_ensembl_genes_chr_range', 'chromosome', 'start_pos', 'end_pos'),
         Index('ix_ensembl_genes_symbol', 'gene_symbol'),
+    )
+
+
+class EnsemblVepVariant(Base):
+    """Local Ensembl VEP variant data parsed from Ensembl VCF dumps.
+    Stores pre-formatted VEP consequences in the same schema as the REST API."""
+    __tablename__ = "ensembl_vep_variants"
+
+    id = Column(BigInteger, primary_key=True)
+    rsid = Column(String, nullable=False, unique=True, index=True)
+    chromosome = Column(String(5), nullable=False)
+    position = Column(Integer, nullable=False)
+    ref_allele = Column(String(500), nullable=False)
+    alt_alleles = Column(String(1000), nullable=False)               # comma-separated ALTs
+    variant_type = Column(String(20))                                # SNV, indel, etc.
+    minor_allele = Column(String(50))
+    minor_allele_freq = Column(Float)
+    ancestral_allele = Column(String(500))
+    clinical_significance = Column(ARRAY(String))                    # ['benign', 'pathogenic', ...]
+    evidence = Column(ARRAY(String))                                 # ['Freq', '1000G', ...]
+    most_severe_consequence = Column(String(100))                    # missense_variant, etc.
+    impact = Column(String(20))                                      # HIGH, MODERATE, LOW, MODIFIER
+    gene_symbol = Column(String(50))                                 # Best gene from consequence
+    # Pre-formatted VEP data (matches Ensembl REST API response structure)
+    vep_data = Column(JSON)                                          # Full API-compatible dict
+
+    imported_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index('ix_ensembl_vep_chr_pos', 'chromosome', 'position'),
     )

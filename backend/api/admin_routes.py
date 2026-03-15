@@ -1044,7 +1044,7 @@ async def backfill_source(
 
     from ..services.genetic_api_service import OptimizedGeneticAPIService
     api_service = None
-    if source_name not in ('alpha_missense', 'clinvar_local'):
+    if source_name not in ('alpha_missense', 'clinvar_local', 'ensembl'):
         api_service = OptimizedGeneticAPIService()
         await api_service.initialize()
 
@@ -1054,7 +1054,7 @@ async def backfill_source(
 
     try:
         for idx, ann in enumerate(annotations):
-            if idx > 0 and source_name not in ('alpha_missense', 'clinvar_local'):
+            if idx > 0 and source_name not in ('alpha_missense', 'clinvar_local', 'ensembl'):
                 await asyncio.sleep(0.5)
 
             try:
@@ -1097,6 +1097,34 @@ async def backfill_source(
                             confirmed_no_data += 1
                     else:
                         failed += 1
+                elif source_name == 'ensembl':
+                    from ..services.ensembl_vep_local import get_ensembl_vep_service
+                    vep_svc = get_ensembl_vep_service()
+                    if await vep_svc.ensure_loaded():
+                        result_data = await vep_svc.lookup(ann.rsid)
+                        if result_data and result_data.get('found'):
+                            ann.ensembl_data = result_data
+                            completed += 1
+                        else:
+                            ann.ensembl_data = {'found': False, 'confirmed_no_data': True, 'source': 'ensembl'}
+                            confirmed_no_data += 1
+                    else:
+                        # No local VEP data loaded — fall back to API
+                        if not api_service:
+                            from ..services.genetic_api_service import OptimizedGeneticAPIService
+                            api_service = OptimizedGeneticAPIService()
+                            await api_service.initialize()
+                        method = getattr(api_service, '_get_ensembl_annotation', None)
+                        if method:
+                            result_data = await method(ann.rsid)
+                            if result_data and isinstance(result_data, dict) and result_data.get('found', False):
+                                ann.ensembl_data = result_data
+                                completed += 1
+                            else:
+                                ann.ensembl_data = {'found': False, 'confirmed_no_data': True, 'source': 'ensembl'}
+                                confirmed_no_data += 1
+                        else:
+                            failed += 1
                 else:
                     method = getattr(api_service, f'_get_{source_name}_annotation', None)
                     if not method:
@@ -1147,6 +1175,74 @@ async def backfill_source(
     )
 
 
+# --- Ensembl VEP ETL ---
+
+class VepEtlResponse(BaseModel):
+    detail: str
+    chromosomes_imported: list = []
+    total_variants: int = 0
+    skipped_chromosomes: list = []
+
+@router.post("/ensembl-vep-etl/import", response_model=VepEtlResponse)
+async def trigger_vep_etl(
+    chromosomes: Optional[str] = Query(None, description="Comma-separated chromosome list, e.g. '1,2,X'. Omit for all available."),
+    force_reload: bool = Query(False, description="Re-import already loaded chromosomes"),
+    admin: User = Depends(require_admin),
+):
+    """Import Ensembl VEP data from local VCF files into the ensembl_vep_variants table.
+    Only imports rsids that exist in genetic_markers (filtered ETL)."""
+    from ..services.ensembl_vep_etl import EnsemblVepETL
+
+    chrom_list = [c.strip() for c in chromosomes.split(',')] if chromosomes else None
+
+    try:
+        etl = EnsemblVepETL()
+        result = await etl.run_import(
+            filter_to_known=True,
+            force_reload=force_reload,
+            chromosomes=chrom_list,
+        )
+        return VepEtlResponse(
+            detail=f"VEP ETL complete: {result.get('total_imported', 0)} variants from {len(result.get('imported', []))} chromosomes",
+            chromosomes_imported=result.get('imported', []),
+            total_variants=result.get('total_imported', 0),
+            skipped_chromosomes=result.get('skipped', []),
+        )
+    except Exception as e:
+        logger.error(f"VEP ETL failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"VEP ETL failed: {str(e)}")
+
+
+@router.get("/ensembl-vep-etl/status")
+async def vep_etl_status(
+    admin: User = Depends(require_admin),
+):
+    """Check Ensembl VEP local data status."""
+    from ..services.ensembl_vep_local import get_ensembl_vep_service
+    vep_svc = get_ensembl_vep_service()
+    loaded = await vep_svc.ensure_loaded()
+    count = vep_svc.variant_count
+
+    # Check available VCF files
+    import os
+    data_dir = os.environ.get('ENSEMBL_DATA_DIR', '')
+    vcf_dir = os.path.join(data_dir, 'variation', 'vcf_vep') if data_dir else ''
+    available_files = []
+    if vcf_dir and os.path.isdir(vcf_dir):
+        import glob
+        available_files = sorted([
+            os.path.basename(f) for f in glob.glob(os.path.join(vcf_dir, 'homo_sapiens_incl_consequences-chr*.vcf.gz'))
+        ])
+
+    return {
+        "loaded": loaded,
+        "variant_count": count,
+        "data_dir": data_dir,
+        "vcf_dir": vcf_dir,
+        "available_vcf_files": available_files,
+    }
+
+
 # --- Incomplete Annotations ---
 
 class IncompleteAnnotationResponse(BaseModel):
@@ -1180,6 +1276,81 @@ class IncompleteAnnotationSummary(BaseModel):
     complete: int
     partial: int
     failed: int
+    enabled_sources: List[str] = []  # all enabled sources (for table columns)
+    active_sources: List[str] = []   # high-coverage sources (used for counts)
+
+
+async def _get_all_enabled_source_names(db: AsyncSession) -> List[str]:
+    """Return all enabled source names (for display in table columns)."""
+    result = await db.execute(
+        select(AnnotationSourceConfig.source_name)
+        .where(AnnotationSourceConfig.is_enabled.is_(True))
+        .order_by(AnnotationSourceConfig.priority)
+    )
+    names = [r[0] for r in result.all()]
+    return names if names else list(SOURCE_TO_COLUMN.keys())
+
+
+async def _get_enabled_source_names(db: AsyncSession) -> List[str]:
+    """Return enabled source names that have been systematically applied.
+
+    A source is considered "active" only when it covers more than 50% of all
+    annotations.  This avoids counting sources that were never called during
+    bulk processing (e.g. remote APIs, niche local sources) as contributing
+    to "incompleteness".
+    """
+    result = await db.execute(
+        select(AnnotationSourceConfig.source_name)
+        .where(AnnotationSourceConfig.is_enabled.is_(True))
+    )
+    enabled = [r[0] for r in result.all()]
+    if not enabled:
+        enabled = list(SOURCE_TO_COLUMN.keys())
+
+    # Single-pass: get total count + per-source non-NULL count
+    count_exprs = [func.count().label('total')]
+    src_cols: List[tuple] = []  # (source_name, column_object)
+    for src in enabled:
+        col_prefix = SOURCE_TO_COLUMN.get(src)
+        if col_prefix is None:
+            continue
+        col = getattr(SharedVariantAnnotation, f'{col_prefix}_data', None)
+        if col is None:
+            continue
+        src_cols.append((src, col))
+        count_exprs.append(func.count(col).label(f'{src}_cnt'))
+
+    if not src_cols:
+        return []
+
+    row = (await db.execute(select(*count_exprs).select_from(SharedVariantAnnotation))).one()
+    total = row[0] or 1  # avoid division by zero
+
+    active: List[str] = []
+    for idx, (src, _col) in enumerate(src_cols, start=1):
+        non_null = row[idx]
+        if non_null / total > 0.5:
+            active.append(src)
+
+    return active
+
+
+def _build_incomplete_condition(enabled_sources: List[str]):
+    """Build SQLAlchemy OR condition: at least one enabled source column IS NULL.
+
+    Returns ``None`` when there are no enabled sources to check.
+    """
+    from sqlalchemy import or_
+
+    conditions = []
+    for src in enabled_sources:
+        col_prefix = SOURCE_TO_COLUMN.get(src)
+        if col_prefix is None:
+            continue
+        col = getattr(SharedVariantAnnotation, f'{col_prefix}_data', None)
+        if col is not None:
+            conditions.append(col.is_(None))
+    return or_(*conditions) if conditions else None
 
 
 @router.get("/annotations/incomplete/summary", response_model=IncompleteAnnotationSummary)
@@ -1187,18 +1358,51 @@ async def get_incomplete_summary(
     db: AsyncSession = Depends(get_session),
     admin: User = Depends(require_admin),
 ):
-    """Get counts of incomplete annotations."""
-    result = await db.execute(
-        select(SharedVariantAnnotation.annotation_status, func.count().label("cnt"))
-        .group_by(SharedVariantAnnotation.annotation_status)
+    """Get counts of incomplete annotations.
+
+    A variant is 'incomplete' if at least one *enabled* source column is NULL
+    (never queried).  Columns with ``{found: false}`` are considered complete
+    (confirmed absence of data in the source).
+    """
+    from sqlalchemy import or_, and_
+
+    all_enabled = await _get_all_enabled_source_names(db)
+    active = await _get_enabled_source_names(db)
+    incomplete_cond = _build_incomplete_condition(active)
+
+    total_result = await db.execute(
+        select(func.count()).select_from(SharedVariantAnnotation)
     )
-    rows = {r[0]: r[1] for r in result.all()}
-    total = sum(rows.values())
+    total = total_result.scalar() or 0
+
+    if incomplete_cond is None:
+        # No active sources → nothing can be incomplete
+        return IncompleteAnnotationSummary(
+            total_annotations=total, complete=total, partial=0, failed=0,
+            enabled_sources=all_enabled, active_sources=active,
+        )
+
+    incomplete_result = await db.execute(
+        select(func.count()).select_from(SharedVariantAnnotation).where(incomplete_cond)
+    )
+    incomplete = incomplete_result.scalar() or 0
+
+    failed_result = await db.execute(
+        select(func.count()).select_from(SharedVariantAnnotation)
+        .where(
+            SharedVariantAnnotation.failed_sources.isnot(None),
+            func.json_array_length(SharedVariantAnnotation.failed_sources) > 0,
+        )
+    )
+    failed = failed_result.scalar() or 0
+
     return IncompleteAnnotationSummary(
         total_annotations=total,
-        complete=rows.get('completed', 0),
-        partial=rows.get('partial', 0),
-        failed=rows.get('failed', 0),
+        complete=total - incomplete,
+        partial=incomplete - failed,
+        failed=failed,
+        enabled_sources=all_enabled,
+        active_sources=active,
     )
 
 
@@ -1210,14 +1414,36 @@ async def list_incomplete_annotations(
     db: AsyncSession = Depends(get_session),
     admin: User = Depends(require_admin),
 ):
-    """List annotations with incomplete data from external sources."""
-    from ..services.annotation_constants import source_status
+    """List annotations with truly missing data from enabled sources.
 
-    q = select(SharedVariantAnnotation)
-    if status_filter == 'all':
-        q = q.where(SharedVariantAnnotation.annotation_status.in_(['partial', 'failed']))
-    else:
-        q = q.where(SharedVariantAnnotation.annotation_status == status_filter)
+    Only returns variants where at least one enabled source column is NULL.
+    Variants where all enabled sources returned ``found`` or ``no_data`` are
+    considered complete and excluded.
+    """
+    from ..services.annotation_constants import source_status
+    from sqlalchemy import and_
+
+    enabled = await _get_enabled_source_names(db)
+    incomplete_cond = _build_incomplete_condition(enabled)
+
+    if incomplete_cond is None:
+        return []
+
+    q = select(SharedVariantAnnotation).where(incomplete_cond)
+
+    if status_filter == 'failed':
+        q = q.where(
+            SharedVariantAnnotation.failed_sources.isnot(None),
+            func.json_array_length(SharedVariantAnnotation.failed_sources) > 0,
+        )
+    elif status_filter == 'partial':
+        # Exclude rows that have recorded failures — show only "never queried" gaps
+        q = q.where(
+            (SharedVariantAnnotation.failed_sources.is_(None))
+            | (func.json_array_length(SharedVariantAnnotation.failed_sources) == 0)
+        )
+    # 'all' — no extra filter
+
     q = q.order_by(SharedVariantAnnotation.usage_count.desc()).limit(limit).offset(offset)
 
     result = await db.execute(q)

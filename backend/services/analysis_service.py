@@ -942,6 +942,39 @@ class ComprehensiveAnalysisService:
                     await session.commit()
             logger.info(f"Backfilled gnomAD data for {gnomad_updated}/{len(missing_gnomad)} annotations")
 
+        # --- Ensembl VEP backfill ---
+        do_ensembl = enabled_sources is None or 'ensembl' in enabled_sources
+        vep_svc = None
+        if do_ensembl:
+            from .ensembl_vep_local import get_ensembl_vep_service
+            vep_svc = get_ensembl_vep_service()
+            do_ensembl = await vep_svc.ensure_loaded()
+
+        missing_ensembl = []
+        if do_ensembl:
+            missing_ensembl = [
+                rsid for rsid, data in existing_annotations.items()
+                if 'ensembl' not in data.get('annotations', {})
+            ]
+
+        if missing_ensembl and vep_svc:
+            logger.info(f"Backfilling Ensembl VEP for {len(missing_ensembl)} existing annotations")
+            ens_results = await vep_svc.lookup_batch(missing_ensembl)
+            ens_updated = 0
+            async with async_session_factory() as session:
+                for rsid, ens_data in ens_results.items():
+                    if ens_data and ens_data.get('found'):
+                        await session.execute(
+                            update(SharedVariantAnnotation)
+                            .where(SharedVariantAnnotation.rsid == rsid)
+                            .values(ensembl_data=ens_data)
+                        )
+                        existing_annotations[rsid]['annotations']['ensembl'] = ens_data
+                        ens_updated += 1
+                if ens_updated:
+                    await session.commit()
+            logger.info(f"Backfilled Ensembl VEP data for {ens_updated}/{len(missing_ensembl)} annotations")
+
         # --- BigQuery backfill (ChEMBL, FDA Drug, AlphaFold) ---
         bq_source_names = {'chembl', 'fda_drug', 'alphafold'}
         enabled_bq = bq_source_names & set(enabled_sources) if enabled_sources else bq_source_names
@@ -1049,6 +1082,17 @@ class ComprehensiveAnalysisService:
                 gn_found = sum(1 for v in gn_map.values() if v and v.get('found'))
                 logger.info(f"  gnomAD local batch: {gn_found}/{total} found ({time.time() - t0:.1f}s)")
 
+        # --- Step 2.5: Batch Ensembl VEP local lookups ---
+        ens_map: Dict[str, Optional[Dict]] = {}
+        if enabled_sources is None or 'ensembl' in enabled_sources:
+            from .ensembl_vep_local import get_ensembl_vep_service
+            vep_svc = get_ensembl_vep_service()
+            if await vep_svc.ensure_loaded():
+                t0 = time.time()
+                ens_map = await vep_svc.lookup_batch(unique_rsids)
+                ens_found = sum(1 for v in ens_map.values() if v and v.get('found'))
+                logger.info(f"  Ensembl VEP local batch: {ens_found}/{total} found ({time.time() - t0:.1f}s)")
+
         await asyncio.sleep(0)
 
         # --- Step 3: Bulk upsert shared_variant_annotations + create variant_annotations ---
@@ -1065,6 +1109,8 @@ class ComprehensiveAnalysisService:
                     cv_val = cv_data if cv_data and cv_data.get('found') else None
                     gn_data = gn_map.get(rsid)
                     gn_val = gn_data if gn_data and gn_data.get('found') else None
+                    ens_data = ens_map.get(rsid)
+                    ens_val = ens_data if ens_data and ens_data.get('found') else None
 
                     # Get marker_id from first variant with this rsid
                     first_variant = rsid_to_variants[rsid][0]
@@ -1075,6 +1121,7 @@ class ComprehensiveAnalysisService:
                         rsid=rsid,
                         clinvar_local_data=cv_val,
                         gnomad_data=gn_val,
+                        ensembl_data=ens_val,
                         annotation_status='partial',
                         total_api_calls=0,
                         usage_count=1,
@@ -1096,6 +1143,11 @@ class ComprehensiveAnalysisService:
                         conflict_set['gnomad_data'] = func.coalesce(
                             SharedVariantAnnotation.gnomad_data,
                             stmt.excluded.gnomad_data,
+                        )
+                    if ens_val:
+                        conflict_set['ensembl_data'] = func.coalesce(
+                            SharedVariantAnnotation.ensembl_data,
+                            stmt.excluded.ensembl_data,
                         )
                     stmt = stmt.on_conflict_do_update(
                         index_elements=['rsid'],
@@ -1126,6 +1178,9 @@ class ComprehensiveAnalysisService:
                         ann_data['success_count'] += 1
                     if gn_val:
                         ann_data['annotations']['gnomad'] = gn_val
+                        ann_data['success_count'] += 1
+                    if ens_val:
+                        ann_data['annotations']['ensembl'] = ens_val
                         ann_data['success_count'] += 1
 
                     from .scoring_engine import get_scoring_engine

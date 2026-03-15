@@ -32,7 +32,8 @@ SOURCE_TO_COLUMN: Dict[str, str] = {
 REMOTE_API_SOURCES: Set[str] = {'ensembl', 'clinvar', 'clinpgx', 'snpedia'}
 
 # Sources backed by local data (files, local DB tables)
-LOCAL_SOURCES: Set[str] = {'clinvar_local', 'gnomad', 'alpha_missense'}
+# 'ensembl' is hybrid — uses local VEP VCF when loaded, falls back to API
+LOCAL_SOURCES: Set[str] = {'clinvar_local', 'gnomad', 'alpha_missense', 'ensembl'}
 
 # Sources backed by BigQuery public datasets
 BQ_SOURCES: Set[str] = {'chembl', 'fda_drug', 'alphafold'}
