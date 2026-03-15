@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { Brain, BookOpen, Lightbulb, Target, Puzzle, ChevronRight, CheckCircle } from 'lucide-react'
+import React, { useState, useMemo, useEffect } from 'react'
+import { Brain, BookOpen, Lightbulb, Target, Puzzle, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { PercentileBarChart } from './GenomicCharts'
 import {
@@ -9,6 +9,7 @@ import {
   SectionCard,
   StatusBadge,
   ScoreBar,
+  DisclaimerCard,
   VariantLinks,
   advantageToSeverity,
   formatLabel,
@@ -20,6 +21,8 @@ import type { CategoryPanelProps, IntelligenceTrait } from './types'
 export default function IntelligencePanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
   const theme = useThemeClasses(isDarkMode)
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [advantageFilter, setAdvantageFilter] = useState<string>('all')
 
   const [realIntelligenceData, setRealIntelligenceData] = useState<IntelligenceTrait[]>([])
   const [loading, setLoading] = useState(false)
@@ -92,6 +95,36 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
 
   const cognitiveTraits = getCognitiveTraits()
 
+  const advantageOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const t of cognitiveTraits) set.add((t.result || 'moderate').toLowerCase())
+    return Array.from(set).sort()
+  }, [cognitiveTraits])
+
+  const filteredTraits = useMemo(() => {
+    let list = cognitiveTraits
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      list = list.filter(t => t.trait.toLowerCase().includes(q) || t.gene.toLowerCase().includes(q))
+    }
+    if (advantageFilter !== 'all') {
+      list = list.filter(t => (t.result || 'moderate').toLowerCase() === advantageFilter)
+    }
+    return list
+  }, [cognitiveTraits, searchQuery, advantageFilter])
+
+  const allSuggestions = useMemo(() => {
+    const seen = new Set<string>()
+    const result: string[] = []
+    for (const t of cognitiveTraits) {
+      for (const s of t.suggestions) {
+        const key = s.toLowerCase().trim()
+        if (!seen.has(key) && key) { seen.add(key); result.push(s) }
+      }
+    }
+    return result.slice(0, 8)
+  }, [cognitiveTraits])
+
   const headerProps = {
     icon: Brain,
     iconColorClass: 'text-purple-400',
@@ -133,9 +166,36 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
         </SectionCard>
       )}
 
-      <SectionCard title="Cognitive Abilities" theme={theme}>
+      {/* Filter Bar */}
+      <div className="flex flex-wrap gap-3">
+        <div className="relative flex-1 min-w-50">
+          <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+          <input
+            type="text"
+            placeholder="Search abilities or genes…"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} placeholder:${theme.textSecondary} focus:outline-none focus:ring-2 focus:ring-purple-500/40 text-sm`}
+          />
+        </div>
+        <div className="relative min-w-40">
+          <Filter className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+          <select
+            value={advantageFilter}
+            onChange={e => setAdvantageFilter(e.target.value)}
+            className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} focus:outline-none focus:ring-2 focus:ring-purple-500/40 text-sm appearance-none cursor-pointer`}
+          >
+            <option value="all">All Advantages</option>
+            {advantageOptions.map(s => (
+              <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <SectionCard title={`Cognitive Abilities${filteredTraits.length !== cognitiveTraits.length ? ` (${filteredTraits.length} of ${cognitiveTraits.length})` : ''}`} theme={theme}>
         <MasonryLayout>
-          {cognitiveTraits.map((trait, index) => {
+          {filteredTraits.map((trait, index) => {
             const Icon = trait.icon
             const itemKey = `intelligence-${index}`
             const isExpanded = selectedItem === itemKey
@@ -162,7 +222,7 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
                 </div>
 
                 <div className="flex flex-wrap gap-1.5">
-                  {rsid && <Badge variant="secondary" className="text-xs">{rsid}</Badge>}
+                  {rsid && <Badge variant="secondary" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>}
                   {gene && <Badge variant="outline" className="text-xs">{gene}</Badge>}
                 </div>
 
@@ -199,6 +259,21 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
           })}
         </MasonryLayout>
       </SectionCard>
+
+      {allSuggestions.length > 0 && (
+        <SectionCard title="Enhancement Suggestions" theme={theme}>
+          <div className="space-y-2">
+            {allSuggestions.map((s, i) => (
+              <div key={i} className={`flex items-start gap-2 text-sm ${theme.textSecondary}`}>
+                <CheckCircle className="h-4 w-4 text-purple-400 mt-0.5 shrink-0" />
+                <span>{s}</span>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      )}
+
+      <DisclaimerCard theme={theme} />
     </div>
   )
 }

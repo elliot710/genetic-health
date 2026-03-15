@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { Brain, Heart, Users, Target, Zap, Palette, ChevronRight, CheckCircle } from 'lucide-react'
+import React, { useState, useMemo, useEffect } from 'react'
+import { Brain, Heart, Users, Target, Zap, Palette, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { TraitRadarChart } from './GenomicCharts'
 import {
@@ -8,6 +8,7 @@ import {
   EmptyState,
   SectionCard,
   StatusBadge,
+  DisclaimerCard,
   VariantLinks,
   advantageToSeverity,
   MasonryLayout,
@@ -29,6 +30,7 @@ interface PersonalityTrait {
 export default function PersonalityPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
   const theme = useThemeClasses(isDarkMode)
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
   const [personalityData, setPersonalityData] = useState<DashboardData | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -109,6 +111,24 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
 
   const personalityTraits = getPersonalityTraits()
 
+  const filteredTraits = useMemo(() => {
+    if (!searchQuery.trim()) return personalityTraits
+    const q = searchQuery.toLowerCase()
+    return personalityTraits.filter(t => t.trait.toLowerCase().includes(q) || t.gene.toLowerCase().includes(q))
+  }, [personalityTraits, searchQuery])
+
+  const allCharacteristics = useMemo(() => {
+    const seen = new Set<string>()
+    const result: string[] = []
+    for (const t of personalityTraits) {
+      for (const c of t.characteristics) {
+        const key = c.toLowerCase().trim()
+        if (!seen.has(key) && key) { seen.add(key); result.push(c) }
+      }
+    }
+    return result.slice(0, 8)
+  }, [personalityTraits])
+
   const headerProps = {
     icon: Palette,
     iconColorClass: 'text-pink-400',
@@ -150,9 +170,23 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
         </SectionCard>
       )}
 
-      <SectionCard title="Personality Profile" theme={theme}>
+      {/* Filter Bar */}
+      <div className="flex flex-wrap gap-3">
+        <div className="relative flex-1 min-w-50">
+          <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+          <input
+            type="text"
+            placeholder="Search traits or genes…"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} placeholder:${theme.textSecondary} focus:outline-none focus:ring-2 focus:ring-pink-500/40 text-sm`}
+          />
+        </div>
+      </div>
+
+      <SectionCard title={`Personality Profile${filteredTraits.length !== personalityTraits.length ? ` (${filteredTraits.length} of ${personalityTraits.length})` : ''}`} theme={theme}>
         <MasonryLayout>
-          {personalityTraits.map((trait: PersonalityTrait, index: number) => {
+          {filteredTraits.map((trait: PersonalityTrait, index: number) => {
             const IconComponent = trait.icon
             const itemKey = `personality-${index}`
             const isExpanded = selectedItem === itemKey
@@ -178,7 +212,7 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
                 </div>
 
                 <div className="flex flex-wrap gap-1.5">
-                  {trait.gene?.startsWith('rs') && <Badge variant="secondary" className="text-xs">{trait.gene}</Badge>}
+                  {trait.gene?.startsWith('rs') && <Badge variant="secondary" className="text-xs font-mono">{trait.gene}{data?.genotype_map?.[trait.gene] ? ` ${data.genotype_map[trait.gene]}` : ''}</Badge>}
                   {!trait.gene?.startsWith('rs') && trait.gene && trait.gene !== 'Multiple markers' && <Badge variant="outline" className="text-xs">{trait.gene}</Badge>}
                 </div>
 
@@ -206,6 +240,21 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
           })}
         </MasonryLayout>
       </SectionCard>
+
+      {allCharacteristics.length > 0 && (
+        <SectionCard title="Key Insights" theme={theme}>
+          <div className="space-y-2">
+            {allCharacteristics.map((c, i) => (
+              <div key={i} className={`flex items-start gap-2 text-sm ${theme.textSecondary}`}>
+                <CheckCircle className="h-4 w-4 text-pink-400 mt-0.5 shrink-0" />
+                <span>{c}</span>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      )}
+
+      <DisclaimerCard theme={theme} />
     </div>
   )
 }

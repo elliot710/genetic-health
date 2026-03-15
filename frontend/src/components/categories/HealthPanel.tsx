@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { Heart, AlertTriangle, ChevronRight, CheckCircle } from 'lucide-react'
+import React, { useState, useMemo, useEffect } from 'react'
+import { Heart, AlertTriangle, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import {
   useThemeClasses,
@@ -48,6 +48,8 @@ interface MappedHealthRisk {
 export default function HealthPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
   const theme = useThemeClasses(isDarkMode)
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [riskFilter, setRiskFilter] = useState<string>('all')
 
   const [realHealthRisks, setRealHealthRisks] = useState<HealthRisk[]>([])
   const [variantAnnotations, setVariantAnnotations] = useState<Record<string, VariantAnnotation>>({})
@@ -210,6 +212,24 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
 
   const healthRisks = getHealthRisks()
 
+  const riskOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const r of healthRisks) set.add(r.riskLevel)
+    return Array.from(set).sort()
+  }, [healthRisks])
+
+  const filteredRisks = useMemo(() => {
+    let list = healthRisks
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      list = list.filter(r => r.condition.toLowerCase().includes(q) || r.gene.toLowerCase().includes(q))
+    }
+    if (riskFilter !== 'all') {
+      list = list.filter(r => r.riskLevel === riskFilter)
+    }
+    return list
+  }, [healthRisks, searchQuery, riskFilter])
+
   const highRiskItems = healthRisks.filter((r: MappedHealthRisk) => r.riskLevel === 'high')
   const moderateRiskItems = healthRisks.filter((r: MappedHealthRisk) => r.riskLevel === 'moderate')
 
@@ -254,9 +274,36 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
         </SectionCard>
       )}
 
-      <SectionCard title="Health Risk Assessment" theme={theme}>
+      {/* Filter Bar */}
+      <div className="flex flex-wrap gap-3">
+        <div className="relative flex-1 min-w-50">
+          <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+          <input
+            type="text"
+            placeholder="Search conditions or variants…"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} placeholder:${theme.textSecondary} focus:outline-none focus:ring-2 focus:ring-red-500/40 text-sm`}
+          />
+        </div>
+        <div className="relative min-w-40">
+          <Filter className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+          <select
+            value={riskFilter}
+            onChange={e => setRiskFilter(e.target.value)}
+            className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} focus:outline-none focus:ring-2 focus:ring-red-500/40 text-sm appearance-none cursor-pointer`}
+          >
+            <option value="all">All Risk Levels</option>
+            {riskOptions.map(s => (
+              <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <SectionCard title={`Health Risk Assessment${filteredRisks.length !== healthRisks.length ? ` (${filteredRisks.length} of ${healthRisks.length})` : ''}`} theme={theme}>
         <MasonryLayout>
-          {healthRisks.map((risk: MappedHealthRisk, index: number) => {
+          {filteredRisks.map((risk: MappedHealthRisk, index: number) => {
             const itemKey = `health-${index}`
             const isExpanded = selectedItem === itemKey
             return (
@@ -278,7 +325,9 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
 
                 <div className="flex flex-wrap gap-1.5">
                   {risk.gene && risk.gene !== 'Unknown' && (
-                    <Badge variant="secondary" className="text-xs">{risk.gene}</Badge>
+                    <Badge variant={risk.gene.startsWith('rs') ? 'secondary' : 'secondary'} className={`text-xs ${risk.gene.startsWith('rs') ? 'font-mono' : ''}`}>
+                      {risk.gene}{risk.gene.startsWith('rs') && data?.genotype_map?.[risk.gene] ? ` ${data.genotype_map[risk.gene]}` : ''}
+                    </Badge>
                   )}
                   {risk.clinicalSignificance && (
                     <Badge variant="outline" className="text-xs">{risk.clinicalSignificance}</Badge>

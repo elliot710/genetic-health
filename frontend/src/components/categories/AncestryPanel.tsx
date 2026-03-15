@@ -8,12 +8,15 @@ import {
   EmptyState,
   SectionCard,
   ScoreBar,
+  DisclaimerCard,
 } from './shared'
 import type { CategoryPanelProps } from './types'
 
 interface AncestryRegion {
   region: string
   percentage: number
+  confidence?: string
+  geographic_origin?: string
   color?: string
 }
 
@@ -46,14 +49,36 @@ export default function AncestryPanel({ isDarkMode = false, data }: CategoryPane
   const getAncestryData = () => {
     const results = data?.ancestry_results
     const hasRealData = !!results && results.length > 0
-    const ancestryData = hasRealData ? results[0] : null
+    if (!hasRealData) {
+      return {
+        hasRealData: false,
+        ancestryComposition: [] as AncestryRegion[],
+        maternalHaplogroup: null,
+        paternalHaplogroup: null,
+        neanderthalVariants: null,
+      }
+    }
+
+    // The first result may carry nested composition/haplogroup data (legacy format)
+    const first = results[0]
+
+    // Build composition: prefer nested .composition, otherwise use the flat results list
+    let composition: AncestryRegion[] = first?.composition || []
+    if (composition.length === 0) {
+      composition = results
+        .filter((r: Record<string, unknown>) => r.population)
+        .map((r: Record<string, unknown>) => ({
+          region: String(r.population),
+          percentage: parseFloat(String(r.percentage)) || 0,
+        }))
+    }
 
     return {
-      hasRealData,
-      ancestryComposition: ancestryData?.composition || [],
-      maternalHaplogroup: ancestryData?.maternal_haplogroup || null,
-      paternalHaplogroup: ancestryData?.paternal_haplogroup || null,
-      neanderthalVariants: ancestryData?.neanderthal_variants || null,
+      hasRealData: true,
+      ancestryComposition: composition,
+      maternalHaplogroup: first?.maternal_haplogroup || null,
+      paternalHaplogroup: first?.paternal_haplogroup || null,
+      neanderthalVariants: first?.neanderthal_variants || null,
     }
   }
 
@@ -234,6 +259,8 @@ export default function AncestryPanel({ isDarkMode = false, data }: CategoryPane
           </p>
         </div>
       </SectionCard>
+
+      <DisclaimerCard theme={theme} />
     </div>
   )
 }

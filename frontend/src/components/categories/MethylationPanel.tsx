@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useMemo } from 'react'
-import { Dna, ChevronRight, CheckCircle } from 'lucide-react'
+import { Dna, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { CapacityChart } from './GenomicCharts'
 import {
@@ -10,6 +10,7 @@ import {
   EmptyState,
   SectionCard,
   StatusBadge,
+  DisclaimerCard,
   capacityToSeverity,
   VariantLinks,
   formatLabel,
@@ -19,6 +20,8 @@ import type { CategoryPanelProps, MethylationProfile } from './types'
 
 export default function MethylationPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
   const [selectedGene, setSelectedGene] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [capacityFilter, setCapacityFilter] = useState<string>('all')
   const theme = useThemeClasses(isDarkMode)
 
   const profiles: MethylationProfile[] = data?.methylation_profiles || []
@@ -37,6 +40,29 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
     }
     return result
   }, [profiles])
+
+  const capacityOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const p of profiles) set.add(p.methylation_capacity || 'normal')
+    return Array.from(set).sort()
+  }, [profiles])
+
+  const filteredProfiles = useMemo(() => {
+    let list = profiles
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase()
+      list = list.filter(p =>
+        p.gene?.toLowerCase().includes(q) ||
+        p.variant?.toLowerCase().includes(q) ||
+        p.associated_variants?.some(v => v.toLowerCase().includes(q)) ||
+        p.supplement_recommendations?.some(r => r.toLowerCase().includes(q))
+      )
+    }
+    if (capacityFilter !== 'all') {
+      list = list.filter(p => (p.methylation_capacity || 'normal') === capacityFilter)
+    }
+    return list
+  }, [profiles, searchQuery, capacityFilter])
 
   const headerProps = {
     icon: Dna,
@@ -73,6 +99,38 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
     <div className="space-y-6">
       <CategoryHeader {...headerProps} />
 
+      {/* Filter Bar */}
+      <div className={`${theme.glass} border ${theme.border} rounded-xl p-4 flex flex-col sm:flex-row gap-3`}>
+        <div className="relative flex-1">
+          <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+          <input
+            type="text"
+            placeholder="Search by gene, rsid, or keyword..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className={`w-full pl-9 pr-3 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} placeholder:${theme.textSecondary} text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/40`}
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <Filter className={`h-4 w-4 ${theme.textSecondary}`} />
+          <select
+            value={capacityFilter}
+            onChange={e => setCapacityFilter(e.target.value)}
+            className={`px-3 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/40`}
+          >
+            <option value="all">All Capacities</option>
+            {capacityOptions.map(c => (
+              <option key={c} value={c}>{formatLabel(c)}</option>
+            ))}
+          </select>
+        </div>
+        {(searchQuery || capacityFilter !== 'all') && (
+          <span className={`text-xs ${theme.textSecondary} self-center`}>
+            {filteredProfiles.length} of {profiles.length}
+          </span>
+        )}
+      </div>
+
       {profiles.length >= 3 && (
         <SectionCard title="Capacity Distribution" theme={theme}>
           <CapacityChart data={profiles.map(p => ({ name: p.gene, capacity: p.methylation_capacity || 'normal' }))} isDarkMode={isDarkMode} height={200} />
@@ -81,11 +139,12 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
 
       <SectionCard title="Methylation Markers" theme={theme}>
         <MasonryLayout>
-          {profiles.map((item, index) => {
+          {filteredProfiles.map((item, index) => {
             const rsid = item.associated_variants?.[0] || item.variant
             const capacity = item.methylation_capacity || 'normal'
             const geneKey = `${item.gene}-${index}`
             const isExpanded = selectedGene === geneKey
+            const description = item.supplement_recommendations?.[0] || ''
 
             return (
               <div
@@ -105,7 +164,11 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
                 </div>
 
                 {rsid && (
-                  <Badge variant="secondary" className="text-xs">{rsid}</Badge>
+                  <Badge variant="secondary" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>
+                )}
+
+                {description && (
+                  <p className={`text-sm ${theme.textSecondary} mt-2 line-clamp-2`}>{description}</p>
                 )}
 
                 {isExpanded && (
@@ -145,6 +208,8 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
           </div>
         </SectionCard>
       )}
+
+      <DisclaimerCard theme={theme} />
     </div>
   )
 }

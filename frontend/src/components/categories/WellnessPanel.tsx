@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { Activity, ChevronRight, CheckCircle } from 'lucide-react'
+import React, { useState, useMemo, useEffect } from 'react'
+import { Activity, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { WellnessScoreChart } from './GenomicCharts'
 import {
@@ -8,6 +8,7 @@ import {
   EmptyState,
   SectionCard,
   StatusBadge,
+  DisclaimerCard,
   VariantLinks,
   capacityToSeverity,
   formatLabel,
@@ -29,6 +30,8 @@ interface WellnessTrait {
 export default function WellnessPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
   const theme = useThemeClasses(isDarkMode)
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState<string>('all')
   const [wellnessTraits, setWellnessTraits] = useState<WellnessTrait[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -83,6 +86,36 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
     theme,
   }
 
+  const categoryOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const t of wellnessTraits) set.add(t.category)
+    return Array.from(set).sort()
+  }, [wellnessTraits])
+
+  const filteredTraits = useMemo(() => {
+    let list = wellnessTraits
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      list = list.filter(t => t.name.toLowerCase().includes(q) || t.gene.toLowerCase().includes(q) || t.category.toLowerCase().includes(q))
+    }
+    if (categoryFilter !== 'all') {
+      list = list.filter(t => t.category === categoryFilter)
+    }
+    return list
+  }, [wellnessTraits, searchQuery, categoryFilter])
+
+  const allRecommendations = useMemo(() => {
+    const seen = new Set<string>()
+    const result: string[] = []
+    for (const t of wellnessTraits) {
+      for (const rec of t.recommendations) {
+        const key = rec.toLowerCase().trim()
+        if (!seen.has(key) && key) { seen.add(key); result.push(rec) }
+      }
+    }
+    return result.slice(0, 8)
+  }, [wellnessTraits])
+
   if (wellnessTraits.length === 0 && !loading) {
     return (
       <div className="space-y-6">
@@ -111,9 +144,38 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
         </SectionCard>
       )}
 
-      <SectionCard title="Wellness Markers" theme={theme}>
+      {/* Filter Bar */}
+      <div className="flex flex-wrap gap-3">
+        <div className="relative flex-1 min-w-50">
+          <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+          <input
+            type="text"
+            placeholder="Search traits, genes, or categories…"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} placeholder:${theme.textSecondary} focus:outline-none focus:ring-2 focus:ring-green-500/40 text-sm`}
+          />
+        </div>
+        {categoryOptions.length > 1 && (
+          <div className="relative min-w-40">
+            <Filter className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+            <select
+              value={categoryFilter}
+              onChange={e => setCategoryFilter(e.target.value)}
+              className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} focus:outline-none focus:ring-2 focus:ring-green-500/40 text-sm appearance-none cursor-pointer`}
+            >
+              <option value="all">All Categories</option>
+              {categoryOptions.map(s => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
+
+      <SectionCard title={`Wellness Markers${filteredTraits.length !== wellnessTraits.length ? ` (${filteredTraits.length} of ${wellnessTraits.length})` : ''}`} theme={theme}>
         <MasonryLayout>
-          {wellnessTraits.map((trait, index) => {
+          {filteredTraits.map((trait, index) => {
             const itemKey = `wellness-${index}`
             const isExpanded = selectedItem === itemKey
             return (
@@ -136,7 +198,7 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
                 <div className="flex flex-wrap gap-1.5">
                   {trait.associated_variants && trait.associated_variants.length > 0
                     ? trait.associated_variants.map((v, i) => (
-                        <Badge key={i} variant="secondary" className="text-xs">{v}</Badge>
+                        <Badge key={i} variant="secondary" className="text-xs font-mono">{v}{data?.genotype_map?.[v] ? ` ${data.genotype_map[v]}` : ''}</Badge>
                       ))
                     : trait.gene && trait.gene !== 'Multiple' && (
                         <Badge variant="secondary" className="text-xs">{trait.gene}</Badge>
@@ -171,6 +233,21 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
           })}
         </MasonryLayout>
       </SectionCard>
+
+      {allRecommendations.length > 0 && (
+        <SectionCard title="Wellness Recommendations" theme={theme}>
+          <div className="space-y-2">
+            {allRecommendations.map((rec, i) => (
+              <div key={i} className={`flex items-start gap-2 text-sm ${theme.textSecondary}`}>
+                <CheckCircle className="h-4 w-4 text-green-400 mt-0.5 shrink-0" />
+                <span>{rec}</span>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      )}
+
+      <DisclaimerCard theme={theme} />
     </div>
   )
 }

@@ -867,6 +867,8 @@ DEFAULT_SOURCES = [
     {"source_name": "chembl", "display_name": "ChEMBL (BigQuery)", "is_enabled": True, "description": "Drug mechanisms, indications, and safety warnings for gene targets — via Google BigQuery public data (ebi_chembl v33)", "rate_limit": None, "priority": 8},
     {"source_name": "fda_drug", "display_name": "FDA Drug Labels (BigQuery)", "is_enabled": True, "description": "FDA drug labels with CYP enzyme interaction data and pharmacokinetics — via Google BigQuery public data", "rate_limit": None, "priority": 9},
     {"source_name": "alphafold", "display_name": "AlphaFold (BigQuery)", "is_enabled": True, "description": "DeepMind AlphaFold protein structure confidence scores (pLDDT) — via Google BigQuery public data", "rate_limit": None, "priority": 10},
+    {"source_name": "thousand_genomes", "display_name": "1000 Genomes Phase 3", "is_enabled": True, "description": "Population allele frequencies from 1000 Genomes Phase 3 (AFR, AMR, EAS, EUR, SAS superpopulations) — local data, no API calls", "rate_limit": None, "priority": 11},
+    {"source_name": "ensembl_vep", "display_name": "Ensembl VEP (Local)", "is_enabled": True, "description": "Local Ensembl VEP variant annotations — per-chromosome VCFs, clinically associated, and phenotype associated variants (no API calls)", "rate_limit": None, "priority": 12},
 ]
 
 # Shared source-to-column mapping — single source of truth
@@ -1391,6 +1393,7 @@ async def get_incomplete_summary(
         select(func.count()).select_from(SharedVariantAnnotation)
         .where(
             SharedVariantAnnotation.failed_sources.isnot(None),
+            func.json_typeof(SharedVariantAnnotation.failed_sources) == 'array',
             func.json_array_length(SharedVariantAnnotation.failed_sources) > 0,
         )
     )
@@ -1434,12 +1437,14 @@ async def list_incomplete_annotations(
     if status_filter == 'failed':
         q = q.where(
             SharedVariantAnnotation.failed_sources.isnot(None),
+            func.json_typeof(SharedVariantAnnotation.failed_sources) == 'array',
             func.json_array_length(SharedVariantAnnotation.failed_sources) > 0,
         )
     elif status_filter == 'partial':
         # Exclude rows that have recorded failures — show only "never queried" gaps
         q = q.where(
             (SharedVariantAnnotation.failed_sources.is_(None))
+            | (func.json_typeof(SharedVariantAnnotation.failed_sources) != 'array')
             | (func.json_array_length(SharedVariantAnnotation.failed_sources) == 0)
         )
     # 'all' — no extra filter
@@ -2099,6 +2104,31 @@ async def ensembl_etl_import(admin: User = Depends(require_admin)):
 
 
 # ======================================================================
+# 1000 Genomes Phase 3 ETL endpoints
+# ======================================================================
+
+@router.get("/1kg-etl/status")
+async def thousand_genomes_etl_status(admin: User = Depends(require_admin)):
+    """Get current 1000 Genomes import status (row count + file availability)."""
+    from ..services.thousand_genomes_etl import ThousandGenomesETL
+    etl = ThousandGenomesETL()
+    return await etl.get_import_status()
+
+
+@router.post("/1kg-etl/import")
+async def thousand_genomes_etl_import(admin: User = Depends(require_admin)):
+    """Run full 1000 Genomes Phase 3 ETL import (truncates + reimports).
+    Parses the Ensembl 1000GENOMES-phase_3.vcf.gz file (~1.5 GB)."""
+    from ..services.thousand_genomes_etl import ThousandGenomesETL
+    etl = ThousandGenomesETL()
+    stats = await etl.run_full_import()
+    from ..services.thousand_genomes_local import get_thousand_genomes_service
+    tkg_svc = get_thousand_genomes_service()
+    await tkg_svc.ensure_loaded()
+    return stats
+
+
+# ======================================================================
 # gnomAD BigQuery backfill endpoints
 # ======================================================================
 
@@ -2143,3 +2173,19 @@ async def run_auto_categorize(
     cat_list = [c.strip() for c in categories.split(",")] if categories else None
     categorizer = AutoCategorizer()
     return await categorizer.run(categories=cat_list)
+
+
+# ======================================================================
+# Sync variant mappings → panel marker configs
+# ======================================================================
+
+@router.post("/panels/sync-from-mappings")
+async def sync_panels_from_mappings(
+    categories: Optional[str] = Query(None, description="Comma-separated category filter"),
+    admin: User = Depends(require_admin),
+):
+    """Populate PanelMarkerConfig from active VariantMappings so the admin
+    panel reflects the full registry. Only inserts — never overwrites manual markers."""
+    from ..services.auto_categorizer import sync_panels_from_mappings
+    cat_list = [c.strip() for c in categories.split(",")] if categories else None
+    return await sync_panels_from_mappings(categories=cat_list)

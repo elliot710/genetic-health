@@ -1,12 +1,14 @@
-import React, { useState, useEffect } from 'react'
-import { Zap, Eye, Ruler, Palette, Sun, ChevronRight } from 'lucide-react'
+import React, { useState, useMemo, useEffect } from 'react'
+import { Zap, Eye, Ruler, Palette, Sun, ChevronRight, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
+import { CapacityChart } from './GenomicCharts'
 import {
   useThemeClasses,
   CategoryHeader,
   EmptyState,
   SectionCard,
   StatusBadge,
+  DisclaimerCard,
   VariantLinks,
   advantageToSeverity,
   formatLabel,
@@ -18,6 +20,8 @@ import type { CategoryPanelProps, PhysicalTrait } from './types'
 export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
   const theme = useThemeClasses(isDarkMode)
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [confidenceFilter, setConfidenceFilter] = useState<string>('all')
 
   const [realPhysicalTraits, setRealPhysicalTraits] = useState<PhysicalTrait[]>([])
   const [loading, setLoading] = useState(false)
@@ -89,6 +93,24 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
 
   const physicalTraits = getPhysicalTraits()
 
+  const confidenceOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const t of physicalTraits) set.add((t.confidence || 'moderate').toLowerCase())
+    return Array.from(set).sort()
+  }, [physicalTraits])
+
+  const filteredTraits = useMemo(() => {
+    let list = physicalTraits
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      list = list.filter(t => t.category.toLowerCase().includes(q) || t.gene.toLowerCase().includes(q) || (t.trait || '').toLowerCase().includes(q))
+    }
+    if (confidenceFilter !== 'all') {
+      list = list.filter(t => (t.confidence || 'moderate').toLowerCase() === confidenceFilter)
+    }
+    return list
+  }, [physicalTraits, searchQuery, confidenceFilter])
+
   const getTraitIcon = (category: string) => {
     const categoryLower = category.toLowerCase()
     if (categoryLower.includes('eye')) return Eye
@@ -142,9 +164,42 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
     <div className="space-y-6">
       <CategoryHeader {...headerProps} />
 
-      <SectionCard title="Physical Characteristics" theme={theme}>
+      {physicalTraits.length >= 3 && (
+        <SectionCard title="Confidence Distribution" theme={theme}>
+          <CapacityChart data={physicalTraits.map(t => ({ name: t.category, capacity: t.confidence || 'moderate' }))} isDarkMode={isDarkMode} />
+        </SectionCard>
+      )}
+
+      {/* Filter Bar */}
+      <div className="flex flex-wrap gap-3">
+        <div className="relative flex-1 min-w-50">
+          <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+          <input
+            type="text"
+            placeholder="Search traits or genes…"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} placeholder:${theme.textSecondary} focus:outline-none focus:ring-2 focus:ring-purple-500/40 text-sm`}
+          />
+        </div>
+        <div className="relative min-w-40">
+          <Filter className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+          <select
+            value={confidenceFilter}
+            onChange={e => setConfidenceFilter(e.target.value)}
+            className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} focus:outline-none focus:ring-2 focus:ring-purple-500/40 text-sm appearance-none cursor-pointer`}
+          >
+            <option value="all">All Confidence</option>
+            {confidenceOptions.map(s => (
+              <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <SectionCard title={`Physical Characteristics${filteredTraits.length !== physicalTraits.length ? ` (${filteredTraits.length} of ${physicalTraits.length})` : ''}`} theme={theme}>
         <MasonryLayout>
-          {physicalTraits.map((trait, index) => {
+          {filteredTraits.map((trait, index) => {
             const itemKey = `trait-${index}`
             const isExpanded = selectedItem === itemKey
             const rsid = trait.gene?.startsWith('rs') ? trait.gene : undefined
@@ -167,7 +222,7 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
                 </div>
 
                 <div className="flex flex-wrap gap-1.5">
-                  {rsid && <Badge variant="secondary" className="text-xs">{rsid}</Badge>}
+                  {rsid && <Badge variant="secondary" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>}
                   {gene && <Badge variant="outline" className="text-xs">{gene}</Badge>}
                 </div>
 
@@ -182,6 +237,8 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
           })}
         </MasonryLayout>
       </SectionCard>
+
+      <DisclaimerCard theme={theme} />
     </div>
   )
 }

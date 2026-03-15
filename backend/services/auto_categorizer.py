@@ -20,6 +20,7 @@ from ..db.database import async_session_factory
 from ..db.models import (
     CategoryRule, ClinVarVariant, ClinVarGeneCondition,
     VariantMapping, GnomadVariant, GnomadGeneConstraint,
+    PanelMarkerConfig,
 )
 
 logger = logging.getLogger(__name__)
@@ -748,3 +749,167 @@ async def seed_category_rules(*, force: bool = False) -> Dict[str, int]:
 
     logger.info("Seeded %d category rules across %d categories", inserted, len(by_cat))
     return {"inserted": inserted, "by_category": by_cat}
+
+
+# ======================================================================
+# Sync VariantMappings → PanelMarkerConfigs
+# ======================================================================
+
+# Map analysis category names → panel_id used in the admin UI
+CATEGORY_TO_PANEL = {
+    "health":      "health",
+    "drug":        "drug_responses",
+    "physical":    "physical_traits",
+    "nutrition":   "nutrition",
+    "sports":      "sports",
+    "cognitive":   "intelligence",
+    "personality": "personality",
+    "wellness":    "wellness",
+    "methylation": "methylation",
+    "detox":       "detox",
+    "carrier":     "carrier",
+    "ancestry":    "ancestry",
+}
+
+
+def _extract_description(category: str, data: dict) -> str:
+    """Build a human-readable description from a VariantMapping's data JSON."""
+    if category == "health":
+        cond = data.get("condition", "")
+        risk = data.get("risk_multiplier")
+        return f"{cond} — Risk: {risk}x" if risk else cond
+    if category == "drug":
+        gene = data.get("gene", "")
+        drugs = data.get("drugs", [])
+        # drugs can be list of strings or list of [name, status, note] tuples
+        names = []
+        for d in drugs[:4]:
+            names.append(d[0] if isinstance(d, (list, tuple)) else d)
+        return f"{gene} — {', '.join(names)}" if names else gene
+    if category == "physical":
+        return data.get("trait", data.get("description", ""))
+    if category == "nutrition":
+        nut = data.get("nutrient", "")
+        met = data.get("metabolism", "")
+        return f"{nut} ({met})" if met else nut
+    if category == "sports":
+        cat = data.get("category", "")
+        adv = data.get("advantage", "")
+        return f"{cat} — {adv} advantage" if adv else cat
+    if category == "cognitive":
+        return data.get("domain", "")
+    if category == "personality":
+        return data.get("trait", "")
+    if category == "wellness":
+        return data.get("metric", data.get("trait", ""))
+    if category == "methylation":
+        gene = data.get("gene", "")
+        cap = data.get("capacity", "")
+        return f"{gene} — {cap}" if cap else gene
+    if category == "detox":
+        gene = data.get("gene", "")
+        phase = data.get("phase", "")
+        return f"{gene} Phase {phase}" if phase else gene
+    if category == "carrier":
+        cond = data.get("condition", "")
+        st = data.get("status", "")
+        return f"{cond} ({st})" if st else cond
+    # ancestry / fallback
+    return data.get("condition", data.get("trait", data.get("description", "")))
+
+
+async def sync_panels_from_mappings(
+    *, categories: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """Read active VariantMappings and upsert corresponding PanelMarkerConfig
+    rows so the admin panel reflects the full registry.
+
+    Only inserts; never overwrites existing manual markers.
+    Returns per-panel insert counts.
+    """
+    start = time.time()
+
+    async with async_session_factory() as session:
+        q = select(VariantMapping).where(VariantMapping.is_active == True)
+        if categories:
+            q = q.where(VariantMapping.category.in_(categories))
+        result = await session.execute(q)
+        mappings = result.scalars().all()
+
+        if not mappings:
+            return {"error": "No active variant mappings found."}
+
+        stats: Dict[str, int] = {}
+        batch: list[dict] = []
+
+        for m in mappings:
+            panel_id = CATEGORY_TO_PANEL.get(m.category)
+            if not panel_id:
+                continue
+
+            data = m.data if isinstance(m.data, dict) else {}
+            desc = _extract_description(m.category, data)
+            # Truncate overly long auto-generated descriptions
+            if len(desc) > 200:
+                desc = desc[:197] + "..."
+
+            if m.map_type == "rsid":
+                rsid = m.key
+                gene = data.get("gene", "")
+            else:
+                # gene-type mapping — use synthetic rsid for unique constraint
+                rsid = f"GENE:{m.key}"
+                gene = m.key
+
+            batch.append({
+                "panel_id": panel_id,
+                "rsid": rsid,
+                "gene": gene or None,
+                "description": desc or None,
+                "category": m.category,
+                "is_active": True,
+                "is_auto_discovered": True,
+            })
+
+        # Bulk upsert in chunks of 500
+        total_inserted = 0
+        chunk_size = 500
+        for i in range(0, len(batch), chunk_size):
+            chunk = batch[i : i + chunk_size]
+            stmt = insert(PanelMarkerConfig).values(chunk)
+            stmt = stmt.on_conflict_do_nothing(
+                index_elements=["panel_id", "rsid"]
+            )
+            res = await session.execute(stmt)
+            inserted = res.rowcount
+            total_inserted += inserted
+
+            # Count per panel
+            for row in chunk:
+                if inserted > 0:  # approximate — PostgreSQL doesn't give per-row info
+                    stats[row["panel_id"]] = stats.get(row["panel_id"], 0)
+
+        # Re-count inserted per panel accurately
+        count_q = (
+            select(
+                PanelMarkerConfig.panel_id,
+                func.count().label("cnt"),
+            )
+            .where(PanelMarkerConfig.is_auto_discovered == True)
+            .group_by(PanelMarkerConfig.panel_id)
+        )
+        count_result = await session.execute(count_q)
+        stats = {r[0]: r[1] for r in count_result.all()}
+
+        await session.commit()
+
+    elapsed = round(time.time() - start, 2)
+    logger.info(
+        "Panel sync: inserted %d new markers across %d panels in %.2fs",
+        total_inserted, len(stats), elapsed,
+    )
+    return {
+        "inserted": total_inserted,
+        "auto_discovered_per_panel": stats,
+        "elapsed_seconds": elapsed,
+    }

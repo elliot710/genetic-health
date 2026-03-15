@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { Pill, Info, ChevronRight, CheckCircle } from 'lucide-react'
+import React, { useState, useMemo, useEffect } from 'react'
+import { Pill, Info, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { DrugResponseChart } from './GenomicCharts'
 import SmartInsights from '../SmartInsights'
@@ -28,6 +28,8 @@ interface MappedDrugResponse {
 export default function DrugResponsesPanel({ data, isDarkMode = false, token }: CategoryPanelProps) {
   const theme = useThemeClasses(isDarkMode)
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [riskFilter, setRiskFilter] = useState<string>('all')
 
   const [realDrugResponses, setRealDrugResponses] = useState<DrugResponse[]>([])
   const [loading, setLoading] = useState(false)
@@ -128,6 +130,24 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
 
   const drugResponses = getDrugResponses()
 
+  const riskOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const d of drugResponses) if (d.risk) set.add(d.risk.toLowerCase())
+    return Array.from(set).sort()
+  }, [drugResponses])
+
+  const filteredDrugs = useMemo(() => {
+    let list = drugResponses
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      list = list.filter(d => d.drug.toLowerCase().includes(q) || d.gene.toLowerCase().includes(q) || d.response.toLowerCase().includes(q))
+    }
+    if (riskFilter !== 'all') {
+      list = list.filter(d => (d.risk || '').toLowerCase() === riskFilter)
+    }
+    return list
+  }, [drugResponses, searchQuery, riskFilter])
+
   const headerProps = {
     icon: Pill,
     iconColorClass: 'text-blue-400',
@@ -151,9 +171,36 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
         </SectionCard>
       )}
 
-      <SectionCard title="Drug Interactions" theme={theme}>
+      {/* Filter Bar */}
+      <div className="flex flex-wrap gap-3">
+        <div className="relative flex-1 min-w-50">
+          <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+          <input
+            type="text"
+            placeholder="Search drugs, genes, or responses…"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} placeholder:${theme.textSecondary} focus:outline-none focus:ring-2 focus:ring-blue-500/40 text-sm`}
+          />
+        </div>
+        <div className="relative min-w-40">
+          <Filter className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+          <select
+            value={riskFilter}
+            onChange={e => setRiskFilter(e.target.value)}
+            className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} focus:outline-none focus:ring-2 focus:ring-blue-500/40 text-sm appearance-none cursor-pointer`}
+          >
+            <option value="all">All Risk Levels</option>
+            {riskOptions.map(s => (
+              <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <SectionCard title={`Drug Interactions${filteredDrugs.length !== drugResponses.length ? ` (${filteredDrugs.length} of ${drugResponses.length})` : ''}`} theme={theme}>
         <MasonryLayout>
-          {drugResponses.map((drug: MappedDrugResponse, index: number) => {
+          {filteredDrugs.map((drug: MappedDrugResponse, index: number) => {
             const itemKey = `drug-${index}`
             const isExpanded = selectedItem === itemKey
             return (

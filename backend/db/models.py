@@ -209,6 +209,11 @@ class AncestryResult(Base):
     confidence = Column(String)
     geographic_origin = Column(String)
     associated_variants = Column(JSON)
+    # Structured ancestry data (JSON blobs consumed by the frontend)
+    composition = Column(JSON)           # [{region, percentage}, ...]
+    maternal_haplogroup = Column(JSON)   # {haplogroup, origin, frequency, age, description}
+    paternal_haplogroup = Column(JSON)   # {haplogroup, origin, frequency, age, description}
+    neanderthal_variants = Column(JSON)  # {percentage, variants, moreOrLess, comparison}
 
 class CarrierStatus(Base):
     __tablename__ = "carrier_status"
@@ -273,6 +278,7 @@ class SharedVariantAnnotation(Base):
     alpha_missense_data = Column(JSON)  # AlphaMissense AI pathogenicity prediction (local data, NOT clinically validated)
     clinvar_local_data = Column(JSON)  # ClinVar local TSV data (variant_summary + citations + cross-refs + gene stats)
     gnomad_data = Column(JSON)  # gnomAD population frequencies + constraint metrics (local/BigQuery)
+    thousand_genomes_data = Column(JSON)  # 1000 Genomes Phase 3 population frequencies (local ETL)
     chembl_data = Column(JSON)  # ChEMBL drug mechanisms, indications, warnings (BigQuery)
     fda_drug_data = Column(JSON)  # FDA drug label CYP interactions (BigQuery)
     alphafold_data = Column(JSON)  # AlphaFold protein structure confidence (BigQuery)
@@ -779,4 +785,52 @@ class EnsemblVepVariant(Base):
 
     __table_args__ = (
         Index('ix_ensembl_vep_chr_pos', 'chromosome', 'position'),
+    )
+
+
+# ==============================================================================
+# 1000 Genomes Phase 3 — imported from Ensembl VCF dump via ETL.
+# Population allele frequencies for AFR, AMR, EAS, EUR, SAS superpopulations.
+# ==============================================================================
+
+class ThousandGenomesVariant(Base):
+    """1000 Genomes Phase 3 variant record — one row per (chrom, pos, ref, alt).
+    Stores population-level allele frequencies from the 1000 Genomes Project.
+    Primary lookup table for ancestry-relevant population frequency data."""
+    __tablename__ = "thousand_genomes_variants"
+
+    id = Column(BigInteger, primary_key=True)
+    chrom = Column(String, nullable=False)                           # '1'..'22', 'X', 'Y', 'MT'
+    pos = Column(Integer, nullable=False)                            # Genomic position (GRCh38)
+    ref = Column(String, nullable=False)                             # Reference allele
+    alt = Column(String, nullable=False)                             # Alternate allele
+    rsid = Column(String)                                            # dbSNP rsid (e.g. 'rs123456')
+    variant_type = Column(String)                                    # SNV, indel, deletion, etc.
+
+    # Minor allele info
+    minor_allele = Column(String)                                    # Minor allele (from MA field)
+    maf = Column(Float)                                              # Minor allele frequency (from MAF field)
+    mac = Column(Integer)                                            # Minor allele count (from MAC field)
+    ancestral_allele = Column(String)                                # Ancestral allele (from AA field)
+
+    # Superpopulation allele frequencies
+    af_afr = Column(Float)                                           # African
+    af_amr = Column(Float)                                           # Admixed American
+    af_eas = Column(Float)                                           # East Asian
+    af_eur = Column(Float)                                           # European
+    af_sas = Column(Float)                                           # South Asian
+
+    # Evidence flags
+    is_clinvar = Column(Boolean, default=False)                      # In ClinVar
+    is_1000g = Column(Boolean, default=False)                        # In 1000 Genomes (always True here)
+
+    # Source tracking
+    data_source = Column(String, default='ensembl_vcf')             # 'ensembl_vcf'
+    imported_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index('ix_1kg_rsid', 'rsid'),
+        Index('ix_1kg_chrom_pos', 'chrom', 'pos'),
+        Index('ix_1kg_chrom_pos_ref_alt', 'chrom', 'pos', 'ref', 'alt', unique=True),
+        Index('ix_1kg_maf', 'maf'),
     )

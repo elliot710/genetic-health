@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { ExternalLink, Dna, FlaskConical, BookOpen, Activity, X, ChevronDown, ChevronUp, AlertTriangle, Pill, Shield, Atom } from 'lucide-react'
+import { ExternalLink, Dna, FlaskConical, BookOpen, Activity, X, ChevronDown, ChevronUp, AlertTriangle, Pill, Shield, Atom, RefreshCw } from 'lucide-react'
 import { Badge } from '../ui/badge'
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -117,6 +117,16 @@ interface VariantDetails {
       donor_loss?: number | null
       max_score?: number | null
     }
+  }
+  thousand_genomes?: {
+    found: boolean
+    source?: string
+    variant_type?: string
+    minor_allele?: string
+    maf?: number | null
+    mac?: number | null
+    ancestral_allele?: string
+    population_frequencies?: Record<string, { name: string; af: number }>
   }
   pathogenicity_score?: {
     composite_score: number
@@ -292,20 +302,34 @@ export default function VariantDetailDialog({
   const [details, setDetails] = useState<VariantDetails | null>(null)
   const [loading, setLoading] = useState(false)
   const [showPubs, setShowPubs] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
 
-  useEffect(() => {
-    if (!open || !rsid || !token) return
-    setDetails(null)
-    setLoading(true)
+  const fetchDetails = (forceRefresh = false) => {
+    if (!rsid || !token) return
+    if (forceRefresh) {
+      setRefreshing(true)
+    } else {
+      setDetails(null)
+      setLoading(true)
+    }
     setShowPubs(false)
 
-    fetch(`http://localhost:8000/api/annotations/variant-details/${rsid}`, {
+    const url = `http://localhost:8000/api/annotations/variant-details/${rsid}${forceRefresh ? '?refresh=true' : ''}`
+    fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => res.json())
       .then((data) => setDetails(data))
       .catch(() => setDetails({ found: false, rsid }))
-      .finally(() => setLoading(false))
+      .finally(() => {
+        setLoading(false)
+        setRefreshing(false)
+      })
+  }
+
+  useEffect(() => {
+    if (!open || !rsid || !token) return
+    fetchDetails(false)
   }, [open, rsid, token])
 
   const bg = isDarkMode ? 'bg-gray-900/95' : 'bg-white'
@@ -349,12 +373,22 @@ export default function VariantDetailDialog({
                 </p>
               </div>
             </div>
-            <button
-              onClick={() => onOpenChange(false)}
-              className={`p-1.5 rounded-lg ${isDarkMode ? 'hover:bg-white/10' : 'hover:bg-gray-100'} transition-colors`}
-            >
-              <X className={`h-4 w-4 ${textSecondary}`} />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => fetchDetails(true)}
+                disabled={refreshing || loading}
+                title="Refresh from external APIs"
+                className={`p-1.5 rounded-lg ${isDarkMode ? 'hover:bg-white/10' : 'hover:bg-gray-100'} transition-colors disabled:opacity-40`}
+              >
+                <RefreshCw className={`h-4 w-4 ${textSecondary} ${refreshing ? 'animate-spin' : ''}`} />
+              </button>
+              <button
+                onClick={() => onOpenChange(false)}
+                className={`p-1.5 rounded-lg ${isDarkMode ? 'hover:bg-white/10' : 'hover:bg-gray-100'} transition-colors`}
+              >
+                <X className={`h-4 w-4 ${textSecondary}`} />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1037,6 +1071,111 @@ export default function VariantDetailDialog({
                     className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors"
                   >
                     View on gnomAD Browser <ExternalLink className="h-3 w-3" />
+                  </a>
+                </div>
+              </div>
+            )}
+
+            {/* ── 1000 Genomes Phase 3 Population Frequencies ── */}
+            {details.thousand_genomes?.found && (
+              <div>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
+                  <Activity className="h-3.5 w-3.5" /> 1000 Genomes
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                    Phase 3
+                  </Badge>
+                </h4>
+                <div className={`${cardBg} rounded-xl p-3 border ${border} space-y-2`}>
+                  {/* MAF summary */}
+                  {details.thousand_genomes.maf != null && (
+                    <div className="flex items-center justify-between">
+                      <span className={`text-xs ${textSecondary}`}>Minor Allele Frequency</span>
+                      <span className={`text-sm font-mono font-semibold ${
+                        details.thousand_genomes.maf < 0.001 ? 'text-red-400' :
+                        details.thousand_genomes.maf < 0.01 ? 'text-amber-400' :
+                        'text-green-400'
+                      }`}>
+                        {formatFrequency(details.thousand_genomes.maf)}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Minor allele / Ancestral allele / MAC */}
+                  <div className="grid grid-cols-3 gap-2">
+                    {details.thousand_genomes.minor_allele && (
+                      <div className={`text-center p-1.5 rounded-lg ${isDarkMode ? 'bg-white/5' : 'bg-gray-100'}`}>
+                        <div className={`text-[10px] ${textSecondary}`}>Minor Allele</div>
+                        <div className={`text-xs font-mono ${textPrimary}`}>{details.thousand_genomes.minor_allele}</div>
+                      </div>
+                    )}
+                    {details.thousand_genomes.ancestral_allele && (
+                      <div className={`text-center p-1.5 rounded-lg ${isDarkMode ? 'bg-white/5' : 'bg-gray-100'}`}>
+                        <div className={`text-[10px] ${textSecondary}`}>Ancestral Allele</div>
+                        <div className={`text-xs font-mono ${textPrimary}`}>{details.thousand_genomes.ancestral_allele}</div>
+                      </div>
+                    )}
+                    {details.thousand_genomes.mac != null && (
+                      <div className={`text-center p-1.5 rounded-lg ${isDarkMode ? 'bg-white/5' : 'bg-gray-100'}`}>
+                        <div className={`text-[10px] ${textSecondary}`}>Minor Allele Count</div>
+                        <div className={`text-xs font-mono ${textPrimary}`}>{details.thousand_genomes.mac.toLocaleString()}</div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Variant type */}
+                  {details.thousand_genomes.variant_type && (
+                    <div className="flex items-center gap-1.5">
+                      <span className={`text-[10px] ${textSecondary}`}>Type:</span>
+                      <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                        {details.thousand_genomes.variant_type}
+                      </Badge>
+                    </div>
+                  )}
+
+                  {/* Population frequency bars */}
+                  {details.thousand_genomes.population_frequencies && Object.keys(details.thousand_genomes.population_frequencies).length > 0 && (
+                    <div className={`pt-2 border-t ${border}`}>
+                      <div className={`text-[10px] font-semibold ${textSecondary} uppercase tracking-wider mb-1.5`}>
+                        Super-Population Frequencies
+                      </div>
+                      <div className="space-y-1">
+                        {Object.entries(details.thousand_genomes.population_frequencies)
+                          .sort(([, a], [, b]) => (b.af || 0) - (a.af || 0))
+                          .map(([code, pop]) => {
+                            const maxAf = Math.max(
+                              ...Object.values(details.thousand_genomes!.population_frequencies!).map(p => p.af || 0),
+                              0.001
+                            )
+                            const barWidth = maxAf > 0 ? Math.max((pop.af / maxAf) * 100, 1) : 1
+                            return (
+                              <div key={code} className="flex items-center gap-2">
+                                <span className={`text-[10px] ${textSecondary} w-28 truncate text-right`}>
+                                  {pop.name}
+                                </span>
+                                <div className={`flex-1 h-3 rounded-full overflow-hidden ${isDarkMode ? 'bg-white/5' : 'bg-gray-200'}`}>
+                                  <div
+                                    className="h-full rounded-full bg-linear-to-r from-emerald-500 to-teal-400"
+                                    style={{ width: `${barWidth}%` }}
+                                  />
+                                </div>
+                                <span className={`text-[10px] font-mono ${textPrimary} w-16 text-right`}>
+                                  {formatFrequency(pop.af)}
+                                </span>
+                              </div>
+                            )
+                          })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Link to Ensembl browser */}
+                  <a
+                    href={`https://www.ensembl.org/Homo_sapiens/Variation/Population?v=${rsid}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                  >
+                    View on Ensembl <ExternalLink className="h-3 w-3" />
                   </a>
                 </div>
               </div>

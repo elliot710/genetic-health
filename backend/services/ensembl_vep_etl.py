@@ -384,6 +384,20 @@ class EnsemblVepETL:
                 files.append((m.group(1), p))
         return files
 
+    def _discover_special_vcf_files(self) -> List[Tuple[str, Path]]:
+        """Find clinically_associated and phenotype_associated VCF files."""
+        specials = []
+        if not _VCF_VEP_DIR.exists():
+            return specials
+        for name, label in [
+            ('homo_sapiens_clinically_associated.vcf.gz', 'clinically_associated'),
+            ('homo_sapiens_phenotype_associated.vcf.gz', 'phenotype_associated'),
+        ]:
+            p = _VCF_VEP_DIR / name
+            if p.exists():
+                specials.append((label, p))
+        return specials
+
     async def _load_known_rsids(self, conn: asyncpg.Connection) -> Set[str]:
         """Load all rsids from genetic_markers table."""
         rows = await conn.fetch("SELECT rsid FROM genetic_markers WHERE rsid IS NOT NULL")
@@ -447,6 +461,18 @@ class EnsemblVepETL:
                 chr_stats[chrom] = count
                 total_imported += count
 
+            # ── Also import clinically_associated & phenotype_associated VCFs ──
+            special_stats: Dict[str, int] = {}
+            for label, vcf_path in self._discover_special_vcf_files():
+                if label in already_loaded:
+                    logger.info(f"Skipping {label} — already loaded")
+                    continue
+                count = await self._import_chromosome(
+                    conn, vcf_path, label, known_rsids, gene_lookup
+                )
+                special_stats[label] = count
+                total_imported += count
+
             elapsed = time.monotonic() - t0
 
             # Get total count
@@ -463,6 +489,7 @@ class EnsemblVepETL:
             return {
                 'variants_imported': total_imported,
                 'chromosomes_processed': chr_stats,
+                'special_files_processed': special_stats,
                 'chromosomes_skipped': total_skipped,
                 'total_in_table': total_rows,
                 'elapsed_seconds': round(elapsed, 1),
@@ -480,7 +507,7 @@ class EnsemblVepETL:
         gene_lookup: Dict[str, List[Tuple[int, int, str, str]]],
     ) -> int:
         """Import a single chromosome VCF file.  Returns count of imported rows."""
-        logger.info(f"Importing chr{chrom} from {vcf_path.name}")
+        logger.info(f"Importing {chrom} from {vcf_path.name}")
         t0 = time.monotonic()
 
         records = []
@@ -514,12 +541,12 @@ class EnsemblVepETL:
 
                 if lines_read % 5_000_000 == 0:
                     logger.info(
-                        f"  chr{chrom}: read {lines_read:,} lines, "
+                        f"  {chrom}: read {lines_read:,} lines, "
                         f"{len(records):,} matched"
                     )
 
         if not records:
-            logger.info(f"  chr{chrom}: no matching variants in {lines_read:,} lines")
+            logger.info(f"  {chrom}: no matching variants in {lines_read:,} lines")
             return 0
 
         # Bulk insert using COPY + temp table for conflict handling
@@ -563,7 +590,7 @@ class EnsemblVepETL:
 
         elapsed = time.monotonic() - t0
         logger.info(
-            f"  chr{chrom}: imported {actual_inserted:,} variants "
+            f"  {chrom}: imported {actual_inserted:,} variants "
             f"from {lines_read:,} lines ({elapsed:.1f}s)"
         )
         return actual_inserted

@@ -141,6 +141,15 @@ async def startup_event():
     except Exception as e:
         print(f"ℹ️ gnomAD BigQuery: unavailable ({e})")
 
+    # Check 1000 Genomes Phase 3 PG availability
+    from .services.thousand_genomes_local import get_thousand_genomes_service
+    tkg_svc = get_thousand_genomes_service()
+    ok = await tkg_svc.ensure_loaded()
+    if ok:
+        print(f"✅ 1000 Genomes PG: {tkg_svc.variant_count} variants available")
+    else:
+        print("⚠️ 1000 Genomes PG: table empty — run ETL import via admin panel")
+
 @app.on_event("shutdown")
 async def shutdown_event():
     """Clean shutdown of analysis queue"""

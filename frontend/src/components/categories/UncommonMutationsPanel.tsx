@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { Search, ChevronRight } from 'lucide-react'
+import React, { useState, useEffect, useMemo } from 'react'
+import { Search, ChevronRight, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import type { CategoryPanelProps } from './types'
 import {
@@ -8,6 +8,7 @@ import {
   EmptyState,
   SectionCard,
   StatusBadge,
+  DisclaimerCard,
   VariantLinks,
   clinicalSignificanceToSeverity,
   formatLabel,
@@ -31,6 +32,8 @@ interface UncommonMutation {
 export default function UncommonMutationsPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
   const theme = useThemeClasses(isDarkMode)
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [relevanceFilter, setRelevanceFilter] = useState<string>('all')
 
   const [realMutations, setRealMutations] = useState<UncommonMutation[]>([])
   const [loading, setLoading] = useState(false)
@@ -72,6 +75,29 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
   }
 
   const mutations = processUncommonMutations()
+
+  const relevanceOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const m of mutations) set.add(m.clinical_relevance || 'unknown')
+    return Array.from(set).sort()
+  }, [mutations])
+
+  const filteredMutations = useMemo(() => {
+    let list = mutations
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase()
+      list = list.filter(m =>
+        m.gene?.toLowerCase().includes(q) ||
+        m.rsid?.toLowerCase().includes(q) ||
+        m.effect?.toLowerCase().includes(q) ||
+        m.mutation_name?.toLowerCase().includes(q)
+      )
+    }
+    if (relevanceFilter !== 'all') {
+      list = list.filter(m => (m.clinical_relevance || 'unknown') === relevanceFilter)
+    }
+    return list
+  }, [mutations, searchQuery, relevanceFilter])
 
   const getSummary = () => {
     const summary: Record<string, number> = {}
@@ -119,9 +145,41 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
     <div className="space-y-6">
       <CategoryHeader {...headerProps} />
 
+      {/* Filter Bar */}
+      <div className={`${theme.glass} border ${theme.border} rounded-xl p-4 flex flex-col sm:flex-row gap-3`}>
+        <div className="relative flex-1">
+          <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+          <input
+            type="text"
+            placeholder="Search by gene, rsid, or effect..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className={`w-full pl-9 pr-3 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} placeholder:${theme.textSecondary} text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40`}
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <Filter className={`h-4 w-4 ${theme.textSecondary}`} />
+          <select
+            value={relevanceFilter}
+            onChange={e => setRelevanceFilter(e.target.value)}
+            className={`px-3 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40`}
+          >
+            <option value="all">All Relevance</option>
+            {relevanceOptions.map(r => (
+              <option key={r} value={r}>{formatLabel(r)}</option>
+            ))}
+          </select>
+        </div>
+        {(searchQuery || relevanceFilter !== 'all') && (
+          <span className={`text-xs ${theme.textSecondary} self-center`}>
+            {filteredMutations.length} of {mutations.length}
+          </span>
+        )}
+      </div>
+
       <SectionCard title="Uncommon Variant Analysis" theme={theme}>
         <MasonryLayout>
-          {mutations.map((mutation, index) => {
+          {filteredMutations.map((mutation, index) => {
             const itemKey = `uncommon-${index}`
             const isExpanded = selectedItem === itemKey
             return (
@@ -142,9 +200,13 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
                 </div>
 
                 <div className="flex flex-wrap gap-1.5">
-                  {mutation.rsid && <Badge variant="secondary" className="text-xs">{mutation.rsid}</Badge>}
+                  {mutation.rsid && <Badge variant="secondary" className="text-xs font-mono">{mutation.rsid}{data?.genotype_map?.[mutation.rsid] ? ` ${data.genotype_map[mutation.rsid]}` : ''}</Badge>}
                   {mutation.effect_size && <Badge variant="outline" className="text-xs">Effect: {mutation.effect_size}</Badge>}
                 </div>
+
+                {mutation.effect && (
+                  <p className={`text-sm ${theme.textSecondary} mt-2 line-clamp-2`}>{cleanCondition(mutation.effect)}</p>
+                )}
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
@@ -194,6 +256,8 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
           ))}
         </div>
       </SectionCard>
+
+      <DisclaimerCard theme={theme} />
     </div>
   )
 }

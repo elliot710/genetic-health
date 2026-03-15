@@ -1,12 +1,14 @@
-import React, { useState, useEffect } from 'react'
-import { Dumbbell, ChevronRight, CheckCircle } from 'lucide-react'
+import React, { useState, useMemo, useEffect } from 'react'
+import { Dumbbell, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
+import { CapacityChart } from './GenomicCharts'
 import {
   useThemeClasses,
   CategoryHeader,
   EmptyState,
   SectionCard,
   StatusBadge,
+  DisclaimerCard,
   VariantLinks,
   advantageToSeverity,
   formatLabel,
@@ -18,6 +20,8 @@ import type { CategoryPanelProps, SportsPerformance } from './types'
 export default function SportsPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
   const theme = useThemeClasses(isDarkMode)
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [advantageFilter, setAdvantageFilter] = useState<string>('all')
 
   const [realSportsData, setRealSportsData] = useState<SportsPerformance[]>([])
   const [loading, setLoading] = useState(false)
@@ -80,6 +84,38 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
 
   const athleticTraits = getAthleticTraits()
 
+  const advantageOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const t of athleticTraits) set.add((t.result || 'moderate').toLowerCase())
+    return Array.from(set).sort()
+  }, [athleticTraits])
+
+  const filteredTraits = useMemo(() => {
+    let list = athleticTraits
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      list = list.filter(t => t.trait.toLowerCase().includes(q) || t.gene.toLowerCase().includes(q))
+    }
+    if (advantageFilter !== 'all') {
+      list = list.filter(t => (t.result || 'moderate').toLowerCase() === advantageFilter)
+    }
+    return list
+  }, [athleticTraits, searchQuery, advantageFilter])
+
+  const allRecommendations = useMemo(() => {
+    const seen = new Set<string>()
+    const result: string[] = []
+    for (const t of athleticTraits) {
+      if (t.recommendation) {
+        for (const rec of t.recommendation.split(', ')) {
+          const key = rec.toLowerCase().trim()
+          if (!seen.has(key) && key) { seen.add(key); result.push(rec) }
+        }
+      }
+    }
+    return result.slice(0, 8)
+  }, [athleticTraits])
+
   const headerProps = {
     icon: Dumbbell,
     iconColorClass: 'text-orange-400',
@@ -115,9 +151,42 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
     <div className="space-y-6">
       <CategoryHeader {...headerProps} />
 
-      <SectionCard title="Athletic Traits" theme={theme}>
+      {athleticTraits.length >= 3 && (
+        <SectionCard title="Advantage Distribution" theme={theme}>
+          <CapacityChart data={athleticTraits.map(t => ({ name: t.trait, capacity: t.result || 'moderate' }))} isDarkMode={isDarkMode} />
+        </SectionCard>
+      )}
+
+      {/* Filter Bar */}
+      <div className="flex flex-wrap gap-3">
+        <div className="relative flex-1 min-w-50">
+          <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+          <input
+            type="text"
+            placeholder="Search traits or genes…"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} placeholder:${theme.textSecondary} focus:outline-none focus:ring-2 focus:ring-orange-500/40 text-sm`}
+          />
+        </div>
+        <div className="relative min-w-40">
+          <Filter className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+          <select
+            value={advantageFilter}
+            onChange={e => setAdvantageFilter(e.target.value)}
+            className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} focus:outline-none focus:ring-2 focus:ring-orange-500/40 text-sm appearance-none cursor-pointer`}
+          >
+            <option value="all">All Advantages</option>
+            {advantageOptions.map(s => (
+              <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <SectionCard title={`Athletic Traits${filteredTraits.length !== athleticTraits.length ? ` (${filteredTraits.length} of ${athleticTraits.length})` : ''}`} theme={theme}>
         <MasonryLayout>
-          {athleticTraits.map((trait, index) => {
+          {filteredTraits.map((trait, index) => {
             const itemKey = `sport-${index}`
             const isExpanded = selectedItem === itemKey
             const rsid = trait.gene?.startsWith('rs') ? trait.gene : undefined
@@ -140,7 +209,7 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
                 </div>
 
                 <div className="flex flex-wrap gap-1.5">
-                  {rsid && <Badge variant="secondary" className="text-xs">{rsid}</Badge>}
+                  {rsid && <Badge variant="secondary" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>}
                   {gene && <Badge variant="outline" className="text-xs">{gene}</Badge>}
                 </div>
 
@@ -166,6 +235,21 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
           })}
         </MasonryLayout>
       </SectionCard>
+
+      {allRecommendations.length > 0 && (
+        <SectionCard title="Training Recommendations" theme={theme}>
+          <div className="space-y-2">
+            {allRecommendations.map((rec, i) => (
+              <div key={i} className={`flex items-start gap-2 text-sm ${theme.textSecondary}`}>
+                <CheckCircle className="h-4 w-4 text-orange-400 mt-0.5 shrink-0" />
+                <span>{rec}</span>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      )}
+
+      <DisclaimerCard theme={theme} />
     </div>
   )
 }

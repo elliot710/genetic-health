@@ -247,6 +247,7 @@ class VCFParser:
                 "position": position,
                 "id": rsid or f"variant_{row_num}",
                 "rsid": rsid,  # Add rsid field for database compatibility
+                "genotype": genotype,  # Store genotype at top level for analysis_variants
                 "ref_allele": ref_allele or "N",
                 "alt_allele": alt_allele or "N", 
                 "quality": None,

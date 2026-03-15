@@ -17,6 +17,30 @@ from backend.db.schemas import User
 router = APIRouter(prefix="/api/annotations", tags=["annotations"])
 
 
+def _is_noise_condition(s: str) -> bool:
+    """Return True for placeholder condition strings that carry no clinical meaning."""
+    lower = s.lower().strip()
+    return lower in ("not provided", "not specified", "see cases", "")
+
+
+def _split_condition_string(raw: str) -> list[str]:
+    """Split a raw ClinVar condition string on pipe and semicolon delimiters."""
+    parts: list[str] = []
+    for chunk in raw.split("|"):
+        for sub in chunk.split(";"):
+            cleaned = sub.strip()
+            if cleaned and not _is_noise_condition(cleaned):
+                parts.append(cleaned)
+    return parts
+
+
+def _is_hgvs_name(title: str) -> bool:
+    """Heuristic: real HGVS names contain ':c.' / ':p.' / ':g.' or 'NM_' / 'NC_' prefixes."""
+    return bool(title) and (":c." in title or ":p." in title or ":g." in title
+                            or title.startswith("NM_") or title.startswith("NC_")
+                            or title.startswith("NR_"))
+
+
 def _build_variant_description(rsid: str, response: Dict[str, Any]) -> str:
     """Build a natural language description of a variant from annotation data."""
     parts = []
@@ -38,13 +62,15 @@ def _build_variant_description(rsid: str, response: Dict[str, Any]) -> str:
     clinvar_entries = response.get("clinvar", {}).get("entries", [])
     for entry in clinvar_entries:
         title = entry.get("title", "")
-        if title and not hgvs_name:
+        # Only accept titles that look like real HGVS nomenclature
+        if title and not hgvs_name and _is_hgvs_name(title):
             hgvs_name = title
         vt = entry.get("variation_type", "")
         if vt and not clinvar_variation_type:
             clinvar_variation_type = vt
         conditions = entry.get("conditions", [])
-        all_conditions.extend(c for c in conditions if c and c.lower() != "not provided" and c.lower() != "not specified")
+        for cond_str in conditions:
+            all_conditions.extend(_split_condition_string(cond_str))
 
     all_conditions = list(dict.fromkeys(all_conditions))  # dedupe preserving order
 
@@ -179,40 +205,190 @@ async def search_literature(
 @router.post("/clinical-summary")
 async def get_clinical_summary(
     request: ClinicalSummaryRequest,
+    refresh: bool = False,
+    db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Get a comprehensive clinical summary combining all data sources
-    
-    Provides a unified view of:
-    - Clinical significance from ClinVar
-    - Population frequencies from Ensembl
-    - Drug response information
-    - Literature evidence count
-    - Clinical recommendations
+    Get a comprehensive clinical summary combining all data sources.
+    Serves from SharedVariantAnnotation cache when available.
+    Pass ?refresh=true to force a fresh fetch from external APIs.
     """
+    rsid = request.rsid
+    gene = request.gene
+
+    # ── Build empty summary skeleton ──
+    summary: Dict[str, Any] = {
+        'rsid': rsid,
+        'gene': gene,
+        'clinical_significance': 'unknown',
+        'population_frequency': None,
+        'drug_responses': [],
+        'literature_count': 0,
+        'sources': [],
+    }
+
+    # ── Step 1: Check DB cache unless refresh requested ──
+    if not refresh:
+        result = await db.execute(
+            select(SharedVariantAnnotation).where(SharedVariantAnnotation.rsid == rsid)
+        )
+        cached = result.scalar_one_or_none()
+
+        if cached and (cached.ensembl_data or cached.clinvar_data or cached.pharmgkb_data or cached.snpedia_data):
+            return _build_clinical_summary_from_cache(cached, rsid, gene)
+
+    # ── Step 2: Cache miss or refresh — fetch live, persist, and build summary ──
     try:
         async with GeneticAPIService() as api_service:
-            result = await api_service.get_variant_clinical_summary(request.rsid, request.gene)
-            return result
+            raw_ann = await api_service.annotate_variant(rsid)
+        raw = raw_ann.get("annotations", {}) if raw_ann else {}
+
+        # Persist raw annotations so future calls are served from cache
+        if raw:
+            try:
+                from backend.db.models import GeneticMarker
+                existing = await db.execute(
+                    select(SharedVariantAnnotation).where(SharedVariantAnnotation.rsid == rsid)
+                )
+                existing_ann = existing.scalar_one_or_none()
+                if existing_ann:
+                    existing_ann.ensembl_data = raw.get("ensembl") or existing_ann.ensembl_data
+                    existing_ann.clinvar_data = raw.get("clinvar") or existing_ann.clinvar_data
+                    existing_ann.pharmgkb_data = raw.get("clinpgx") or existing_ann.pharmgkb_data
+                    existing_ann.snpedia_data = raw.get("snpedia") or existing_ann.snpedia_data
+                    existing_ann.litvar_data = raw.get("litvar") or existing_ann.litvar_data
+                    await db.commit()
+                else:
+                    marker_result = await db.execute(
+                        select(GeneticMarker).where(GeneticMarker.rsid == rsid)
+                    )
+                    marker = marker_result.scalar_one_or_none()
+                    new_ann = SharedVariantAnnotation(
+                        rsid=rsid,
+                        marker_id=marker.id if marker else None,
+                        ensembl_data=raw.get("ensembl"),
+                        clinvar_data=raw.get("clinvar"),
+                        pharmgkb_data=raw.get("clinpgx"),
+                        snpedia_data=raw.get("snpedia"),
+                        litvar_data=raw.get("litvar"),
+                    )
+                    db.add(new_ann)
+                    await db.commit()
+            except Exception:
+                pass  # Cache persistence is best-effort
+
+        # Build summary from the raw annotations
+        clinvar = raw.get('clinvar', {})
+        if isinstance(clinvar, dict) and clinvar.get('found'):
+            summary['sources'].append('clinvar')
+            summary['clinical_significance'] = 'Reported in ClinVar'
+            summary['clinvar_ids'] = clinvar.get('ids', [])
+
+        ensembl = raw.get('ensembl', {})
+        if isinstance(ensembl, dict) and ensembl.get('found'):
+            summary['sources'].append('ensembl')
+            data = ensembl.get('data', [])
+            if isinstance(data, list) and data:
+                vep = data[0]
+                freqs = vep.get('colocated_variants', [{}])
+                if freqs:
+                    freq_data = freqs[0].get('frequencies', {})
+                    if freq_data:
+                        summary['population_frequency'] = freq_data
+                consequences = vep.get('most_severe_consequence', '')
+                if consequences:
+                    summary['consequence'] = consequences.replace('_', ' ')
+
+        clinpgx = raw.get('clinpgx', {})
+        if isinstance(clinpgx, dict) and clinpgx.get('found'):
+            summary['sources'].append('clinpgx')
+
+        snpedia = raw.get('snpedia', {})
+        if isinstance(snpedia, dict) and snpedia.get('found'):
+            summary['sources'].append('snpedia')
+
+        return summary
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Clinical summary failed: {str(e)}")
+
+
+def _build_clinical_summary_from_cache(
+    cached: SharedVariantAnnotation, rsid: str, gene: Optional[str]
+) -> Dict[str, Any]:
+    """Build a clinical summary dict from cached SharedVariantAnnotation data."""
+    summary: Dict[str, Any] = {
+        'rsid': rsid,
+        'gene': gene,
+        'clinical_significance': 'unknown',
+        'population_frequency': None,
+        'drug_responses': [],
+        'literature_count': 0,
+        'sources': [],
+    }
+
+    # ClinVar
+    clinvar = cached.clinvar_data
+    if isinstance(clinvar, dict) and clinvar.get('found'):
+        summary['sources'].append('clinvar')
+        summary['clinical_significance'] = 'Reported in ClinVar'
+        summary['clinvar_ids'] = clinvar.get('ids', [])
+
+    # Ensembl
+    ensembl = cached.ensembl_data
+    if isinstance(ensembl, dict) and ensembl.get('found'):
+        summary['sources'].append('ensembl')
+        data = ensembl.get('data', [])
+        if isinstance(data, list) and data:
+            vep = data[0]
+            freqs = vep.get('colocated_variants', [{}])
+            if freqs:
+                freq_data = freqs[0].get('frequencies', {})
+                if freq_data:
+                    summary['population_frequency'] = freq_data
+            consequences = vep.get('most_severe_consequence', '')
+            if consequences:
+                summary['consequence'] = consequences.replace('_', ' ')
+
+    # ClinPGx
+    clinpgx = cached.pharmgkb_data
+    if isinstance(clinpgx, dict) and clinpgx.get('found'):
+        summary['sources'].append('clinpgx')
+
+    # SNPedia
+    snpedia = cached.snpedia_data
+    if isinstance(snpedia, dict) and snpedia.get('found'):
+        summary['sources'].append('snpedia')
+
+    # AlphaMissense from cache
+    am = cached.alpha_missense_data
+    if isinstance(am, dict) and am.get('found'):
+        summary['alpha_missense'] = {
+            'am_pathogenicity': am.get('am_pathogenicity'),
+            'am_class': am.get('am_class'),
+        }
+
+    return summary
 
 @router.get("/variant-details/{rsid}")
 async def get_variant_details(
     rsid: str,
+    refresh: bool = False,
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
     """
     Get structured annotation details for a variant from the database.
     Falls back to live API fetch when no cached annotation exists.
-    Returns processed ensembl, clinvar, and publication data.
+    Pass ?refresh=true to force a fresh fetch from external APIs.
     """
-    result = await db.execute(
-        select(SharedVariantAnnotation).where(SharedVariantAnnotation.rsid == rsid)
-    )
-    annotation = result.scalar_one_or_none()
+    annotation = None
+
+    if not refresh:
+        result = await db.execute(
+            select(SharedVariantAnnotation).where(SharedVariantAnnotation.rsid == rsid)
+        )
+        annotation = result.scalar_one_or_none()
 
     if not annotation:
         # Fall back: fetch live data from external APIs and persist it
@@ -227,20 +403,38 @@ async def get_variant_details(
                 live = await api_service.annotate_variant(rsid)
             raw = live.get("annotations", {})
 
-            # Persist as a new SharedVariantAnnotation so future lookups are instant
-            new_ann = SharedVariantAnnotation(
-                rsid=rsid,
-                marker_id=marker.id if marker else None,
-                ensembl_data=raw.get("ensembl"),
-                clinvar_data=raw.get("clinvar"),
-                pharmgkb_data=raw.get("clinpgx"),
-                snpedia_data=raw.get("snpedia"),
-                litvar_data=raw.get("litvar"),
-            )
-            db.add(new_ann)
-            await db.commit()
-            await db.refresh(new_ann)
-            annotation = new_ann
+            if refresh:
+                # Update existing annotation in-place
+                existing = await db.execute(
+                    select(SharedVariantAnnotation).where(SharedVariantAnnotation.rsid == rsid)
+                )
+                existing_ann = existing.scalar_one_or_none()
+                if existing_ann:
+                    existing_ann.ensembl_data = raw.get("ensembl")
+                    existing_ann.clinvar_data = raw.get("clinvar")
+                    existing_ann.pharmgkb_data = raw.get("clinpgx")
+                    existing_ann.snpedia_data = raw.get("snpedia")
+                    existing_ann.litvar_data = raw.get("litvar")
+                    await db.commit()
+                    await db.refresh(existing_ann)
+                    annotation = existing_ann
+                else:
+                    refresh = False  # No existing row, insert below
+
+            if not annotation:
+                new_ann = SharedVariantAnnotation(
+                    rsid=rsid,
+                    marker_id=marker.id if marker else None,
+                    ensembl_data=raw.get("ensembl"),
+                    clinvar_data=raw.get("clinvar"),
+                    pharmgkb_data=raw.get("clinpgx"),
+                    snpedia_data=raw.get("snpedia"),
+                    litvar_data=raw.get("litvar"),
+                )
+                db.add(new_ann)
+                await db.commit()
+                await db.refresh(new_ann)
+                annotation = new_ann
         except Exception:
             return {"found": False, "rsid": rsid}
 
@@ -325,12 +519,59 @@ async def get_variant_details(
                     clinvar_entries = cached_clinvar.get("entries", [])
             except Exception:
                 pass
+        # Clean conditions: split pipe/semicolon delimiters, filter noise, deduplicate
+        for entry in clinvar_entries:
+            raw_conds = entry.get("conditions", [])
+            cleaned: list[str] = []
+            for c in raw_conds:
+                cleaned.extend(_split_condition_string(c))
+            entry["conditions"] = list(dict.fromkeys(cleaned))
+
         response["clinvar"] = {
             "found": True,
             "count": clinvar.get("count", 0),
             "ids": clinvar.get("ids", []),
             "entries": clinvar_entries,
         }
+
+    # Process ClinVar local data (curated from local ClinVar DB — richer than API)
+    cv_local = annotation.clinvar_local_data
+    if cv_local and isinstance(cv_local, dict) and cv_local.get("found"):
+        cv_local_resp: Dict[str, Any] = {
+            "found": True,
+            "genes": cv_local.get("genes", []),
+            "clinical_significances": cv_local.get("clinical_significances", []),
+            "gene_conditions": cv_local.get("gene_conditions", []),
+            "review_statuses": cv_local.get("review_statuses", []),
+            "has_conflicting_interpretations": cv_local.get("has_conflicting_interpretations", False),
+        }
+        vcf = cv_local.get("vcf_data", {})
+        if vcf:
+            cv_local_resp["molecular_consequences"] = vcf.get("molecular_consequences", [])
+            cv_local_resp["conflicting_classifications"] = vcf.get("conflicting_classifications", [])
+            cv_local_resp["allele_frequencies"] = vcf.get("allele_frequencies", {})
+        gene_stats = cv_local.get("gene_stats", [])
+        if gene_stats:
+            cv_local_resp["gene_stats"] = gene_stats
+        response["clinvar_local"] = cv_local_resp
+
+        # Backfill clinvar entries from local data if API entries are empty
+        if "clinvar" not in response or not response.get("clinvar", {}).get("entries"):
+            entries = cv_local.get("entries", [])
+            if entries:
+                # Clean conditions in local entries too
+                for entry in entries:
+                    raw_conds = entry.get("conditions", [])
+                    cleaned_local: list[str] = []
+                    for c in raw_conds:
+                        cleaned_local.extend(_split_condition_string(c))
+                    entry["conditions"] = list(dict.fromkeys(cleaned_local))
+                response["clinvar"] = {
+                    "found": True,
+                    "count": cv_local.get("count", len(entries)),
+                    "ids": cv_local.get("ids", []),
+                    "entries": entries,
+                }
 
     # Process ClinPGx data (stored in pharmgkb_data column for backward compat)
     clinpgx_raw = annotation.pharmgkb_data
@@ -425,6 +666,23 @@ async def get_variant_details(
             gnomad_resp["splice_ai"] = gnomad_raw["splice_ai"]
         response["gnomad"] = gnomad_resp
 
+    # Process 1000 Genomes Phase 3 data (super-population allele frequencies)
+    tkg_raw = annotation.thousand_genomes_data
+    if tkg_raw and isinstance(tkg_raw, dict) and tkg_raw.get("found"):
+        tkg_resp: Dict[str, Any] = {
+            "found": True,
+            "source": tkg_raw.get("source", "1000genomes_local"),
+            "variant_type": tkg_raw.get("variant_type"),
+            "minor_allele": tkg_raw.get("minor_allele"),
+            "maf": tkg_raw.get("maf"),
+            "mac": tkg_raw.get("mac"),
+            "ancestral_allele": tkg_raw.get("ancestral_allele"),
+        }
+        pop_freqs = tkg_raw.get("population_frequencies", {})
+        if pop_freqs:
+            tkg_resp["population_frequencies"] = pop_freqs
+        response["thousand_genomes"] = tkg_resp
+
     # Generate natural language variant description from combined sources (after all processing)
     response["description"] = _build_variant_description(rsid, response)
 
@@ -442,6 +700,8 @@ async def get_variant_details(
         scoring_annotations["alpha_missense"] = annotation.alpha_missense_data
     if annotation.gnomad_data:
         scoring_annotations["gnomad"] = annotation.gnomad_data
+    if annotation.thousand_genomes_data:
+        scoring_annotations["thousand_genomes"] = annotation.thousand_genomes_data
     response["pathogenicity_score"] = get_scoring_engine().score_variant(scoring_annotations)
 
     # ── BigQuery enrichment (ChEMBL, FDA Drug, AlphaFold) ─────────

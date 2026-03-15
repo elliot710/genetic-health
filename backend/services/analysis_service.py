@@ -152,6 +152,11 @@ class SharedVariantAnnotationService:
                 if gnomad is not None:
                     merged_data['annotations']['gnomad'] = gnomad
 
+                # Include 1000 Genomes Phase 3 data (PG-backed)
+                tkg = getattr(annotation, 'thousand_genomes_data', None)
+                if tkg is not None:
+                    merged_data['annotations']['thousand_genomes'] = tkg
+
                 # Include BigQuery data (ChEMBL, FDA Drug, AlphaFold)
                 for bq_src, bq_col in (('chembl', 'chembl_data'), ('fda_drug', 'fda_drug_data'), ('alphafold', 'alphafold_data')):
                     bq_data = getattr(annotation, bq_col, None)
@@ -250,6 +255,16 @@ class SharedVariantAnnotationService:
                 if gnomad_svc.is_loaded:
                     gnomad_data_val = await gnomad_svc.lookup(rsid, local_only=True)
 
+            # Look up 1000 Genomes Phase 3 data
+            thousand_genomes_data_val = None
+            if enabled_sources is None or '1000genomes' in enabled_sources:
+                from .thousand_genomes_local import get_thousand_genomes_service
+                tkg_svc = get_thousand_genomes_service()
+                if tkg_svc.is_loaded:
+                    thousand_genomes_data_val = await tkg_svc.lookup(rsid)
+                    if thousand_genomes_data_val and not thousand_genomes_data_val.get('found'):
+                        thousand_genomes_data_val = None
+
             # BigQuery enrichment (ChEMBL, FDA Drug, AlphaFold) is deferred to
             # backfill / on-demand variant-detail to avoid blocking bulk analysis.
             chembl_data_val = None
@@ -267,6 +282,7 @@ class SharedVariantAnnotationService:
                 alpha_missense_data=am_data,
                 clinvar_local_data=cv_local_data,
                 gnomad_data=gnomad_data_val,
+                thousand_genomes_data=thousand_genomes_data_val,
                 chembl_data=chembl_data_val,
                 fda_drug_data=fda_drug_data_val,
                 alphafold_data=alphafold_data_val,
@@ -314,6 +330,11 @@ class SharedVariantAnnotationService:
                 conflict_set['gnomad_data'] = func.coalesce(
                     SharedVariantAnnotation.gnomad_data,
                     stmt.excluded.gnomad_data,
+                )
+            if thousand_genomes_data_val:
+                conflict_set['thousand_genomes_data'] = func.coalesce(
+                    SharedVariantAnnotation.thousand_genomes_data,
+                    stmt.excluded.thousand_genomes_data,
                 )
             if chembl_data_val:
                 conflict_set['chembl_data'] = func.coalesce(
@@ -502,7 +523,7 @@ class ComprehensiveAnalysisService:
         Local sources (alpha_missense, clinvar_local) are always included
         if not explicitly disabled, even if their config row doesn't exist yet."""
         # Local sources that should always be enabled unless explicitly disabled
-        LOCAL_SOURCES = {'alpha_missense', 'clinvar_local', 'gnomad'}
+        LOCAL_SOURCES = {'alpha_missense', 'clinvar_local', 'gnomad', 'thousand_genomes', 'ensembl_vep'}
         try:
             from ..db.database import async_session_factory
             async with async_session_factory() as session:
@@ -902,6 +923,13 @@ class ComprehensiveAnalysisService:
             vep_svc = get_ensembl_vep_service()
             do_ensembl = await vep_svc.ensure_loaded()
 
+        do_1kg = enabled_sources is None or '1000genomes' in enabled_sources
+        tkg_svc = None
+        if do_1kg:
+            from .thousand_genomes_local import get_thousand_genomes_service
+            tkg_svc = get_thousand_genomes_service()
+            do_1kg = tkg_svc.is_loaded
+
         # Build missing lists from existing annotations
         missing_cv = [
             rsid for rsid, data in existing_annotations.items()
@@ -915,8 +943,12 @@ class ComprehensiveAnalysisService:
             rsid for rsid, data in existing_annotations.items()
             if do_ensembl and 'ensembl' not in data.get('annotations', {})
         ]
+        missing_1kg = [
+            rsid for rsid, data in existing_annotations.items()
+            if do_1kg and '1000genomes' not in data.get('annotations', {})
+        ]
 
-        if not missing_cv and not missing_gnomad and not missing_ensembl:
+        if not missing_cv and not missing_gnomad and not missing_ensembl and not missing_1kg:
             # Skip to BQ backfill check below
             pass
         else:
@@ -934,6 +966,11 @@ class ComprehensiveAnalysisService:
             if missing_ensembl:
                 logger.info(f"Backfilling Ensembl VEP for {len(missing_ensembl)} existing annotations")
                 ens_results = await vep_svc.lookup_batch(missing_ensembl)
+
+            tkg_results: Dict[str, Optional[Dict]] = {}
+            if missing_1kg:
+                logger.info(f"Backfilling 1000G for {len(missing_1kg)} existing annotations")
+                tkg_results = await tkg_svc.lookup_batch(missing_1kg)
 
             # --- Batch DB updates using executemany (pipelined via asyncpg) ---
             from sqlalchemy import bindparam
@@ -957,6 +994,12 @@ class ComprehensiveAnalysisService:
                 if ens_data and ens_data.get('found'):
                     ens_params.append({'b_rsid': rsid, 'b_data': ens_data})
                     existing_annotations[rsid]['annotations']['ensembl'] = ens_data
+
+            tkg_params = []
+            for rsid, tkg_data in tkg_results.items():
+                if tkg_data and tkg_data.get('found'):
+                    tkg_params.append({'b_rsid': rsid, 'b_data': tkg_data})
+                    existing_annotations[rsid]['annotations']['1000genomes'] = tkg_data
 
             async with async_session_factory() as session:
                 if cv_params:
@@ -986,7 +1029,17 @@ class ComprehensiveAnalysisService:
                     )
                     ens_updated = len(ens_params)
 
-                if cv_updated or gn_updated or ens_updated:
+                tkg_updated = 0
+                if tkg_params:
+                    await session.execute(
+                        update(SharedVariantAnnotation)
+                        .where(SharedVariantAnnotation.rsid == bindparam('b_rsid'))
+                        .values(thousand_genomes_data=bindparam('b_data')),
+                        tkg_params
+                    )
+                    tkg_updated = len(tkg_params)
+
+                if cv_updated or gn_updated or ens_updated or tkg_updated:
                     await session.commit()
 
             if cv_updated:
@@ -995,6 +1048,8 @@ class ComprehensiveAnalysisService:
                 logger.info(f"Backfilled gnomAD data for {gn_updated}/{len(missing_gnomad)} annotations")
             if ens_updated:
                 logger.info(f"Backfilled Ensembl VEP data for {ens_updated}/{len(missing_ensembl)} annotations")
+            if tkg_updated:
+                logger.info(f"Backfilled 1000G data for {tkg_updated}/{len(missing_1kg)} annotations")
 
         # --- BigQuery backfill (ChEMBL, FDA Drug, AlphaFold) ---
         bq_source_names = {'chembl', 'fda_drug', 'alphafold'}
@@ -1134,6 +1189,17 @@ class ComprehensiveAnalysisService:
                 ens_found = sum(1 for v in ens_map.values() if v and v.get('found'))
                 logger.info(f"  Ensembl VEP local batch: {ens_found}/{total} found ({time.time() - t0:.1f}s)")
 
+        # --- Step 2.6: Batch 1000 Genomes local lookups ---
+        tkg_map: Dict[str, Optional[Dict]] = {}
+        if enabled_sources is None or '1000genomes' in enabled_sources:
+            from .thousand_genomes_local import get_thousand_genomes_service
+            tkg_svc = get_thousand_genomes_service()
+            if tkg_svc.is_loaded:
+                t0 = time.time()
+                tkg_map = await tkg_svc.lookup_batch(unique_rsids)
+                tkg_found = sum(1 for v in tkg_map.values() if v and v.get('found'))
+                logger.info(f"  1000G local batch: {tkg_found}/{total} found ({time.time() - t0:.1f}s)")
+
         await asyncio.sleep(0)
 
         # --- Step 3: Bulk upsert shared_variant_annotations + create variant_annotations ---
@@ -1160,6 +1226,7 @@ class ComprehensiveAnalysisService:
                 cv_val = _val(cv_map.get(rsid))
                 gn_val = _val(gn_map.get(rsid))
                 ens_val = _val(ens_map.get(rsid))
+                tkg_val = _val(tkg_map.get(rsid))
                 first_variant = rsid_to_variants[rsid][0]
                 marker_id = getattr(first_variant, 'marker_id', None)
 
@@ -1168,6 +1235,7 @@ class ComprehensiveAnalysisService:
                     clinvar_local_data=cv_val,
                     gnomad_data=gn_val,
                     ensembl_data=ens_val,
+                    thousand_genomes_data=tkg_val,
                     annotation_status='partial',
                     total_api_calls=0,
                     usage_count=1,
@@ -1195,6 +1263,10 @@ class ComprehensiveAnalysisService:
                         ensembl_data=func.coalesce(
                             SharedVariantAnnotation.ensembl_data,
                             stmt.excluded.ensembl_data,
+                        ),
+                        thousand_genomes_data=func.coalesce(
+                            SharedVariantAnnotation.thousand_genomes_data,
+                            stmt.excluded.thousand_genomes_data,
                         ),
                     ),
                 ).returning(SharedVariantAnnotation.id, SharedVariantAnnotation.rsid)
@@ -1229,6 +1301,7 @@ class ComprehensiveAnalysisService:
                 cv_val = _val(cv_map.get(rsid))
                 gn_val = _val(gn_map.get(rsid))
                 ens_val = _val(ens_map.get(rsid))
+                tkg_val = _val(tkg_map.get(rsid))
 
                 ann_data: Dict[str, Any] = {
                     'rsid': rsid,
@@ -1244,6 +1317,9 @@ class ComprehensiveAnalysisService:
                     ann_data['success_count'] += 1
                 if ens_val:
                     ann_data['annotations']['ensembl'] = ens_val
+                    ann_data['success_count'] += 1
+                if tkg_val:
+                    ann_data['annotations']['thousand_genomes'] = tkg_val
                     ann_data['success_count'] += 1
 
                 ann_data['pathogenicity_score'] = scorer.score_variant(
@@ -1638,6 +1714,50 @@ class ComprehensiveAnalysisService:
         except (KeyError, IndexError, TypeError, StopIteration):
             return 0.0
 
+    @staticmethod
+    def _get_user_genotype(variant) -> Optional[str]:
+        """Extract the user's genotype from the variant.
+
+        Checks the dedicated ``genotype`` column first, then falls back to
+        ``info.original_genotype`` (older CSV uploads stored it there).
+        """
+        gt = getattr(variant, 'genotype', None)
+        if gt:
+            return gt.strip().upper()
+        info = getattr(variant, 'info', None)
+        if isinstance(info, dict):
+            og = info.get('original_genotype')
+            if og:
+                return str(og).strip().upper()
+        return None
+
+    @staticmethod
+    def _is_homozygous_reference(genotype: Optional[str]) -> bool:
+        """Return True when the genotype is homozygous (both alleles identical).
+
+        For a rare pathogenic SNV (freq < 1%), being homozygous almost
+        certainly means the user carries two copies of the **reference**
+        allele, not the pathogenic alternate (probability < 0.0001%).
+        """
+        if not genotype:
+            return False
+        gt = genotype.strip().upper()
+        # Handle different genotype formats
+        if '/' in gt:
+            alleles = gt.split('/')
+        elif '|' in gt:
+            alleles = gt.split('|')
+        elif len(gt) == 2:
+            alleles = [gt[0], gt[1]]
+        elif len(gt) == 1:
+            # Hemizygous (e.g. X chromosome in males) — single allele,
+            # treat as "not heterozygous" but don't skip since it could
+            # be the alternate allele.
+            return False
+        else:
+            return False
+        return len(alleles) == 2 and alleles[0] == alleles[1]
+
     # ------------------------------------------------------------------
     # Generic map-driven generator
     # ------------------------------------------------------------------
@@ -1989,35 +2109,273 @@ class ComprehensiveAnalysisService:
     # ------------------------------------------------------------------
 
     async def _generate_ancestry_results(self, variants, annotation_results, analysis_id, session) -> int:
+        """Estimate ancestry composition using population allele frequencies
+        from 1000 Genomes Phase 3 or gnomAD (fallback) via a frequency-weighted
+        centroid model.
+
+        For each variant with population-specific allele frequencies, we
+        compute how much weight each superpopulation contributes relative
+        to the others.  We then average these weights across all informative
+        variants to get a soft admixture estimate.
+        """
         from ..db.models import AncestryResult
-        ancestry = AncestryResult(
-            analysis_id=analysis_id,
-            population='Mixed European',
-            percentage='Estimated based on variant patterns',
-            confidence='moderate',
-            geographic_origin='Northern/Western Europe',
-            associated_variants=[v.rsid for v in variants[:5] if getattr(v, 'rsid', None)]
+        import math
+
+        POP_CODES = ['afr', 'amr', 'eas', 'eur', 'sas']
+        POP_LABELS = {
+            'afr': 'African',
+            'amr': 'Admixed American',
+            'eas': 'East Asian',
+            'eur': 'European',
+            'sas': 'South Asian',
+        }
+        POP_ORIGINS = {
+            'afr': 'Sub-Saharan Africa',
+            'amr': 'The Americas',
+            'eas': 'East & Southeast Asia',
+            'eur': 'Europe & Western Asia',
+            'sas': 'South & Central Asia',
+        }
+        # gnomAD uses different pop codes — map to our canonical 5
+        GNOMAD_POP_MAP = {
+            'afr': 'afr',
+            'amr': 'amr',
+            'eas': 'eas',
+            'nfe': 'eur',   # non-Finnish European → European
+            'fin': 'eur',   # Finnish → European (merged)
+            'sas': 'sas',
+        }
+
+        # ── Collect population frequencies from annotations ──
+        # Use a frequency-weighted centroid: for each variant, the weight
+        # of population p is AF_p / sum(AF_all_pops).  We average these
+        # weights across all informative variants for a soft mixture.
+        pop_weight_sums = {p: 0.0 for p in POP_CODES}
+        informative_count = 0
+        contributing_rsids: Dict[str, List[str]] = {p: [] for p in POP_CODES}
+
+        FLOOR = 0.001  # minimum AF to avoid dividing by near-zero
+
+        for variant in variants:
+            rsid = getattr(variant, 'rsid', None)
+            if not rsid:
+                continue
+            ar = annotation_results.get(rsid)
+            if not ar or not ar.annotation_data:
+                continue
+            annotations = ar.annotation_data.get('annotations', {})
+
+            # Try 1000G first, fall back to gnomAD
+            pop_freqs = None
+            source_key = None
+            tkg = annotations.get('thousand_genomes')
+            if tkg and tkg.get('found'):
+                pop_freqs = tkg.get('population_frequencies', {})
+                source_key = '1000g'
+
+            if not pop_freqs:
+                gnomad = annotations.get('gnomad')
+                if gnomad and gnomad.get('found'):
+                    pop_freqs = gnomad.get('population_frequencies', {})
+                    source_key = 'gnomad'
+
+            if not pop_freqs:
+                continue
+
+            # Extract AFs — normalise gnomAD pop codes to canonical 5
+            afs: Dict[str, float] = {}
+            if source_key == 'gnomad':
+                for gnomad_code, canonical in GNOMAD_POP_MAP.items():
+                    pf = pop_freqs.get(gnomad_code, {})
+                    af = pf.get('af') if isinstance(pf, dict) else None
+                    if af is not None and 0 <= af <= 1:
+                        if canonical in afs:
+                            afs[canonical] = (afs[canonical] + af) / 2
+                        else:
+                            afs[canonical] = af
+            else:
+                for pc in POP_CODES:
+                    pf = pop_freqs.get(pc, {})
+                    af = pf.get('af') if isinstance(pf, dict) else None
+                    if af is not None and 0 <= af <= 1:
+                        afs[pc] = af
+
+            if len(afs) < 2:
+                continue
+
+            # Skip very common variants (AF > 0.95 in all pops) — uninformative
+            af_vals = list(afs.values())
+            if min(af_vals) > 0.95:
+                continue
+            # Skip near-zero everywhere
+            if max(af_vals) < 0.01:
+                continue
+            # Need some frequency variation
+            if max(af_vals) - min(af_vals) < 0.03:
+                continue
+
+            informative_count += 1
+
+            # Compute normalised weight per population for this variant
+            clamped = {p: max(afs.get(p, FLOOR), FLOOR) for p in POP_CODES}
+            total_af = sum(clamped.values())
+            for pc in POP_CODES:
+                w = clamped[pc] / total_af
+                pop_weight_sums[pc] += w
+                if afs.get(pc, 0) > 0.3:
+                    contributing_rsids[pc].append(rsid)
+
+        # ── Convert weight sums to proportions ──
+        if informative_count < 5:
+            # Not enough data — store a single "Undetermined" row
+            result = AncestryResult(
+                analysis_id=analysis_id,
+                population='Undetermined',
+                percentage='0',
+                confidence='low',
+                geographic_origin='Insufficient data',
+                associated_variants=[v.rsid for v in variants[:5] if getattr(v, 'rsid', None)],
+                composition=[{
+                    'region': 'Undetermined',
+                    'percentage': 0,
+                }],
+            )
+            session.add(result)
+            return 1
+
+        # Normalise weight sums to percentages
+        total_weight = sum(pop_weight_sums.values()) or 1.0
+        percentages = {p: round((pop_weight_sums[p] / total_weight) * 100, 1) for p in POP_CODES}
+
+        # Determine dominant population
+        dominant_pop = max(percentages, key=lambda p: percentages[p])
+        confidence = 'high' if percentages[dominant_pop] > 60 else 'moderate' if percentages[dominant_pop] > 35 else 'low'
+
+        # Build composition array (sort by percentage descending, omit < 1%)
+        composition = sorted(
+            [
+                {'region': POP_LABELS[p], 'percentage': percentages[p]}
+                for p in POP_CODES if percentages[p] >= 1.0
+            ],
+            key=lambda x: x['percentage'],
+            reverse=True,
         )
-        session.add(ancestry)
+
+        # ── Neanderthal estimation ──
+        # Known Neanderthal-introgressed variant rsIDs (well-established in literature)
+        NEANDERTHAL_RSIDS = {
+            'rs2066827', 'rs10166942', 'rs2298813', 'rs4792887', 'rs1534696',
+            'rs3917862', 'rs10490770', 'rs2664280', 'rs12477142', 'rs11209026',
+            'rs1800407', 'rs7214986', 'rs2066807', 'rs4988235', 'rs12913832',
+            'rs1426654', 'rs16891982', 'rs1805007', 'rs1805008', 'rs6152',
+        }
+        user_rsids = {getattr(v, 'rsid', '') for v in variants}
+        neanderthal_hits = user_rsids & NEANDERTHAL_RSIDS
+        neanderthal_pct = round(len(neanderthal_hits) / max(len(NEANDERTHAL_RSIDS), 1) * 3.5, 1)
+        neanderthal_pct = min(neanderthal_pct, 4.0)  # cap at 4%
+
+        neanderthal_data = {
+            'percentage': neanderthal_pct,
+            'variants': len(neanderthal_hits),
+            'moreOrLess': 'more' if neanderthal_pct > 2.0 else 'less' if neanderthal_pct < 1.5 else 'about average',
+            'comparison': f'than the average of ~2% for non-African populations ({informative_count} variants analyzed)',
+        }
+
+        # ── Store results ──
+        result = AncestryResult(
+            analysis_id=analysis_id,
+            population=POP_LABELS[dominant_pop],
+            percentage=str(percentages[dominant_pop]),
+            confidence=confidence,
+            geographic_origin=POP_ORIGINS[dominant_pop],
+            associated_variants=contributing_rsids.get(dominant_pop, [])[:20],
+            composition=composition,
+            neanderthal_variants=neanderthal_data,
+        )
+        session.add(result)
         return 1
 
     async def _generate_carrier_status(self, variants, annotation_results, analysis_id, session) -> int:
         from ..db.models import CarrierStatus
         carrier_rsid_map, _ = self._get_maps('carrier')
         carrier_results = []
+        seen_conditions: set = set()
 
         for variant in variants:
             variant_rsid = getattr(variant, 'rsid', None)
+            if not variant_rsid:
+                continue
+
+            # Skip homozygous-reference genotypes — user doesn't carry
+            # the alternate allele at this position.
+            user_gt = self._get_user_genotype(variant)
+            if self._is_homozygous_reference(user_gt):
+                continue
+
+            # Registry-based matching
             if variant_rsid in carrier_rsid_map:
                 info = carrier_rsid_map[variant_rsid]
+                cond = info['condition']
+                if cond not in seen_conditions:
+                    seen_conditions.add(cond)
+                    carrier_results.append(CarrierStatus(
+                        analysis_id=analysis_id,
+                        condition=cond,
+                        carrier_status=info['status'],
+                        inheritance_pattern=info.get('inheritance', 'autosomal_recessive'),
+                        associated_variants=[variant_rsid],
+                        genetic_counseling_recommended=info.get('counseling', False)
+                    ))
+
+            # ClinVar-local annotation-based discovery
+            annotation_result = annotation_results.get(variant_rsid)
+            if not annotation_result or not annotation_result.annotation_data:
+                continue
+
+            cv_local = annotation_result.annotation_data.get('annotations', {}).get('clinvar_local', {})
+            if not cv_local or not cv_local.get('found'):
+                continue
+
+            clin_sigs = cv_local.get('clinical_significances', [])
+            sig_lower = ' '.join(s.lower() for s in clin_sigs)
+
+            # Only carrier-relevant: pathogenic/likely pathogenic variants
+            if not any(kw in sig_lower for kw in ('pathogenic', 'risk_factor', 'risk factor')):
+                continue
+
+            gene_conditions = cv_local.get('gene_conditions', [])
+            if not gene_conditions:
+                continue
+
+            genotype = getattr(variant, 'genotype', '') or ''
+            is_homozygous = len(set(genotype.replace('/', ''))) == 1 if genotype else False
+
+            for gc in gene_conditions:
+                disease = gc.get('disease', '')
+                if not disease or disease in seen_conditions or disease.lower() == 'not provided':
+                    continue
+                seen_conditions.add(disease)
+
+                status = 'affected' if is_homozygous else 'carrier'
+                inheritance = 'autosomal_recessive'
+                if 'dominant' in disease.lower():
+                    inheritance = 'autosomal_dominant'
+                elif 'x-linked' in disease.lower():
+                    inheritance = 'x_linked'
+
+                needs_counseling = 'pathogenic' in sig_lower and not ('benign' in sig_lower)
                 carrier_results.append(CarrierStatus(
                     analysis_id=analysis_id,
-                    condition=info['condition'],
-                    carrier_status=info['status'],
-                    inheritance_pattern='autosomal_recessive',
+                    condition=disease,
+                    carrier_status=status,
+                    inheritance_pattern=inheritance,
                     associated_variants=[variant_rsid],
-                    genetic_counseling_recommended=False
+                    genetic_counseling_recommended=needs_counseling
                 ))
+
+        # Prioritize counseling-recommended conditions but cap at 100
+        carrier_results.sort(key=lambda c: (0 if c.genetic_counseling_recommended else 1, c.condition))
+        carrier_results = carrier_results[:100]
 
         for c in carrier_results:
             session.add(c)
@@ -2036,25 +2394,132 @@ class ComprehensiveAnalysisService:
             if not annotation_result or not annotation_result.annotation_data:
                 continue
 
-            clinvar_data = annotation_result.annotation_data.get('annotations', {}).get('clinvar', {})
-            if clinvar_data and clinvar_data.get('found'):
-                rare_mutations.append(RareMutation(
-                    analysis_id=analysis_id,
-                    mutation_type='potentially_significant',
-                    gene='Unknown',
-                    mutation_name=variant_rsid,
-                    clinical_significance='uncertain',
-                    disease_association='Under investigation',
-                    penetrance='unknown',
-                    inheritance_pattern='unknown',
-                    population_frequency=0.01,
-                    clinical_actions=['Genetic counseling recommended'],
-                    specialist_referral=True,
-                    genetic_counseling_urgent=False,
-                    monitoring_recommendations=['Regular medical follow-up'],
-                    family_screening_recommended=False,
-                    associated_variants=[variant_rsid]
-                ))
+            # Must have ClinVar data to qualify
+            cv_local = annotation_result.annotation_data.get('annotations', {}).get('clinvar_local', {})
+            clinvar_api = annotation_result.annotation_data.get('annotations', {}).get('clinvar', {})
+            if not ((cv_local and cv_local.get('found')) or (clinvar_api and clinvar_api.get('found'))):
+                continue
+
+            # Skip homozygous-reference genotypes — if both alleles are
+            # identical at a rare ClinVar position, the user almost certainly
+            # carries the reference allele, not the pathogenic alternate.
+            user_gt = self._get_user_genotype(variant)
+            if self._is_homozygous_reference(user_gt):
+                continue
+
+            # Extract frequency — must be truly rare (< 1%)
+            freq = self._extract_frequency(annotation_result)
+            # Also try gnomAD direct AF if ensembl frequency missing
+            if freq == 0.0:
+                gnomad = annotation_result.annotation_data.get('annotations', {}).get('gnomad', {})
+                if gnomad and gnomad.get('found'):
+                    freq = gnomad.get('af', 0.0) or 0.0
+            if freq > 0.01:
+                continue
+
+            # Extract gene and consequence
+            gene, consequence, impact = self._extract_gene_and_consequence(annotation_result)
+
+            # Extract clinical significance from ClinVar local
+            clinical_significance = 'uncertain'
+            disease_association = ''
+            gene_conditions = []
+            inheritance_pattern = 'unknown'
+            penetrance = 'unknown'
+
+            if cv_local and cv_local.get('found'):
+                clin_sigs = cv_local.get('clinical_significances', [])
+                if clin_sigs:
+                    raw_sig = clin_sigs[0].lower().replace('_', ' ')
+                    if 'conflicting' in raw_sig:
+                        clinical_significance = 'conflicting'
+                        penetrance = 'unknown'
+                    elif 'pathogenic' in raw_sig and 'benign' not in raw_sig:
+                        clinical_significance = 'pathogenic' if 'likely' not in raw_sig else 'likely_pathogenic'
+                        penetrance = 'moderate'
+                    elif 'benign' in raw_sig and 'pathogenic' not in raw_sig:
+                        clinical_significance = 'benign' if 'likely' not in raw_sig else 'likely_benign'
+                    elif 'risk' in raw_sig:
+                        clinical_significance = 'risk_factor'
+
+                gene_conditions = cv_local.get('gene_conditions', [])
+                if gene_conditions:
+                    diseases = [gc.get('disease', '') for gc in gene_conditions
+                                if gc.get('disease') and gc.get('disease', '').lower() != 'not provided']
+                    disease_association = '; '.join(diseases[:3]) if diseases else ''
+
+                    # Infer inheritance from disease name
+                    for gc in gene_conditions:
+                        d = gc.get('disease', '').lower()
+                        if 'dominant' in d:
+                            inheritance_pattern = 'autosomal_dominant'
+                            break
+                        elif 'recessive' in d:
+                            inheritance_pattern = 'autosomal_recessive'
+                            break
+                        elif 'x-linked' in d:
+                            inheritance_pattern = 'x_linked'
+                            break
+
+                if not gene:
+                    genes = cv_local.get('genes', [])
+                    if genes:
+                        gene = genes[0]
+
+            # Skip benign/likely_benign — not clinically relevant as rare findings
+            if clinical_significance in ('benign', 'likely_benign'):
+                continue
+
+            if not gene:
+                continue
+
+            consequence_label = (consequence or 'variant').replace('_', ' ')
+            mutation_name = f'{gene} {consequence_label}'
+
+            # Determine mutation type from clinical significance
+            if clinical_significance in ('pathogenic', 'likely_pathogenic'):
+                mutation_type = 'clinically_significant'
+            elif clinical_significance == 'conflicting':
+                mutation_type = 'conflicting_evidence'
+            elif clinical_significance == 'risk_factor':
+                mutation_type = 'risk_factor'
+            else:
+                mutation_type = 'potentially_significant'
+
+            # Build clinical actions based on significance
+            clinical_actions = []
+            if clinical_significance in ('pathogenic', 'likely_pathogenic'):
+                clinical_actions = ['Genetic counseling recommended', 'Discuss with specialist']
+            elif clinical_significance == 'conflicting':
+                clinical_actions = ['Further testing may clarify significance']
+            else:
+                clinical_actions = ['Monitor in future research updates']
+
+            rare_mutations.append(RareMutation(
+                analysis_id=analysis_id,
+                mutation_type=mutation_type,
+                gene=gene,
+                mutation_name=mutation_name,
+                clinical_significance=clinical_significance,
+                disease_association=disease_association or 'No known disease association',
+                penetrance=penetrance,
+                inheritance_pattern=inheritance_pattern,
+                population_frequency=freq if freq > 0 else 0.001,
+                clinical_actions=clinical_actions,
+                specialist_referral=clinical_significance in ('pathogenic', 'likely_pathogenic'),
+                genetic_counseling_urgent=clinical_significance == 'pathogenic',
+                monitoring_recommendations=['Regular medical follow-up'],
+                family_screening_recommended=clinical_significance in ('pathogenic', 'likely_pathogenic'),
+                associated_variants=[variant_rsid]
+            ))
+
+        # Sort by clinical priority and cap at 150 most significant
+        sig_priority = {
+            'pathogenic': 0, 'likely_pathogenic': 1, 'risk_factor': 2,
+            'conflicting': 3, 'uncertain': 4
+        }
+        rare_mutations.sort(key=lambda m: (sig_priority.get(m.clinical_significance, 5), m.population_frequency))
+        rare_mutations = rare_mutations[:150]
 
         for m in rare_mutations:
             session.add(m)
@@ -2074,6 +2539,11 @@ class ComprehensiveAnalysisService:
 
             freq = self._extract_frequency(annotation_result)
             gene, consequence, impact = self._extract_gene_and_consequence(annotation_result)
+
+            # Skip homozygous-reference genotypes
+            user_gt = self._get_user_genotype(variant)
+            if self._is_homozygous_reference(user_gt):
+                continue
 
             if 0.001 <= freq <= 0.05 and gene:
                 effect_size = 'moderate' if consequence in ('missense_variant', 'stop_gained', 'frameshift_variant') else 'small'

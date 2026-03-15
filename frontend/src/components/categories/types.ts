@@ -231,6 +231,7 @@ export interface DashboardData {
   uncommon_mutations?: UncommonMutation[]
   alpha_missense_map?: Record<string, { score?: number; classification?: string }>
   clinvar_count_map?: Record<string, number>
+  genotype_map?: Record<string, string>
   real_data?: {
     variants?: { rsid?: string; chromosome?: string; position?: number; genotype?: string }[]
     analysis?: Record<string, unknown>

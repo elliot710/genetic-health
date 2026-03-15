@@ -67,6 +67,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [variantCategories, setVariantCategories] = useState<{name: string, count: number}[]>([])
+  const [variantCategoryStats, setVariantCategoryStats] = useState<{total: number, annotated: number}>({total: 0, annotated: 0})
   const [currentUserName, setCurrentUserName] = useState(userName || 'User')
   const [currentAvatarUrl, setCurrentAvatarUrl] = useState<string | null | undefined>(userAvatarUrl)
   
@@ -150,7 +151,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
       headers: { Authorization: `Bearer ${token}` }
     })
       .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d?.categories) setVariantCategories(d.categories) })
+      .then(d => { if (d?.categories) { setVariantCategories(d.categories); setVariantCategoryStats({total: d.total_variants || 0, annotated: d.annotated_variants || 0}) } })
       .catch(() => {})
   }, [token])
 
@@ -886,7 +887,7 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
       case 'ancestry':
         return <AncestryPanel data={data} isDarkMode={isDarkMode} />
       case 'carrier-status':
-        return <CarrierStatusPanel data={data} isDarkMode={isDarkMode} />
+        return <CarrierStatusPanel data={data} isDarkMode={isDarkMode} token={token} />
       case 'wellness':
         return <WellnessPanel data={data} isDarkMode={isDarkMode} token={token} />
       case 'methylation':
@@ -1359,53 +1360,6 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                     )
                   })}
 
-                  {/* Risk Breakdown - with chart */}
-                  {Array.isArray(data?.health_risks) && data.health_risks.length > 0 && (() => {
-                    const risks = data.health_risks as HealthRisk[]
-                    return (
-                    <div
-                      className={`p-4 rounded-xl border ${theme.glassBorder} ${isDarkMode ? 'bg-slate-800/30' : 'bg-slate-50/50'} cursor-pointer hover:shadow-md transition-all`}
-                      onClick={() => setActiveCategory('health')}
-                    >
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                          <FileText className={`h-4 w-4 ${getThemeClass('text-blue-500', isDarkMode)}`} />
-                          <span className={`text-xs font-semibold uppercase tracking-wider ${theme.text.muted}`}>Risk Breakdown</span>
-                        </div>
-                        <ChevronRight className={`h-3.5 w-3.5 ${theme.text.muted}`} />
-                      </div>
-                      <RiskDistributionChart data={risks} isDarkMode={isDarkMode} height={160} />
-                    </div>
-                    )
-                  })()}
-
-                  {/* Drug response detail - clickable */}
-                  {Array.isArray(data?.drug_responses) && data.drug_responses.length > 0 && (
-                    <div
-                      className={`p-4 rounded-xl border ${theme.glassBorder} ${isDarkMode ? 'bg-slate-800/30' : 'bg-slate-50/50'} cursor-pointer hover:shadow-md transition-all`}
-                      onClick={() => setActiveCategory('drug-responses')}
-                    >
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                          <Pill className={`h-4 w-4 ${getThemeClass('text-purple-500', isDarkMode)}`} />
-                          <span className={`text-xs font-semibold uppercase tracking-wider ${theme.text.muted}`}>Pharmacogenomic Highlights</span>
-                        </div>
-                        <ChevronRight className={`h-3.5 w-3.5 ${theme.text.muted}`} />
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {data.drug_responses.slice(0, 8).map((dr: DrugResponse, i: number) => (
-                          <span key={i} className={`px-2.5 py-1 rounded-lg text-xs font-medium border ${theme.glassBorder} ${isDarkMode ? 'bg-purple-500/10 text-purple-300' : 'bg-purple-50 text-purple-700'}`}>
-                            {dr.gene}{dr.drug ? ` → ${dr.drug}` : ''}
-                          </span>
-                        ))}
-                        {data.drug_responses.length > 8 && (
-                          <span className={`px-2.5 py-1 rounded-lg text-xs font-medium ${theme.text.muted}`}>
-                            +{data.drug_responses.length - 8} more
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  )}
                 </div>
               </div>
 
@@ -1423,10 +1377,14 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
                 {variantCategories.length > 0 ? (
                   <div>
-                    <FunctionalCategoriesChart data={variantCategories} isDarkMode={isDarkMode} height={280} />
+                    <FunctionalCategoriesChart data={variantCategories.filter(c => c.name !== 'Unknown')} isDarkMode={isDarkMode} />
                     <div className={`flex justify-between pt-3 mt-2 border-t ${theme.glassBorder}`}>
-                      <span className={`text-xs font-medium ${theme.text.muted}`}>Total annotated</span>
-                      <span className={`text-xs font-bold ${theme.text.primary}`}>{variantCategories.reduce((s, c) => s + c.count, 0).toLocaleString()} variants</span>
+                      <span className={`text-xs font-medium ${theme.text.muted}`}>Total variants</span>
+                      <span className={`text-xs font-bold ${theme.text.primary}`}>{variantCategoryStats.total.toLocaleString()}</span>
+                    </div>
+                    <div className={`flex justify-between pt-1`}>
+                      <span className={`text-xs font-medium ${theme.text.muted}`}>Annotated</span>
+                      <span className={`text-xs font-bold ${theme.text.primary}`}>{variantCategoryStats.annotated.toLocaleString()} ({variantCategoryStats.total > 0 ? ((variantCategoryStats.annotated / variantCategoryStats.total) * 100).toFixed(1) : 0}%)</span>
                     </div>
                   </div>
                 ) : (
@@ -1436,6 +1394,57 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
                   </div>
                 )}
               </div>
+            </div>
+
+            {/* Risk Breakdown & Pharmacogenomic Highlights */}
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+              {/* Risk Breakdown - with chart */}
+              {Array.isArray(data?.health_risks) && data.health_risks.length > 0 && (() => {
+                const risks = data.health_risks as HealthRisk[]
+                return (
+                <div
+                  className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-6 cursor-pointer hover:shadow-md transition-all`}
+                  onClick={() => setActiveCategory('health')}
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <FileText className={`h-4 w-4 ${getThemeClass('text-blue-500', isDarkMode)}`} />
+                      <span className={`text-xs font-semibold uppercase tracking-wider ${theme.text.muted}`}>Risk Breakdown</span>
+                    </div>
+                    <ChevronRight className={`h-3.5 w-3.5 ${theme.text.muted}`} />
+                  </div>
+                  <RiskDistributionChart data={risks} isDarkMode={isDarkMode} height={160} />
+                </div>
+                )
+              })()}
+
+              {/* Drug response detail - clickable */}
+              {Array.isArray(data?.drug_responses) && data.drug_responses.length > 0 && (
+                <div
+                  className={`${theme.glass} border ${theme.glassBorder} rounded-2xl p-6 cursor-pointer hover:shadow-md transition-all`}
+                  onClick={() => setActiveCategory('drug-responses')}
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <Pill className={`h-4 w-4 ${getThemeClass('text-purple-500', isDarkMode)}`} />
+                      <span className={`text-xs font-semibold uppercase tracking-wider ${theme.text.muted}`}>Pharmacogenomic Highlights</span>
+                    </div>
+                    <ChevronRight className={`h-3.5 w-3.5 ${theme.text.muted}`} />
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {data.drug_responses.slice(0, 8).map((dr: DrugResponse, i: number) => (
+                      <span key={i} className={`px-2.5 py-1 rounded-lg text-xs font-medium border ${theme.glassBorder} ${isDarkMode ? 'bg-purple-500/10 text-purple-300' : 'bg-purple-50 text-purple-700'}`}>
+                        {dr.gene}{dr.drug ? ` → ${dr.drug}` : ''}
+                      </span>
+                    ))}
+                    {data.drug_responses.length > 8 && (
+                      <span className={`px-2.5 py-1 rounded-lg text-xs font-medium ${theme.text.muted}`}>
+                        +{data.drug_responses.length - 8} more
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )

@@ -36,7 +36,7 @@ async def build_knowledge_graph(user_id: int, session: AsyncSession) -> dict:
     result = await session.execute(
         select(GeneticAnalysis)
         .where(GeneticAnalysis.user_id == user_id)
-        .order_by(GeneticAnalysis.created_at.desc())
+        .order_by(GeneticAnalysis.upload_date.desc())
         .limit(1)
     )
     analysis = result.scalar_one_or_none()

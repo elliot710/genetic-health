@@ -455,6 +455,47 @@ export function VariantLinks({ rsid, gene, token, isDarkMode = false, alphaMisse
   )
 }
 
+// ─── Clickable Rsid Badge ──────────────────────────────────────
+
+interface ClickableRsidBadgeProps {
+  rsid: string
+  gene?: string
+  genotype?: string
+  token?: string
+  isDarkMode?: boolean
+}
+
+/**
+ * A mono-font rsid badge that opens the VariantDetailDialog on click.
+ * Reusable across any panel that displays rsids.
+ */
+export function ClickableRsidBadge({ rsid, gene, genotype, token, isDarkMode = false }: ClickableRsidBadgeProps) {
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const validRsid = rsid && rsid !== 'Unknown' && rsid.startsWith('rs')
+
+  return (
+    <>
+      <Badge
+        variant="outline"
+        className={`text-xs font-mono ${validRsid && token ? 'cursor-pointer hover:bg-blue-500/10 hover:border-blue-500/40 transition-colors' : ''}`}
+        onClick={validRsid && token ? (e: React.MouseEvent) => { e.stopPropagation(); setDialogOpen(true) } : undefined}
+      >
+        {rsid}{genotype ? ` ${genotype}` : ''}
+      </Badge>
+      {validRsid && token && (
+        <VariantDetailDialog
+          rsid={rsid}
+          gene={gene}
+          token={token}
+          isDarkMode={isDarkMode}
+          open={dialogOpen}
+          onOpenChange={setDialogOpen}
+        />
+      )}
+    </>
+  )
+}
+
 // ─── Recommendation Block ──────────────────────────────────────
 
 interface RecommendationBlockProps {
@@ -476,8 +517,8 @@ export function RecommendationBlock({ title, text, theme }: RecommendationBlockP
 
 interface DisclaimerCardProps {
   icon?: LucideIcon
-  title: string
-  text: string
+  title?: string
+  text?: string
   borderColorClass?: string
   bgTintClass?: string
   theme: ThemeClasses
@@ -485,8 +526,8 @@ interface DisclaimerCardProps {
 
 export function DisclaimerCard({
   icon: Icon = Info,
-  title,
-  text,
+  title = 'Important Disclaimer',
+  text = 'This information is for educational purposes only and should not be used as a substitute for professional medical advice, diagnosis, or treatment. Always consult a qualified healthcare provider.',
   borderColorClass = 'border-blue-500/20',
   bgTintClass = 'bg-blue-500/5',
   theme,

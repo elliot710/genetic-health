@@ -557,7 +557,11 @@ async def get_dashboard_data(
         ancestry_rows = ar.scalars().all()
         dashboard_data["ancestry_results"] = _dedup_by([
             {"population": r.population, "percentage": r.percentage,
-             "confidence": r.confidence, "geographic_origin": r.geographic_origin}
+             "confidence": r.confidence, "geographic_origin": r.geographic_origin,
+             "composition": r.composition,
+             "maternal_haplogroup": r.maternal_haplogroup,
+             "paternal_haplogroup": r.paternal_haplogroup,
+             "neanderthal_variants": r.neanderthal_variants}
             for r in ancestry_rows
         ], "population")
 
@@ -593,6 +597,7 @@ async def get_dashboard_data(
         dashboard_data["carrier_status"] = _dedup_by([
             {"condition": _clean_trait_name(r.condition), "carrier_status": r.carrier_status,
              "inheritance_pattern": r.inheritance_pattern,
+             "associated_variants": r.associated_variants or [],
              "genetic_counseling_recommended": r.genetic_counseling_recommended}
             for r in carrier_rows
         ], "condition")
@@ -757,6 +762,44 @@ async def get_dashboard_data(
                     cv_count_map[row.rsid] = count
         dashboard_data["alpha_missense_map"] = am_map
         dashboard_data["clinvar_count_map"] = cv_count_map
+
+        # Build rsid → genotype map only for variants referenced in panel data
+        panel_rsids: set = set()
+        for key in ("health_risks", "sports_performance", "nutrition_traits",
+                     "carrier_status", "methylation_profiles", "detoxification_profiles",
+                     "rare_mutations", "physical_traits", "intelligence",
+                     "personality_traits", "wellness_traits", "uncommon_mutations"):
+            items = dashboard_data.get(key, [])
+            if isinstance(items, dict):
+                items = items.get("metrics", [])
+            for item in items:
+                for v in (item.get("associated_variants") or []):
+                    if isinstance(v, str) and v.startswith("rs"):
+                        panel_rsids.add(v)
+                for field in ("rsid", "variant", "gene", "marker"):
+                    val = item.get(field)
+                    if isinstance(val, str) and val.startswith("rs"):
+                        panel_rsids.add(val)
+        # Drug responses use variants_involved
+        for dr_item in dashboard_data.get("drug_responses", []):
+            for v in (dr_item.get("variants_involved") or []):
+                if isinstance(v, str) and v.startswith("rs"):
+                    panel_rsids.add(v)
+
+        genotype_map: Dict[str, str] = {}
+        if panel_rsids:
+            genotype_query = await db.execute(
+                select(GeneticMarker.rsid, AnalysisVariant.genotype)
+                .select_from(AnalysisVariant)
+                .join(GeneticMarker, AnalysisVariant.marker_id == GeneticMarker.id)
+                .where(AnalysisVariant.analysis_id.in_(analysis_ids))
+                .where(GeneticMarker.rsid.in_(panel_rsids))
+                .where(AnalysisVariant.genotype.isnot(None))
+                .where(AnalysisVariant.genotype != '')
+            )
+            for row in genotype_query.all():
+                genotype_map[row.rsid] = row.genotype
+        dashboard_data["genotype_map"] = genotype_map
         
         return dashboard_data
         

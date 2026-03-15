@@ -1,12 +1,14 @@
-import React, { useState, useEffect } from 'react'
-import { Apple, Coffee, Utensils, Wheat, ChefHat, ChevronRight, CheckCircle } from 'lucide-react'
+import React, { useState, useMemo, useEffect } from 'react'
+import { Apple, Coffee, Utensils, Wheat, ChefHat, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
+import { CapacityChart } from './GenomicCharts'
 import {
   useThemeClasses,
   CategoryHeader,
   EmptyState,
   SectionCard,
   StatusBadge,
+  DisclaimerCard,
   VariantLinks,
   sensitivityToSeverity,
   formatLabel,
@@ -18,6 +20,8 @@ import type { CategoryPanelProps, NutritionTrait } from './types'
 export default function FoodNutritionPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
   const theme = useThemeClasses(isDarkMode)
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [sensitivityFilter, setSensitivityFilter] = useState<string>('all')
 
   const [realNutritionTraits, setRealNutritionTraits] = useState<NutritionTrait[]>([])
   const [loading, setLoading] = useState(false)
@@ -91,6 +95,36 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
 
   const nutritionTraits = getNutritionTraits()
 
+  const sensitivityOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const t of nutritionTraits) set.add((t.sensitivity || 'moderate').toLowerCase())
+    return Array.from(set).sort()
+  }, [nutritionTraits])
+
+  const filteredTraits = useMemo(() => {
+    let list = nutritionTraits
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      list = list.filter(t => t.trait.toLowerCase().includes(q) || t.gene.toLowerCase().includes(q))
+    }
+    if (sensitivityFilter !== 'all') {
+      list = list.filter(t => (t.sensitivity || 'moderate').toLowerCase() === sensitivityFilter)
+    }
+    return list
+  }, [nutritionTraits, searchQuery, sensitivityFilter])
+
+  const allRecommendations = useMemo(() => {
+    const seen = new Set<string>()
+    const result: string[] = []
+    for (const t of nutritionTraits) {
+      for (const rec of t.recommendations) {
+        const key = rec.toLowerCase().trim()
+        if (!seen.has(key) && key) { seen.add(key); result.push(rec) }
+      }
+    }
+    return result.slice(0, 8)
+  }, [nutritionTraits])
+
   const headerProps = {
     icon: Apple,
     iconColorClass: 'text-green-400',
@@ -126,9 +160,42 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
     <div className="space-y-6">
       <CategoryHeader {...headerProps} />
 
-      <SectionCard title="Metabolic Traits" theme={theme}>
+      {nutritionTraits.length >= 3 && (
+        <SectionCard title="Sensitivity Distribution" theme={theme}>
+          <CapacityChart data={nutritionTraits.map(t => ({ name: t.trait, capacity: t.sensitivity || 'moderate' }))} isDarkMode={isDarkMode} />
+        </SectionCard>
+      )}
+
+      {/* Filter Bar */}
+      <div className="flex flex-wrap gap-3">
+        <div className="relative flex-1 min-w-50">
+          <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+          <input
+            type="text"
+            placeholder="Search nutrients or genes…"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} placeholder:${theme.textSecondary} focus:outline-none focus:ring-2 focus:ring-green-500/40 text-sm`}
+          />
+        </div>
+        <div className="relative min-w-40">
+          <Filter className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+          <select
+            value={sensitivityFilter}
+            onChange={e => setSensitivityFilter(e.target.value)}
+            className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} focus:outline-none focus:ring-2 focus:ring-green-500/40 text-sm appearance-none cursor-pointer`}
+          >
+            <option value="all">All Sensitivities</option>
+            {sensitivityOptions.map(s => (
+              <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <SectionCard title={`Metabolic Traits${filteredTraits.length !== nutritionTraits.length ? ` (${filteredTraits.length} of ${nutritionTraits.length})` : ''}`} theme={theme}>
         <MasonryLayout>
-          {nutritionTraits.map((trait, index) => {
+          {filteredTraits.map((trait, index) => {
             const Icon = trait.icon
             const itemKey = `nutrition-${index}`
             const isExpanded = selectedItem === itemKey
@@ -155,7 +222,7 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
                 </div>
 
                 <div className="flex flex-wrap gap-1.5">
-                  {rsid && <Badge variant="secondary" className="text-xs">{rsid}</Badge>}
+                  {rsid && <Badge variant="secondary" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>}
                   {gene && <Badge variant="outline" className="text-xs">{gene}</Badge>}
                 </div>
 
@@ -181,6 +248,21 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
           })}
         </MasonryLayout>
       </SectionCard>
+
+      {allRecommendations.length > 0 && (
+        <SectionCard title="Dietary Recommendations" theme={theme}>
+          <div className="space-y-2">
+            {allRecommendations.map((rec, i) => (
+              <div key={i} className={`flex items-start gap-2 text-sm ${theme.textSecondary}`}>
+                <CheckCircle className="h-4 w-4 text-green-400 mt-0.5 shrink-0" />
+                <span>{rec}</span>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      )}
+
+      <DisclaimerCard theme={theme} />
     </div>
   )
 }

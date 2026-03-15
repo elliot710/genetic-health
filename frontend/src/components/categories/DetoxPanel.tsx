@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useMemo } from 'react'
-import { Shield, ChevronRight, CheckCircle } from 'lucide-react'
+import { Shield, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { CapacityChart } from './GenomicCharts'
 import {
@@ -10,6 +10,7 @@ import {
   EmptyState,
   SectionCard,
   StatusBadge,
+  DisclaimerCard,
   capacityToSeverity,
   sensitivityToSeverity,
   VariantLinks,
@@ -31,6 +32,9 @@ const PHASE_ORDER = ['phase1', 'phase2', 'phase3', 'antioxidant', 'peroxisomal',
 
 export default function DetoxPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
   const [expandedGene, setExpandedGene] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [phaseFilter, setPhaseFilter] = useState<string>('all')
+  const [capacityFilter, setCapacityFilter] = useState<string>('all')
   const theme = useThemeClasses(isDarkMode)
 
   const profiles: DetoxProfile[] = data?.detoxification_profiles || []
@@ -38,9 +42,40 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
   const formatPhase = (phase: string): string =>
     PHASE_LABELS[phase] || formatLabel(phase)
 
+  const capacityOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const p of profiles) set.add(p.detox_capacity || 'normal')
+    return Array.from(set).sort()
+  }, [profiles])
+
+  const phaseOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const p of profiles) set.add(p.detox_phase || 'other')
+    return Array.from(set).sort()
+  }, [profiles])
+
+  const filteredProfiles = useMemo(() => {
+    let list = profiles
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase()
+      list = list.filter(p =>
+        p.gene?.toLowerCase().includes(q) ||
+        p.associated_variants?.some(v => v.toLowerCase().includes(q)) ||
+        p.support_recommendations?.some(r => r.toLowerCase().includes(q))
+      )
+    }
+    if (phaseFilter !== 'all') {
+      list = list.filter(p => (p.detox_phase || 'other') === phaseFilter)
+    }
+    if (capacityFilter !== 'all') {
+      list = list.filter(p => (p.detox_capacity || 'normal') === capacityFilter)
+    }
+    return list
+  }, [profiles, searchQuery, phaseFilter, capacityFilter])
+
   const grouped = useMemo(() => {
     const map: Record<string, DetoxProfile[]> = {}
-    for (const p of profiles) {
+    for (const p of filteredProfiles) {
       const phase = p.detox_phase || 'other'
       if (!map[phase]) map[phase] = []
       map[phase].push(p)
@@ -104,6 +139,48 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
     <div className="space-y-6">
       <CategoryHeader {...headerProps} />
 
+      {/* Filter Bar */}
+      <div className={`${theme.glass} border ${theme.border} rounded-xl p-4 flex flex-col sm:flex-row gap-3`}>
+        <div className="relative flex-1">
+          <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+          <input
+            type="text"
+            placeholder="Search by gene, rsid, or keyword..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className={`w-full pl-9 pr-3 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} placeholder:${theme.textSecondary} text-sm focus:outline-none focus:ring-2 focus:ring-green-500/40`}
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <Filter className={`h-4 w-4 ${theme.textSecondary}`} />
+          <select
+            value={phaseFilter}
+            onChange={e => setPhaseFilter(e.target.value)}
+            className={`px-3 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} text-sm focus:outline-none focus:ring-2 focus:ring-green-500/40`}
+          >
+            <option value="all">All Phases</option>
+            {phaseOptions.map(p => (
+              <option key={p} value={p}>{formatPhase(p)}</option>
+            ))}
+          </select>
+          <select
+            value={capacityFilter}
+            onChange={e => setCapacityFilter(e.target.value)}
+            className={`px-3 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} text-sm focus:outline-none focus:ring-2 focus:ring-green-500/40`}
+          >
+            <option value="all">All Capacities</option>
+            {capacityOptions.map(c => (
+              <option key={c} value={c}>{formatLabel(c)}</option>
+            ))}
+          </select>
+        </div>
+        {(searchQuery || phaseFilter !== 'all' || capacityFilter !== 'all') && (
+          <span className={`text-xs ${theme.textSecondary} self-center`}>
+            {filteredProfiles.length} of {profiles.length}
+          </span>
+        )}
+      </div>
+
       {profiles.length >= 3 && (
         <SectionCard title="Detox Capacity Overview" theme={theme}>
           <CapacityChart data={profiles.map(p => ({ name: p.gene, capacity: p.detox_capacity || 'normal' }))} isDarkMode={isDarkMode} height={200} />
@@ -149,9 +226,13 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                   {item.associated_variants?.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-2">
                       {item.associated_variants.map((v: string) => (
-                        <Badge key={v} variant="secondary" className="text-xs">{v}</Badge>
+                        <Badge key={v} variant="secondary" className="text-xs font-mono">{v}{data?.genotype_map?.[v] ? ` ${data.genotype_map[v]}` : ''}</Badge>
                       ))}
                     </div>
+                  )}
+
+                  {item.support_recommendations?.[0] && (
+                    <p className={`text-sm ${theme.textSecondary} mt-2 line-clamp-2`}>{item.support_recommendations[0]}</p>
                   )}
 
                   {isExpanded && (
@@ -201,6 +282,8 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
           </div>
         </SectionCard>
       )}
+
+      <DisclaimerCard theme={theme} />
     </div>
   )
 }

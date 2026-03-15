@@ -237,14 +237,14 @@ interface FunctionalCategoriesProps extends ChartBase {
   data: { name: string; count: number }[]
 }
 
-export function FunctionalCategoriesChart({ data, isDarkMode, height = 260 }: FunctionalCategoriesProps) {
+export function FunctionalCategoriesChart({ data, isDarkMode, height = 200 }: FunctionalCategoriesProps) {
   if (!data.length) return null
   const sorted = [...data].sort((a, b) => b.count - a.count)
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <BarChart data={sorted} margin={{ left: 4, right: 16, top: 8, bottom: 8 }}>
+      <BarChart data={sorted} margin={{ left: 4, right: 16, top: 8, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke={gridStroke(isDarkMode)} />
-        <XAxis dataKey="name" tick={{ ...axisStyle(isDarkMode), fontSize: 10 }} interval={0} angle={-30} textAnchor="end" height={60} />
+        <XAxis dataKey="name" tick={{ ...axisStyle(isDarkMode), fontSize: 10 }} interval={0} angle={-30} textAnchor="end" height={50} />
         <YAxis tick={axisStyle(isDarkMode)} />
         <Tooltip content={<GlassTooltip isDarkMode={isDarkMode} />} />
         <Bar dataKey="count" name="Variants" radius={[6, 6, 0, 0]}>
@@ -281,7 +281,81 @@ export function WellnessScoreChart({ data, isDarkMode, height = 240 }: WellnessA
   )
 }
 
-// ── 9. Overview Summary Pie – high-level category breakdown ────────
+// ── 9. Generic Category Distribution – reusable horizontal bar ─────
+interface CategoryDistributionChartProps extends ChartBase {
+  data: { label: string; count: number; color?: string }[]
+  barLabel?: string
+}
+
+/**
+ * Reusable horizontal bar chart for any categorical distribution.
+ * Used by carrier status (inheritance patterns), and available for any panel
+ * that needs a category→count breakdown.
+ */
+export function CategoryDistributionChart({ data, isDarkMode, height = 220, barLabel = 'Count' }: CategoryDistributionChartProps) {
+  const chartData = useMemo(() =>
+    data.filter(d => d.count > 0)
+      .map((d, i) => ({ ...d, fill: d.color || PALETTE[i % PALETTE.length] }))
+      .sort((a, b) => b.count - a.count),
+  [data])
+
+  if (!chartData.length) return null
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <BarChart data={chartData} layout="vertical" margin={{ left: 8, right: 16, top: 8, bottom: 8 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke={gridStroke(isDarkMode)} horizontal={false} />
+        <XAxis type="number" tick={axisStyle(isDarkMode)} allowDecimals={false} />
+        <YAxis type="category" dataKey="label" tick={axisStyle(isDarkMode)} width={140} />
+        <Tooltip content={<GlassTooltip isDarkMode={isDarkMode} />} />
+        <Bar dataKey="count" name={barLabel} radius={[0, 6, 6, 0]} barSize={24}>
+          {chartData.map((d, i) => <Cell key={i} fill={d.fill} />)}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  )
+}
+
+// ── 10. Carrier Status Distribution – donut (only when > 1 status) ─
+const CARRIER_COLORS: Record<string, string> = { carrier: '#f59e0b', 'non-carrier': '#22c55e', affected: '#ef4444', unknown: '#94a3b8' }
+
+interface CarrierStatusChartProps extends ChartBase {
+  data: { status: string; count: number }[]
+}
+
+export function CarrierStatusChart({ data, isDarkMode, height = 240 }: CarrierStatusChartProps) {
+  const chartData = useMemo(() =>
+    data.filter(d => d.count > 0).map(d => ({
+      name: d.status.charAt(0).toUpperCase() + d.status.slice(1),
+      value: d.count,
+      fill: CARRIER_COLORS[d.status.toLowerCase()] || '#94a3b8',
+    })),
+  [data])
+
+  // Don't render a single-slice donut — it's not informative
+  if (chartData.length <= 1) return null
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <PieChart>
+        <Pie
+          data={chartData}
+          cx="50%" cy="50%"
+          innerRadius="40%" outerRadius="70%"
+          paddingAngle={3}
+          dataKey="value"
+          nameKey="name"
+          label={({ name, value }) => `${name}: ${value}`}
+          labelLine={{ stroke: isDarkMode ? '#64748b' : '#94a3b8' }}
+        >
+          {chartData.map((d, i) => <Cell key={i} fill={d.fill} stroke="none" />)}
+        </Pie>
+        <Tooltip content={<GlassTooltip isDarkMode={isDarkMode} />} />
+        <Legend wrapperStyle={{ fontSize: 11, color: isDarkMode ? '#cbd5e1' : '#475569' }} />
+      </PieChart>
+    </ResponsiveContainer>
+  )
+}
+
+// ── 10. Overview Summary Pie – high-level category breakdown ───────
 interface OverviewPieProps extends ChartBase {
   counts: { label: string; count: number; color: string }[]
 }
