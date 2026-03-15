@@ -1,7 +1,7 @@
 """
 Database models for user authentication and genetic data storage
 """
-from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey, JSON, Float, Index, BigInteger, SmallInteger, ARRAY
+from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey, JSON, Float, Index, BigInteger, SmallInteger, ARRAY, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .database import Base
@@ -311,6 +311,10 @@ class VariantAnnotation(Base):
     analysis_variant = relationship("AnalysisVariant", back_populates="variant_annotations")
     analysis = relationship("GeneticAnalysis")
     shared_annotation = relationship("SharedVariantAnnotation")
+
+    __table_args__ = (
+        UniqueConstraint('analysis_id', 'analysis_variant_id', name='uq_variant_annotations_analysis_variant'),
+    )
 
 
 class RareMutation(Base):

@@ -487,9 +487,11 @@ async def get_dashboard_data(
         processed_variants = sum(getattr(a, 'processed_variants', 0) or 0 for a in analyses)
         
         # Count actual variant annotations for more accurate "analyzed" count
+        # Use DISTINCT analysis_variant_id to avoid inflated counts from
+        # duplicate links created during analysis resume/retry
         from ..db.models import VariantAnnotation, SharedVariantAnnotation
         analyzed_count_result = await db.execute(
-            select(func.count(VariantAnnotation.id))
+            select(func.count(func.distinct(VariantAnnotation.analysis_variant_id)))
             .join(GeneticAnalysis, VariantAnnotation.analysis_id == GeneticAnalysis.id)
             .where(GeneticAnalysis.user_id == current_user.id)
         )
@@ -497,7 +499,7 @@ async def get_dashboard_data(
         
         # Count insights (annotations with meaningful data) using shared annotations
         insights_count_result = await db.execute(
-            select(func.count(VariantAnnotation.id))
+            select(func.count(func.distinct(VariantAnnotation.analysis_variant_id)))
             .join(GeneticAnalysis, VariantAnnotation.analysis_id == GeneticAnalysis.id)
             .join(SharedVariantAnnotation, VariantAnnotation.shared_annotation_id == SharedVariantAnnotation.id)
             .where(

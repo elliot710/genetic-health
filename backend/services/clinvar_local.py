@@ -94,7 +94,7 @@ class ClinVarLocalService:
         if not rsids:
             return {}
         results: Dict[str, Optional[Dict[str, Any]]] = {}
-        batch_size = 500
+        batch_size = 2000
         async with async_session_factory() as session:
             for i in range(0, len(rsids), batch_size):
                 chunk = rsids[i:i + batch_size]

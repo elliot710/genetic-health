@@ -89,27 +89,28 @@ class EnsemblVepLocalService:
             return self._format_result(row)
 
     async def lookup_batch(self, rsids: List[str]) -> Dict[str, Optional[Dict[str, Any]]]:
-        """Batch lookup by rsids using IN clause."""
+        """Batch lookup by rsids. Uses raw column access to skip ORM hydration."""
         if not rsids:
             return {}
         results: Dict[str, Optional[Dict[str, Any]]] = {}
-        batch_size = 500
+        batch_size = 2000
         async with async_session_factory() as session:
             for i in range(0, len(rsids), batch_size):
                 chunk = rsids[i:i + batch_size]
                 result = await session.execute(
-                    select(EnsemblVepVariant).where(
+                    select(
+                        EnsemblVepVariant.rsid,
+                        EnsemblVepVariant.vep_data,
+                    ).where(
                         EnsemblVepVariant.rsid.in_(chunk)
                     )
                 )
-                rows = result.scalars().all()
-                by_rsid = {r.rsid: r for r in rows}
-
-                for rsid_key in chunk:
-                    row = by_rsid.get(rsid_key)
-                    if row:
-                        results[rsid_key] = self._format_result(row)
-                    # Don't set missing keys — caller checks presence
+                for row in result.all():
+                    vep = row.vep_data
+                    if vep and isinstance(vep, dict):
+                        results[row.rsid] = vep
+                    else:
+                        results[row.rsid] = {'found': True, 'source': 'ensembl', 'data': []}
         return results
 
 

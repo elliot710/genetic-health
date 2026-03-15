@@ -5,7 +5,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime
-from typing import ClassVar, Dict, List, Optional, Any, Callable
+from typing import ClassVar, Dict, List, Optional, Any, Callable, Tuple
 from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -97,6 +97,9 @@ class SharedVariantAnnotationService:
         logger.info(f"Checking for existing shared annotations for {len(rsids)} RSIDs in {total_batches} batches")
         lookup_start = time.time()
 
+        from .scoring_engine import get_scoring_engine
+        scorer = get_scoring_engine()
+
         for i in range(0, len(rsids), batch_size):
             batch_rsids = rsids[i:i + batch_size]
             batch_num = i // batch_size + 1
@@ -156,8 +159,7 @@ class SharedVariantAnnotationService:
                         merged_data['annotations'][bq_src] = bq_data
 
                 # Compute composite pathogenicity score
-                from .scoring_engine import get_scoring_engine
-                merged_data['pathogenicity_score'] = get_scoring_engine().score_variant(
+                merged_data['pathogenicity_score'] = scorer.score_variant(
                     merged_data['annotations']
                 )
 
@@ -165,15 +167,19 @@ class SharedVariantAnnotationService:
                     annotation_map[annotation.rsid] = merged_data
 
         if annotation_map:
+            # Chunk usage_count updates to stay under PostgreSQL's 32767 parameter limit
             found_rsids = list(annotation_map.keys())
-            await self.session.execute(
-                update(SharedVariantAnnotation)
-                .where(SharedVariantAnnotation.rsid.in_(found_rsids))
-                .values(
-                    usage_count=SharedVariantAnnotation.usage_count + 1,
-                    last_updated_at=func.now()
+            UPDATE_BATCH = 30000
+            for j in range(0, len(found_rsids), UPDATE_BATCH):
+                batch = found_rsids[j:j + UPDATE_BATCH]
+                await self.session.execute(
+                    update(SharedVariantAnnotation)
+                    .where(SharedVariantAnnotation.rsid.in_(batch))
+                    .values(
+                        usage_count=SharedVariantAnnotation.usage_count + 1,
+                        last_updated_at=func.now()
+                    )
                 )
-            )
 
         await self.session.commit()
         elapsed = time.time() - lookup_start
@@ -366,14 +372,17 @@ class SharedVariantAnnotationService:
             result = await self.session.execute(stmt)
             shared_annotation_id = result.scalar_one()
 
-            variant_annotation = VariantAnnotation(
+            # Use INSERT ... ON CONFLICT DO NOTHING to handle resume/retry
+            from sqlalchemy.dialects.postgresql import insert as pg_insert
+            va_stmt = pg_insert(VariantAnnotation).values(
                 analysis_id=analysis_id,
                 analysis_variant_id=analysis_variant_id,
                 shared_annotation_id=shared_annotation_id,
                 rsid=rsid
+            ).on_conflict_do_nothing(
+                constraint='uq_variant_annotations_analysis_variant'
             )
-
-            self.session.add(variant_annotation)
+            await self.session.execute(va_stmt)
             return True
 
         except Exception as e:
@@ -868,25 +877,17 @@ class ComprehensiveAnalysisService:
         enabled_sources: Optional[List[str]],
         variants: List[AnalysisVariant],
     ):
-        """Backfill ClinVar Local (and AlphaMissense) data for existing annotations
-        that were created before those local sources were added."""
+        """Backfill local sources for existing annotations using a single session."""
         from ..db.database import async_session_factory
 
-        # --- ClinVar Local backfill ---
+        # --- Determine which sources need backfilling ---
         do_clinvar = enabled_sources is None or 'clinvar_local' in enabled_sources
+        cv_svc = None
         if do_clinvar:
             from .clinvar_local import get_clinvar_local_service
             cv_svc = get_clinvar_local_service()
             do_clinvar = cv_svc.is_loaded
 
-        missing_cv = []
-        if do_clinvar:
-            missing_cv = [
-                rsid for rsid, data in existing_annotations.items()
-                if 'clinvar_local' not in data.get('annotations', {})
-            ]
-
-        # --- gnomAD backfill ---
         do_gnomad = enabled_sources is None or 'gnomad' in enabled_sources
         gnomad_svc = None
         if do_gnomad:
@@ -894,55 +895,6 @@ class ComprehensiveAnalysisService:
             gnomad_svc = get_gnomad_service()
             do_gnomad = gnomad_svc.is_loaded
 
-        missing_gnomad = []
-        if do_gnomad:
-            missing_gnomad = [
-                rsid for rsid, data in existing_annotations.items()
-                if 'gnomad' not in data.get('annotations', {})
-            ]
-
-        if not missing_cv and not missing_gnomad:
-            return
-
-        # ClinVar Local backfill
-        cv_updated = 0
-        if missing_cv:
-            logger.info(f"Backfilling ClinVar Local for {len(missing_cv)} existing annotations")
-            cv_results = await cv_svc.lookup_batch(missing_cv)
-            async with async_session_factory() as session:
-                for rsid, cv_data in cv_results.items():
-                    if cv_data and cv_data.get('found'):
-                        await session.execute(
-                            update(SharedVariantAnnotation)
-                            .where(SharedVariantAnnotation.rsid == rsid)
-                            .values(clinvar_local_data=cv_data)
-                        )
-                        existing_annotations[rsid]['annotations']['clinvar_local'] = cv_data
-                        cv_updated += 1
-                if cv_updated:
-                    await session.commit()
-            logger.info(f"Backfilled ClinVar Local data for {cv_updated}/{len(missing_cv)} annotations")
-
-        # gnomAD backfill (local only — no BigQuery fallback)
-        gnomad_updated = 0
-        if missing_gnomad and gnomad_svc:
-            logger.info(f"Backfilling gnomAD for {len(missing_gnomad)} existing annotations (local only)")
-            batch_results = await gnomad_svc.lookup_batch(missing_gnomad)
-            async with async_session_factory() as session:
-                for rsid, gn_data in batch_results.items():
-                    if gn_data and gn_data.get('found'):
-                        await session.execute(
-                            update(SharedVariantAnnotation)
-                            .where(SharedVariantAnnotation.rsid == rsid)
-                            .values(gnomad_data=gn_data)
-                        )
-                        existing_annotations[rsid]['annotations']['gnomad'] = gn_data
-                        gnomad_updated += 1
-                if gnomad_updated:
-                    await session.commit()
-            logger.info(f"Backfilled gnomAD data for {gnomad_updated}/{len(missing_gnomad)} annotations")
-
-        # --- Ensembl VEP backfill ---
         do_ensembl = enabled_sources is None or 'ensembl' in enabled_sources
         vep_svc = None
         if do_ensembl:
@@ -950,30 +902,99 @@ class ComprehensiveAnalysisService:
             vep_svc = get_ensembl_vep_service()
             do_ensembl = await vep_svc.ensure_loaded()
 
-        missing_ensembl = []
-        if do_ensembl:
-            missing_ensembl = [
-                rsid for rsid, data in existing_annotations.items()
-                if 'ensembl' not in data.get('annotations', {})
-            ]
+        # Build missing lists from existing annotations
+        missing_cv = [
+            rsid for rsid, data in existing_annotations.items()
+            if do_clinvar and 'clinvar_local' not in data.get('annotations', {})
+        ]
+        missing_gnomad = [
+            rsid for rsid, data in existing_annotations.items()
+            if do_gnomad and 'gnomad' not in data.get('annotations', {})
+        ]
+        missing_ensembl = [
+            rsid for rsid, data in existing_annotations.items()
+            if do_ensembl and 'ensembl' not in data.get('annotations', {})
+        ]
 
-        if missing_ensembl and vep_svc:
-            logger.info(f"Backfilling Ensembl VEP for {len(missing_ensembl)} existing annotations")
-            ens_results = await vep_svc.lookup_batch(missing_ensembl)
-            ens_updated = 0
+        if not missing_cv and not missing_gnomad and not missing_ensembl:
+            # Skip to BQ backfill check below
+            pass
+        else:
+            # --- Batch lookups (parallel-friendly: each uses its own read session) ---
+            cv_results: Dict[str, Optional[Dict]] = {}
+            gn_results: Dict[str, Optional[Dict]] = {}
+            ens_results: Dict[str, Optional[Dict]] = {}
+
+            if missing_cv:
+                logger.info(f"Backfilling ClinVar Local for {len(missing_cv)} existing annotations")
+                cv_results = await cv_svc.lookup_batch(missing_cv)
+            if missing_gnomad:
+                logger.info(f"Backfilling gnomAD for {len(missing_gnomad)} existing annotations")
+                gn_results = await gnomad_svc.lookup_batch(missing_gnomad)
+            if missing_ensembl:
+                logger.info(f"Backfilling Ensembl VEP for {len(missing_ensembl)} existing annotations")
+                ens_results = await vep_svc.lookup_batch(missing_ensembl)
+
+            # --- Batch DB updates using executemany (pipelined via asyncpg) ---
+            from sqlalchemy import bindparam
+            cv_updated = gn_updated = ens_updated = 0
+
+            # Build update params for each source
+            cv_params = []
+            for rsid, cv_data in cv_results.items():
+                if cv_data and cv_data.get('found'):
+                    cv_params.append({'b_rsid': rsid, 'b_data': cv_data})
+                    existing_annotations[rsid]['annotations']['clinvar_local'] = cv_data
+
+            gn_params = []
+            for rsid, gn_data in gn_results.items():
+                if gn_data and gn_data.get('found'):
+                    gn_params.append({'b_rsid': rsid, 'b_data': gn_data})
+                    existing_annotations[rsid]['annotations']['gnomad'] = gn_data
+
+            ens_params = []
+            for rsid, ens_data in ens_results.items():
+                if ens_data and ens_data.get('found'):
+                    ens_params.append({'b_rsid': rsid, 'b_data': ens_data})
+                    existing_annotations[rsid]['annotations']['ensembl'] = ens_data
+
             async with async_session_factory() as session:
-                for rsid, ens_data in ens_results.items():
-                    if ens_data and ens_data.get('found'):
-                        await session.execute(
-                            update(SharedVariantAnnotation)
-                            .where(SharedVariantAnnotation.rsid == rsid)
-                            .values(ensembl_data=ens_data)
-                        )
-                        existing_annotations[rsid]['annotations']['ensembl'] = ens_data
-                        ens_updated += 1
-                if ens_updated:
+                if cv_params:
+                    await session.execute(
+                        update(SharedVariantAnnotation)
+                        .where(SharedVariantAnnotation.rsid == bindparam('b_rsid'))
+                        .values(clinvar_local_data=bindparam('b_data')),
+                        cv_params
+                    )
+                    cv_updated = len(cv_params)
+
+                if gn_params:
+                    await session.execute(
+                        update(SharedVariantAnnotation)
+                        .where(SharedVariantAnnotation.rsid == bindparam('b_rsid'))
+                        .values(gnomad_data=bindparam('b_data')),
+                        gn_params
+                    )
+                    gn_updated = len(gn_params)
+
+                if ens_params:
+                    await session.execute(
+                        update(SharedVariantAnnotation)
+                        .where(SharedVariantAnnotation.rsid == bindparam('b_rsid'))
+                        .values(ensembl_data=bindparam('b_data')),
+                        ens_params
+                    )
+                    ens_updated = len(ens_params)
+
+                if cv_updated or gn_updated or ens_updated:
                     await session.commit()
-            logger.info(f"Backfilled Ensembl VEP data for {ens_updated}/{len(missing_ensembl)} annotations")
+
+            if cv_updated:
+                logger.info(f"Backfilled ClinVar Local data for {cv_updated}/{len(missing_cv)} annotations")
+            if gn_updated:
+                logger.info(f"Backfilled gnomAD data for {gn_updated}/{len(missing_gnomad)} annotations")
+            if ens_updated:
+                logger.info(f"Backfilled Ensembl VEP data for {ens_updated}/{len(missing_ensembl)} annotations")
 
         # --- BigQuery backfill (ChEMBL, FDA Drug, AlphaFold) ---
         bq_source_names = {'chembl', 'fda_drug', 'alphafold'}
@@ -1009,26 +1030,46 @@ class ComprehensiveAnalysisService:
                     bq_updated = 0
                     bq_total = len(missing_bq)
                     bq_start = time.time()
-                    async with async_session_factory() as session:
-                        for idx, (rsid, (gene, needed)) in enumerate(missing_bq.items(), 1):
-                            bq_result = await bq_svc.enrich_variant(gene, needed, analysis_id=analysis_id)
-                            update_vals = {}
-                            for src, src_data in bq_result.items():
-                                if src in bq_col_map and src_data:
-                                    update_vals[bq_col_map[src]] = src_data
-                                    existing_annotations[rsid]['annotations'][src] = src_data
-                            if update_vals:
+                    commit_interval = 50
+
+                    # Accumulate updates between commits (same pattern as _bulk_enrich_bigquery)
+                    pending_updates: List[Tuple[str, Dict]] = []  # (rsid, update_vals)
+
+                    async def _flush_bq_backfill():
+                        nonlocal pending_updates
+                        if not pending_updates:
+                            return
+                        async with async_session_factory() as session:
+                            for rsid, vals in pending_updates:
                                 await session.execute(
                                     update(SharedVariantAnnotation)
                                     .where(SharedVariantAnnotation.rsid == rsid)
-                                    .values(**update_vals)
+                                    .values(**vals)
                                 )
-                                bq_updated += 1
-                            if idx % 100 == 0 or idx == bq_total:
-                                elapsed = time.time() - bq_start
-                                logger.info(f"  BQ backfill progress: {idx}/{bq_total} ({bq_updated} enriched, {elapsed:.1f}s)")
-                        if bq_updated:
                             await session.commit()
+                        pending_updates = []
+
+                    for idx, (rsid, (gene, needed)) in enumerate(missing_bq.items(), 1):
+                        bq_result = await bq_svc.enrich_variant(gene, needed, analysis_id=analysis_id)
+                        update_vals = {}
+                        for src, src_data in bq_result.items():
+                            if src in bq_col_map and src_data:
+                                update_vals[bq_col_map[src]] = src_data
+                                existing_annotations[rsid]['annotations'][src] = src_data
+                        if update_vals:
+                            pending_updates.append((rsid, update_vals))
+                            bq_updated += 1
+
+                        if idx % commit_interval == 0:
+                            await _flush_bq_backfill()
+
+                        if idx % 100 == 0 or idx == bq_total:
+                            elapsed = time.time() - bq_start
+                            logger.info(f"  BQ backfill progress: {idx}/{bq_total} ({bq_updated} enriched, {elapsed:.1f}s)")
+
+                        await asyncio.sleep(0)
+
+                    await _flush_bq_backfill()
                     logger.info(f"Backfilled BigQuery data for {bq_updated}/{bq_total} annotations ({time.time() - bq_start:.1f}s)")
                 except Exception as e:
                     logger.warning(f"BigQuery backfill failed: {e}")
@@ -1100,113 +1141,136 @@ class ComprehensiveAnalysisService:
         batch_size = 500
         saved_count = 0
 
+        # Pre-import scoring engine once — not per-variant
+        from .scoring_engine import get_scoring_engine
+        scorer = get_scoring_engine()
+
+        # Pre-compute per-rsid values to avoid dict lookups in inner loop
+        def _val(data):
+            return data if data and data.get('found') else None
+
+        last_progress_update = time.time()
+
         for i in range(0, len(unique_rsids), batch_size):
             chunk_rsids = unique_rsids[i:i + batch_size]
 
+            # ── Build batch values ──
+            batch_values = []
+            for rsid in chunk_rsids:
+                cv_val = _val(cv_map.get(rsid))
+                gn_val = _val(gn_map.get(rsid))
+                ens_val = _val(ens_map.get(rsid))
+                first_variant = rsid_to_variants[rsid][0]
+                marker_id = getattr(first_variant, 'marker_id', None)
+
+                row = dict(
+                    rsid=rsid,
+                    clinvar_local_data=cv_val,
+                    gnomad_data=gn_val,
+                    ensembl_data=ens_val,
+                    annotation_status='partial',
+                    total_api_calls=0,
+                    usage_count=1,
+                )
+                if marker_id is not None:
+                    row['marker_id'] = marker_id
+                batch_values.append(row)
+
             async with async_session_factory() as session:
-                for rsid in chunk_rsids:
-                    cv_data = cv_map.get(rsid)
-                    cv_val = cv_data if cv_data and cv_data.get('found') else None
-                    gn_data = gn_map.get(rsid)
-                    gn_val = gn_data if gn_data and gn_data.get('found') else None
-                    ens_data = ens_map.get(rsid)
-                    ens_val = ens_data if ens_data and ens_data.get('found') else None
-
-                    # Get marker_id from first variant with this rsid
-                    first_variant = rsid_to_variants[rsid][0]
-                    marker_id = getattr(first_variant, 'marker_id', None)
-
-                    # Upsert shared annotation
-                    values = dict(
-                        rsid=rsid,
-                        clinvar_local_data=cv_val,
-                        gnomad_data=gn_val,
-                        ensembl_data=ens_val,
-                        annotation_status='partial',
-                        total_api_calls=0,
-                        usage_count=1,
-                    )
-                    if marker_id is not None:
-                        values['marker_id'] = marker_id
-
-                    stmt = insert(SharedVariantAnnotation).values(**values)
-                    conflict_set = dict(
+                # ── Multi-value upsert (one statement for the whole chunk) ──
+                stmt = insert(SharedVariantAnnotation).values(batch_values)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=['rsid'],
+                    set_=dict(
                         usage_count=SharedVariantAnnotation.usage_count + 1,
                         last_updated_at=func.now(),
-                    )
-                    if cv_val:
-                        conflict_set['clinvar_local_data'] = func.coalesce(
+                        clinvar_local_data=func.coalesce(
                             SharedVariantAnnotation.clinvar_local_data,
                             stmt.excluded.clinvar_local_data,
-                        )
-                    if gn_val:
-                        conflict_set['gnomad_data'] = func.coalesce(
+                        ),
+                        gnomad_data=func.coalesce(
                             SharedVariantAnnotation.gnomad_data,
                             stmt.excluded.gnomad_data,
-                        )
-                    if ens_val:
-                        conflict_set['ensembl_data'] = func.coalesce(
+                        ),
+                        ensembl_data=func.coalesce(
                             SharedVariantAnnotation.ensembl_data,
                             stmt.excluded.ensembl_data,
-                        )
-                    stmt = stmt.on_conflict_do_update(
-                        index_elements=['rsid'],
-                        set_=conflict_set,
-                    ).returning(SharedVariantAnnotation.id)
+                        ),
+                    ),
+                ).returning(SharedVariantAnnotation.id, SharedVariantAnnotation.rsid)
 
-                    result = await session.execute(stmt)
-                    shared_id = result.scalar_one()
+                result = await session.execute(stmt)
+                rsid_to_shared_id = {row.rsid: row.id for row in result.all()}
 
-                    # Create variant_annotation links for ALL analysis_variants with this rsid
+                # ── Batch insert variant_annotation links ──
+                link_values = []
+                for rsid in chunk_rsids:
+                    shared_id = rsid_to_shared_id.get(rsid)
+                    if shared_id is None:
+                        continue
                     for v in rsid_to_variants[rsid]:
-                        session.add(VariantAnnotation(
+                        link_values.append(dict(
                             analysis_id=analysis_id,
                             analysis_variant_id=getattr(v, 'id'),
                             shared_annotation_id=shared_id,
                             rsid=rsid,
                         ))
-
-                    # Build in-memory annotation result
-                    ann_data: Dict[str, Any] = {
-                        'rsid': rsid,
-                        'annotations': {},
-                        'sources_queried': [],
-                        'success_count': 0,
-                    }
-                    if cv_val:
-                        ann_data['annotations']['clinvar_local'] = cv_val
-                        ann_data['success_count'] += 1
-                    if gn_val:
-                        ann_data['annotations']['gnomad'] = gn_val
-                        ann_data['success_count'] += 1
-                    if ens_val:
-                        ann_data['annotations']['ensembl'] = ens_val
-                        ann_data['success_count'] += 1
-
-                    from .scoring_engine import get_scoring_engine
-                    ann_data['pathogenicity_score'] = get_scoring_engine().score_variant(
-                        ann_data['annotations']
+                if link_values:
+                    link_stmt = insert(VariantAnnotation).values(link_values)
+                    link_stmt = link_stmt.on_conflict_do_nothing(
+                        constraint='uq_variant_annotations_analysis_variant'
                     )
-
-                    annotation_results[rsid] = AnnotationResult(
-                        rsid=rsid, was_reused=False,
-                        annotation_data=ann_data, source='local'
-                    )
-                    saved_count += 1
+                    await session.execute(link_stmt)
 
                 await session.commit()
 
-            # Progress + logging
+            # ── Build in-memory annotation results (no DB, pure CPU) ──
+            for rsid in chunk_rsids:
+                cv_val = _val(cv_map.get(rsid))
+                gn_val = _val(gn_map.get(rsid))
+                ens_val = _val(ens_map.get(rsid))
+
+                ann_data: Dict[str, Any] = {
+                    'rsid': rsid,
+                    'annotations': {},
+                    'sources_queried': [],
+                    'success_count': 0,
+                }
+                if cv_val:
+                    ann_data['annotations']['clinvar_local'] = cv_val
+                    ann_data['success_count'] += 1
+                if gn_val:
+                    ann_data['annotations']['gnomad'] = gn_val
+                    ann_data['success_count'] += 1
+                if ens_val:
+                    ann_data['annotations']['ensembl'] = ens_val
+                    ann_data['success_count'] += 1
+
+                ann_data['pathogenicity_score'] = scorer.score_variant(
+                    ann_data['annotations']
+                )
+
+                annotation_results[rsid] = AnnotationResult(
+                    rsid=rsid, was_reused=False,
+                    annotation_data=ann_data, source='local'
+                )
+                saved_count += 1
+
+            # Progress — throttle DB updates to every 2s to reduce connection churn
             progress.annotated_variants += sum(
                 len(rsid_to_variants[r]) for r in chunk_rsids
             )
             progress.new_annotations += len(chunk_rsids)
             progress.processed_variants = progress.annotated_variants
             progress.phase_progress = progress.processed_variants / max(1, progress.total_variants)
-            await self._update_progress(analysis_id, progress)
 
+            now = time.time()
             chunk_num = i // batch_size + 1
             total_chunks = (total + batch_size - 1) // batch_size
+            if now - last_progress_update >= 2.0 or chunk_num == total_chunks:
+                await self._update_progress(analysis_id, progress)
+                last_progress_update = now
+
             if chunk_num % 20 == 0 or chunk_num == total_chunks:
                 elapsed = time.time() - bulk_start
                 logger.info(
@@ -1339,8 +1403,30 @@ class ComprehensiveAnalysisService:
             updated_variants = 0
             commit_interval = 50  # Commit every N genes
 
-            session = async_session_factory()
-            await session.__aenter__()
+            # Accumulate updates between commits instead of holding one session open for hours
+            pending_updates: List[Tuple[List[str], Dict]] = []  # (rsids, update_vals)
+            pending_mem: List[Tuple[List[str], Dict]] = []  # (rsids, mem_updates)
+
+            async def _flush_pending():
+                nonlocal pending_updates, pending_mem
+                if not pending_updates:
+                    return
+                async with async_session_factory() as session:
+                    for rsids_list, vals in pending_updates:
+                        await session.execute(
+                            update(SharedVariantAnnotation)
+                            .where(SharedVariantAnnotation.rsid.in_(rsids_list))
+                            .values(**vals)
+                        )
+                    await session.commit()
+                for rsids_list, mem_upd in pending_mem:
+                    for rsid in rsids_list:
+                        ar = annotation_results.get(rsid)
+                        if ar and ar.annotation_data:
+                            for src, src_data in mem_upd.items():
+                                ar.annotation_data.setdefault('annotations', {})[src] = src_data
+                pending_updates = []
+                pending_mem = []
 
             try:
                 total_to_process = len(genes_to_process)
@@ -1375,41 +1461,37 @@ class ComprehensiveAnalysisService:
                             mem_updates[src] = src_data
 
                     if not update_vals:
-                        # Periodic commit even when no data, to flush pending updates
-                        if idx % commit_interval == 0 and enriched_genes > 0:
-                            await session.commit()
+                        # Periodic flush even when no data, to persist pending updates
+                        if idx % commit_interval == 0 and pending_updates:
+                            await _flush_pending()
+                            logger.info(f"  BQ commit checkpoint at gene {idx}/{len(genes_to_process)}")
                         await asyncio.sleep(0)
                         continue
 
                     enriched_genes += 1
                     rsids_for_gene = gene_to_rsids[gene]
+                    updated_variants += len(rsids_for_gene)
 
-                    await session.execute(
-                        update(SharedVariantAnnotation)
-                        .where(SharedVariantAnnotation.rsid.in_(rsids_for_gene))
-                        .values(**update_vals)
-                    )
+                    pending_updates.append((rsids_for_gene, update_vals))
+                    pending_mem.append((rsids_for_gene, mem_updates))
 
-                    for rsid in rsids_for_gene:
-                        ar = annotation_results.get(rsid)
-                        if ar and ar.annotation_data:
-                            for src, src_data in mem_updates.items():
-                                ar.annotation_data.setdefault('annotations', {})[src] = src_data
-                            updated_variants += 1
-
-                    # Periodic commit to persist progress
+                    # Periodic flush to persist progress (releases connection between flushes)
                     if idx % commit_interval == 0:
-                        await session.commit()
+                        await _flush_pending()
                         logger.info(f"  BQ commit checkpoint at gene {idx}/{len(genes_to_process)}")
 
                     await asyncio.sleep(0)
 
-                # Final commit
-                if enriched_genes:
-                    await session.commit()
+                # Final flush
+                await _flush_pending()
 
-            finally:
-                await session.__aexit__(None, None, None)
+            except Exception as inner_e:
+                # Try to flush what we have before propagating
+                try:
+                    await _flush_pending()
+                except Exception:
+                    pass
+                raise inner_e
 
             logger.info(f"BigQuery enrichment complete: {enriched_genes}/{len(genes_to_process)} genes "
                         f"enriched, {updated_variants} variants updated "
@@ -2077,20 +2159,16 @@ class ComprehensiveAnalysisService:
                                *, force_percentage: Optional[int] = None):
         try:
             from ..db.database import async_session_factory
+            pct = force_percentage if force_percentage is not None else progress.progress_percentage
+
             async with async_session_factory() as session:
-                # Never overwrite user-initiated statuses (paused/stopped)
-                result = await session.execute(
-                    select(GeneticAnalysis.analysis_status).where(GeneticAnalysis.id == analysis_id)
-                )
-                current_status = result.scalar_one_or_none()
-                if current_status in ('paused', 'stopped'):
-                    return
-
-                pct = force_percentage if force_percentage is not None else progress.progress_percentage
-
+                # Single UPDATE with status guard — no separate SELECT needed
                 await session.execute(
                     update(GeneticAnalysis)
-                    .where(GeneticAnalysis.id == analysis_id)
+                    .where(
+                        GeneticAnalysis.id == analysis_id,
+                        GeneticAnalysis.analysis_status.notin_(['paused', 'stopped']),
+                    )
                     .values(
                         progress_percentage=pct,
                         processed_variants=progress.processed_variants,
