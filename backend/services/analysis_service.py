@@ -2109,17 +2109,18 @@ class ComprehensiveAnalysisService:
     # ------------------------------------------------------------------
 
     async def _generate_ancestry_results(self, variants, annotation_results, analysis_id, session) -> int:
-        """Estimate ancestry composition using population allele frequencies
-        from 1000 Genomes Phase 3 or gnomAD (fallback) via a frequency-weighted
-        centroid model.
+        """Estimate ancestry composition using a genotype-likelihood model.
 
-        For each variant with population-specific allele frequencies, we
-        compute how much weight each superpopulation contributes relative
-        to the others.  We then average these weights across all informative
-        variants to get a soft admixture estimate.
+        Queries the thousand_genomes_variants table directly (JOIN via
+        genetic_markers) to obtain population-specific allele frequencies,
+        then computes P(observed_genotype | population) under Hardy-Weinberg.
+        Log-likelihoods are summed across informative variants and
+        normalised via softmax to produce percentage estimates.
         """
         from ..db.models import AncestryResult
+        from ..db.database import async_session_factory
         import math
+        from sqlalchemy import text
 
         POP_CODES = ['afr', 'amr', 'eas', 'eur', 'sas']
         POP_LABELS = {
@@ -2136,133 +2137,154 @@ class ComprehensiveAnalysisService:
             'eur': 'Europe & Western Asia',
             'sas': 'South & Central Asia',
         }
-        # gnomAD uses different pop codes — map to our canonical 5
-        GNOMAD_POP_MAP = {
-            'afr': 'afr',
-            'amr': 'amr',
-            'eas': 'eas',
-            'nfe': 'eur',   # non-Finnish European → European
-            'fin': 'eur',   # Finnish → European (merged)
-            'sas': 'sas',
-        }
 
-        # ── Collect population frequencies from annotations ──
-        # Use a frequency-weighted centroid: for each variant, the weight
-        # of population p is AF_p / sum(AF_all_pops).  We average these
-        # weights across all informative variants for a soft mixture.
-        pop_weight_sums = {p: 0.0 for p in POP_CODES}
+        FLOOR = 0.001
+
+        def _genotype_log_likelihood(af: float, gt_type: str) -> float:
+            p = max(min(af, 1 - FLOOR), FLOOR)
+            q = 1 - p
+            if gt_type == 'hom_ref':
+                return math.log(q * q + 1e-30)
+            elif gt_type == 'het':
+                return math.log(2 * p * q + 1e-30)
+            else:
+                return math.log(p * p + 1e-30)
+
+        def _classify_genotype(gt_str: Optional[str], ref: Optional[str], alt: Optional[str]) -> Optional[str]:
+            if not gt_str:
+                return None
+            gt = gt_str.strip().upper()
+            if '/' in gt:
+                alleles = gt.split('/')
+            elif '|' in gt:
+                alleles = gt.split('|')
+            elif len(gt) == 2:
+                alleles = [gt[0], gt[1]]
+            else:
+                return None
+            if len(alleles) != 2:
+                return None
+            a1, a2 = alleles[0].strip(), alleles[1].strip()
+            ref_u = (ref or '').strip().upper()
+            alt_u = (alt or '').strip().upper()
+            if ref_u and alt_u:
+                is_ref = [a == ref_u for a in (a1, a2)]
+                is_alt = [a == alt_u for a in (a1, a2)]
+                if all(is_ref):
+                    return 'hom_ref'
+                if all(is_alt):
+                    return 'hom_alt'
+                if any(is_ref) and any(is_alt):
+                    return 'het'
+                if a1 != a2:
+                    return 'het'
+                return 'hom_ref'
+            else:
+                if a1 == a2:
+                    return 'hom_ref'
+                return 'het'
+
+        # ── Bulk-fetch population AFs directly from thousand_genomes_variants ──
+        # Use a separate read-only session so we don't bloat the write session.
+        rows = []
+        async with async_session_factory() as read_session:
+            result_proxy = await read_session.execute(text("""
+                SELECT gm.rsid, av.genotype, gm.ref_allele, gm.alt_alleles,
+                       tg.af_afr, tg.af_amr, tg.af_eas, tg.af_eur, tg.af_sas
+                FROM analysis_variants av
+                JOIN genetic_markers gm ON av.marker_id = gm.id
+                JOIN thousand_genomes_variants tg ON gm.rsid = tg.rsid
+                WHERE av.analysis_id = :aid
+                  AND tg.af_eur IS NOT NULL
+                  AND tg.af_afr IS NOT NULL
+            """), {'aid': analysis_id})
+            rows = result_proxy.fetchall()
+
+        logger.info(f"Ancestry: fetched {len(rows)} variant×1000G rows for analysis {analysis_id}")
+
+        # De-duplicate by rsid (keep first row per rsid)
+        seen_rsids: set = set()
+        unique_rows = []
+        for row in rows:
+            if row[0] not in seen_rsids:
+                seen_rsids.add(row[0])
+                unique_rows.append(row)
+
+        log_likelihoods = {p: 0.0 for p in POP_CODES}
         informative_count = 0
         contributing_rsids: Dict[str, List[str]] = {p: [] for p in POP_CODES}
 
-        FLOOR = 0.001  # minimum AF to avoid dividing by near-zero
+        for rsid, genotype, ref_allele, alt_alleles, af_afr, af_amr, af_eas, af_eur, af_sas in unique_rows:
+            afs = {
+                'afr': af_afr or 0.0,
+                'amr': af_amr or 0.0,
+                'eas': af_eas or 0.0,
+                'eur': af_eur or 0.0,
+                'sas': af_sas or 0.0,
+            }
 
-        for variant in variants:
-            rsid = getattr(variant, 'rsid', None)
-            if not rsid:
-                continue
-            ar = annotation_results.get(rsid)
-            if not ar or not ar.annotation_data:
-                continue
-            annotations = ar.annotation_data.get('annotations', {})
-
-            # Try 1000G first, fall back to gnomAD
-            pop_freqs = None
-            source_key = None
-            tkg = annotations.get('thousand_genomes')
-            if tkg and tkg.get('found'):
-                pop_freqs = tkg.get('population_frequencies', {})
-                source_key = '1000g'
-
-            if not pop_freqs:
-                gnomad = annotations.get('gnomad')
-                if gnomad and gnomad.get('found'):
-                    pop_freqs = gnomad.get('population_frequencies', {})
-                    source_key = 'gnomad'
-
-            if not pop_freqs:
-                continue
-
-            # Extract AFs — normalise gnomAD pop codes to canonical 5
-            afs: Dict[str, float] = {}
-            if source_key == 'gnomad':
-                for gnomad_code, canonical in GNOMAD_POP_MAP.items():
-                    pf = pop_freqs.get(gnomad_code, {})
-                    af = pf.get('af') if isinstance(pf, dict) else None
-                    if af is not None and 0 <= af <= 1:
-                        if canonical in afs:
-                            afs[canonical] = (afs[canonical] + af) / 2
-                        else:
-                            afs[canonical] = af
-            else:
-                for pc in POP_CODES:
-                    pf = pop_freqs.get(pc, {})
-                    af = pf.get('af') if isinstance(pf, dict) else None
-                    if af is not None and 0 <= af <= 1:
-                        afs[pc] = af
-
-            if len(afs) < 2:
-                continue
-
-            # Skip very common variants (AF > 0.95 in all pops) — uninformative
             af_vals = list(afs.values())
-            if min(af_vals) > 0.95:
+            # Skip uninformative variants (all AFs very similar)
+            if max(af_vals) - min(af_vals) < 0.05:
                 continue
-            # Skip near-zero everywhere
-            if max(af_vals) < 0.01:
+            # Skip fixed variants
+            if min(af_vals) > 0.95 or max(af_vals) < 0.005:
                 continue
-            # Need some frequency variation
-            if max(af_vals) - min(af_vals) < 0.03:
+
+            gt_type = _classify_genotype(genotype, ref_allele, alt_alleles)
+            if not gt_type:
                 continue
 
             informative_count += 1
 
-            # Compute normalised weight per population for this variant
-            clamped = {p: max(afs.get(p, FLOOR), FLOOR) for p in POP_CODES}
-            total_af = sum(clamped.values())
             for pc in POP_CODES:
-                w = clamped[pc] / total_af
-                pop_weight_sums[pc] += w
-                if afs.get(pc, 0) > 0.3:
-                    contributing_rsids[pc].append(rsid)
+                ll = _genotype_log_likelihood(afs[pc], gt_type)
+                log_likelihoods[pc] += ll
 
-        # ── Convert weight sums to proportions ──
-        if informative_count < 5:
-            # Not enough data — store a single "Undetermined" row
+            best_pop = max(afs, key=lambda p: afs[p])
+            if afs[best_pop] > 0.3:
+                contributing_rsids[best_pop].append(rsid)
+
+        logger.info(f"Ancestry: {informative_count} informative variants out of {len(unique_rows)} unique")
+
+        # ── Convert log-likelihoods to percentages ──
+        if informative_count < 10:
             result = AncestryResult(
                 analysis_id=analysis_id,
                 population='Undetermined',
                 percentage='0',
                 confidence='low',
                 geographic_origin='Insufficient data',
-                associated_variants=[v.rsid for v in variants[:5] if getattr(v, 'rsid', None)],
-                composition=[{
-                    'region': 'Undetermined',
-                    'percentage': 0,
-                }],
+                associated_variants=[getattr(v, 'rsid', '') for v in variants[:5] if getattr(v, 'rsid', None)],
+                composition=[{'region': 'Undetermined', 'percentage': 0}],
             )
             session.add(result)
             return 1
 
-        # Normalise weight sums to percentages
-        total_weight = sum(pop_weight_sums.values()) or 1.0
-        percentages = {p: round((pop_weight_sums[p] / total_weight) * 100, 1) for p in POP_CODES}
+        max_ll = max(log_likelihoods.values())
+        # Temperature scaling: with many variants, raw log-likelihoods
+        # produce extreme softmax concentrations.  Scale by a factor
+        # proportional to the number of informative variants so that the
+        # resulting distribution has realistic spread (similar to using a
+        # curated panel of ~1-2 K ancestry-informative markers).
+        temperature = max(informative_count / 500, 1.0)
+        exp_lls = {p: math.exp((log_likelihoods[p] - max_ll) / temperature) for p in POP_CODES}
+        total_exp = sum(exp_lls.values()) or 1.0
+        percentages = {p: round((exp_lls[p] / total_exp) * 100, 1) for p in POP_CODES}
 
-        # Determine dominant population
         dominant_pop = max(percentages, key=lambda p: percentages[p])
         confidence = 'high' if percentages[dominant_pop] > 60 else 'moderate' if percentages[dominant_pop] > 35 else 'low'
 
-        # Build composition array (sort by percentage descending, omit < 1%)
         composition = sorted(
             [
                 {'region': POP_LABELS[p], 'percentage': percentages[p]}
-                for p in POP_CODES if percentages[p] >= 1.0
+                for p in POP_CODES if percentages[p] >= 0.5
             ],
             key=lambda x: x['percentage'],
             reverse=True,
         )
 
         # ── Neanderthal estimation ──
-        # Known Neanderthal-introgressed variant rsIDs (well-established in literature)
         NEANDERTHAL_RSIDS = {
             'rs2066827', 'rs10166942', 'rs2298813', 'rs4792887', 'rs1534696',
             'rs3917862', 'rs10490770', 'rs2664280', 'rs12477142', 'rs11209026',
@@ -2272,7 +2294,7 @@ class ComprehensiveAnalysisService:
         user_rsids = {getattr(v, 'rsid', '') for v in variants}
         neanderthal_hits = user_rsids & NEANDERTHAL_RSIDS
         neanderthal_pct = round(len(neanderthal_hits) / max(len(NEANDERTHAL_RSIDS), 1) * 3.5, 1)
-        neanderthal_pct = min(neanderthal_pct, 4.0)  # cap at 4%
+        neanderthal_pct = min(neanderthal_pct, 4.0)
 
         neanderthal_data = {
             'percentage': neanderthal_pct,
@@ -2281,7 +2303,9 @@ class ComprehensiveAnalysisService:
             'comparison': f'than the average of ~2% for non-African populations ({informative_count} variants analyzed)',
         }
 
-        # ── Store results ──
+        logger.info(f"Ancestry result: {', '.join(f'{POP_LABELS[p]} {percentages[p]}%' for p in POP_CODES)} "
+                     f"(dominant={POP_LABELS[dominant_pop]}, confidence={confidence})")
+
         result = AncestryResult(
             analysis_id=analysis_id,
             population=POP_LABELS[dominant_pop],

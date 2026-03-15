@@ -79,7 +79,7 @@ class AnalysisVariant(Base):
     __tablename__ = "analysis_variants"
     
     id = Column(Integer, primary_key=True, index=True)
-    analysis_id = Column(Integer, ForeignKey("genetic_analyses.id", ondelete="CASCADE"), nullable=False)
+    analysis_id = Column(Integer, ForeignKey("genetic_analyses.id", ondelete="CASCADE"), nullable=False, index=True)
     marker_id = Column(Integer, ForeignKey("genetic_markers.id"), nullable=False)
     
     # User-specific data (genotype varies per person)

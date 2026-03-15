@@ -1,0 +1,10 @@
+data_sources/
+backups/
+*.dump
+*.csv
+log.txt
+.git/
+__pycache__/
+*.pyc
+node_modules/
+.next/

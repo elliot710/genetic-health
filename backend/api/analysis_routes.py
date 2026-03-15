@@ -440,10 +440,13 @@ async def get_dashboard_data(
     Get comprehensive dashboard data for the current user.
     """
     try:
-        # Get all analyses for the user
+        # Get all analyses for the user (exclude soft-deleted)
         result = await db.execute(
             select(GeneticAnalysis)
-            .where(GeneticAnalysis.user_id == current_user.id)
+            .where(
+                GeneticAnalysis.user_id == current_user.id,
+                GeneticAnalysis.analysis_status != 'deleted',
+            )
             .order_by(GeneticAnalysis.upload_date.desc())
         )
         analyses = result.scalars().all()
@@ -824,7 +827,10 @@ async def list_user_analyses(
     try:
         result = await db.execute(
             select(GeneticAnalysis)
-            .where(GeneticAnalysis.user_id == current_user.id)
+            .where(
+                GeneticAnalysis.user_id == current_user.id,
+                GeneticAnalysis.analysis_status != 'deleted',
+            )
             .order_by(GeneticAnalysis.upload_date.desc())
             .offset(skip)
             .limit(limit)

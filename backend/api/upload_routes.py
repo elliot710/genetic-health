@@ -1,15 +1,16 @@
 """
 Upload routes for genetic data files with optimized variant storage.
 """
+import asyncio
 import logging
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status, BackgroundTasks
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy import select, func, delete, update
 
 from .auth_routes import get_current_user
-from ..db.database import get_session
+from ..db.database import get_session, async_session_factory
 from ..db.models import GeneticAnalysis, AnalysisVariant
 from ..utils.vcf_parser import VCFParser
 from ..services.variant_uploader import VariantUploader
@@ -160,61 +161,88 @@ async def upload_csv(
 
 @router.delete("/data")
 async def delete_all_user_data(
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
     """
     Delete all genetic data for the current user.
-    This only deletes user-specific data (analyses and their insights),
-    but preserves shared variant annotations for efficiency.
+    Instantly marks analyses as deleted (so UI updates immediately),
+    then cleans up the big child tables in the background.
+    Preserves shared variant annotations by design.
     """
     try:
-        # Get all user's analyses with their related data
-        from sqlalchemy import delete
-        from ..db.models import (
-            VariantAnnotation, AnalysisVariant, HealthRisk, DrugResponse,
-            PhysicalTrait, NutritionTrait, SportsPerformance, CognitiveProfile,
-            PersonalityTrait, AncestryResult, CarrierStatus, WellnessMetric,
-            MethylationProfile, DetoxificationProfile, RareMutation, UncommonMutation
-        )
-        
+        from sqlalchemy import text
+
+        # Count analyses first for the response message
         result = await session.execute(
-            select(GeneticAnalysis).where(
-                GeneticAnalysis.user_id == current_user.id
+            select(GeneticAnalysis.id).where(
+                GeneticAnalysis.user_id == current_user.id,
+                GeneticAnalysis.analysis_status != 'deleted',
             )
         )
-        analyses = result.scalars().all()
+        analysis_ids = [row[0] for row in result.all()]
         
-        if not analyses:
+        if not analysis_ids:
             return JSONResponse({
                 "status": "success",
                 "message": "No data found to delete"
             })
 
-        analysis_ids = [analysis.id for analysis in analyses]
         deleted_count = len(analysis_ids)
-        
-        # Explicitly delete large child tables first for performance
-        # (CASCADE would handle it, but bulk DELETE is much faster for 600K+ rows)
+        user_id = current_user.id
+
+        # Instant: mark as deleted so dashboard hides them immediately
         await session.execute(
-            delete(VariantAnnotation).where(VariantAnnotation.analysis_id.in_(analysis_ids))
+            text("UPDATE genetic_analyses SET analysis_status = 'deleted' WHERE user_id = :uid AND analysis_status != 'deleted'"),
+            {"uid": user_id},
         )
-        await session.execute(
-            delete(AnalysisVariant).where(AnalysisVariant.analysis_id.in_(analysis_ids))
-        )
-        
-        # Delete analyses (remaining smaller tables cascade-delete automatically)
-        await session.execute(
-            delete(GeneticAnalysis).where(GeneticAnalysis.id.in_(analysis_ids))
-        )
-        
         await session.commit()
+
+        # Background: clean up the big child tables (600K+ rows)
+        async def _bg_cleanup():
+            logger.info(f"Background cleanup STARTING for user {user_id}, analyses={analysis_ids}")
+            try:
+                async with async_session_factory() as bg_session:
+                    async with bg_session.begin():
+                        ids = analysis_ids
+                        # 1. Deepest children first: variant_annotations
+                        await bg_session.execute(
+                            text("DELETE FROM variant_annotations WHERE analysis_id = ANY(:ids)"),
+                            {"ids": ids},
+                        )
+                        # 2. analysis_variants
+                        await bg_session.execute(
+                            text("DELETE FROM analysis_variants WHERE analysis_id = ANY(:ids)"),
+                            {"ids": ids},
+                        )
+                        # 3. All insight tables (small, fast)
+                        for tbl in [
+                            "health_risks", "drug_responses", "physical_traits",
+                            "nutrition_traits", "sports_performance", "cognitive_profiles",
+                            "personality_traits", "ancestry_results", "carrier_status",
+                            "wellness_metrics", "methylation_profiles",
+                            "detoxification_profiles", "rare_mutations", "uncommon_mutations",
+                        ]:
+                            await bg_session.execute(
+                                text(f"DELETE FROM {tbl} WHERE analysis_id = ANY(:ids)"),
+                                {"ids": ids},
+                            )
+                        # 4. Parent last
+                        await bg_session.execute(
+                            text("DELETE FROM genetic_analyses WHERE id = ANY(:ids)"),
+                            {"ids": ids},
+                        )
+                logger.info(f"Background cleanup COMPLETED for user {user_id}: {deleted_count} analyses")
+            except Exception as exc:
+                logger.error(f"Background cleanup FAILED for user {user_id}: {exc}", exc_info=True)
+
+        background_tasks.add_task(_bg_cleanup)
 
         return JSONResponse({
             "status": "success",
-            "message": f"Successfully deleted {deleted_count} analyses and user-specific data",
+            "message": f"Successfully deleted {deleted_count} analyses",
             "deleted_analyses": analysis_ids,
-            "note": "User-specific data deleted, shared annotations automatically preserved"
         })
 
     except Exception as e:
