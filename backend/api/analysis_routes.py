@@ -2,14 +2,17 @@
 Unified and optimized analysis API routes with proper error handling and clean architecture.
 Fixed version with correct SQLAlchemy ORM usage patterns.
 """
+import asyncio
+import json
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Request, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, func
+from starlette.responses import StreamingResponse
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel
 
-from ..db.database import get_session
+from ..db.database import get_session, async_session_factory
 from ..db.models import GeneticAnalysis, HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait, SportsPerformance, CognitiveProfile, PersonalityTrait, AncestryResult, CarrierStatus, WellnessMetric, MethylationProfile, DetoxificationProfile, RareMutation, UncommonMutation
 from ..core.container import ServiceManager
 from .auth_routes import get_current_user
@@ -166,6 +169,75 @@ async def get_analysis_status(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get analysis status"
         )
+
+
+@router.get("/stream/{analysis_id}")
+async def stream_analysis_progress(
+    analysis_id: int,
+    request: Request,
+    current_user = Depends(get_current_user)
+):
+    """
+    Stream analysis progress via Server-Sent Events (SSE).
+    Replaces polling — client connects once and receives updates until completion.
+    """
+    async def event_generator():
+        terminal_statuses = {'completed', 'failed', 'stopped', 'cancelled'}
+        while True:
+            if await request.is_disconnected():
+                break
+
+            try:
+                async with async_session_factory() as session:
+                    result = await session.execute(
+                        select(GeneticAnalysis).where(
+                            GeneticAnalysis.id == analysis_id,
+                            GeneticAnalysis.user_id == current_user.id
+                        )
+                    )
+                    analysis = result.scalar_one_or_none()
+
+                if not analysis:
+                    yield f"event: error\ndata: {json.dumps({'error': 'Analysis not found'})}\n\n"
+                    break
+
+                estimated_completion = None
+                ec = getattr(analysis, 'estimated_completion', None)
+                if ec:
+                    estimated_completion = ec.isoformat()
+
+                status_data = {
+                    "analysis_id": analysis_id,
+                    "status": getattr(analysis, 'analysis_status', 'pending') or 'pending',
+                    "message": getattr(analysis, 'current_step', 'Waiting to start') or 'Waiting to start',
+                    "current_step": getattr(analysis, 'current_step', 'Waiting to start') or 'Waiting to start',
+                    "progress_percentage": getattr(analysis, 'progress_percentage', 0) or 0,
+                    "processed_variants": getattr(analysis, 'processed_variants', 0) or 0,
+                    "total_variants": getattr(analysis, 'total_variants', 0) or 0,
+                    "filename": getattr(analysis, 'filename', '') or '',
+                    "estimated_completion": estimated_completion,
+                }
+
+                yield f"data: {json.dumps(status_data)}\n\n"
+
+                if status_data['status'] in terminal_statuses:
+                    break
+
+            except Exception as e:
+                logger.error(f"SSE stream error for analysis {analysis_id}: {e}")
+                break
+
+            await asyncio.sleep(1)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+    )
 
 
 @router.get("/results/{analysis_id}", response_model=Dict[str, Any])

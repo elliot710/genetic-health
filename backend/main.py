@@ -3,6 +3,7 @@ Genetic Health Analysis Toolkit - FastAPI Backend
 """
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -10,6 +11,7 @@ from .api import auth_routes, upload_routes, annotation_routes, variant_routes
 from .api.analysis_routes import router as analysis_router
 from .api.admin_routes import router as admin_router
 from .api.insights_routes import router as insights_router
+from .core.telemetry import configure_telemetry
 from .db.database import init_db
 from .services.analysis_queue import get_analysis_queue
 
@@ -20,11 +22,128 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application startup and shutdown lifecycle."""
+    # ── Startup ──────────────────────────────────────────────────
+    # Configure OpenTelemetry before anything else so all spans are captured
+    configure_telemetry()
+    try:
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # type: ignore[import]
+        FastAPIInstrumentor.instrument_app(app)
+    except Exception:
+        pass  # OTel instrumentation is optional
+
+    await init_db()
+
+    # Install per-job log handler on analysis-related loggers
+    from .services.job_logs import JobLogHandler
+    job_handler = JobLogHandler()
+    job_handler.setLevel(logging.INFO)
+    for name in [
+        'backend.services.analysis_service',
+        'backend.services.genetic_api_service',
+        'backend.services.ensembl_vep_local',
+        'backend.services.clinvar_local',
+        'backend.services.gnomad_local',
+        'backend.services.thousand_genomes_local',
+        'backend.services.ensembl_local',
+    ]:
+        logging.getLogger(name).addHandler(job_handler)
+
+    # Start the analysis queue processor
+    analysis_queue = get_analysis_queue()
+    await analysis_queue.start()
+    print("🚀 Analysis queue processor started")
+
+    # Detect and re-queue stale analyses left in 'processing' state
+    # (e.g. from a server restart or container hot-reload)
+    try:
+        from .db.database import async_session_factory
+        from sqlalchemy import select, update as sa_update
+        from .db.models import GeneticAnalysis
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(GeneticAnalysis.id, GeneticAnalysis.user_id, GeneticAnalysis.current_step)
+                .where(GeneticAnalysis.analysis_status == 'processing')
+            )
+            stale = result.all()
+            if stale:
+                for analysis_id, user_id, step in stale:
+                    print(f"🔄 Re-queuing stale analysis {analysis_id} (was at step: {step})")
+                    await analysis_queue.enqueue_analysis(analysis_id, user_id)
+                print(f"🔄 Re-queued {len(stale)} stale analyses for resume")
+            else:
+                print("✅ No stale analyses found")
+    except Exception as e:
+        print(f"⚠️ Stale analysis check failed: {e}")
+
+    # Check ClinVar PG availability (instant — just counts rows)
+    from .services.clinvar_local import get_clinvar_local_service
+    cv_svc = get_clinvar_local_service()
+    ok = await cv_svc.ensure_loaded()
+    if ok:
+        print(f"✅ ClinVar PG: {cv_svc.variant_count} rows available")
+    else:
+        print("⚠️ ClinVar PG: table empty — run ETL import via admin panel")
+
+    # Check gnomAD PG availability (instant — just counts rows)
+    from .services.gnomad_local import get_gnomad_service
+    gnomad_svc = get_gnomad_service()
+    ok = await gnomad_svc.ensure_loaded()
+    if ok:
+        print(f"✅ gnomAD PG: {gnomad_svc.variant_count} variants, {gnomad_svc.constraint_count} gene constraints")
+    else:
+        print("⚠️ gnomAD PG: table empty — run ETL import via admin panel")
+
+    # Check gnomAD BigQuery availability
+    try:
+        from .services.gnomad_bigquery import get_gnomad_bigquery_service
+        bq_svc = get_gnomad_bigquery_service()
+        if await bq_svc.is_available():
+            print("✅ gnomAD BigQuery: credentials configured — fallback enabled")
+        else:
+            print("ℹ️ gnomAD BigQuery: not configured — set GOOGLE_APPLICATION_CREDENTIALS to enable")
+    except Exception as e:
+        print(f"ℹ️ gnomAD BigQuery: unavailable ({e})")
+
+    # Check 1000 Genomes Phase 3 PG availability
+    from .services.thousand_genomes_local import get_thousand_genomes_service
+    tkg_svc = get_thousand_genomes_service()
+    ok = await tkg_svc.ensure_loaded()
+    if ok:
+        print(f"✅ 1000 Genomes PG: {tkg_svc.variant_count} variants available")
+    else:
+        print("⚠️ 1000 Genomes PG: table empty — run ETL import via admin panel")
+
+    # Preload Ensembl VEP cache in background (takes ~15min, don't block startup)
+    from .services.ensembl_vep_local import get_ensembl_vep_service
+    vep_svc = get_ensembl_vep_service()
+    async def _preload_vep():
+        try:
+            ok = await vep_svc.ensure_loaded()
+            if ok:
+                print(f"✅ Ensembl VEP: {vep_svc.variant_count} variants cached from VCF files")
+            else:
+                print("⚠️ Ensembl VEP: no VCF files found or no known rsids")
+        except Exception as e:
+            print(f"⚠️ Ensembl VEP preload failed: {e}")
+    asyncio.create_task(_preload_vep())
+    print("⏳ Ensembl VEP: preloading VCF cache in background...")
+
+    yield
+
+    # ── Shutdown ─────────────────────────────────────────────────
+    await analysis_queue.stop()
+    print("🛑 Analysis queue processor stopped")
+
+
 # Create FastAPI app
 app = FastAPI(
     title="Genetic Health Analysis Toolkit",
     description="A comprehensive toolkit for genetic health analysis",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Configure CORS

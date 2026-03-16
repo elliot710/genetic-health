@@ -126,6 +126,7 @@ export default function Home() {
   }, [checkSession])
 
   const handleLogin = () => {
+    setLoading(true)
     checkSession()
   }
 

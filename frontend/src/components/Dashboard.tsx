@@ -37,6 +37,7 @@ import MethylationPanel from './categories/MethylationPanel'
 import DetoxPanel from './categories/DetoxPanel'
 import RareMutationsPanel from './categories/RareMutationsPanel'
 import UncommonMutationsPanel from './categories/UncommonMutationsPanel'
+import { ErrorState, useThemeClasses } from './categories/shared'
 import { RiskDistributionChart, FunctionalCategoriesChart, OverviewSummaryPie } from './categories/GenomicCharts'
 import SmartInsights from './SmartInsights'
 import KnowledgeGraph from './KnowledgeGraph'
@@ -113,6 +114,7 @@ export default function Dashboard({
   })
 
   const theme = getTheme(isDarkMode)
+  const panelTheme = useThemeClasses(isDarkMode)
 
   // ── Notification helper ───────────────────────────────────
   const showNotification = useCallback(
@@ -127,6 +129,7 @@ export default function Dashboard({
   const {
     data,
     loading,
+    error: dataError,
     lastFetchedAt,
     isCached,
     refreshData,
@@ -252,6 +255,15 @@ export default function Dashboard({
 
   // ── Panel content switcher ────────────────────────────────
   const renderCategoryContent = () => {
+    if (dataError) {
+      return (
+        <ErrorState
+          message={dataError}
+          onRetry={() => refreshData(true)}
+          theme={panelTheme}
+        />
+      )
+    }
     switch (activeCategory) {
       case 'food-nutrition':
         return <FoodNutritionPanel data={data} isDarkMode={isDarkMode} token={token} />

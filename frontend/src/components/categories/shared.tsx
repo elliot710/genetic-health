@@ -1,9 +1,10 @@
 'use client'
 
 import React, { useState } from 'react'
-import { LucideIcon, AlertTriangle, CheckCircle, Flame, Info, ExternalLink, Search } from 'lucide-react'
+import { LucideIcon, AlertCircle, AlertTriangle, CheckCircle, Flame, Info, ExternalLink, RefreshCw, Search } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card'
 import { Badge } from '../ui/badge'
+import { Button } from '../ui/button'
 import VariantDetailDialog from './VariantDetailDialog'
 import {
   getGlassBackground,
@@ -111,6 +112,38 @@ export function EmptyState({
             <h3 className={`text-xl font-bold ${theme.textPrimary} mb-2`}>{title}</h3>
             <p className={`${theme.textSecondary} max-w-md`}>{description}</p>
           </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ─── Error State ──────────────────────────────────────────────
+
+interface ErrorStateProps {
+  message?: string
+  onRetry?: () => void
+  theme: ThemeClasses
+}
+
+export function ErrorState({ message = 'Failed to load data.', onRetry, theme }: ErrorStateProps) {
+  return (
+    <Card className={`${theme.glass} border ${theme.border} ring-0`}>
+      <CardContent className="py-12">
+        <div className="flex flex-col items-center gap-4 text-center">
+          <div className="p-4 rounded-xl bg-linear-to-br from-red-500/20 to-red-600/10 border border-red-500/30">
+            <AlertCircle className="h-8 w-8 text-red-400" />
+          </div>
+          <div>
+            <h3 className={`text-xl font-bold ${theme.textPrimary} mb-2`}>Something went wrong</h3>
+            <p className={`${theme.textSecondary} max-w-md`}>{message}</p>
+          </div>
+          {onRetry && (
+            <Button variant="outline" size="sm" onClick={onRetry} className="mt-2 gap-2">
+              <RefreshCw className="h-4 w-4" />
+              Retry
+            </Button>
+          )}
         </div>
       </CardContent>
     </Card>

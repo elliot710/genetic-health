@@ -35,12 +35,19 @@ services:
       - ENSEMBL_DATA_DIR=/app/data_sources/ensembl/homo_sapiens
       - GOOGLE_APPLICATION_CREDENTIALS=/app/genetic-health-490017-b854a959d61b.json
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # OpenTelemetry — traces go to the bundled Jaeger container by default.
+      # Set OTEL_EXPORTER_OTLP_ENDPOINT='' in your .env to disable tracing.
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4318}
+      - OTEL_SERVICE_NAME=dna-toolkit-backend
+      - OTEL_CONSOLE_EXPORT=${OTEL_CONSOLE_EXPORT:-false}
     volumes:
       - .:/app
       - /app/.venv  # Exclude virtual environment from volume mount
     depends_on:
       postgres:
         condition: service_healthy
+      jaeger:
+        condition: service_started
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -49,6 +56,19 @@ services:
       retries: 3
       start_period: 40s
     command: ["uv", "run", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "backend"]
+
+  # Jaeger — distributed tracing UI (http://localhost:16686)
+  # Receives OTLP traces from the backend on port 4318.
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4318:4318"     # OTLP HTTP receiver
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    volumes:
+      - jaeger_data:/badger
+    restart: unless-stopped
 
   # Next.js Frontend
   frontend:
@@ -68,3 +88,4 @@ services:
 
 volumes:
   postgres_data:
+  jaeger_data:

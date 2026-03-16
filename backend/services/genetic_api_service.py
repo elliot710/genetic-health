@@ -10,8 +10,10 @@ from dataclasses import dataclass
 from asyncio import Semaphore
 
 from ..core.config import settings
+from ..core.telemetry import get_tracer
 
 logger = logging.getLogger(__name__)
+tracer = get_tracer(__name__)
 
 
 @dataclass
@@ -218,7 +220,7 @@ class OptimizedGeneticAPIService:
             request_headers.update(headers)
         
         start_time = time.time()
-        
+
         for attempt in range(endpoint.max_retries):
             try:
                 await rate_limiter.acquire()
@@ -334,7 +336,7 @@ class OptimizedGeneticAPIService:
         """Get comprehensive annotation for a variant from ALL sources."""
         if not rsid or not rsid.startswith('rs'):
             return None
-        
+
         # Run ALL annotation sources concurrently for maximum speed
         tasks = [
             self._get_ensembl_annotation(rsid),

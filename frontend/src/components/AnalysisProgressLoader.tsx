@@ -49,80 +49,60 @@ export default function AnalysisProgressLoader({
   useEffect(() => {
     if (!analysisId) return;
 
-    const checkProgress = async () => {
-      try {
-        console.log('🔍 Making request to:', apiUrl(`/api/analysis/status/${analysisId}`));
+    const eventSource = new EventSource(
+      apiUrl(`/api/analysis/stream/${analysisId}`),
+      { withCredentials: true }
+    );
 
-        const response = await fetch(apiUrl(`/api/analysis/status/${analysisId}`), {
-          method: 'GET',
+    const handleCompleted = async () => {
+      setIsLoading(false);
+      if (onComplete) {
+        const resultsResponse = await fetch(apiUrl('/api/analysis/dashboard-data'), {
           credentials: 'include',
         });
-
-        console.log('📡 Response status:', response.status);
-        console.log('📡 Response ok:', response.ok);
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error('❌ Response error:', errorText);
-          throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
+        if (resultsResponse.ok) {
+          const results = await resultsResponse.json();
+          onComplete(results);
         }
-
-        const data: AnalysisProgress = await response.json();
-        setProgress(data);
-
-        // Check if analysis is complete
-        if (data.status === 'completed') {
-          setIsLoading(false);
-          if (onComplete) {
-            // Fetch full results
-            const resultsResponse = await fetch(apiUrl('/api/analysis/dashboard-data'), {
-              credentials: 'include',
-            });
-
-            if (resultsResponse.ok) {
-              const results = await resultsResponse.json();
-              onComplete(results);
-            }
-          }
-        } else if (data.status === 'failed') {
-          setIsLoading(false);
-          const errorMsg = 'Analysis failed. Please try again.';
-          setError(errorMsg);
-          if (onError) {
-            onError(errorMsg);
-          }
-        } else if (data.status === 'pending') {
-          // Analysis is queued but not yet started - this is normal
-          console.log('Analysis is pending/queued, waiting for processing to start...');
-        } else if (data.status === 'processing') {
-          // Analysis is actively running - this is normal
-          console.log('Analysis is processing...');
-        } else {
-          // Handle any other unexpected status
-          console.warn('Unexpected analysis status:', data.status);
-        }
-
-      } catch (err) {
-        console.error('Error checking progress:', err);
-        
-        // Don't immediately fail on network errors - they might be temporary
-        // Only fail after multiple consecutive failures
-        const errorMsg = err instanceof Error ? err.message : 'Unknown error occurred';
-        
-        // For now, just log the error but continue polling
-        // The user will see the error in console but won't get the "failed" UI
-        // unless the backend explicitly returns status 'failed'
-        console.warn('Temporary error checking analysis progress, will retry...', errorMsg);
       }
     };
 
-    // Initial check
-    checkProgress();
+    eventSource.onmessage = (event) => {
+      try {
+        const data: AnalysisProgress = JSON.parse(event.data);
+        setProgress(data);
 
-    // Set up polling for progress updates
-    const interval = setInterval(checkProgress, 2000); // Check every 2 seconds
+        if (data.status === 'completed') {
+          eventSource.close();
+          handleCompleted();
+        } else if (data.status === 'failed') {
+          eventSource.close();
+          setIsLoading(false);
+          const errorMsg = 'Analysis failed. Please try again.';
+          setError(errorMsg);
+          if (onError) onError(errorMsg);
+        }
+      } catch (err) {
+        console.error('Error parsing SSE message:', err);
+      }
+    };
 
-    return () => clearInterval(interval);
+    eventSource.addEventListener('error', (event) => {
+      const data = (event as MessageEvent).data;
+      if (data) {
+        try {
+          const parsed = JSON.parse(data);
+          const errorMsg = parsed.error || 'Analysis error occurred.';
+          setError(errorMsg);
+          if (onError) onError(errorMsg);
+        } catch {
+          // ignore parse error
+        }
+      }
+      eventSource.close();
+    });
+
+    return () => eventSource.close();
   }, [analysisId, onComplete, onError]);
 
   if (error) {

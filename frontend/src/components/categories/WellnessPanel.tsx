@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react'
 import { Activity, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
-import { WellnessScoreChart } from './GenomicCharts'
+import { CategoryDistributionChart } from './GenomicCharts'
 import {
   useThemeClasses,
   CategoryHeader,
@@ -42,9 +42,31 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
       gene: t.gene || 'Multiple',
       confidence: t.confidence || 'Medium',
       recommendations: Array.isArray(t.recommendations) ? t.recommendations : [],
-      associated_variants: [] as string[],
+      associated_variants: Array.isArray(t.associated_variants) ? t.associated_variants : [],
     }))
   }, [data?.wellness_traits])
+
+  const statusDistribution = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const t of wellnessTraits) {
+      const v = (t.value || 'unknown').toLowerCase()
+      counts[v] = (counts[v] || 0) + 1
+    }
+    const COLORS: Record<string, string> = {
+      normal: '#22c55e',
+      variant_detected: '#f59e0b',
+      reduced: '#ef4444',
+      impaired: '#dc2626',
+      enhanced: '#06b6d4',
+      variable: '#94a3b8',
+    }
+    return Object.entries(counts)
+      .map(([label, count]) => ({
+        label: label.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        count,
+        color: COLORS[label] || '#94a3b8',
+      }))
+  }, [wellnessTraits])
 
   const headerProps = {
     icon: Activity,
@@ -69,7 +91,12 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
     let list = wellnessTraits
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase()
-      list = list.filter(t => t.name.toLowerCase().includes(q) || t.gene.toLowerCase().includes(q) || t.category.toLowerCase().includes(q))
+      list = list.filter(t =>
+        t.name.toLowerCase().includes(q) ||
+        t.gene.toLowerCase().includes(q) ||
+        t.category.toLowerCase().includes(q) ||
+        t.value.toLowerCase().includes(q)
+      )
     }
     if (categoryFilter !== 'all') {
       list = list.filter(t => t.category === categoryFilter)
@@ -111,9 +138,9 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
     <div className="space-y-6">
       <CategoryHeader {...headerProps} />
 
-      {wellnessTraits.length >= 3 && (
-        <SectionCard title="Wellness Scores Overview" theme={theme}>
-          <WellnessScoreChart data={wellnessTraits.map(t => ({ metric: t.name, score: t.value === 'normal' ? 80 : t.value === 'variant_detected' || t.value === 'reduced' ? 50 : t.value === 'impaired' ? 25 : 65 }))} isDarkMode={isDarkMode} height={220} />
+      {statusDistribution.length > 0 && (
+        <SectionCard title="Wellness Status Distribution" theme={theme}>
+          <CategoryDistributionChart data={statusDistribution} isDarkMode={isDarkMode} height={Math.max(120, statusDistribution.length * 40 + 40)} barLabel="Traits" />
         </SectionCard>
       )}
 
@@ -147,6 +174,11 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
       </div>
 
       <SectionCard title={`Wellness Markers${filteredTraits.length !== wellnessTraits.length ? ` (${filteredTraits.length} of ${wellnessTraits.length})` : ''}`} theme={theme}>
+        {filteredTraits.length === 0 ? (
+          <div className={`py-10 text-center text-sm ${theme.textSecondary}`}>
+            No traits match your search.
+          </div>
+        ) : (
         <MasonryLayout>
           {filteredTraits.map((trait, index) => {
             const itemKey = `wellness-${index}`
@@ -205,6 +237,7 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
             )
           })}
         </MasonryLayout>
+        )}
       </SectionCard>
 
       {allRecommendations.length > 0 && (

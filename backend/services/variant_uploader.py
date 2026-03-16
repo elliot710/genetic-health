@@ -13,8 +13,10 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy import select
 
 from ..db.models import GeneticMarker, AnalysisVariant
+from ..core.telemetry import get_tracer
 
 logger = logging.getLogger(__name__)
+tracer = get_tracer(__name__)
 
 
 class VariantUploader:
@@ -43,40 +45,34 @@ class VariantUploader:
         if not variants_data:
             return 0, 0
         
-        logger.info(f"Processing {len(variants_data)} variants for analysis {analysis_id}")
-        
-        batch_size = 1000
-        total_processed = 0
-        total_new_markers = 0
-        
-        for i in range(0, len(variants_data), batch_size):
-            batch = variants_data[i:i + batch_size]
-            processed, new_markers = await self._process_variant_batch(analysis_id, batch)
-            total_processed += processed
-            total_new_markers += new_markers
-            
-            await self.session.commit()
-            
-            if i % (batch_size * 5) == 0:
-                logger.info(f"Processed {i + len(batch)}/{len(variants_data)} variants ({total_new_markers} new markers)")
-        
-        logger.info(f"Upload complete: {total_processed} variants, {total_new_markers} new markers, {total_processed - total_new_markers} reused")
-        
-        return total_processed, total_new_markers
-    
-    async def _process_variant_batch(
-        self, 
-        analysis_id: int, 
-        batch: List[Dict[str, Any]]
-    ) -> Tuple[int, int]:
-        """Process a batch: upsert markers, then create analysis_variant links."""
-        
-        # 1. Prepare marker data (only variants with rsids)
-        marker_map = {}  # rsid -> marker data
-        for variant in batch:
-            rsid = variant.get('rsid')
-            if not rsid:
-                continue
+        with tracer.start_as_current_span("upload.variants") as span:
+            span.set_attribute("analysis.id", analysis_id)
+            span.set_attribute("variants.input", len(variants_data))
+
+            logger.info(f"Processing {len(variants_data)} variants for analysis {analysis_id}")
+
+            batch_size = 1000
+            total_processed = 0
+            total_new_markers = 0
+
+            for i in range(0, len(variants_data), batch_size):
+                batch = variants_data[i:i + batch_size]
+                processed, new_markers = await self._process_variant_batch(analysis_id, batch)
+                total_processed += processed
+                total_new_markers += new_markers
+
+                await self.session.commit()
+
+                if i % (batch_size * 5) == 0:
+                    logger.info(f"Processed {i + len(batch)}/{len(variants_data)} variants ({total_new_markers} new markers)")
+
+            logger.info(f"Upload complete: {total_processed} variants, {total_new_markers} new markers, {total_processed - total_new_markers} reused")
+
+            span.set_attribute("variants.processed", total_processed)
+            span.set_attribute("markers.new", total_new_markers)
+            span.set_attribute("markers.reused", total_processed - total_new_markers)
+
+            return total_processed, total_new_markers
             
             alt = str(variant.get('alt_allele', variant.get('alt', '')))
             

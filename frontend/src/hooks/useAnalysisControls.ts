@@ -40,9 +40,70 @@ export function useAnalysisControls({
   const [processedVariants, setProcessedVariants] = useState<number>(0)
   const [isAnalysisRunning, setIsAnalysisRunning] = useState(false)
   const [showProgress, setShowProgress] = useState(false)
-  const progressIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const eventSourceRef = useRef<EventSource | null>(null)
 
-  // Check analysis status
+  const closeSSEStream = useCallback(() => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close()
+      eventSourceRef.current = null
+    }
+  }, [])
+
+  const openSSEStream = useCallback(() => {
+    if (!analysisId || eventSourceRef.current) return
+
+    const es = new EventSource(
+      apiUrl(`/api/analysis/stream/${analysisId}`),
+      { withCredentials: true }
+    )
+    eventSourceRef.current = es
+
+    es.onmessage = async (event) => {
+      try {
+        const progress = JSON.parse(event.data)
+
+        const hasCompletedResults =
+          progress.analysis_results?.status === 'completed' && progress.status === 'processing'
+        const shouldBeCompleted =
+          progress.progress_percentage >= 100 && progress.status !== 'completed'
+
+        if (hasCompletedResults || shouldBeCompleted) {
+          setAnalysisStatus('completed')
+          setAnalysisProgress(100)
+          setTotalVariants(progress.total_variants || 0)
+          setProcessedVariants(progress.processed_variants || progress.total_variants || 0)
+          setIsAnalysisRunning(false)
+        } else {
+          setAnalysisStatus(progress.status)
+          setAnalysisProgress(progress.progress_percentage || 0)
+          setTotalVariants(progress.total_variants || 0)
+          setProcessedVariants(progress.processed_variants || 0)
+          setIsAnalysisRunning(progress.status === 'processing')
+        }
+
+        const isTerminal = ['completed', 'failed', 'stopped', 'cancelled'].includes(progress.status)
+        if (isTerminal || hasCompletedResults || shouldBeCompleted) {
+          es.close()
+          eventSourceRef.current = null
+          if (onRefresh && token) {
+            await onRefresh(token)
+          }
+        }
+      } catch (err) {
+        console.error('SSE message parse error:', err)
+      }
+    }
+
+    es.onerror = () => {
+      console.warn('SSE connection issue for analysis status.')
+    }
+  }, [analysisId, token, onRefresh])
+
+  // Aliases used by action handlers below
+  const startProgressPolling = openSSEStream
+  const stopProgressPolling = closeSSEStream
+
+  // One-shot status check used after cancel/pause to sync state
   const checkAnalysisStatus = useCallback(async () => {
     if (!token || !analysisId) return
 
@@ -54,10 +115,7 @@ export function useAnalysisControls({
         const progress = await response.json()
 
         const hasCompletedResults =
-          progress.analysis_results &&
-          progress.analysis_results.status === 'completed' &&
-          progress.status === 'processing'
-
+          progress.analysis_results?.status === 'completed' && progress.status === 'processing'
         const shouldBeCompleted =
           progress.progress_percentage >= 100 && progress.status !== 'completed'
 
@@ -76,7 +134,7 @@ export function useAnalysisControls({
         }
 
         if (progress.status === 'completed' || hasCompletedResults || shouldBeCompleted) {
-          stopProgressPolling()
+          closeSSEStream()
           if (onRefresh && token) {
             await onRefresh(token)
           }
@@ -85,64 +143,18 @@ export function useAnalysisControls({
     } catch (error) {
       console.error('Error checking analysis status:', error)
     }
-  }, [token, analysisId, onRefresh])
-
-  const startProgressPolling = useCallback(() => {
-    if (progressIntervalRef.current) return
-    const interval = setInterval(checkAnalysisStatus, 2000)
-    progressIntervalRef.current = interval
-  }, [checkAnalysisStatus])
-
-  const stopProgressPolling = useCallback(() => {
-    if (progressIntervalRef.current) {
-      clearInterval(progressIntervalRef.current)
-      progressIntervalRef.current = null
-    }
-  }, [])
+  }, [token, analysisId, onRefresh, closeSSEStream])
 
   // Clean up on unmount
   useEffect(() => {
-    return () => stopProgressPolling()
-  }, [stopProgressPolling])
+    return () => closeSSEStream()
+  }, [closeSSEStream])
 
-  // Initial status check + polling
+  // Connect to SSE stream on mount / when analysisId changes
   useEffect(() => {
     if (!token || !analysisId) return
-
-    const checkStatus = async () => {
-      try {
-        const response = await fetch(apiUrl(`/api/analysis/status/${analysisId}`), {
-          credentials: 'include',
-        })
-        if (response.ok) {
-          const progress = await response.json()
-          setAnalysisStatus(progress.status)
-          setAnalysisProgress(progress.progress_percentage || 0)
-          setTotalVariants(progress.total_variants || 0)
-          setProcessedVariants(progress.processed_variants || 0)
-          const stillRunning = ['processing', 'running'].includes(progress.status)
-          setIsAnalysisRunning(stillRunning)
-          return stillRunning
-        }
-      } catch (error) {
-        console.error('Error checking analysis status:', error)
-      }
-      return false
-    }
-
-    checkStatus()
-
-    if (!isAnalysisRunning) return
-
-    const interval = setInterval(async () => {
-      const stillRunning = await checkStatus()
-      if (!stillRunning) {
-        clearInterval(interval)
-      }
-    }, 2000)
-
-    return () => clearInterval(interval)
-  }, [analysisId, token, isAnalysisRunning])
+    openSSEStream()
+  }, [analysisId, token])
 
   const handleStartAnalysis = useCallback(async () => {
     if (!token || !analysisId) {

@@ -18,6 +18,7 @@ interface UseDashboardDataOptions {
 interface UseDashboardDataReturn {
   data: DashboardData | undefined
   loading: boolean
+  error: string | null
   /** Timestamp of last successful fetch */
   lastFetchedAt: number | null
   /** Whether data is from cache (not a fresh fetch) */
@@ -41,6 +42,7 @@ export function useDashboardData({
 }: UseDashboardDataOptions): UseDashboardDataReturn {
   const [data, setData] = useState<DashboardData | undefined>(initialData || undefined)
   const [loading, setLoading] = useState(!initialData)
+  const [error, setError] = useState<string | null>(null)
   const [lastFetchedAt, setLastFetchedAt] = useState<number | null>(
     initialData ? Date.now() : null
   )
@@ -61,15 +63,20 @@ export function useDashboardData({
       if (response.ok) {
         const result = await response.json()
         setData(result)
+        setError(null)
         setLastFetchedAt(Date.now())
         setIsCached(false)
         return result
       } else {
+        const msg = `Failed to load dashboard data (HTTP ${response.status}). Please try again.`
         console.error('Failed to load dashboard data:', response.status)
+        setError(msg)
         return null
       }
-    } catch (error) {
-      console.error('Error loading dashboard data:', error)
+    } catch (err) {
+      const msg = 'Could not reach the server. Check your connection and try again.'
+      console.error('Error loading dashboard data:', err)
+      setError(msg)
       return null
     }
   }, [])
@@ -124,6 +131,7 @@ export function useDashboardData({
   // Clear all data (used on delete)
   const clearData = useCallback(() => {
     setData(undefined)
+    setError(null)
     setLastFetchedAt(null)
     setIsCached(false)
     setVariantCategories([])
@@ -165,6 +173,7 @@ export function useDashboardData({
   return {
     data,
     loading,
+    error,
     lastFetchedAt,
     isCached,
     refreshData,

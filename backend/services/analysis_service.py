@@ -20,11 +20,13 @@ from ..db.models import (
 )
 from ..core.exceptions import AnalysisNotFoundException
 from ..core.config import settings
+from ..core.telemetry import get_tracer
 from .job_logs import JobLogCollector
 from .shared_annotation_service import SharedVariantAnnotationService
 from .insight_generators import ALL_GENERATORS, GeneratorContext
 
 logger = logging.getLogger(__name__)
+tracer = get_tracer(__name__)
 
 
 class AnalysisCancelled(Exception):
@@ -247,6 +249,13 @@ class ComprehensiveAnalysisService:
         log_collector = JobLogCollector.get_instance()
         log_collector.set_active_job(analysis_id)
 
+        from opentelemetry import context as otel_context, trace as otel_trace
+        root_span = tracer.start_span(
+            "analysis.process",
+            attributes={"analysis.id": analysis_id, "analysis.strategy": strategy},
+        )
+        _ctx_token = otel_context.attach(otel_trace.use_span(root_span))
+
         try:
             await self.initialize_services()
             await self._load_registry()
@@ -297,8 +306,11 @@ class ComprehensiveAnalysisService:
 
             # ── Phase 1: Build gene map (always — cheap, in-memory only) ──
             logger.info(f"═══ Phase 1/4: Building gene map ═══")
-            all_rsids = [str(v.rsid) for v in variants if v.rsid]
-            await self._build_rsid_gene_map(variants)
+            with tracer.start_as_current_span("analysis.phase1.build_gene_map") as span:
+                span.set_attribute("variant.count", len(variants))
+                all_rsids = [str(v.rsid) for v in variants if v.rsid]
+                await self._build_rsid_gene_map(variants)
+                span.set_attribute("rsid.count", len(all_rsids))
             progress.phase = 1
             progress.phase_progress = 1.0
 
@@ -315,11 +327,15 @@ class ComprehensiveAnalysisService:
             logger.info(f"═══ Phase 2/4: Annotating variants ═══")
             phase_start = time.time()
 
-            async with async_session_factory() as session:
-                annotation_service = SharedVariantAnnotationService(session)
-                annotation_results = await self._annotate_variants_efficiently(
-                    variants, analysis_id, annotation_service, progress
-                )
+            with tracer.start_as_current_span("analysis.phase2.annotate_variants") as span:
+                span.set_attribute("variant.count", len(variants))
+                async with async_session_factory() as session:
+                    annotation_service = SharedVariantAnnotationService(session)
+                    annotation_results = await self._annotate_variants_efficiently(
+                        variants, analysis_id, annotation_service, progress
+                    )
+                span.set_attribute("annotation.reused", progress.reused_annotations)
+                span.set_attribute("annotation.new", progress.new_annotations)
             progress.phase_progress = 1.0
             logger.info(f"═══ Phase 2/4 complete ({time.time() - phase_start:.1f}s) ═══")
 
@@ -330,7 +346,9 @@ class ComprehensiveAnalysisService:
             await self._update_progress(analysis_id, progress)
             logger.info(f"═══ Phase 3/4: BigQuery enrichment ═══")
             phase_start = time.time()
-            await self._bulk_enrich_bigquery(annotation_results, analysis_id, progress)
+            with tracer.start_as_current_span("analysis.phase3.bigquery_enrichment") as span:
+                span.set_attribute("annotation.count", len(annotation_results))
+                await self._bulk_enrich_bigquery(annotation_results, analysis_id, progress)
             progress.phase_progress = 1.0
             logger.info(f"═══ Phase 3/4 complete ({time.time() - phase_start:.1f}s) ═══")
 
@@ -342,11 +360,13 @@ class ComprehensiveAnalysisService:
             logger.info(f"═══ Phase 4/4: Generating insights ═══")
             phase_start = time.time()
 
-            async with async_session_factory() as session:
-                insights_generated = await self._generate_comprehensive_insights(
-                    variants, annotation_results, analysis_id, session, progress
-                )
-                await session.commit()
+            with tracer.start_as_current_span("analysis.phase4.generate_insights") as span:
+                async with async_session_factory() as session:
+                    insights_generated = await self._generate_comprehensive_insights(
+                        variants, annotation_results, analysis_id, session, progress
+                    )
+                    await session.commit()
+                span.set_attribute("insights.generated", insights_generated)
             logger.info(f"═══ Phase 4/4 complete ({time.time() - phase_start:.1f}s) ═══")
 
             progress.current_step = "completed"
@@ -357,6 +377,10 @@ class ComprehensiveAnalysisService:
             await self._update_progress(analysis_id, progress, force_percentage=100)
 
             processing_time = time.time() - start_time
+
+            root_span.set_attribute("analysis.processing_time_s", round(processing_time, 2))
+            root_span.set_attribute("analysis.variants_processed", len(variants))
+            root_span.set_attribute("analysis.insights_generated", insights_generated)
 
             logger.info(f"Analysis {analysis_id} completed in {processing_time:.2f}s")
             logger.info(f"Annotations: {progress.reused_annotations} reused, {progress.new_annotations} new")
@@ -375,6 +399,7 @@ class ComprehensiveAnalysisService:
             }
 
         except AnalysisCancelled as e:
+            root_span.set_attribute("analysis.cancelled", True)
             logger.info(f"Analysis {analysis_id} was cancelled: {e}")
             # Status already set by user action (paused/stopped) — don't overwrite
             return {
@@ -386,6 +411,8 @@ class ComprehensiveAnalysisService:
             }
 
         except Exception as e:
+            root_span.record_exception(e)
+            root_span.set_attribute("error", True)
             logger.error(f"Analysis {analysis_id} failed: {str(e)}")
             try:
                 await self._update_analysis_status(analysis_id, "failed", f"Failed: {str(e)}")
@@ -400,6 +427,8 @@ class ComprehensiveAnalysisService:
             }
 
         finally:
+            otel_context.detach(_ctx_token)
+            root_span.end()
             log_collector.clear_active_job()
             try:
                 if self.api_service:
