@@ -768,12 +768,18 @@ class ComprehensiveAnalysisService:
             rsid_to_variant = {str(v.rsid): v for v in variants if v.rsid}
 
             if missing_cv:
-                logger.info(f"Backfilling ClinVar Local for {len(missing_cv)} existing annotations")
+                logger.info(f"Backfilling ClinVar Local for {len(missing_cv)} annotations...")
+                _src_t0 = _time.monotonic()
                 cv_results = await cv_svc.lookup_batch(missing_cv)
+                cv_found = sum(1 for v in cv_results.values() if v and v.get('found'))
+                logger.info(f"  ClinVar lookup done: {cv_found}/{len(missing_cv)} found ({_time.monotonic() - _src_t0:.1f}s)")
             if missing_gnomad:
-                logger.info(f"Backfilling gnomAD for {len(missing_gnomad)} existing annotations")
+                logger.info(f"Backfilling gnomAD for {len(missing_gnomad)} annotations (rsid lookup)...")
+                _src_t0 = _time.monotonic()
                 # Try rsid-based lookup first (checks SQLite cache → PG)
                 gn_results = await gnomad_svc.lookup_batch(missing_gnomad)
+                gn_rsid_found = sum(1 for v in gn_results.values() if v and v.get('found'))
+                logger.info(f"  gnomAD rsid lookup done: {gn_rsid_found}/{len(missing_gnomad)} found ({_time.monotonic() - _src_t0:.1f}s)")
                 # Collect rsids that were NOT found by rsid lookup
                 gn_rsid_misses = [
                     rsid for rsid in missing_gnomad
@@ -795,23 +801,36 @@ class ComprehensiveAnalysisService:
                                     marker.alt_alleles or '',
                                 ))
                     if gn_pos_tuples:
+                        logger.info(f"  gnomAD position fallback: {len(gn_pos_tuples)} variants to check...")
+                        _src_t1 = _time.monotonic()
                         gn_pos_results = await gnomad_svc.lookup_batch_by_position(gn_pos_tuples)
+                        gn_pos_found = sum(1 for v in gn_pos_results.values() if v and v.get('found'))
+                        logger.info(f"  gnomAD position fallback done: {gn_pos_found}/{len(gn_pos_tuples)} found ({_time.monotonic() - _src_t1:.1f}s)")
                         # Merge position results into main results
                         for rsid, data in gn_pos_results.items():
                             if data and data.get('found'):
                                 gn_results[rsid] = data
+                gn_total_found = sum(1 for v in gn_results.values() if v and v.get('found'))
+                logger.info(f"  gnomAD total: {gn_total_found}/{len(missing_gnomad)} found")
             if missing_ensembl:
-                logger.info(f"Backfilling Ensembl VEP for {len(missing_ensembl)} existing annotations")
+                logger.info(f"Backfilling Ensembl VEP for {len(missing_ensembl)} annotations...")
+                _src_t0 = _time.monotonic()
                 ens_results = await vep_svc.lookup_batch(missing_ensembl)
+                ens_found = sum(1 for v in ens_results.values() if v and v.get('found'))
+                logger.info(f"  Ensembl VEP lookup done: {ens_found}/{len(missing_ensembl)} found ({_time.monotonic() - _src_t0:.1f}s)")
 
             tkg_results: Dict[str, Optional[Dict]] = {}
             if missing_1kg:
-                logger.info(f"Backfilling 1000G for {len(missing_1kg)} existing annotations")
+                logger.info(f"Backfilling 1000G for {len(missing_1kg)} annotations...")
+                _src_t0 = _time.monotonic()
                 tkg_results = await tkg_svc.lookup_batch(missing_1kg)
+                tkg_found = sum(1 for v in tkg_results.values() if v and v.get('found'))
+                logger.info(f"  1000G lookup done: {tkg_found}/{len(missing_1kg)} found ({_time.monotonic() - _src_t0:.1f}s)")
 
             am_results: Dict[str, Optional[Dict]] = {}
             if missing_am:
-                logger.info(f"Backfilling AlphaMissense for {len(missing_am)} existing annotations")
+                logger.info(f"Backfilling AlphaMissense for {len(missing_am)} annotations...")
+                _src_t0 = _time.monotonic()
                 am_batch = []
                 for rsid in missing_am:
                     v = rsid_to_variant.get(rsid)
@@ -831,11 +850,14 @@ class ComprehensiveAnalysisService:
                                     break
                 if am_batch:
                     am_results = am_svc.lookup_variants_batch(am_batch)
+                am_found = sum(1 for v in am_results.values() if v and v.get('found'))
+                logger.info(f"  AlphaMissense lookup done: {am_found}/{len(missing_am)} found ({_time.monotonic() - _src_t0:.1f}s)")
+
+            backfill_lookup_elapsed = _time.monotonic() - backfill_t0
+            logger.info(f"All source lookups complete in {backfill_lookup_elapsed:.1f}s, writing results to DB...")
 
             # --- Batch DB updates using executemany (pipelined via asyncpg) ---
             from sqlalchemy import bindparam
-            cv_updated = gn_updated = ens_updated = 0
-            logger.info("Local source lookups complete, writing results to DB...")
 
             # Build update params for each source (save both found AND not-found
             # so the backfill doesn't re-query the same rsids on every run)
@@ -885,56 +907,51 @@ class ComprehensiveAnalysisService:
                 else:
                     am_params.append({'b_rsid': rsid, 'b_data': _NOT_FOUND_AM})
 
-            async with async_session_factory() as session:
-                if cv_params:
-                    await session.execute(
-                        update(SharedVariantAnnotation)
-                        .where(SharedVariantAnnotation.rsid == bindparam('b_rsid'))
-                        .values(clinvar_local_data=bindparam('b_data')),
-                        cv_params
-                    )
-                    cv_updated = len(cv_params)
+            # --- Chunked DB writes to avoid long-held locks ---
+            WRITE_CHUNK = 5000
 
-                if gn_params:
-                    await session.execute(
-                        update(SharedVariantAnnotation)
-                        .where(SharedVariantAnnotation.rsid == bindparam('b_rsid'))
-                        .values(gnomad_data=bindparam('b_data')),
-                        gn_params
-                    )
-                    gn_updated = len(gn_params)
+            async def _chunked_update(col_name, params):
+                """Write updates in small chunks with intermediate commits."""
+                total = 0
+                total_params = len(params)
+                total_chunks = (total_params + WRITE_CHUNK - 1) // WRITE_CHUNK
+                write_t0 = _time.monotonic()
+                for ci in range(0, total_params, WRITE_CHUNK):
+                    chunk = params[ci:ci + WRITE_CHUNK]
+                    chunk_num = ci // WRITE_CHUNK + 1
+                    async with async_session_factory() as sess:
+                        await sess.execute(
+                            update(SharedVariantAnnotation)
+                            .where(SharedVariantAnnotation.rsid == bindparam('b_rsid'))
+                            .values(**{col_name: bindparam('b_data')}),
+                            chunk
+                        )
+                        await sess.commit()
+                    total += len(chunk)
+                    if ci > 0:
+                        await asyncio.sleep(0.02)  # yield between chunks
+                    if total_chunks > 1 and (chunk_num % 5 == 0 or chunk_num == total_chunks):
+                        elapsed = _time.monotonic() - write_t0
+                        logger.info(
+                            f"    {col_name} write chunk {chunk_num}/{total_chunks}: "
+                            f"{total}/{total_params} rows ({elapsed:.1f}s)"
+                        )
+                return total
 
-                if ens_params:
-                    await session.execute(
-                        update(SharedVariantAnnotation)
-                        .where(SharedVariantAnnotation.rsid == bindparam('b_rsid'))
-                        .values(ensembl_data=bindparam('b_data')),
-                        ens_params
-                    )
-                    ens_updated = len(ens_params)
-
-                tkg_updated = 0
-                if tkg_params:
-                    await session.execute(
-                        update(SharedVariantAnnotation)
-                        .where(SharedVariantAnnotation.rsid == bindparam('b_rsid'))
-                        .values(thousand_genomes_data=bindparam('b_data')),
-                        tkg_params
-                    )
-                    tkg_updated = len(tkg_params)
-
-                am_updated = 0
-                if am_params:
-                    await session.execute(
-                        update(SharedVariantAnnotation)
-                        .where(SharedVariantAnnotation.rsid == bindparam('b_rsid'))
-                        .values(alpha_missense_data=bindparam('b_data')),
-                        am_params
-                    )
-                    am_updated = len(am_params)
-
-                if cv_updated or gn_updated or ens_updated or tkg_updated or am_updated:
-                    await session.commit()
+            sources_to_write = [
+                ('clinvar_local_data', cv_params, 'ClinVar'),
+                ('gnomad_data', gn_params, 'gnomAD'),
+                ('ensembl_data', ens_params, 'Ensembl VEP'),
+                ('thousand_genomes_data', tkg_params, '1000G'),
+                ('alpha_missense_data', am_params, 'AlphaMissense'),
+            ]
+            cv_updated = gn_updated = ens_updated = tkg_updated = am_updated = 0
+            write_results = [0] * len(sources_to_write)
+            for si, (col, params, label) in enumerate(sources_to_write):
+                if params:
+                    logger.info(f"  Writing {label}: {len(params)} rows to DB...")
+                    write_results[si] = await _chunked_update(col, params)
+            cv_updated, gn_updated, ens_updated, tkg_updated, am_updated = write_results
 
             if cv_updated:
                 logger.info(f"Backfilled ClinVar Local data for {cv_updated}/{len(missing_cv)} annotations")

@@ -170,12 +170,20 @@ class GnomadLocalService:
             return results
 
         # 2) Fallback to PG for anything not in cache
-        batch_size = 2000
+        import time as _time
+        batch_size = 500
+        total_remaining = len(remaining)
+        total_batches = (total_remaining + batch_size - 1) // batch_size
+        found_count = sum(1 for v in results.values() if v and v.get('found'))
+        t0 = _time.monotonic()
+        if total_remaining:
+            logger.info(f"  gnomAD rsid PG lookup: {total_remaining} remaining after cache ({len(results)} cached hits)")
         async with async_session_factory() as session:
-            for i in range(0, len(remaining), batch_size):
+            for i in range(0, total_remaining, batch_size):
                 chunk = remaining[i:i + batch_size]
+                batch_num = i // batch_size + 1
                 if i > 0:
-                    await asyncio.sleep(0.01)
+                    await asyncio.sleep(0.05)  # yield to other DB queries
                 result = await session.execute(
                     select(GnomadVariant).where(GnomadVariant.rsid.in_(chunk))
                 )
@@ -189,6 +197,7 @@ class GnomadLocalService:
                         results[rsid_key] = None
                     elif len(row_list) == 1:
                         results[rsid_key] = self._format_variant(row_list[0], rsid=rsid_key)
+                        found_count += 1
                     else:
                         best = max(row_list, key=lambda r: r.af or 0)
                         data = self._format_variant(best, rsid=rsid_key)
@@ -197,6 +206,20 @@ class GnomadLocalService:
                             for r in row_list if r.id != best.id
                         ]
                         results[rsid_key] = data
+                        found_count += 1
+
+                if batch_num % 50 == 0 or batch_num == total_batches:
+                    elapsed = _time.monotonic() - t0
+                    rate = (i + len(chunk)) / elapsed if elapsed > 0 else 0
+                    logger.info(
+                        f"  gnomAD rsid batch {batch_num}/{total_batches}: "
+                        f"{i + len(chunk)}/{total_remaining} queried, {found_count} found "
+                        f"({rate:.0f} rsids/s, {elapsed:.1f}s elapsed)"
+                    )
+
+        if total_remaining:
+            elapsed = _time.monotonic() - t0
+            logger.info(f"  gnomAD rsid complete: {found_count}/{len(rsids)} found in {elapsed:.1f}s")
         return results
 
     async def lookup_batch_by_position(
@@ -237,7 +260,7 @@ class GnomadLocalService:
         if not entries:
             return results
 
-        batch_size = 2000
+        batch_size = 500
         total = len(entries)
         total_batches = (total + batch_size - 1) // batch_size
         found_count = 0
@@ -247,7 +270,7 @@ class GnomadLocalService:
                 chunk = entries[i:i + batch_size]
                 batch_num = i // batch_size + 1
                 if i > 0:
-                    await asyncio.sleep(0.01)
+                    await asyncio.sleep(0.05)  # yield to other DB queries
 
                 result = await session.execute(
                     select(GnomadVariant).where(
@@ -267,11 +290,11 @@ class GnomadLocalService:
                         results[rsid] = self._format_variant(row, rsid=rsid)
                         found_count += 1
 
-                if batch_num % 10 == 0 or batch_num == total_batches:
+                if batch_num % 50 == 0 or batch_num == total_batches:
                     elapsed = _time.monotonic() - t0
                     rate = (i + len(chunk)) / elapsed if elapsed > 0 else 0
                     logger.info(
-                        f"  gnomAD batch {batch_num}/{total_batches}: "
+                        f"  gnomAD pos batch {batch_num}/{total_batches}: "
                         f"{i + len(chunk)}/{total} queried, {found_count} found "
                         f"({rate:.0f} pos/s, {elapsed:.1f}s elapsed)"
                     )
