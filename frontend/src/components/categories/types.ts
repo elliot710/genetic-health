@@ -233,6 +233,7 @@ export interface DashboardData {
   alpha_missense_map?: Record<string, { score?: number; classification?: string }>
   clinvar_count_map?: Record<string, number>
   genotype_map?: Record<string, string>
+  pathogenicity_map?: Record<string, { score: number; classification: string; confidence: string; evidence_count: number }>
   real_data?: {
     variants?: { rsid?: string; chromosome?: string; position?: number; genotype?: string }[]
     analysis?: Record<string, unknown>

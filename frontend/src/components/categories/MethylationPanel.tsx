@@ -13,6 +13,7 @@ import {
   DisclaimerCard,
   capacityToSeverity,
   VariantLinks,
+  PathogenicityBar,
   ZygosityBadge,
   formatLabel,
   MasonryLayout,
@@ -188,6 +189,7 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
                         ))}
                       </div>
                     )}
+                    {rsid && <PathogenicityBar rsid={rsid} pathogenicityMap={data?.pathogenicity_map} theme={theme} />}
                     <VariantLinks rsid={rsid} gene={item.gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} />
                   </div>
                 )}

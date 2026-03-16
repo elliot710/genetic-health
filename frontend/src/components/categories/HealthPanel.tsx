@@ -8,6 +8,7 @@ import {
   SectionCard,
   StatusBadge,
   ScoreBar,
+  PathogenicityBar,
   DisclaimerCard,
   VariantLinks,
   ZygosityBadge,
@@ -133,17 +134,26 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
     const healthRisks = Array.isArray(data?.health_risks) ? data.health_risks as HealthRisk[] : []
     if (healthRisks.length > 0) {
       return healthRisks
-        .map((risk: HealthRisk) => ({
+        .map((risk: HealthRisk) => {
+          // Find max pathogenicity score from associated variants
+          const variants = risk.associated_variants || []
+          const pathScores = variants
+            .map(v => data?.pathogenicity_map?.[v]?.score)
+            .filter((s): s is number => s != null)
+          const pathScore = pathScores.length > 0 ? Math.max(...pathScores) : null
+
+          return {
           condition: cleanCondition(risk.condition),
           risk: getRiskLevel(risk.risk_level),
-          riskScore: risk.risk_level === 'high' ? 85 : risk.risk_level === 'moderate' ? 65 : risk.risk_level === 'low' ? 35 : 20,
+          riskScore: pathScore ?? (risk.risk_level === 'high' ? 85 : risk.risk_level === 'moderate' ? 65 : risk.risk_level === 'low' ? 35 : 20),
           gene: risk.associated_variants?.[0] || 'Unknown',
           description: `Genetic analysis shows ${risk.risk_level} risk for this condition`,
           variantInfo: risk.associated_variants || [],
           clinicalSignificance: risk.clinical_significance || 'Under research',
           riskLevel: risk.risk_level,
           prevention: Array.isArray(risk.recommendations) ? risk.recommendations : [risk.recommendations || 'Consult with healthcare provider']
-        }))
+          }
+        })
         .sort((a: MappedHealthRisk, b: MappedHealthRisk) => {
           const riskOrder = { 'high': 1, 'moderate': 2, 'low': 3, 'unconfirmed': 4, 'unknown': 4 }
           return (riskOrder[a.riskLevel as keyof typeof riskOrder] || 5) - (riskOrder[b.riskLevel as keyof typeof riskOrder] || 5)
@@ -153,17 +163,25 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
     const healthRisksObj = data?.health_risks as { details?: HealthRisk[] } | undefined
     if (healthRisksObj?.details && healthRisksObj.details.length > 0) {
       return healthRisksObj.details
-        .map((risk: HealthRisk) => ({
+        .map((risk: HealthRisk) => {
+          const variants = risk.associated_variants || []
+          const pathScores = variants
+            .map(v => data?.pathogenicity_map?.[v]?.score)
+            .filter((s): s is number => s != null)
+          const pathScore = pathScores.length > 0 ? Math.max(...pathScores) : null
+
+          return {
           condition: cleanCondition(risk.condition),
           risk: getRiskLevel(risk.risk_level),
-          riskScore: risk.risk_level === 'high' ? 85 : risk.risk_level === 'moderate' ? 65 : risk.risk_level === 'low' ? 35 : 20,
+          riskScore: pathScore ?? (risk.risk_level === 'high' ? 85 : risk.risk_level === 'moderate' ? 65 : risk.risk_level === 'low' ? 35 : 20),
           gene: risk.associated_variants?.[0] || 'Unknown',
           description: `Genetic variant analysis shows ${risk.risk_level} risk`,
           variantInfo: risk.associated_variants || [],
           clinicalSignificance: risk.clinical_significance || 'Under research',
           riskLevel: risk.risk_level,
           prevention: risk.recommendations || ['Consult with healthcare provider', 'Monitor regularly', 'Maintain healthy lifestyle']
-        }))
+          }
+        })
         .sort((a: MappedHealthRisk, b: MappedHealthRisk) => {
           const riskOrder = { 'high': 1, 'moderate': 2, 'low': 3, 'unconfirmed': 4, 'unknown': 4 }
           return (riskOrder[a.riskLevel as keyof typeof riskOrder] || 5) - (riskOrder[b.riskLevel as keyof typeof riskOrder] || 5)
@@ -317,7 +335,7 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                     <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{risk.description}</p>
 
                     <ScoreBar
-                      label="Lifetime Risk"
+                      label="Pathogenicity Score"
                       value={risk.riskScore}
                       colorClass={getRiskBarColor(risk.riskScore)}
                       theme={theme}

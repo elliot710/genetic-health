@@ -892,6 +892,53 @@ async def get_dashboard_data(
                 genotype_map[row.rsid] = row.genotype
         dashboard_data["genotype_map"] = genotype_map
 
+        # Build pathogenicity_map: rsid → {score, classification, confidence, evidence_count}
+        # Uses the same ScoringEngine as VariantDetailDialog for consistency
+        pathogenicity_map: Dict[str, Any] = {}
+        if panel_rsids:
+            try:
+                from ..services.scoring_engine import get_scoring_engine
+                scoring_engine = get_scoring_engine()
+                scoring_rows = (await db.execute(
+                    select(
+                        GeneticMarker.rsid,
+                        SharedVariantAnnotation.ensembl_data,
+                        SharedVariantAnnotation.clinvar_data,
+                        SharedVariantAnnotation.clinvar_local_data,
+                        SharedVariantAnnotation.alpha_missense_data,
+                        SharedVariantAnnotation.gnomad_data,
+                    )
+                    .select_from(AnalysisVariant)
+                    .join(GeneticMarker, AnalysisVariant.marker_id == GeneticMarker.id)
+                    .join(SharedVariantAnnotation, SharedVariantAnnotation.marker_id == GeneticMarker.id)
+                    .where(AnalysisVariant.analysis_id == primary_analysis.id)
+                    .where(GeneticMarker.rsid.in_(panel_rsids))
+                )).all()
+                for row in scoring_rows:
+                    annotations = {}
+                    if row.ensembl_data:
+                        annotations["ensembl"] = row.ensembl_data
+                    if row.clinvar_data:
+                        annotations["clinvar"] = row.clinvar_data
+                    if row.clinvar_local_data:
+                        annotations["clinvar_local"] = row.clinvar_local_data
+                    if row.alpha_missense_data:
+                        annotations["alpha_missense"] = row.alpha_missense_data
+                    if row.gnomad_data:
+                        annotations["gnomad"] = row.gnomad_data
+                    if annotations:
+                        result = scoring_engine.score_variant(annotations)
+                        if result.get("evidence_count", 0) > 0:
+                            pathogenicity_map[row.rsid] = {
+                                "score": round(result["composite_score"] * 100),
+                                "classification": result.get("classification", "unknown"),
+                                "confidence": result.get("confidence", "none"),
+                                "evidence_count": result.get("evidence_count", 0),
+                            }
+            except Exception:
+                logger.warning("Failed to compute pathogenicity_map – skipping")
+        dashboard_data["pathogenicity_map"] = pathogenicity_map
+
         # Persist to dashboard cache
         try:
             if cached:

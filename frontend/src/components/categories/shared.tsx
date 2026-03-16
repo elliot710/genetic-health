@@ -359,6 +359,40 @@ export function getRiskBarColor(score: number): string {
   return 'bg-gradient-to-r from-green-500 to-green-400'
 }
 
+// ─── Pathogenicity Score Bar ───────────────────────────────────
+
+function getPathogenicityColor(score: number): string {
+  if (score >= 80) return 'bg-gradient-to-r from-red-600 to-red-400'
+  if (score >= 60) return 'bg-gradient-to-r from-orange-500 to-red-400'
+  if (score >= 30) return 'bg-gradient-to-r from-yellow-500 to-amber-400'
+  if (score >= 15) return 'bg-gradient-to-r from-green-400 to-emerald-400'
+  return 'bg-gradient-to-r from-green-500 to-emerald-500'
+}
+
+interface PathogenicityBarProps {
+  rsid: string
+  pathogenicityMap?: Record<string, { score: number; classification: string; confidence: string; evidence_count: number }>
+  theme: ThemeClasses
+}
+
+/**
+ * Compact pathogenicity score bar. Renders nothing if no data for the given rsid.
+ * Uses the same ScoringEngine output as VariantDetailDialog for consistency.
+ */
+export function PathogenicityBar({ rsid, pathogenicityMap, theme }: PathogenicityBarProps) {
+  const entry = pathogenicityMap?.[rsid]
+  if (!entry) return null
+
+  return (
+    <ScoreBar
+      label={`Pathogenicity Score (${entry.classification.replace(/_/g, ' ')})`}
+      value={entry.score}
+      colorClass={getPathogenicityColor(entry.score)}
+      theme={theme}
+    />
+  )
+}
+
 // ─── Research Links (inline compact) ───────────────────────────
 
 const DB_LINKS: Record<string, (rsid: string) => string> = {

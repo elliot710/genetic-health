@@ -10,6 +10,7 @@ import {
   StatusBadge,
   DisclaimerCard,
   VariantLinks,
+  PathogenicityBar,
   ZygosityBadge,
   clinicalSignificanceToSeverity,
   formatLabel,
@@ -205,6 +206,7 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
                       )}
                     </div>
 
+                    <PathogenicityBar rsid={mutation.rsid} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                     <VariantLinks rsid={mutation.rsid} gene={mutation.gene} token={token} isDarkMode={isDarkMode} alphaMissense={mutation.rsid ? data?.alpha_missense_map?.[mutation.rsid] : undefined} clinvarCount={mutation.rsid ? data?.clinvar_count_map?.[mutation.rsid] : undefined} />
                   </div>
                 )}

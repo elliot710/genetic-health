@@ -12,6 +12,7 @@ import {
   StatusBadge,
   DisclaimerCard,
   VariantLinks,
+  PathogenicityBar,
   ClickableRsidBadge,
   carrierStatusToSeverity,
   MasonryLayout,
@@ -394,9 +395,12 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
                     )}
                     
                     {carrier.rsids.length > 0 && carrier.rsids.map(rsid => (
-                      <div key={rsid} className="mb-2 flex items-center gap-2">
-                        <VariantLinks rsid={rsid} gene={carrier.gene} token={token} isDarkMode={isDarkMode} />
-                      </div>
+                      <React.Fragment key={rsid}>
+                        <PathogenicityBar rsid={rsid} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
+                        <div className="mb-2 flex items-center gap-2">
+                          <VariantLinks rsid={rsid} gene={carrier.gene} token={token} isDarkMode={isDarkMode} />
+                        </div>
+                      </React.Fragment>
                     ))}
 
                     {/* Single dialog for the open rsid */}

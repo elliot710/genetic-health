@@ -10,6 +10,7 @@ import {
   StatusBadge,
   DisclaimerCard,
   VariantLinks,
+  PathogenicityBar,
   riskToSeverity,
   MasonryLayout,
 } from './shared'
@@ -198,6 +199,7 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
                       </div>
                     )}
 
+                    {drug.variants?.[0] && <PathogenicityBar rsid={drug.variants[0]} pathogenicityMap={data?.pathogenicity_map} theme={theme} />}
                     <VariantLinks rsid={drug.variants?.[0]} gene={drug.gene} token={token} isDarkMode={isDarkMode} alphaMissense={drug.variants?.[0] ? data?.alpha_missense_map?.[drug.variants[0]] : undefined} clinvarCount={drug.variants?.[0] ? data?.clinvar_count_map?.[drug.variants[0]] : undefined} />
                   </div>
                 )}

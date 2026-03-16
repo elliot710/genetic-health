@@ -14,6 +14,7 @@ import {
   capacityToSeverity,
   sensitivityToSeverity,
   VariantLinks,
+  PathogenicityBar,
   ZygosityBadge,
   formatLabel,
   MasonryLayout,
@@ -255,6 +256,7 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                         </div>
                       )}
 
+                      {item.associated_variants?.[0] && <PathogenicityBar rsid={item.associated_variants[0]} pathogenicityMap={data?.pathogenicity_map} theme={theme} />}
                       <VariantLinks
                         rsid={item.associated_variants?.[0]}
                         gene={item.gene}
