@@ -82,7 +82,15 @@ async def startup_event():
     from .services.job_logs import JobLogHandler
     job_handler = JobLogHandler()
     job_handler.setLevel(logging.INFO)
-    for name in ['backend.services.analysis_service', 'backend.services.genetic_api_service']:
+    for name in [
+        'backend.services.analysis_service',
+        'backend.services.genetic_api_service',
+        'backend.services.ensembl_vep_local',
+        'backend.services.clinvar_local',
+        'backend.services.gnomad_local',
+        'backend.services.thousand_genomes_local',
+        'backend.services.ensembl_local',
+    ]:
         logging.getLogger(name).addHandler(job_handler)
     
     # Start the analysis queue processor
@@ -149,6 +157,21 @@ async def startup_event():
         print(f"✅ 1000 Genomes PG: {tkg_svc.variant_count} variants available")
     else:
         print("⚠️ 1000 Genomes PG: table empty — run ETL import via admin panel")
+
+    # Preload Ensembl VEP cache in background (takes ~15min, don't block startup)
+    from .services.ensembl_vep_local import get_ensembl_vep_service
+    vep_svc = get_ensembl_vep_service()
+    async def _preload_vep():
+        try:
+            ok = await vep_svc.ensure_loaded()
+            if ok:
+                print(f"✅ Ensembl VEP: {vep_svc.variant_count} variants cached from VCF files")
+            else:
+                print("⚠️ Ensembl VEP: no VCF files found or no known rsids")
+        except Exception as e:
+            print(f"⚠️ Ensembl VEP preload failed: {e}")
+    asyncio.create_task(_preload_vep())
+    print("⏳ Ensembl VEP: preloading VCF cache in background...")
 
 @app.on_event("shutdown")
 async def shutdown_event():

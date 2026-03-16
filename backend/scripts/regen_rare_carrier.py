@@ -17,7 +17,8 @@ from backend.db.models import (
     GeneticAnalysis, AnalysisVariant, SharedVariantAnnotation,
     RareMutation, CarrierStatus
 )
-from backend.services.analysis_service import ComprehensiveAnalysisService, AnnotationResult
+from backend.services.analysis_service import AnnotationResult
+from backend.services.insight_generators import GeneratorContext, generate_rare_mutations, generate_carrier_status
 
 
 async def main():
@@ -73,13 +74,18 @@ async def main():
                 source='existing'
             )
 
-        # 5. Run generators
-        svc = ComprehensiveAnalysisService.__new__(ComprehensiveAnalysisService)
-        svc._rsid_gene_map = {}
-        svc._registry = {}  # No variant_mappings registry needed — carrier uses annotation data
+        # 5. Run generators via GeneratorContext
+        ctx = GeneratorContext(
+            analysis_id=analysis_id,
+            variants=variants,
+            annotation_results=annotation_results,
+            session=session,
+            rsid_gene_map={},
+            registry={},
+        )
 
-        rare_count = await svc._generate_rare_mutations(variants, annotation_results, analysis_id, session)
-        carrier_count = await svc._generate_carrier_status(variants, annotation_results, analysis_id, session)
+        rare_count = await generate_rare_mutations(ctx)
+        carrier_count = await generate_carrier_status(ctx)
 
         await session.commit()
         print(f"Generated {rare_count} rare mutations, {carrier_count} carrier status records")

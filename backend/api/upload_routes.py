@@ -200,23 +200,41 @@ async def delete_all_user_data(
         await session.commit()
 
         # Background: clean up the big child tables (600K+ rows)
+        # Uses batched deletes to avoid long-running transactions that block other queries
         async def _bg_cleanup():
             logger.info(f"Background cleanup STARTING for user {user_id}, analyses={analysis_ids}")
             try:
+                ids = analysis_ids
+                BATCH = 50000
+
+                # Helper: batched delete for large tables
+                async def _batched_delete(table: str):
+                    total = 0
+                    while True:
+                        async with async_session_factory() as s:
+                            result = await s.execute(
+                                text(f"DELETE FROM {table} WHERE ctid IN ("
+                                     f"SELECT ctid FROM {table} WHERE analysis_id = ANY(:ids) LIMIT :lim)"),
+                                {"ids": ids, "lim": BATCH},
+                            )
+                            await s.commit()
+                            deleted = result.rowcount
+                        total += deleted
+                        if deleted < BATCH:
+                            break
+                        await asyncio.sleep(0.05)  # Yield between batches
+                    return total
+
+                # 1. Big tables: batched delete
+                va_count = await _batched_delete("variant_annotations")
+                logger.info(f"Background cleanup: deleted {va_count} variant_annotations")
+
+                av_count = await _batched_delete("analysis_variants")
+                logger.info(f"Background cleanup: deleted {av_count} analysis_variants")
+
+                # 2. Insight tables (small, fast — single delete each)
                 async with async_session_factory() as bg_session:
                     async with bg_session.begin():
-                        ids = analysis_ids
-                        # 1. Deepest children first: variant_annotations
-                        await bg_session.execute(
-                            text("DELETE FROM variant_annotations WHERE analysis_id = ANY(:ids)"),
-                            {"ids": ids},
-                        )
-                        # 2. analysis_variants
-                        await bg_session.execute(
-                            text("DELETE FROM analysis_variants WHERE analysis_id = ANY(:ids)"),
-                            {"ids": ids},
-                        )
-                        # 3. All insight tables (small, fast)
                         for tbl in [
                             "health_risks", "drug_responses", "physical_traits",
                             "nutrition_traits", "sports_performance", "cognitive_profiles",
@@ -228,7 +246,7 @@ async def delete_all_user_data(
                                 text(f"DELETE FROM {tbl} WHERE analysis_id = ANY(:ids)"),
                                 {"ids": ids},
                             )
-                        # 4. Parent last
+                        # 3. Parent last
                         await bg_session.execute(
                             text("DELETE FROM genetic_analyses WHERE id = ANY(:ids)"),
                             {"ids": ids},

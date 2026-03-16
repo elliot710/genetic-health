@@ -12,6 +12,7 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -98,6 +99,9 @@ class ClinVarLocalService:
         async with async_session_factory() as session:
             for i in range(0, len(rsids), batch_size):
                 chunk = rsids[i:i + batch_size]
+                # Yield to event loop between chunks so HTTP handlers can run
+                if i > 0:
+                    await asyncio.sleep(0.01)
                 # Batch fetch all ClinVar rows for this chunk
                 result = await session.execute(
                     select(ClinVarVariant).where(ClinVarVariant.rsid.in_(chunk))
