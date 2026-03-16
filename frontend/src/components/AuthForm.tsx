@@ -7,9 +7,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import { apiUrl } from '@/lib/api'
 
 interface AuthFormProps {
-  onLogin: (token: string) => void
+  onLogin: () => void
   isDarkMode?: boolean
   isHydrated?: boolean
 }
@@ -66,9 +67,10 @@ export default function AuthForm({ onLogin, isDarkMode: initialDarkMode = false,
             full_name: formData.fullName 
           }
 
-      const response = await fetch(`http://localhost:8000${endpoint}`, {
+      const response = await fetch(apiUrl(endpoint), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(body),
       })
 
@@ -79,8 +81,8 @@ export default function AuthForm({ onLogin, isDarkMode: initialDarkMode = false,
       }
 
       if (isLogin) {
-        localStorage.setItem('token', data.access_token)
-        onLogin(data.access_token)
+        // Cookie is set by the backend — just notify parent
+        onLogin()
       } else {
         setIsLogin(true)
         setError('')

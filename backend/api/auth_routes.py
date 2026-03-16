@@ -1,7 +1,7 @@
 """
 Authentication API routes
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import timedelta
@@ -12,10 +12,14 @@ from ..db.database import get_session
 from ..db.schemas import UserCreate, UserResponse, Token, UserLogin
 from ..db.models import User
 from ..services.user_service import UserService
-from ..core.auth import create_access_token, verify_token, verify_password, get_password_hash, ACCESS_TOKEN_EXPIRE_MINUTES
+from ..core.auth import (
+    create_access_token, create_refresh_token, verify_token, verify_refresh_token,
+    verify_password, get_password_hash, ACCESS_TOKEN_EXPIRE_MINUTES,
+    set_auth_cookies, clear_auth_cookies, ACCESS_COOKIE,
+)
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)  # auto_error=False so cookie fallback works
 
 @router.post("/register", response_model=UserResponse)
 async def register(user_data: UserCreate, db: AsyncSession = Depends(get_session)):
@@ -41,9 +45,9 @@ async def register(user_data: UserCreate, db: AsyncSession = Depends(get_session
     user = await user_service.create_user(user_data)
     return UserResponse.model_validate(user)
 
-@router.post("/login", response_model=Token)
-async def login(user_data: UserLogin, db: AsyncSession = Depends(get_session)):
-    """Login user and return access token"""
+@router.post("/login")
+async def login(user_data: UserLogin, response: Response, db: AsyncSession = Depends(get_session)):
+    """Login user — sets HttpOnly auth cookies and returns token for API-client compat."""
     user_service = UserService(db)
     
     user = await user_service.authenticate_user(user_data.username, user_data.password)
@@ -58,15 +62,37 @@ async def login(user_data: UserLogin, db: AsyncSession = Depends(get_session)):
     access_token = create_access_token(
         data={"sub": user.username}, expires_delta=access_token_expires
     )
+    refresh_token = create_refresh_token(data={"sub": user.username})
+
+    # Set HttpOnly cookies
+    set_auth_cookies(response, access_token, refresh_token)
     
+    # Still return token in body for backwards compat (Swagger UI, mobile clients, etc.)
     return Token(access_token=access_token, token_type="bearer")
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: AsyncSession = Depends(get_session)
 ) -> User:
-    """Get current authenticated user"""
-    username = verify_token(credentials.credentials)
+    """Get current authenticated user from HttpOnly cookie or Bearer header."""
+    token: Optional[str] = None
+
+    # 1. Try HttpOnly cookie first
+    token = request.cookies.get(ACCESS_COOKIE)
+
+    # 2. Fall back to Bearer header (Swagger UI, API clients)
+    if not token and credentials:
+        token = credentials.credentials
+
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    username = verify_token(token)
     if username is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -137,3 +163,36 @@ async def change_password(
     current_user.hashed_password = get_password_hash(data.new_password)
     await db.commit()
     return {"detail": "Password changed successfully"}
+
+
+@router.post("/logout")
+async def logout(response: Response):
+    """Clear auth cookies to log the user out."""
+    clear_auth_cookies(response)
+    return {"detail": "Logged out"}
+
+
+@router.post("/refresh")
+async def refresh_access_token(request: Request, response: Response, db: AsyncSession = Depends(get_session)):
+    """Issue a fresh access-token cookie using the refresh-token cookie."""
+    refresh_tok = request.cookies.get("refresh_token")
+    if not refresh_tok:
+        raise HTTPException(status_code=401, detail="No refresh token")
+
+    username = verify_refresh_token(refresh_tok)
+    if not username:
+        clear_auth_cookies(response)
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+
+    # Verify the user still exists
+    user_service = UserService(db)
+    user = await user_service.get_user_by_username(username)
+    if not user:
+        clear_auth_cookies(response)
+        raise HTTPException(status_code=401, detail="User not found")
+
+    # Issue new tokens
+    access_token = create_access_token(data={"sub": username})
+    new_refresh = create_refresh_token(data={"sub": username})
+    set_auth_cookies(response, access_token, new_refresh)
+    return {"detail": "Token refreshed"}

@@ -15,6 +15,7 @@ import {
   MasonryLayout,
   cleanCondition,
 } from './shared'
+import { apiUrl } from '@/lib/api'
 
 interface UncommonMutation {
   rsid: string
@@ -44,11 +45,8 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
 
       setLoading(true)
       try {
-        const response = await fetch('http://localhost:8000/api/analysis/dashboard-data', {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
+        const response = await fetch(apiUrl('/api/analysis/dashboard-data'), {
+          credentials: 'include',
         })
 
         if (response.ok) {

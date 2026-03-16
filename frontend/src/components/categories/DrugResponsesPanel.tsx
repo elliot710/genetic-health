@@ -14,6 +14,7 @@ import {
   MasonryLayout,
 } from './shared'
 import type { CategoryPanelProps, DrugResponse } from './types'
+import { apiUrl } from '@/lib/api'
 
 interface MappedDrugResponse {
   drug: string
@@ -41,11 +42,8 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
       
       setLoading(true)
       try {
-        const response = await fetch('http://localhost:8000/api/analysis/dashboard-data', {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
+        const response = await fetch(apiUrl('/api/analysis/dashboard-data'), {
+          credentials: 'include',
         })
         
         if (response.ok) {

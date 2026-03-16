@@ -1,12 +1,26 @@
 """
 VCF file parser for genetic variant data
 """
+import re
+import logging
 from typing import List, Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
+
+RSID_PATTERN = re.compile(r'^rs\d+$')
+VALID_CHROMOSOMES = frozenset(
+    [str(i) for i in range(1, 23)] + ['X', 'Y', 'MT']
+)
+MIN_POSITION = 1
+MAX_POSITION = 300_000_000  # longest human chromosome is ~249M bp
+VALID_BASES = frozenset('ATGCN')
+
 
 class VCFParser:
     def __init__(self):
         self.header_lines = []
         self.sample_names = []
+        self._skipped_count = 0
     
     async def parse_vcf_content(self, content: bytes) -> List[Dict[str, Any]]:
         """Parse genetic data file content (VCF or CSV) and return variants"""
@@ -75,6 +89,9 @@ class VCFParser:
                 if variant is not None:
                     variants.append(variant)
         
+        if self._skipped_count > 0:
+            logger.info(f"Skipped {self._skipped_count} variants that failed validation")
+
         return variants
 
     async def _parse_csv_format(self, csv_text: str) -> List[Dict[str, Any]]:
@@ -133,7 +150,10 @@ class VCFParser:
                 print(f"Error parsing CSV row {row_num}: {e}")
                 continue
         
-        print(f"Parsed {len(variants)} variants from CSV")
+        if self._skipped_count > 0:
+            logger.info(f"Skipped {self._skipped_count} variants that failed validation")
+
+        logger.info(f"Parsed {len(variants)} variants from CSV")
         return variants
 
     def _parse_csv_row(self, row: Dict[str, str], row_num: int) -> Optional[Dict[str, Any]]:
@@ -214,19 +234,11 @@ class VCFParser:
             if not chromosome or not position:
                 return None
                 
-            # Clean chromosome (remove 'chr' prefix, quotes)
-            chromosome = str(chromosome).strip('"').strip()
-            if chromosome.lower().startswith('chr'):
-                chromosome = chromosome[3:]
-            
-            # Handle X, Y, MT chromosomes
-            chromosome = chromosome.upper()
-            if chromosome in ['23', 'XX', 'X_CHROMOSOME']:
-                chromosome = 'X'
-            elif chromosome in ['24', 'XY', 'Y_CHROMOSOME']:
-                chromosome = 'Y'
-            elif chromosome in ['25', 'MT', 'M', 'MITOCHONDRIAL']:
-                chromosome = 'MT'
+            # Normalize and validate chromosome
+            chromosome = self._normalize_chromosome(chromosome)
+            if chromosome is None:
+                self._skipped_count += 1
+                return None
             
             # Convert position to integer
             try:
@@ -240,8 +252,11 @@ class VCFParser:
                 rsid = str(rsid).strip('"').strip()
                 if not rsid.startswith('rs') and rsid.isdigit():
                     rsid = f"rs{rsid}"
+                # Drop rsid if it doesn't match expected pattern
+                if not RSID_PATTERN.match(rsid):
+                    rsid = None
             
-            return {
+            variant = {
                 "line_number": row_num + 1,
                 "chromosome": chromosome,
                 "position": position,
@@ -254,11 +269,60 @@ class VCFParser:
                 "filter": "PASS",
                 "info": {"source": "csv_upload", "original_genotype": genotype}
             }
+
+            if not self._validate_variant(variant):
+                return None
+
+            return variant
             
         except Exception as e:
             print(f"Error parsing CSV row {row_num}: {e}")
             return None
     
+    @staticmethod
+    def _normalize_chromosome(chrom: str) -> Optional[str]:
+        """Normalize chromosome value to standard form (1-22, X, Y, MT). Returns None if invalid."""
+        chrom = str(chrom).strip().strip('"')
+        if chrom.lower().startswith('chr'):
+            chrom = chrom[3:]
+        chrom = chrom.upper()
+        if chrom in ('23', 'XX', 'X_CHROMOSOME'):
+            chrom = 'X'
+        elif chrom in ('24', 'XY', 'Y_CHROMOSOME'):
+            chrom = 'Y'
+        elif chrom in ('25', 'MT', 'M', 'MITOCHONDRIAL'):
+            chrom = 'MT'
+        return chrom if chrom in VALID_CHROMOSOMES else None
+
+    def _validate_variant(self, variant: Dict[str, Any]) -> bool:
+        """Validate that a parsed variant has well-formed fields."""
+        # Validate chromosome
+        chrom = variant.get('chromosome')
+        if chrom not in VALID_CHROMOSOMES:
+            self._skipped_count += 1
+            return False
+
+        # Validate position
+        pos = variant.get('position')
+        if not isinstance(pos, int) or pos < MIN_POSITION or pos > MAX_POSITION:
+            self._skipped_count += 1
+            return False
+
+        # Validate rsid if present (must match rs\d+ or be a generated placeholder)
+        rsid = variant.get('rsid') or variant.get('id', '')
+        if rsid and not rsid.startswith('variant_') and not RSID_PATTERN.match(rsid):
+            # Drop the invalid rsid so it won't pollute the marker catalog
+            variant['rsid'] = None
+            variant['id'] = f"variant_{variant.get('line_number', 0)}"
+
+        # Validate alleles contain only valid bases
+        for key in ('ref_allele', 'alt_allele'):
+            allele = str(variant.get(key, 'N')).upper()
+            if not allele or not all(c in VALID_BASES or c in ('-', '.', '*') for c in allele):
+                variant[key] = 'N'
+
+        return True
+
     def _parse_variant_line(self, line: str, line_num: int) -> Optional[Dict[str, Any]]:
         """Parse a single variant line from VCF"""
         try:
@@ -266,12 +330,30 @@ class VCFParser:
             
             if len(fields) < 8:
                 return None
-            
+
+            # Normalize chromosome
+            chrom = self._normalize_chromosome(fields[0])
+            if chrom is None:
+                self._skipped_count += 1
+                return None
+
+            # Parse position safely
+            try:
+                position = int(fields[1])
+            except (ValueError, TypeError):
+                self._skipped_count += 1
+                return None
+
+            # Determine rsid
+            raw_id = fields[2]
+            rsid = raw_id if raw_id != '.' and RSID_PATTERN.match(raw_id) else None
+
             variant = {
                 "line_number": line_num + 1,
-                "chromosome": fields[0],
-                "position": int(fields[1]),
-                "id": fields[2] if fields[2] != '.' else f"variant_{line_num}",
+                "chromosome": chrom,
+                "position": position,
+                "id": rsid or f"variant_{line_num}",
+                "rsid": rsid,
                 "ref_allele": fields[3],
                 "alt_allele": fields[4],
                 "quality": fields[5] if fields[5] != '.' else None,
@@ -286,7 +368,10 @@ class VCFParser:
                     if i + 9 < len(fields):
                         sample_data = fields[i + 9].split(':')
                         variant[f"sample_{sample}"] = dict(zip(format_fields, sample_data))
-            
+
+            if not self._validate_variant(variant):
+                return None
+
             return variant
             
         except Exception as e:

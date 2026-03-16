@@ -7,6 +7,7 @@ import FileUpload from '@/components/ModernFileUpload'
 import AuthForm from '@/components/AuthForm'
 import AnalysisProgressLoader from '@/components/AnalysisProgressLoader'
 import { getTheme } from '@/utils/theme'
+import { apiUrl } from '@/lib/api'
 
 interface AnalysisData {
   summary?: {
@@ -65,14 +66,11 @@ export default function Home() {
   // Get theme object
   const theme = getTheme(isDarkMode)
 
-  const loadExistingData = useCallback(async (authToken: string) => {
+  const loadExistingData = useCallback(async () => {
     console.log('Loading existing data...')
     try {
-      // Use the new dashboard data endpoint that aggregates all user data
-      const dashboardResponse = await fetch('http://localhost:8000/api/analysis/dashboard-data', {
-        headers: {
-          'Authorization': `Bearer ${authToken}`
-        }
+      const dashboardResponse = await fetch(apiUrl('/api/analysis/dashboard-data'), {
+        credentials: 'include',
       })
       
       console.log('Dashboard response status:', dashboardResponse.status)
@@ -81,29 +79,23 @@ export default function Home() {
         const dashboardData = await dashboardResponse.json()
         console.log('Dashboard data received:', dashboardData)
         
-        // Check if user has any uploaded data
         if (dashboardData.summary && dashboardData.summary.total_variants > 0) {
           console.log('Found user data with', dashboardData.summary.total_variants, 'variants')
           
-          // Extract analysisId from the dashboard data
           if (dashboardData.summary.analysis_id) {
             setAnalysisId(dashboardData.summary.analysis_id)
             console.log('Set analysis ID:', dashboardData.summary.analysis_id)
           }
           
-          // The API already returns data in the format expected by the dashboard
           setAnalysisData(dashboardData)
           console.log('Analysis data set successfully')
         } else {
           console.log('No variants found for user - may need to upload data')
-          // Don't set analysis data if no variants exist
           setAnalysisData(null)
         }
       } else {
         console.error('Failed to load dashboard data:', dashboardResponse.status)
-        // Check if it's an auth error
         if (dashboardResponse.status === 401) {
-          localStorage.removeItem('token')
           setToken(null)
           setUser(null)
         }
@@ -113,50 +105,40 @@ export default function Home() {
     }
   }, [])
 
-  const verifyToken = useCallback(async (tokenToVerify: string, retries = 2) => {
+  const checkSession = useCallback(async (retries = 2) => {
     try {
-      const response = await fetch('http://localhost:8000/auth/me', {
-        headers: {
-          'Authorization': `Bearer ${tokenToVerify}`
-        }
+      const response = await fetch(apiUrl('/auth/me'), {
+        credentials: 'include',
       })
       
       if (response.ok) {
         const userData = await response.json()
-        setToken(tokenToVerify)
+        setToken('authenticated')
         setUser(userData)
         
-        // Check if user has existing data and load it
-        await loadExistingData(tokenToVerify)
+        await loadExistingData()
       } else {
-        localStorage.removeItem('token')
+        setToken(null)
       }
     } catch (error) {
-      // Retry on network errors (backend may be restarting)
       if (retries > 0) {
         await new Promise(r => setTimeout(r, 2000))
-        return verifyToken(tokenToVerify, retries - 1)
+        return checkSession(retries - 1)
       }
-      console.error('Token verification failed:', error)
-      localStorage.removeItem('token')
+      console.error('Session check failed:', error)
+      setToken(null)
     } finally {
       setLoading(false)
     }
   }, [loadExistingData])
 
   useEffect(() => {
-    // Check for stored token on component mount
-    const storedToken = localStorage.getItem('token')
-    if (storedToken) {
-      verifyToken(storedToken)
-    } else {
-      setLoading(false)
-    }
-  }, [verifyToken])
+    // On mount, check if we have a valid session cookie
+    checkSession()
+  }, [checkSession])
 
-  const handleLogin = (newToken: string) => {
-    setToken(newToken)
-    verifyToken(newToken)
+  const handleLogin = () => {
+    checkSession()
   }
 
   const handleAnalysisComplete = useCallback(async (data: AnalysisData, newAnalysisId?: number) => {
@@ -167,10 +149,10 @@ export default function Home() {
       
       // Start the background analysis job
       try {
-        const startResponse = await fetch(`http://localhost:8000/api/analysis/start/${newAnalysisId}`, {
+        const startResponse = await fetch(apiUrl(`/api/analysis/start/${newAnalysisId}`), {
           method: 'POST',
+          credentials: 'include',
           headers: {
-            'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({})
@@ -198,9 +180,8 @@ export default function Home() {
     console.log('Analysis progress completed:', results)
     setShowProgressLoader(false)
     
-    // Reload the dashboard data with complete analysis
     if (token) {
-      await loadExistingData(token)
+      await loadExistingData()
     }
   }, [token, loadExistingData])
 
@@ -210,12 +191,14 @@ export default function Home() {
     
     // Try to load any existing data
     if (token) {
-      loadExistingData(token)
+      loadExistingData()
     }
   }, [token, loadExistingData])
 
-  const handleLogout = () => {
-    localStorage.removeItem('token')
+  const handleLogout = async () => {
+    try {
+      await fetch(apiUrl('/auth/logout'), { method: 'POST', credentials: 'include' })
+    } catch { /* ignore */ }
     setToken(null)
     setUser(null)
     setAnalysisData(null)

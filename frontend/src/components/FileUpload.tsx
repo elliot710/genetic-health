@@ -5,6 +5,7 @@
 import { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { Upload, File, AlertCircle, CheckCircle } from 'lucide-react'
+import { apiUrl } from '@/lib/api'
 
 interface FileUploadProps {
   onAnalysisComplete: (data: Record<string, unknown>) => void
@@ -28,11 +29,9 @@ export default function FileUpload({ onAnalysisComplete, token }: FileUploadProp
       formData.append('file', file)
 
       // Upload file to backend with authentication
-      const uploadResponse = await fetch(`http://localhost:8000/upload/${fileType}`, {
+      const uploadResponse = await fetch(apiUrl(`/upload/${fileType}`), {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
+        credentials: 'include',
         body: formData,
       })
 
@@ -48,11 +47,9 @@ export default function FileUpload({ onAnalysisComplete, token }: FileUploadProp
       const analysisId = uploadResult.analysis_id
       
       // Fetch the real analysis results from the database
-      const analysisResponse = await fetch(`http://localhost:8000/upload/analysis/${analysisId}`, {
+      const analysisResponse = await fetch(apiUrl(`/upload/analysis/${analysisId}`), {
         method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        credentials: 'include',
       })
 
       if (!analysisResponse.ok) {

@@ -19,6 +19,7 @@ import { getThemeClass } from '../../utils/theme'
 import { RiskDistributionChart } from './GenomicCharts'
 import SmartInsights from '../SmartInsights'
 import type { CategoryPanelProps, HealthRisk } from './types'
+import { apiUrl } from '@/lib/api'
 
 interface VariantAnnotation {
   clinical_significance?: string
@@ -79,12 +80,12 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
     if (!token || !rsid || rsid === 'Unknown' || variantAnnotations[rsid]) return null
 
     try {
-      const response = await fetch(`http://localhost:8000/api/annotations/clinical-summary`, {
+      const response = await fetch(apiUrl(`/api/annotations/clinical-summary`), {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
+        credentials: 'include',
         body: JSON.stringify({ rsid })
       })
 
@@ -107,11 +108,8 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
 
       setLoading(true)
       try {
-        const response = await fetch('http://localhost:8000/api/analysis/dashboard-data', {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
+        const response = await fetch(apiUrl('/api/analysis/dashboard-data'), {
+          credentials: 'include',
         })
 
         if (response.ok) {

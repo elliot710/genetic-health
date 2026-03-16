@@ -17,6 +17,7 @@ import {
   cleanCondition,
 } from './shared'
 import type { CategoryPanelProps, IntelligenceTrait } from './types'
+import { apiUrl } from '@/lib/api'
 
 export default function IntelligencePanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
   const theme = useThemeClasses(isDarkMode)
@@ -33,11 +34,8 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
 
       setLoading(true)
       try {
-        const response = await fetch('http://localhost:8000/api/analysis/dashboard-data', {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
+        const response = await fetch(apiUrl('/api/analysis/dashboard-data'), {
+          credentials: 'include',
         })
 
         if (response.ok) {

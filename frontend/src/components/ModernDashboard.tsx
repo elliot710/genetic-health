@@ -10,6 +10,7 @@ import {
   Square, Play, Pause, Pill, FlaskConical, FileText
 } from 'lucide-react'
 import { getTheme } from '../utils/theme'
+import { apiUrl } from '@/lib/api'
 import type { LucideIcon } from 'lucide-react'
 import type { DashboardData, HealthRisk, DrugResponse, NutritionTrait, SportsPerformance, AncestryResult, CarrierCondition, MethylationProfile, DetoxProfile, IntelligenceTrait, PersonalityTraitData, PhysicalTrait, WellnessTrait, RareMutation, UncommonMutation } from './categories/types'
 
@@ -114,8 +115,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
   const refreshUserInfo = useCallback(async () => {
     if (!token) return
     try {
-      const res = await fetch('http://localhost:8000/auth/me', {
-        headers: { Authorization: `Bearer ${token}` }
+      const res = await fetch(apiUrl('/auth/me'), {
+        credentials: 'include',
       })
       if (res.ok) {
         const u = await res.json()
@@ -147,8 +148,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
   // Fetch variant categories for overview
   useEffect(() => {
     if (!token) return
-    fetch('http://localhost:8000/api/variants/categories', {
-      headers: { Authorization: `Bearer ${token}` }
+    fetch(apiUrl('/api/variants/categories'), {
+      credentials: 'include',
     })
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d?.categories) { setVariantCategories(d.categories); setVariantCategoryStats({total: d.total_variants || 0, annotated: d.annotated_variants || 0}) } })
@@ -161,8 +162,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
     const checkStatus = async () => {
       try {
-        const response = await fetch(`http://localhost:8000/api/analysis/status/${analysisId}`, {
-          headers: { 'Authorization': `Bearer ${token}` }
+        const response = await fetch(apiUrl(`/api/analysis/status/${analysisId}`), {
+          credentials: 'include',
         })
         if (response.ok) {
           const progress = await response.json()
@@ -203,11 +204,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
         setLoading(true)
         
         try {
-          const response = await fetch('http://localhost:8000/api/analysis/dashboard-data', {
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
+          const response = await fetch(apiUrl('/api/analysis/dashboard-data'), {
+            credentials: 'include',
           })
 
           if (response.ok) {
@@ -405,11 +403,9 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
   const handleDeleteData = async () => {
     setIsDeleting(true)
     try {
-      const response = await fetch('http://localhost:8000/upload/data', {
+      const response = await fetch(apiUrl('/upload/data'), {
         method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        credentials: 'include',
       })
 
       if (response.ok) {
@@ -444,8 +440,8 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
     if (!token || !analysisId) return
 
     try {
-      const response = await fetch(`http://localhost:8000/api/analysis/status/${analysisId}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
+      const response = await fetch(apiUrl(`/api/analysis/status/${analysisId}`), {
+        credentials: 'include',
       })
       if (response.ok) {
         const progress = await response.json()
@@ -520,9 +516,9 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
     try {
       setIsAnalysisRunning(true)
       console.log(`Starting analysis for ID: ${analysisId}`)
-      const response = await fetch(`http://localhost:8000/api/analysis/start/${analysisId}`, {
+      const response = await fetch(apiUrl(`/api/analysis/start/${analysisId}`), {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
+        credentials: 'include',
       })
       
       console.log('Start analysis response status:', response.status)
@@ -585,9 +581,9 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
     try {
       console.log(`Stopping analysis for ID: ${analysisId}`)
-      const response = await fetch(`http://localhost:8000/api/analysis/cancel/${analysisId}`, {
+      const response = await fetch(apiUrl(`/api/analysis/cancel/${analysisId}`), {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
+        credentials: 'include',
       })
       
       console.log('Stop analysis response status:', response.status)
@@ -621,9 +617,9 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
 
     try {
       console.log(`Pausing analysis for ID: ${analysisId}`)
-      const response = await fetch(`http://localhost:8000/api/analysis/pause/${analysisId}`, {
+      const response = await fetch(apiUrl(`/api/analysis/pause/${analysisId}`), {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
+        credentials: 'include',
       })
       
       console.log('Pause analysis response status:', response.status)
@@ -658,9 +654,9 @@ export default function ModernDashboard({ token, analysisData, analysisId, onRef
     try {
       setIsAnalysisRunning(true)
       console.log(`Resuming analysis for ID: ${analysisId}`)
-      const response = await fetch(`http://localhost:8000/api/analysis/resume/${analysisId}`, {
+      const response = await fetch(apiUrl(`/api/analysis/resume/${analysisId}`), {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
+        credentials: 'include',
       })
       
       console.log('Resume analysis response status:', response.status)

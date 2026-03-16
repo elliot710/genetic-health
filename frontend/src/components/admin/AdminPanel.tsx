@@ -27,8 +27,9 @@ import {
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import VariantDetailDialog from '@/components/categories/VariantDetailDialog'
+import { apiUrl } from '@/lib/api'
 
-const API = 'http://localhost:8000/api/admin'
+const API = apiUrl('/api/admin')
 
 interface AdminUser {
   id: number
@@ -299,11 +300,15 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const [insightsStatus, setInsightsStatus] = useState<{ provider: string; enabled: boolean; model: string; gemini_configured: boolean; openai_configured: boolean; anthropic_configured: boolean; cache_entries: number } | null>(null)
   const [insightsToggling, setInsightsToggling] = useState(false)
 
-  const headers = useMemo(() => ({ Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }), [token])
+  const headers = useMemo(() => ({ 'Content-Type': 'application/json' }), [])
+  // Wrap fetch to always send HttpOnly auth cookie
+  const authFetch = useCallback((url: string, init?: RequestInit) =>
+    fetch(url, { ...init, credentials: 'include' }), []
+  )
 
   const fetchUsers = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/users`, { headers })
+      const res = await authFetch(`${API}/users`, { headers })
       if (!res.ok) throw new Error('Failed to load users')
       setUsers(await res.json())
     } catch (e: unknown) {
@@ -313,7 +318,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
 
   const fetchPanels = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/panels`, { headers })
+      const res = await authFetch(`${API}/panels`, { headers })
       if (!res.ok) throw new Error('Failed to load panels')
       setPanels(await res.json())
     } catch (e: unknown) {
@@ -323,7 +328,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
 
   const fetchMarkers = useCallback(async (panelId: string) => {
     try {
-      const res = await fetch(`${API}/panels/${encodeURIComponent(panelId)}/markers`, { headers })
+      const res = await authFetch(`${API}/panels/${encodeURIComponent(panelId)}/markers`, { headers })
       if (!res.ok) throw new Error('Failed to load markers')
       setMarkers(await res.json())
     } catch (e: unknown) {
@@ -346,7 +351,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   // --- Registry fetch ---
   const fetchRegistryCategories = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/variant-mappings/categories`, { headers })
+      const res = await authFetch(`${API}/variant-mappings/categories`, { headers })
       if (!res.ok) return
       setRegistryCategories(await res.json())
     } catch { /* ignore */ }
@@ -355,7 +360,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const fetchRegistryMappings = useCallback(async (cat: string) => {
     try {
       const url = `${API}/variant-mappings/${encodeURIComponent(cat)}`
-      const res = await fetch(url, { headers })
+      const res = await authFetch(url, { headers })
       if (!res.ok) return
       setRegistryMappings(await res.json())
     } catch { /* ignore */ }
@@ -367,7 +372,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     if (!cat || !newMapping.key) return
     try {
       const data = JSON.parse(newMapping.data)
-      const res = await fetch(`${API}/variant-mappings`, {
+      const res = await authFetch(`${API}/variant-mappings`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ category: cat, map_type: newMapping.map_type, key: newMapping.key, data }),
@@ -384,7 +389,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const updateMapping = async (mapping: VariantMapping) => {
     try {
       const data = JSON.parse(editingDataStr)
-      const res = await fetch(`${API}/variant-mappings/${mapping.id}`, {
+      const res = await authFetch(`${API}/variant-mappings/${mapping.id}`, {
         method: 'PUT',
         headers,
         body: JSON.stringify({ key: mapping.key, data, is_active: mapping.is_active }),
@@ -398,7 +403,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   }
 
   const deleteMapping = async (id: number) => {
-    const res = await fetch(`${API}/variant-mappings/${id}`, { method: 'DELETE', headers })
+    const res = await authFetch(`${API}/variant-mappings/${id}`, { method: 'DELETE', headers })
     if (res.ok) {
       setRegistryMappings(prev => prev.filter(m => m.id !== id))
       setShowDeleteMapping(null)
@@ -407,7 +412,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   }
 
   const toggleMappingActive = async (mapping: VariantMapping) => {
-    const res = await fetch(`${API}/variant-mappings/${mapping.id}`, {
+    const res = await authFetch(`${API}/variant-mappings/${mapping.id}`, {
       method: 'PUT',
       headers,
       body: JSON.stringify({ is_active: !mapping.is_active }),
@@ -421,7 +426,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
 
   // --- User actions ---
   const toggleUserFlag = async (userId: number, field: 'is_active' | 'is_admin' | 'is_verified', value: boolean) => {
-    const res = await fetch(`${API}/users/${userId}`, {
+    const res = await authFetch(`${API}/users/${userId}`, {
       method: 'PUT',
       headers,
       body: JSON.stringify({ [field]: value }),
@@ -433,7 +438,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   }
 
   const deleteUser = async (userId: number) => {
-    const res = await fetch(`${API}/users/${userId}`, { method: 'DELETE', headers })
+    const res = await authFetch(`${API}/users/${userId}`, { method: 'DELETE', headers })
     if (res.ok) {
       setUsers(prev => prev.filter(u => u.id !== userId))
       setShowDeleteUser(null)
@@ -444,7 +449,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const addMarker = async () => {
     const panelId = newMarker.panel_id || selectedPanel
     if (!panelId || !newMarker.rsid) return
-    const res = await fetch(`${API}/panels/${encodeURIComponent(panelId)}/markers`, {
+    const res = await authFetch(`${API}/panels/${encodeURIComponent(panelId)}/markers`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ ...newMarker, panel_id: panelId }),
@@ -458,7 +463,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   }
 
   const updateMarker = async (marker: MarkerConfig) => {
-    const res = await fetch(`${API}/panels/markers/${marker.id}`, {
+    const res = await authFetch(`${API}/panels/markers/${marker.id}`, {
       method: 'PUT',
       headers,
       body: JSON.stringify({
@@ -477,7 +482,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   }
 
   const deleteMarker = async (id: number) => {
-    const res = await fetch(`${API}/panels/markers/${id}`, { method: 'DELETE', headers })
+    const res = await authFetch(`${API}/panels/markers/${id}`, { method: 'DELETE', headers })
     if (res.ok) {
       setMarkers(prev => prev.filter(m => m.id !== id))
       setShowDeleteMarker(null)
@@ -495,7 +500,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
 
   const exportMarkers = async (format: 'csv' | 'yaml') => {
     if (!selectedPanel) return
-    const res = await fetch(
+    const res = await authFetch(
       `${API}/panels/${encodeURIComponent(selectedPanel)}/markers/export?format=${format}`,
       { headers }
     )
@@ -515,9 +520,9 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     const formData = new FormData()
     formData.append('file', file)
     try {
-      const res = await fetch(
+      const res = await authFetch(
         `${API}/panels/${encodeURIComponent(selectedPanel)}/markers/import`,
-        { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData }
+        { method: 'POST', credentials: 'include' as RequestCredentials, body: formData }
       )
       const data = await res.json()
       if (res.ok) {
@@ -538,7 +543,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   // --- Discoveries ---
   const fetchDiscoverySummary = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/discoveries/summary`, { headers })
+      const res = await authFetch(`${API}/discoveries/summary`, { headers })
       if (res.ok) setDiscoverySummary(await res.json())
     } catch { /* ignore */ }
   }, [headers])
@@ -548,7 +553,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
       const params = new URLSearchParams()
       if (discoveryStatusFilter !== 'all') params.set('status_filter', discoveryStatusFilter)
       if (discoveryTypeFilter !== 'all') params.set('discovery_type', discoveryTypeFilter)
-      const res = await fetch(`${API}/discoveries?${params}`, { headers })
+      const res = await authFetch(`${API}/discoveries?${params}`, { headers })
       if (res.ok) setDiscoveries(await res.json())
     } catch { /* ignore */ }
   }, [headers, discoveryStatusFilter, discoveryTypeFilter])
@@ -559,7 +564,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const reviewDiscovery = async (id: number, action: 'approve' | 'reject', reason?: string) => {
     setReviewingId(id)
     try {
-      const res = await fetch(`${API}/discoveries/${id}/review`, {
+      const res = await authFetch(`${API}/discoveries/${id}/review`, {
         method: 'POST', headers,
         body: JSON.stringify({ action, rejection_reason: reason }),
       })
@@ -577,7 +582,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     const ids = discoveries.filter(d => d.status === 'pending').map(d => d.id)
     if (!ids.length) return
     try {
-      const res = await fetch(`${API}/discoveries/bulk-review?${ids.map(id => `discovery_ids=${id}`).join('&')}`, {
+      const res = await authFetch(`${API}/discoveries/bulk-review?${ids.map(id => `discovery_ids=${id}`).join('&')}`, {
         method: 'POST', headers,
         body: JSON.stringify({ action }),
       })
@@ -591,14 +596,14 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   // --- Incomplete Annotations ---
   const fetchIncompleteSummary = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/annotations/incomplete/summary`, { headers })
+      const res = await authFetch(`${API}/annotations/incomplete/summary`, { headers })
       if (res.ok) setIncompleteSummary(await res.json())
     } catch { /* ignore */ }
   }, [headers])
 
   const fetchIncompleteAnnotations = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/annotations/incomplete?status_filter=${incompleteFilter}&limit=100`, { headers })
+      const res = await authFetch(`${API}/annotations/incomplete?status_filter=${incompleteFilter}&limit=100`, { headers })
       if (res.ok) setIncompleteAnnotations(await res.json())
     } catch { /* ignore */ }
   }, [headers, incompleteFilter])
@@ -610,7 +615,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     setRetriggeringIds(prev => new Set(prev).add(id))
     setRetriggerFeedback(null)
     try {
-      const res = await fetch(`${API}/annotations/retrigger/${id}`, { method: 'POST', headers })
+      const res = await authFetch(`${API}/annotations/retrigger/${id}`, { method: 'POST', headers })
       if (res.ok) {
         const data = await res.json()
         const noData = data.confirmed_no_data || []
@@ -634,7 +639,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const retriggerAllIncomplete = async () => {
     setBulkRetriggering(true)
     try {
-      const res = await fetch(`${API}/annotations/retrigger-bulk?retrigger_all=true&limit=50`, {
+      const res = await authFetch(`${API}/annotations/retrigger-bulk?retrigger_all=true&limit=50`, {
         method: 'POST', headers, body: JSON.stringify([]),
       })
       if (res.ok) {
@@ -648,7 +653,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   // --- Jobs Management ---
   const fetchJobsSummary = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/jobs/summary`, { headers })
+      const res = await authFetch(`${API}/jobs/summary`, { headers })
       if (res.ok) setJobsSummary(await res.json())
     } catch { /* ignore */ }
   }, [headers])
@@ -656,7 +661,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const fetchJobs = useCallback(async () => {
     try {
       const url = jobsStatusFilter === 'all' ? `${API}/jobs` : `${API}/jobs?status=${jobsStatusFilter}`
-      const res = await fetch(url, { headers })
+      const res = await authFetch(url, { headers })
       if (res.ok) setJobs(await res.json())
     } catch { /* ignore */ }
   }, [headers, jobsStatusFilter])
@@ -677,7 +682,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const cancelJob = async (id: number) => {
     setJobActionLoading(id)
     try {
-      const res = await fetch(`${API}/jobs/${id}/cancel`, { method: 'POST', headers })
+      const res = await authFetch(`${API}/jobs/${id}/cancel`, { method: 'POST', headers })
       if (res.ok) { fetchJobs(); fetchJobsSummary() }
     } catch { /* ignore */ }
     setJobActionLoading(null)
@@ -686,7 +691,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const restartJob = async (id: number) => {
     setJobActionLoading(id)
     try {
-      const res = await fetch(`${API}/jobs/${id}/restart`, { method: 'POST', headers })
+      const res = await authFetch(`${API}/jobs/${id}/restart`, { method: 'POST', headers })
       if (res.ok) { fetchJobs(); fetchJobsSummary() }
     } catch { /* ignore */ }
     setJobActionLoading(null)
@@ -696,7 +701,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     setDeleteConfirmJobId(null)
     setJobActionLoading(id)
     try {
-      const res = await fetch(`${API}/jobs/${id}`, { method: 'DELETE', headers })
+      const res = await authFetch(`${API}/jobs/${id}`, { method: 'DELETE', headers })
       if (res.ok) { fetchJobs(); fetchJobsSummary() }
     } catch { /* ignore */ }
     setJobActionLoading(null)
@@ -704,7 +709,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
 
   const fetchJobLogs = useCallback(async (id: number) => {
     try {
-      const res = await fetch(`${API}/jobs/${id}/logs`, { headers })
+      const res = await authFetch(`${API}/jobs/${id}/logs`, { headers })
       if (res.ok) {
         const data = await res.json()
         setJobLogs(data.logs || [])
@@ -740,7 +745,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const fetchAnnotationSources = useCallback(async () => {
     setSourcesLoading(true)
     try {
-      const res = await fetch(`${API}/annotation-sources`, { headers })
+      const res = await authFetch(`${API}/annotation-sources`, { headers })
       if (res.ok) setAnnotationSources(await res.json())
     } catch { /* ignore */ }
     setSourcesLoading(false)
@@ -751,7 +756,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const toggleSource = async (sourceName: string, enabled: boolean) => {
     setSourceToggling(sourceName)
     try {
-      const res = await fetch(`${API}/annotation-sources/${encodeURIComponent(sourceName)}`, {
+      const res = await authFetch(`${API}/annotation-sources/${encodeURIComponent(sourceName)}`, {
         method: 'PUT',
         headers,
         body: JSON.stringify({ is_enabled: enabled }),
@@ -768,7 +773,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     setBackfillingSource(sourceName)
     setBackfillFeedback(null)
     try {
-      const res = await fetch(`${API}/annotation-sources/${encodeURIComponent(sourceName)}/backfill?limit=${limit}`, {
+      const res = await authFetch(`${API}/annotation-sources/${encodeURIComponent(sourceName)}/backfill?limit=${limit}`, {
         method: 'POST',
         headers,
       })
@@ -790,7 +795,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   // AI Insights
   const fetchInsightsStatus = useCallback(async () => {
     try {
-      const res = await fetch('http://localhost:8000/api/insights/status', { headers })
+      const res = await authFetch(apiUrl('/api/insights/status'), { headers })
       if (res.ok) setInsightsStatus(await res.json())
     } catch { /* ignore */ }
   }, [headers])
@@ -800,7 +805,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const toggleInsights = async (enabled: boolean) => {
     setInsightsToggling(true)
     try {
-      const res = await fetch(`http://localhost:8000/api/insights/toggle?enabled=${enabled}`, {
+      const res = await authFetch(apiUrl(`/api/insights/toggle?enabled=${enabled}`), {
         method: 'POST',
         headers,
       })

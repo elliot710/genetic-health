@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Search, Loader2, AlertCircle, CheckCircle, Info, ExternalLink, AlertTriangle, ChevronLeft, ChevronRight, Database, Globe, X, BarChart3, RefreshCw, Clock } from 'lucide-react'
 import type { getTheme } from '@/utils/theme'
+import { apiUrl } from '@/lib/api'
 
 type Theme = ReturnType<typeof getTheme>
 
@@ -139,8 +140,8 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
 
   useEffect(() => {
     if (!token) return
-    fetch('http://localhost:8000/api/variants/categories', {
-      headers: { Authorization: `Bearer ${token}` }
+    fetch(apiUrl('/api/variants/categories'), {
+      credentials: 'include',
     })
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d?.categories) setCategories(d.categories) })
@@ -161,8 +162,8 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
       params.set('page', String(page))
       params.set('per_page', String(perPage))
 
-      const res = await fetch(`http://localhost:8000/api/variants/search?${params}`, {
-        headers: { Authorization: `Bearer ${token}` }
+      const res = await fetch(apiUrl(`/api/variants/search?${params}`), {
+        credentials: 'include',
       })
       if (!res.ok) throw new Error('Failed to search variants')
       const data: SearchResponse = await res.json()
@@ -208,11 +209,11 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
       setActiveTab('lookup')
     }
     try {
-      const res = await fetch('http://localhost:8000/api/variants/lookup', {
+      const res = await fetch(apiUrl('/api/variants/lookup'), {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          ...(token && { Authorization: `Bearer ${token}` })
         },
         body: JSON.stringify({ variant_id: term, include_literature: true, include_clinpgx: true, force_refresh: forceRefresh })
       })

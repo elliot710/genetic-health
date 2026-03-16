@@ -7,6 +7,7 @@ import {
   Dna, Shield, Info, ExternalLink 
 } from 'lucide-react'
 import { getTheme } from '../utils/theme'
+import { apiUrl } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 
 interface AnalysisData {
@@ -48,11 +49,9 @@ export default function ModernFileUpload({ onAnalysisComplete, token, isDarkMode
       }, 200)
 
       // Upload file to backend with authentication
-      const uploadResponse = await fetch(`http://localhost:8000/upload/${fileType}`, {
+      const uploadResponse = await fetch(apiUrl(`/upload/${fileType}`), {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
+        credentials: 'include',
         body: formData,
       })
 
@@ -132,10 +131,8 @@ export default function ModernFileUpload({ onAnalysisComplete, token, isDarkMode
       setTimeout(async () => {
         try {
           // Fetch the updated dashboard data which includes the new upload
-          const dashboardResponse = await fetch('http://localhost:8000/api/analysis/dashboard-data', {
-            headers: {
-              'Authorization': `Bearer ${token}`
-            }
+          const dashboardResponse = await fetch(apiUrl('/api/analysis/dashboard-data'), {
+            credentials: 'include',
           })
           
           if (dashboardResponse.ok) {

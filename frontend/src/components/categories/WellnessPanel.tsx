@@ -16,6 +16,7 @@ import {
   cleanCondition,
 } from './shared'
 import type { CategoryPanelProps } from './types'
+import { apiUrl } from '@/lib/api'
 
 interface WellnessTrait {
   name: string
@@ -43,11 +44,8 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
       }
 
       try {
-        const response = await fetch('http://localhost:8000/api/analysis/dashboard-data', {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
+        const response = await fetch(apiUrl('/api/analysis/dashboard-data'), {
+          credentials: 'include',
         })
 
         if (response.ok) {

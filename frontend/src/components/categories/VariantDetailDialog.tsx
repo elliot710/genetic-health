@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { ExternalLink, Dna, FlaskConical, BookOpen, Activity, X, ChevronDown, ChevronUp, AlertTriangle, Pill, Shield, Atom, RefreshCw } from 'lucide-react'
 import { Badge } from '../ui/badge'
+import { apiUrl } from '@/lib/api'
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -314,9 +315,9 @@ export default function VariantDetailDialog({
     }
     setShowPubs(false)
 
-    const url = `http://localhost:8000/api/annotations/variant-details/${rsid}${forceRefresh ? '?refresh=true' : ''}`
+    const url = apiUrl(`/api/annotations/variant-details/${rsid}${forceRefresh ? '?refresh=true' : ''}`)
     fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
+      credentials: 'include',
     })
       .then((res) => res.json())
       .then((data) => setDetails(data))

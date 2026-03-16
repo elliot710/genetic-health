@@ -16,6 +16,7 @@ import {
 } from 'recharts'
 import { Badge } from './ui/badge'
 import { useThemeClasses, CategoryHeader, EmptyState, SectionCard } from './categories/shared'
+import { apiUrl } from '@/lib/api'
 import VariantDetailDialog from './categories/VariantDetailDialog'
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -125,8 +126,8 @@ export default function KnowledgeGraph({ isDarkMode, token }: KnowledgeGraphProp
     if (!token) { setLoading(false); return }
     ;(async () => {
       try {
-        const resp = await fetch('http://localhost:8000/api/insights/knowledge-graph', {
-          headers: { Authorization: `Bearer ${token}` },
+        const resp = await fetch(apiUrl('/api/insights/knowledge-graph'), {
+          credentials: 'include',
         })
         if (resp.ok) setGraphData(await resp.json())
         else setError('Failed to load data')

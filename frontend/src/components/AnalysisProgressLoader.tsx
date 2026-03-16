@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { AlertCircle, Check, ChevronLeft, ChevronRight, Clock, Info, Loader2 } from 'lucide-react';
 import { getTheme } from '../utils/theme';
 import { Button } from '@/components/ui/button';
+import { apiUrl } from '@/lib/api';
 
 interface AnalysisProgress {
   analysis_id: number;
@@ -49,21 +50,11 @@ export default function AnalysisProgressLoader({
 
     const checkProgress = async () => {
       try {
-        const token = localStorage.getItem('token');
-        if (!token) {
-          throw new Error('No authentication token found');
-        }
+        console.log('🔍 Making request to:', apiUrl(`/api/analysis/status/${analysisId}`));
 
-        console.log('🔍 Making request to:', `http://localhost:8000/api/analysis/status/${analysisId}`);
-        console.log('🔑 Using token:', token.substring(0, 20) + '...');
-
-        const response = await fetch(`http://localhost:8000/api/analysis/status/${analysisId}`, {
+        const response = await fetch(apiUrl(`/api/analysis/status/${analysisId}`), {
           method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          mode: 'cors',  // Explicitly set CORS mode
+          credentials: 'include',
         });
 
         console.log('📡 Response status:', response.status);
@@ -83,11 +74,8 @@ export default function AnalysisProgressLoader({
           setIsLoading(false);
           if (onComplete) {
             // Fetch full results
-            const resultsResponse = await fetch(`http://localhost:8000/api/analysis/dashboard-data`, {
-              headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-              },
+            const resultsResponse = await fetch(apiUrl('/api/analysis/dashboard-data'), {
+              credentials: 'include',
             });
 
             if (resultsResponse.ok) {

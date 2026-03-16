@@ -7,8 +7,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import type { DashboardData } from './categories/types'
+import { apiUrl } from '@/lib/api'
 
-const API = 'http://localhost:8000'
+const API = apiUrl('')
 
 interface SettingsPanelProps {
   token?: string
@@ -30,7 +31,7 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate }: S
     const fetchProfile = async () => {
       try {
         const res = await fetch(`${API}/auth/me`, {
-          headers: { Authorization: `Bearer ${token}` },
+          credentials: 'include',
         })
         if (res.ok) {
           const data = await res.json()
@@ -68,7 +69,8 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate }: S
     try {
       const res = await fetch(`${API}/auth/me`, {
         method: 'PUT',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ full_name: profile.full_name, avatar_url: profile.avatar_url || '' }),
       })
       if (res.ok) {
@@ -99,7 +101,8 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate }: S
     try {
       const res = await fetch(`${API}/auth/change-password`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           current_password: passwords.current,
           new_password: passwords.new_password,

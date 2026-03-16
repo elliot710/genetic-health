@@ -65,9 +65,9 @@ export default function GeneticAnnotation({ token }: GeneticAnnotationProps) {
     try {
       const response = await fetch('/api/annotations/variant', {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
           rsid: rsid.trim(),
