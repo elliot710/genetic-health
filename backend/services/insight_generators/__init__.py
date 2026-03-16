@@ -7,7 +7,7 @@ All generators follow the same signature:
 
 Returns the number of insight rows created.
 """
-from .base import GeneratorContext, extract_gene_and_consequence, extract_frequency
+from .base import GeneratorContext, extract_gene_and_consequence, extract_frequency, zygosity_adjust
 from .health import generate_health_risks
 from .drug_response import generate_drug_responses
 from .physical_traits import generate_physical_traits

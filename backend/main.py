@@ -26,14 +26,6 @@ logging.basicConfig(
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown lifecycle."""
     # ── Startup ──────────────────────────────────────────────────
-    # Configure OpenTelemetry before anything else so all spans are captured
-    configure_telemetry()
-    try:
-        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # type: ignore[import]
-        FastAPIInstrumentor.instrument_app(app)
-    except Exception:
-        pass  # OTel instrumentation is optional
-
     await init_db()
 
     # Install per-job log handler on analysis-related loggers
@@ -146,6 +138,29 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_preload_vep())
     print("⏳ Ensembl VEP: preloading VCF cache in background...")
 
+    # Nightly purge of soft-deleted analyses older than 30 days
+    async def _nightly_purge():
+        """Periodically hard-delete analyses that were soft-deleted > 30 days ago."""
+        while True:
+            await asyncio.sleep(86400)  # Run once per day
+            try:
+                from .db.database import async_session_factory
+                from sqlalchemy import text as sa_text
+                async with async_session_factory() as s:
+                    result = await s.execute(
+                        sa_text(
+                            "DELETE FROM genetic_analyses "
+                            "WHERE deleted_at IS NOT NULL "
+                            "AND deleted_at < NOW() - INTERVAL '30 days'"
+                        )
+                    )
+                    await s.commit()
+                    if result.rowcount:
+                        print(f"🧹 Nightly purge: hard-deleted {result.rowcount} analyses")
+            except Exception as e:
+                print(f"⚠️ Nightly purge failed: {e}")
+    asyncio.create_task(_nightly_purge())
+
     yield
 
     # ── Shutdown ─────────────────────────────────────────────────
@@ -160,6 +175,14 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# Configure OpenTelemetry tracing (must happen before ASGI middleware chain is built)
+configure_telemetry()
+try:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # type: ignore[import]
+    FastAPIInstrumentor.instrument_app(app)
+except Exception:
+    pass  # OTel instrumentation is optional
 
 # Configure CORS
 app.add_middleware(

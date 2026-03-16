@@ -7,7 +7,7 @@ Upload flow:
 3. Create analysis_variants linking the user's analysis to the markers + their genotype
 """
 import logging
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional, Callable, Awaitable
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy import select
@@ -34,10 +34,14 @@ class VariantUploader:
     async def upload_variants(
         self, 
         analysis_id: int, 
-        variants_data: List[Dict[str, Any]]
+        variants_data: List[Dict[str, Any]],
+        on_progress: Optional[Callable[[int, int], Awaitable[None]]] = None,
     ) -> Tuple[int, int]:
         """
         Upload variants: upsert global markers, then link to this analysis.
+        
+        Args:
+            on_progress: Optional async callback(processed_so_far, total) called after each batch commit.
         
         Returns:
             Tuple of (total_variants_processed, new_markers_created)
@@ -63,6 +67,9 @@ class VariantUploader:
 
                 await self.session.commit()
 
+                if on_progress:
+                    await on_progress(i + len(batch), len(variants_data))
+
                 if i % (batch_size * 5) == 0:
                     logger.info(f"Processed {i + len(batch)}/{len(variants_data)} variants ({total_new_markers} new markers)")
 
@@ -73,7 +80,18 @@ class VariantUploader:
             span.set_attribute("markers.reused", total_processed - total_new_markers)
 
             return total_processed, total_new_markers
-            
+
+    async def _process_variant_batch(
+        self, analysis_id: int, batch: List[Dict[str, Any]]
+    ) -> Tuple[int, int]:
+        """Process a single batch: upsert markers, create analysis_variants.
+        Returns (variants_linked, new_markers_created)."""
+        # 1. Build unique marker map from batch
+        marker_map: Dict[str, Dict[str, Any]] = {}
+        for variant in batch:
+            rsid = variant.get('rsid')
+            if not rsid:
+                continue
             alt = str(variant.get('alt_allele', variant.get('alt', '')))
             
             if rsid in marker_map:

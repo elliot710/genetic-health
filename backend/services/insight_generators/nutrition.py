@@ -1,6 +1,6 @@
 """Nutrition traits insight generator."""
 from ...db.models import NutritionTrait
-from .base import GeneratorContext, generate_from_maps
+from .base import GeneratorContext, generate_from_maps, zygosity_adjust
 
 
 async def generate_nutrition_traits(ctx: GeneratorContext) -> int:
@@ -10,7 +10,7 @@ async def generate_nutrition_traits(ctx: GeneratorContext) -> int:
             metabolism_type=info['metabolism'],
             dietary_recommendations=info['recommendations'],
             associated_variants=[rsid],
-            sensitivity_level=info['sensitivity']
+            sensitivity_level=zygosity_adjust(info['sensitivity'], genotype, ref_allele=info.get('_ref_allele'))
         )
 
     def from_gene(aid, rsid, gene, consequence, info):

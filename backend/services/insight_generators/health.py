@@ -8,7 +8,7 @@ from .base import (
 
 async def generate_health_risks(ctx: GeneratorContext) -> int:
     def from_rsid(aid, rsid, genotype, info):
-        risk_level = assess_risk_level(genotype, info['risk_multiplier'])
+        risk_level = assess_risk_level(genotype, info['risk_multiplier'], ref_allele=info.get('_ref_allele'))
         return HealthRisk(
             analysis_id=aid, condition=info['condition'],
             risk_level=risk_level, risk_score=f"{info['risk_multiplier']}x",

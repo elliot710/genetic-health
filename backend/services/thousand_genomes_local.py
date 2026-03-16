@@ -121,9 +121,15 @@ class ThousandGenomesLocalService:
             return {}
         results: Dict[str, Optional[Dict[str, Any]]] = {}
         batch_size = 2000
+        total = len(rsids)
+        total_batches = (total + batch_size - 1) // batch_size
+        found_count = 0
+        import time as _time
+        t0 = _time.monotonic()
         async with async_session_factory() as session:
             for i in range(0, len(rsids), batch_size):
                 chunk = rsids[i:i + batch_size]
+                batch_num = i // batch_size + 1
                 # Yield to event loop between chunks so HTTP handlers can run
                 if i > 0:
                     await asyncio.sleep(0.01)
@@ -142,6 +148,7 @@ class ThousandGenomesLocalService:
                         results[rsid_key] = None
                     elif len(row_list) == 1:
                         results[rsid_key] = self._format_variant(row_list[0], rsid=rsid_key)
+                        found_count += 1
                     else:
                         best = max(row_list, key=lambda r: r.maf or 0)
                         data = self._format_variant(best, rsid=rsid_key)
@@ -150,6 +157,19 @@ class ThousandGenomesLocalService:
                             for r in row_list if r.id != best.id
                         ]
                         results[rsid_key] = data
+                        found_count += 1
+
+                if batch_num % 10 == 0 or batch_num == total_batches:
+                    elapsed = _time.monotonic() - t0
+                    rate = (i + len(chunk)) / elapsed if elapsed > 0 else 0
+                    logger.info(
+                        f"  1000G batch {batch_num}/{total_batches}: "
+                        f"{i + len(chunk)}/{total} queried, {found_count} found "
+                        f"({rate:.0f} rsids/s, {elapsed:.1f}s elapsed)"
+                    )
+
+        elapsed = _time.monotonic() - t0
+        logger.info(f"  1000G complete: {found_count}/{total} found in {elapsed:.1f}s")
         return results
 
     # ------------------------------------------------------------------

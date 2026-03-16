@@ -2,7 +2,7 @@
 from ...db.models import UncommonMutation
 from .base import (
     GeneratorContext, extract_gene_and_consequence, extract_frequency,
-    get_user_genotype, is_homozygous_reference,
+    get_user_genotype, get_ref_allele, is_homozygous_reference,
 )
 
 
@@ -25,7 +25,8 @@ async def generate_uncommon_mutations(ctx: GeneratorContext) -> int:
 
         # Skip homozygous-reference genotypes
         user_gt = get_user_genotype(variant)
-        if is_homozygous_reference(user_gt):
+        ref_allele = get_ref_allele(variant)
+        if is_homozygous_reference(user_gt, ref_allele):
             continue
 
         if 0.001 <= freq <= 0.05 and gene:

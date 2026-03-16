@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { Shield, Users, Settings, Plus, Trash2, Pencil, Check, X, ChevronRight, Download, Upload, Database, Lightbulb, RefreshCw, AlertTriangle, Minus, Info, Activity, Play, Square, Clock, FileText, Zap, Sparkles } from 'lucide-react'
+import { Shield, Users, Settings, Plus, Trash2, Pencil, Check, X, ChevronRight, Download, Upload, Database, Lightbulb, RefreshCw, AlertTriangle, Minus, Info, Activity, Play, Pause, Square, Clock, FileText, Zap, Sparkles } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -700,6 +700,24 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     setJobActionLoading(id)
     try {
       const res = await authFetch(`${API}/jobs/${id}/restart`, { method: 'POST', headers })
+      if (res.ok) { fetchJobs(); fetchJobsSummary() }
+    } catch { /* ignore */ }
+    setJobActionLoading(null)
+  }
+
+  const pauseJob = async (id: number) => {
+    setJobActionLoading(id)
+    try {
+      const res = await authFetch(`${API}/jobs/${id}/pause`, { method: 'POST', headers })
+      if (res.ok) { fetchJobs(); fetchJobsSummary() }
+    } catch { /* ignore */ }
+    setJobActionLoading(null)
+  }
+
+  const resumeJob = async (id: number) => {
+    setJobActionLoading(id)
+    try {
+      const res = await authFetch(`${API}/jobs/${id}/resume`, { method: 'POST', headers })
       if (res.ok) { fetchJobs(); fetchJobsSummary() }
     } catch { /* ignore */ }
     setJobActionLoading(null)
@@ -1960,6 +1978,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                             job.analysis_status === 'completed' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' :
                             job.analysis_status === 'processing' ? 'bg-amber-500/20 text-amber-400 border-amber-500/30' :
                             job.analysis_status === 'pending' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' :
+                            job.analysis_status === 'paused' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' :
                             'bg-red-500/20 text-red-400 border-red-500/30'
                           }>
                             {job.analysis_status}
@@ -2011,6 +2030,28 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                               <Button
                                 size="sm"
                                 variant="outline"
+                                className="h-7 px-2 text-xs text-yellow-400 border-yellow-500/30 hover:bg-yellow-500/10"
+                                disabled={jobActionLoading === job.id}
+                                onClick={() => pauseJob(job.id)}
+                              >
+                                <Pause className="h-3 w-3 mr-1" /> Pause
+                              </Button>
+                            )}
+                            {job.analysis_status === 'paused' && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-xs text-green-400 border-green-500/30 hover:bg-green-500/10"
+                                disabled={jobActionLoading === job.id}
+                                onClick={() => resumeJob(job.id)}
+                              >
+                                <Play className="h-3 w-3 mr-1" /> Resume
+                              </Button>
+                            )}
+                            {(job.analysis_status === 'processing' || job.analysis_status === 'pending' || job.analysis_status === 'paused') && (
+                              <Button
+                                size="sm"
+                                variant="outline"
                                 className="h-7 px-2 text-xs text-amber-400 border-amber-500/30 hover:bg-amber-500/10"
                                 disabled={jobActionLoading === job.id}
                                 onClick={() => cancelJob(job.id)}
@@ -2029,7 +2070,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                                 <Play className="h-3 w-3 mr-1" /> Restart
                               </Button>
                             )}
-                            {job.analysis_status !== 'processing' && (
+                            {job.analysis_status !== 'processing' && job.analysis_status !== 'paused' && (
                               <Button
                                 size="sm"
                                 variant="outline"

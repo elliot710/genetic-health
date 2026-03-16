@@ -36,12 +36,12 @@ export default function FileUpload({ onAnalysisComplete, token, isDarkMode }: Fi
       const formData = new FormData()
       formData.append('file', file)
 
-      // Simulate progress for upload
+      // Simulate brief upload progress while file bytes are sent
       const progressInterval = setInterval(() => {
-        setProgress(prev => Math.min(prev + 10, 90))
-      }, 200)
+        setProgress(prev => Math.min(prev + 15, 90))
+      }, 150)
 
-      // Upload file to backend with authentication
+      // Upload file to backend — returns immediately after parsing
       const uploadResponse = await fetch(apiUrl(`/upload/${fileType}`), {
         method: 'POST',
         credentials: 'include',
@@ -57,34 +57,17 @@ export default function FileUpload({ onAnalysisComplete, token, isDarkMode }: Fi
       }
 
       const uploadResult = await uploadResponse.json()
-      setUploadStatus('processing')
-      setProgress(0)
-
-      // Analysis is automatically queued by the upload endpoint
-      console.log('Upload successful, analysis queued automatically:', uploadResult)
-
-      // Simulate analysis progress
-      const analysisInterval = setInterval(() => {
-        setProgress(prev => Math.min(prev + 15, 90))
-      }, 300)
-
-      // Wait for simulated analysis time
-      setTimeout(() => {
-        clearInterval(analysisInterval)
-        setProgress(100)
-      }, 2000)
-
-      // Use the upload result stats instead of trying to fetch incomplete analysis
       const analysisId = uploadResult.analysis_id
       
-      // Transform the upload stats into the format expected by Dashboard
+      setUploadStatus('success')
+
+      // Build minimal dashboard data for the transition
       const dashboardData: DashboardData = {
         summary: {
-          total_variants: uploadResult.stats?.total_variants || 0,
+          total_variants: uploadResult.total_variants || 0,
           data_sources: [file.name],
           analysis_id: analysisId,
           status: 'processing',
-          upload_info: uploadResult,
         },
         drug_interactions: {
           high_risk_genes: [],
@@ -97,32 +80,9 @@ export default function FileUpload({ onAnalysisComplete, token, isDarkMode }: Fi
         }
       }
       
-      setUploadStatus('success')
-      
-      // Pass the analysis ID to trigger progress tracking
+      // Transition to AnalysisProgressLoader immediately —
+      // variant processing and analysis run in the background with SSE progress
       onAnalysisComplete(dashboardData, analysisId)
-      
-      // Wait a moment to let the background analysis begin, then fetch the latest dashboard data
-      setTimeout(async () => {
-        try {
-          // Fetch the updated dashboard data which includes the new upload
-          const dashboardResponse = await fetch(apiUrl('/api/analysis/dashboard-data'), {
-            credentials: 'include',
-          })
-          
-          if (dashboardResponse.ok) {
-            const dashboardData = await dashboardResponse.json()
-            console.log('Fetched updated dashboard data after upload:', dashboardData)
-            onAnalysisComplete(dashboardData, analysisId)
-          } else {
-            console.error('Failed to fetch updated dashboard data')
-            // Continue with progress tracking using the analysis ID
-          }
-        } catch (error) {
-          console.error('Error fetching updated dashboard data:', error)
-          // Continue with progress tracking using the analysis ID
-        }
-      }, 2000)
 
     } catch (error) {
       console.error('Error processing file:', error)

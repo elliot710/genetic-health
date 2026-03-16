@@ -199,6 +199,87 @@ class GnomadLocalService:
                         results[rsid_key] = data
         return results
 
+    async def lookup_batch_by_position(
+        self, variants: List[tuple]
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
+        """Batch lookup by genomic coordinates using the (chrom,pos,ref,alt) unique index.
+
+        Args:
+            variants: list of (rsid, chrom, pos, ref_allele, alt_alleles_csv) tuples.
+                alt_alleles_csv may contain comma-separated alternatives.
+
+        Returns: {rsid: result_or_none}
+        """
+        if not variants:
+            return {}
+
+        from sqlalchemy import tuple_
+        import time as _time
+
+        results: Dict[str, Optional[Dict[str, Any]]] = {}
+
+        # Build lookup entries: (rsid, chrom, pos, ref, alt) — one per alt allele
+        entries = []
+        key_to_rsid: Dict[tuple, str] = {}  # (chrom, pos, ref, alt) → rsid
+        for rsid, chrom, pos, ref, alt_csv in variants:
+            c = str(chrom).replace('chr', '')
+            p = int(pos)
+            r = str(ref)
+            if alt_csv:
+                for alt in str(alt_csv).split(','):
+                    alt = alt.strip()
+                    if alt:
+                        key = (c, p, r, alt)
+                        key_to_rsid.setdefault(key, rsid)
+                        entries.append(key)
+            # Also try without alt (some markers have no alt_alleles)
+
+        if not entries:
+            return results
+
+        batch_size = 2000
+        total = len(entries)
+        total_batches = (total + batch_size - 1) // batch_size
+        found_count = 0
+        t0 = _time.monotonic()
+        async with async_session_factory() as session:
+            for i in range(0, len(entries), batch_size):
+                chunk = entries[i:i + batch_size]
+                batch_num = i // batch_size + 1
+                if i > 0:
+                    await asyncio.sleep(0.01)
+
+                result = await session.execute(
+                    select(GnomadVariant).where(
+                        tuple_(
+                            GnomadVariant.chrom,
+                            GnomadVariant.pos,
+                            GnomadVariant.ref,
+                            GnomadVariant.alt,
+                        ).in_(chunk)
+                    )
+                )
+                rows = result.scalars().all()
+                for row in rows:
+                    key = (row.chrom, row.pos, row.ref, row.alt)
+                    rsid = key_to_rsid.get(key)
+                    if rsid and rsid not in results:
+                        results[rsid] = self._format_variant(row, rsid=rsid)
+                        found_count += 1
+
+                if batch_num % 10 == 0 or batch_num == total_batches:
+                    elapsed = _time.monotonic() - t0
+                    rate = (i + len(chunk)) / elapsed if elapsed > 0 else 0
+                    logger.info(
+                        f"  gnomAD batch {batch_num}/{total_batches}: "
+                        f"{i + len(chunk)}/{total} queried, {found_count} found "
+                        f"({rate:.0f} pos/s, {elapsed:.1f}s elapsed)"
+                    )
+
+        elapsed = _time.monotonic() - t0
+        logger.info(f"  gnomAD complete: {found_count}/{total} found in {elapsed:.1f}s")
+        return results
+
     async def get_gene_constraint(self, gene: str) -> Optional[Dict[str, Any]]:
         """Get gene-level constraint metrics."""
         async with async_session_factory() as session:

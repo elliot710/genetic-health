@@ -106,6 +106,16 @@ def extract_frequency(annotation_result) -> float:
         return 0.0
 
 
+def get_ref_allele(variant) -> Optional[str]:
+    """Extract the reference allele from the variant's marker."""
+    marker = getattr(variant, 'marker', None)
+    if marker:
+        ref = getattr(marker, 'ref_allele', None)
+        if ref and ref not in ('N', '-', '.', ''):
+            return ref
+    return None
+
+
 def get_user_genotype(variant) -> Optional[str]:
     """Extract the user's genotype from the variant.
 
@@ -123,17 +133,15 @@ def get_user_genotype(variant) -> Optional[str]:
     return None
 
 
-def is_homozygous_reference(genotype: Optional[str]) -> bool:
-    """Return True when the genotype is homozygous (both alleles identical).
-
-    For a rare pathogenic SNV (freq < 1%), being homozygous almost
-    certainly means the user carries two copies of the **reference**
-    allele, not the pathogenic alternate (probability < 0.0001%).
+def _parse_alleles(genotype: Optional[str]):
+    """Split a genotype string into a list of alleles, or return None.
+    
+    For hemizygous genotypes (single allele, e.g. X chromosome in males),
+    returns a single-element list so callers can handle it.
     """
     if not genotype:
-        return False
+        return None
     gt = genotype.strip().upper()
-    # Handle different genotype formats
     if '/' in gt:
         alleles = gt.split('/')
     elif '|' in gt:
@@ -141,29 +149,95 @@ def is_homozygous_reference(genotype: Optional[str]) -> bool:
     elif len(gt) == 2:
         alleles = [gt[0], gt[1]]
     elif len(gt) == 1:
-        # Hemizygous (e.g. X chromosome in males) — single allele,
-        # treat as "not heterozygous" but don't skip since it could
-        # be the alternate allele.
-        return False
+        return [gt]  # hemizygous (X chromosome, mitochondrial)
     else:
+        return None
+    return alleles if len(alleles) >= 1 else None
+
+
+def is_homozygous_reference(genotype: Optional[str], ref_allele: Optional[str] = None) -> bool:
+    """Return True when the user carries only the reference allele.
+
+    Handles diploid (2 alleles) and hemizygous (1 allele, e.g. X chromosome in males).
+    When *ref_allele* is provided we check explicitly.  Without it we
+    fall back to heuristics.
+    """
+    alleles = _parse_alleles(genotype)
+    if alleles is None:
         return False
-    return len(alleles) == 2 and alleles[0] == alleles[1]
+    if ref_allele:
+        ref = ref_allele.strip().upper()
+        return all(a == ref for a in alleles)
+    # Fallback: treat any homozygous as "reference" (inaccurate for homo-alt)
+    # For hemizygous, we can't tell without ref_allele so return False
+    if len(alleles) == 1:
+        return False
+    return alleles[0] == alleles[1]
+
+
+def is_heterozygous(genotype: Optional[str]) -> bool:
+    """Return True when the genotype has two different alleles.
+    Hemizygous genotypes (1 allele) are never heterozygous."""
+    alleles = _parse_alleles(genotype)
+    if alleles is None or len(alleles) < 2:
+        return False
+    return alleles[0] != alleles[1]
+
+
+# Severity ladder used by zygosity_adjust — from mildest to most severe
+_SEVERITY_LADDER = ['low', 'average', 'moderate', 'high', 'very_high']
+_SEVERITY_IDX = {v: i for i, v in enumerate(_SEVERITY_LADDER)}
+
+
+def zygosity_adjust(level: str, genotype: Optional[str], *, ref_allele: Optional[str] = None, steps: int = 1) -> str:
+    """Shift a severity/level string up or down based on zygosity.
+
+    - Homozygous reference (both alleles == ref): de-escalate by *steps*
+    - Heterozygous (one alternate allele): keep as-is (the mapping baseline)
+    - Homozygous alternate (both alleles != ref): escalate by *steps*
+
+    When *ref_allele* is supplied the classification is exact.
+    Without it the function uses a heuristic (any homozygous → reference).
+    """
+    normalised = level.strip().lower().replace(' ', '_')
+    idx = _SEVERITY_IDX.get(normalised)
+    if idx is None:
+        return level  # not on the ladder — nothing to shift
+
+    if is_homozygous_reference(genotype, ref_allele) or not genotype:
+        new_idx = max(0, idx - steps)
+    elif is_heterozygous(genotype):
+        new_idx = idx  # baseline — no change
+    else:
+        # Homozygous non-reference
+        new_idx = min(len(_SEVERITY_LADDER) - 1, idx + steps)
+
+    result = _SEVERITY_LADDER[new_idx]
+    # Preserve original casing style (Title Case if original was)
+    if level[0].isupper():
+        result = result.replace('_', ' ').title()
+    return result
 
 
 # ---------------------------------------------------------------------------
 # Scoring / recommendation helpers
 # ---------------------------------------------------------------------------
 
-def assess_risk_level(genotype: str, risk_multiplier: float) -> str:
+def assess_risk_level(genotype: str, risk_multiplier: float, ref_allele: Optional[str] = None) -> str:
+    """Assess risk level considering both the risk multiplier and zygosity."""
     if not genotype:
         return 'unknown'
+    # Base level from multiplier
     if risk_multiplier >= 2.0:
-        return 'high'
+        base = 'high'
     elif risk_multiplier >= 1.2:
-        return 'moderate'
+        base = 'moderate'
     elif risk_multiplier <= 0.8:
-        return 'low'
-    return 'average'
+        base = 'low'
+    else:
+        base = 'average'
+    # Adjust for zygosity
+    return zygosity_adjust(base, genotype, ref_allele=ref_allele)
 
 
 def assess_drug_response(genotype: str, gene: str) -> str:
@@ -239,7 +313,9 @@ async def generate_from_maps(
             if key not in seen:
                 seen.add(key)
                 genotype = getattr(variant, 'genotype', '') or ''
-                item = build_from_rsid(ctx.analysis_id, rsid, genotype, info)
+                ref_allele = getattr(getattr(variant, 'marker', None), 'ref_allele', None)
+                info_with_ref = {**info, '_ref_allele': ref_allele}
+                item = build_from_rsid(ctx.analysis_id, rsid, genotype, info_with_ref)
                 if item:
                     items.append(item)
 

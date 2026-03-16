@@ -11,20 +11,96 @@ from sqlalchemy import select, func, delete, update
 
 from .auth_routes import get_current_user
 from ..db.database import get_session, async_session_factory
-from ..db.models import GeneticAnalysis, AnalysisVariant
+from ..db.models import GeneticAnalysis, AnalysisVariant, DashboardCache
 from ..utils.vcf_parser import VCFParser
 from ..services.variant_uploader import VariantUploader
 from ..services.analysis_service import ComprehensiveAnalysisService
 from ..services.analysis_queue import queue_analysis
+from ..core.container import ServiceManager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
 
+async def _process_upload_background(
+    analysis_id: int,
+    variants_data: list,
+    user_id: int,
+):
+    """Background task: upload variants in batches, then auto-start analysis."""
+    try:
+        async with async_session_factory() as session:
+            uploader = VariantUploader(session)
+
+            async def report_progress(processed: int, total: int):
+                pct = min(95, int(processed / total * 100)) if total else 0
+                await session.execute(
+                    update(GeneticAnalysis)
+                    .where(GeneticAnalysis.id == analysis_id)
+                    .values(
+                        progress_percentage=pct,
+                        processed_variants=processed,
+                    )
+                )
+                await session.commit()
+
+            processed_count, new_count = await uploader.upload_variants(
+                analysis_id, variants_data, on_progress=report_progress,
+            )
+
+            # Mark variant upload complete
+            await session.execute(
+                update(GeneticAnalysis)
+                .where(GeneticAnalysis.id == analysis_id)
+                .values(
+                    total_variants=processed_count,
+                    processed_variants=0,
+                    progress_percentage=0,
+                    current_step='starting_analysis',
+                )
+            )
+            await session.commit()
+
+        # Auto-start the comprehensive analysis
+        try:
+            async with ServiceManager() as service_manager:
+                analysis_service = service_manager.get_analysis_service(user_id)
+                await analysis_service.process_analysis(analysis_id)
+        except Exception as e:
+            logger.error(f"Background analysis failed for {analysis_id}: {e}")
+            async with async_session_factory() as session:
+                await session.execute(
+                    update(GeneticAnalysis)
+                    .where(GeneticAnalysis.id == analysis_id)
+                    .values(
+                        analysis_status='failed',
+                        current_step=f'Analysis error: {str(e)[:200]}',
+                    )
+                )
+                await session.commit()
+
+    except Exception as e:
+        logger.error(f"Background upload failed for analysis {analysis_id}: {e}")
+        try:
+            async with async_session_factory() as session:
+                await session.execute(
+                    update(GeneticAnalysis)
+                    .where(GeneticAnalysis.id == analysis_id)
+                    .values(
+                        analysis_status='failed',
+                        current_step=f'Upload error: {str(e)[:200]}',
+                    )
+                )
+                await session.commit()
+        except Exception:
+            logger.exception(f"Failed to mark analysis {analysis_id} as failed")
+
+
 @router.post("/vcf")
 async def upload_vcf(
     file: UploadFile = File(...),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     session: AsyncSession = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
@@ -45,41 +121,33 @@ async def upload_vcf(
             filename=file.filename,
             file_type='vcf',
             analysis_status='processing',
-            current_step='uploading_variants'
+            current_step='uploading_variants',
+            progress_percentage=0,
         )
         session.add(analysis)
         await session.commit()
         await session.refresh(analysis)
 
-        # Parse VCF and upload variants
+        # Parse VCF into memory (fast)
         parser = VCFParser()
         variants_data = await parser.parse_vcf_content(content)
         
-        # Get the analysis ID value after refresh
         analysis_id = getattr(analysis, 'id')
-        
-        uploader = VariantUploader(session)
-        processed_count, new_count = await uploader.upload_variants(analysis_id, variants_data)
-        
-        # Update total_variants in the analysis record
-        await session.execute(
-            update(GeneticAnalysis)
-            .where(GeneticAnalysis.id == analysis_id)
-            .values(total_variants=processed_count)
-        )
-        await session.commit()
 
-        # Return immediately - frontend will trigger background analysis via /api/analysis/start/{id}
+        # Process variants + run analysis in background
+        background_tasks.add_task(
+            _process_upload_background,
+            analysis_id=analysis_id,
+            variants_data=variants_data,
+            user_id=current_user.id,
+        )
+
+        # Return immediately — SSE stream will provide real-time progress
         return JSONResponse({
-            "status": "uploaded",
+            "status": "uploading_variants",
             "analysis_id": analysis_id,
-            "message": "VCF file uploaded successfully",
-            "processed_variants": processed_count,
-            "stats": {
-                "total_variants": processed_count,
-                "new_variants": new_count,
-                "reused_variants": processed_count - new_count
-            }
+            "message": "VCF file parsed, processing variants...",
+            "total_variants": len(variants_data),
         })
 
     except Exception as e:
@@ -93,6 +161,7 @@ async def upload_vcf(
 @router.post("/csv")
 async def upload_csv(
     file: UploadFile = File(...),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     session: AsyncSession = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
@@ -113,42 +182,33 @@ async def upload_csv(
             filename=file.filename,
             file_type='csv',
             analysis_status='processing',
-            current_step='uploading_variants'
+            current_step='uploading_variants',
+            progress_percentage=0,
         )
         session.add(analysis)
         await session.commit()
         await session.refresh(analysis)
 
-        # Parse CSV and upload variants
+        # Parse CSV into memory (fast)
         parser = VCFParser()
         variants_data = await parser.parse_vcf_content(content)
         
-        # Get the analysis ID value after refresh
         analysis_id = getattr(analysis, 'id')
-        
-        uploader = VariantUploader(session)
-        processed_count, new_count = await uploader.upload_variants(analysis_id, variants_data)
-        
-        # Update total_variants in the analysis record
-        await session.execute(
-            update(GeneticAnalysis)
-            .where(GeneticAnalysis.id == analysis_id)
-            .values(total_variants=processed_count)
-        )
-        await session.commit()
 
-        # Return immediately - frontend will trigger background analysis via /api/analysis/start/{id}
+        # Process variants + run analysis in background
+        background_tasks.add_task(
+            _process_upload_background,
+            analysis_id=analysis_id,
+            variants_data=variants_data,
+            user_id=current_user.id,
+        )
+
+        # Return immediately — SSE stream will provide real-time progress
         return JSONResponse({
-            "status": "uploaded",
+            "status": "uploading_variants",
             "analysis_id": analysis_id,
-            "message": "CSV file uploaded successfully",
-            "processed_variants": processed_count,
-            "stats": {
-                "total_variants": processed_count,
-                "new_variants": new_count,
-                "reused_variants": processed_count - new_count
-            },
-            "redirect_to_dashboard": True
+            "message": "CSV file parsed, processing variants...",
+            "total_variants": len(variants_data),
         })
 
     except Exception as e:
@@ -161,7 +221,6 @@ async def upload_csv(
 
 @router.delete("/data")
 async def delete_all_user_data(
-    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
@@ -172,90 +231,56 @@ async def delete_all_user_data(
     Preserves shared variant annotations by design.
     """
     try:
-        from sqlalchemy import text
-
         # Count analyses first for the response message
+        # Exclude processing/pending analyses — they must finish or be cancelled first
         result = await session.execute(
             select(GeneticAnalysis.id).where(
                 GeneticAnalysis.user_id == current_user.id,
-                GeneticAnalysis.analysis_status != 'deleted',
+                GeneticAnalysis.deleted_at.is_(None),
+                GeneticAnalysis.analysis_status.notin_(['processing', 'pending']),
             )
         )
         analysis_ids = [row[0] for row in result.all()]
         
         if not analysis_ids:
+            # Check if there are processing analyses that weren't deleted
+            processing_result = await session.execute(
+                select(func.count()).where(
+                    GeneticAnalysis.user_id == current_user.id,
+                    GeneticAnalysis.deleted_at.is_(None),
+                    GeneticAnalysis.analysis_status.in_(['processing', 'pending']),
+                )
+            )
+            processing_count = processing_result.scalar() or 0
+            if processing_count > 0:
+                return JSONResponse({
+                    "status": "success",
+                    "message": f"No completed data to delete. {processing_count} analysis job(s) still running."
+                })
             return JSONResponse({
                 "status": "success",
                 "message": "No data found to delete"
             })
 
         deleted_count = len(analysis_ids)
-        user_id = current_user.id
 
-        # Instant: mark as deleted so dashboard hides them immediately
+        # Soft delete: mark as deleted with timestamp (skip processing/pending)
         await session.execute(
-            text("UPDATE genetic_analyses SET analysis_status = 'deleted' WHERE user_id = :uid AND analysis_status != 'deleted'"),
-            {"uid": user_id},
+            update(GeneticAnalysis)
+            .where(
+                GeneticAnalysis.user_id == current_user.id,
+                GeneticAnalysis.deleted_at.is_(None),
+                GeneticAnalysis.analysis_status.notin_(['processing', 'pending']),
+            )
+            .values(analysis_status='deleted', deleted_at=func.now())
         )
+
+        # Invalidate dashboard cache so stale data isn't served after re-upload
+        await session.execute(
+            delete(DashboardCache).where(DashboardCache.user_id == current_user.id)
+        )
+
         await session.commit()
-
-        # Background: clean up the big child tables (600K+ rows)
-        # Uses batched deletes to avoid long-running transactions that block other queries
-        async def _bg_cleanup():
-            logger.info(f"Background cleanup STARTING for user {user_id}, analyses={analysis_ids}")
-            try:
-                ids = analysis_ids
-                BATCH = 50000
-
-                # Helper: batched delete for large tables
-                async def _batched_delete(table: str):
-                    total = 0
-                    while True:
-                        async with async_session_factory() as s:
-                            result = await s.execute(
-                                text(f"DELETE FROM {table} WHERE ctid IN ("
-                                     f"SELECT ctid FROM {table} WHERE analysis_id = ANY(:ids) LIMIT :lim)"),
-                                {"ids": ids, "lim": BATCH},
-                            )
-                            await s.commit()
-                            deleted = result.rowcount
-                        total += deleted
-                        if deleted < BATCH:
-                            break
-                        await asyncio.sleep(0.05)  # Yield between batches
-                    return total
-
-                # 1. Big tables: batched delete
-                va_count = await _batched_delete("variant_annotations")
-                logger.info(f"Background cleanup: deleted {va_count} variant_annotations")
-
-                av_count = await _batched_delete("analysis_variants")
-                logger.info(f"Background cleanup: deleted {av_count} analysis_variants")
-
-                # 2. Insight tables (small, fast — single delete each)
-                async with async_session_factory() as bg_session:
-                    async with bg_session.begin():
-                        for tbl in [
-                            "health_risks", "drug_responses", "physical_traits",
-                            "nutrition_traits", "sports_performance", "cognitive_profiles",
-                            "personality_traits", "ancestry_results", "carrier_status",
-                            "wellness_metrics", "methylation_profiles",
-                            "detoxification_profiles", "rare_mutations", "uncommon_mutations",
-                        ]:
-                            await bg_session.execute(
-                                text(f"DELETE FROM {tbl} WHERE analysis_id = ANY(:ids)"),
-                                {"ids": ids},
-                            )
-                        # 3. Parent last
-                        await bg_session.execute(
-                            text("DELETE FROM genetic_analyses WHERE id = ANY(:ids)"),
-                            {"ids": ids},
-                        )
-                logger.info(f"Background cleanup COMPLETED for user {user_id}: {deleted_count} analyses")
-            except Exception as exc:
-                logger.error(f"Background cleanup FAILED for user {user_id}: {exc}", exc_info=True)
-
-        background_tasks.add_task(_bg_cleanup)
 
         return JSONResponse({
             "status": "success",
@@ -298,20 +323,23 @@ async def delete_analysis(
                 detail="Analysis not found"
             )
 
-        # Import necessary models for explicit deletion
-        from sqlalchemy import delete
+        if analysis.deleted_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Analysis not found"
+            )
 
-        # Delete analysis (this will cascade to all user-specific data while preserving shared annotations)
+        # Soft delete: mark as deleted with timestamp
         await session.execute(
-            delete(GeneticAnalysis).where(GeneticAnalysis.id == analysis_id)
+            update(GeneticAnalysis)
+            .where(GeneticAnalysis.id == analysis_id)
+            .values(analysis_status='deleted', deleted_at=func.now())
         )
-        
         await session.commit()
 
         return JSONResponse({
             "status": "success",
-            "message": f"Analysis {analysis_id} deleted successfully",
-            "note": "User-specific data deleted, shared annotations automatically preserved"
+            "message": f"Analysis {analysis_id} deleted successfully"
         })
 
     except Exception as e:
@@ -333,7 +361,8 @@ async def get_data_summary(
         # Get user's analyses
         result = await session.execute(
             select(GeneticAnalysis).where(
-                GeneticAnalysis.user_id == current_user.id
+                GeneticAnalysis.user_id == current_user.id,
+                GeneticAnalysis.deleted_at.is_(None),
             ).options(selectinload(GeneticAnalysis.analysis_variants))
         )
         analyses = result.scalars().all()
@@ -377,7 +406,8 @@ async def get_analysis_variants(
         result = await session.execute(
             select(GeneticAnalysis).where(
                 GeneticAnalysis.id == analysis_id,
-                GeneticAnalysis.user_id == current_user.id
+                GeneticAnalysis.user_id == current_user.id,
+                GeneticAnalysis.deleted_at.is_(None),
             )
         )
         analysis = result.scalar_one_or_none()
@@ -448,7 +478,8 @@ async def reanalyze_data(
         result = await session.execute(
             select(GeneticAnalysis).where(
                 GeneticAnalysis.id == analysis_id,
-                GeneticAnalysis.user_id == current_user.id
+                GeneticAnalysis.user_id == current_user.id,
+                GeneticAnalysis.deleted_at.is_(None),
             )
         )
         analysis = result.scalar_one_or_none()

@@ -133,12 +133,12 @@ class ComprehensiveAnalysisService:
 
         # Step 1: ClinVar DB lookup (fast, covers ~6% of variants)
         batch_size = 1000
-        async with async_session_factory() as session:
-            for i in range(0, len(rsids), batch_size):
-                batch = rsids[i:i + batch_size]
-                # Yield between batches so HTTP handlers can run
-                if i > 0:
-                    await asyncio.sleep(0.01)
+        for i in range(0, len(rsids), batch_size):
+            batch = rsids[i:i + batch_size]
+            # Yield between batches so HTTP handlers can run
+            if i > 0:
+                await asyncio.sleep(0.01)
+            async with async_session_factory() as session:
                 result = await session.execute(
                     select(ClinVarVariant.rsid, ClinVarVariant.gene)
                     .where(
@@ -224,15 +224,15 @@ class ComprehensiveAnalysisService:
             return None
 
     async def _check_if_cancelled(self, analysis_id: int):
-        """Check if the analysis has been paused or stopped by the user."""
+        """Check if the analysis has been paused, stopped, cancelled, or deleted."""
         from ..db.database import async_session_factory
         async with async_session_factory() as session:
             result = await session.execute(
                 select(GeneticAnalysis.analysis_status).where(GeneticAnalysis.id == analysis_id)
             )
             current_status = result.scalar_one_or_none()
-            if current_status in ('paused', 'stopped'):
-                raise AnalysisCancelled(f"Analysis {analysis_id} was {current_status} by user")
+            if current_status in ('paused', 'stopped', 'failed', 'deleted'):
+                raise AnalysisCancelled(f"Analysis {analysis_id} was {current_status}")
 
     # ------------------------------------------------------------------
     # Top-level orchestration
@@ -290,6 +290,9 @@ class ComprehensiveAnalysisService:
                             f"(phases 1-{last_completed_phase} already done)")
 
             logger.info(f"Starting comprehensive analysis for {len(variants)} variants")
+            logger.info(f"  Analysis ID: {analysis_id} | Strategy: {strategy} | User: {self.user_id}")
+            logger.info(f"  Registry: {len(self._registry)} categories, "
+                        f"{sum(len(v.get('rsid', {})) + len(v.get('gene', {})) for v in self._registry.values())} mappings")
 
             progress = AnalysisProgress(
                 total_variants=len(variants),
@@ -305,12 +308,20 @@ class ComprehensiveAnalysisService:
             await self._update_progress(analysis_id, progress)
 
             # ── Phase 1: Build gene map (always — cheap, in-memory only) ──
+            phase_start = time.time()
             logger.info(f"═══ Phase 1/4: Building gene map ═══")
+            all_rsids = [str(v.rsid) for v in variants if v.rsid]
+            has_position = sum(1 for v in variants if v.chromosome and v.position)
+            logger.info(f"  Input: {len(all_rsids)} RSIDs, {has_position} with chr:pos")
             with tracer.start_as_current_span("analysis.phase1.build_gene_map") as span:
                 span.set_attribute("variant.count", len(variants))
-                all_rsids = [str(v.rsid) for v in variants if v.rsid]
                 await self._build_rsid_gene_map(variants)
                 span.set_attribute("rsid.count", len(all_rsids))
+            unmapped = len(all_rsids) - len(self._rsid_gene_map)
+            logger.info(f"═══ Phase 1/4 complete ({time.time() - phase_start:.1f}s) ═══")
+            logger.info(f"  Gene map coverage: {len(self._rsid_gene_map)}/{len(all_rsids)} "
+                        f"({100 * len(self._rsid_gene_map) / max(1, len(all_rsids)):.1f}%) | "
+                        f"{unmapped} unmapped")
             progress.phase = 1
             progress.phase_progress = 1.0
 
@@ -329,15 +340,21 @@ class ComprehensiveAnalysisService:
 
             with tracer.start_as_current_span("analysis.phase2.annotate_variants") as span:
                 span.set_attribute("variant.count", len(variants))
-                async with async_session_factory() as session:
-                    annotation_service = SharedVariantAnnotationService(session)
-                    annotation_results = await self._annotate_variants_efficiently(
-                        variants, analysis_id, annotation_service, progress
-                    )
+                annotation_service = SharedVariantAnnotationService()
+                annotation_results = await self._annotate_variants_efficiently(
+                    variants, analysis_id, annotation_service, progress
+                )
                 span.set_attribute("annotation.reused", progress.reused_annotations)
                 span.set_attribute("annotation.new", progress.new_annotations)
             progress.phase_progress = 1.0
-            logger.info(f"═══ Phase 2/4 complete ({time.time() - phase_start:.1f}s) ═══")
+            phase_elapsed = time.time() - phase_start
+            total_annotated = progress.reused_annotations + progress.new_annotations
+            logger.info(f"═══ Phase 2/4 complete ({phase_elapsed:.1f}s) ═══")
+            logger.info(f"  Reused: {progress.reused_annotations} | New: {progress.new_annotations} | "
+                        f"Total annotated: {total_annotated}/{len(variants)} "
+                        f"({100 * total_annotated / max(1, len(variants)):.1f}%)")
+            if phase_elapsed > 0:
+                logger.info(f"  Throughput: {total_annotated / phase_elapsed:.0f} variants/sec")
 
             # ── Phase 3: BigQuery enrichment (own session, periodic commits) ──
             progress.phase = 3
@@ -345,19 +362,28 @@ class ComprehensiveAnalysisService:
             progress.current_step = "enriching_bigquery"
             await self._update_progress(analysis_id, progress)
             logger.info(f"═══ Phase 3/4: BigQuery enrichment ═══")
+            logger.info(f"  Input: {len(annotation_results)} annotated variants | "
+                        f"{len(set(self._rsid_gene_map.values()))} unique genes in map")
             phase_start = time.time()
             with tracer.start_as_current_span("analysis.phase3.bigquery_enrichment") as span:
                 span.set_attribute("annotation.count", len(annotation_results))
                 await self._bulk_enrich_bigquery(annotation_results, analysis_id, progress)
+            phase_elapsed = time.time() - phase_start
             progress.phase_progress = 1.0
-            logger.info(f"═══ Phase 3/4 complete ({time.time() - phase_start:.1f}s) ═══")
+            logger.info(f"═══ Phase 3/4 complete ({phase_elapsed:.1f}s) ═══")
 
             # ── Phase 4: Generate insights (own session, committed at end) ──
             progress.phase = 4
             progress.phase_progress = 0.0
             progress.current_step = "generating_insights"
             await self._update_progress(analysis_id, progress)
+            # Count how many annotations have real data for context
+            annotated_with_data = sum(1 for ar in annotation_results.values()
+                                      if ar.annotation_data and ar.annotation_data.get('annotations'))
             logger.info(f"═══ Phase 4/4: Generating insights ═══")
+            logger.info(f"  Input: {annotated_with_data}/{len(annotation_results)} variants with annotation data")
+            logger.info(f"  Generators: {len(ALL_GENERATORS)} — "
+                        f"{', '.join(name for name, _ in ALL_GENERATORS)}")
             phase_start = time.time()
 
             with tracer.start_as_current_span("analysis.phase4.generate_insights") as span:
@@ -367,7 +393,10 @@ class ComprehensiveAnalysisService:
                     )
                     await session.commit()
                 span.set_attribute("insights.generated", insights_generated)
-            logger.info(f"═══ Phase 4/4 complete ({time.time() - phase_start:.1f}s) ═══")
+            phase_elapsed = time.time() - phase_start
+            logger.info(f"═══ Phase 4/4 complete ({phase_elapsed:.1f}s) ═══")
+            logger.info(f"  Total insights: {insights_generated} | "
+                        f"Rate: {insights_generated / max(0.1, phase_elapsed):.0f} insights/sec")
 
             progress.current_step = "completed"
             progress.status = "completed"
@@ -395,9 +424,14 @@ class ComprehensiveAnalysisService:
             root_span.set_attribute("analysis.variants_processed", len(variants))
             root_span.set_attribute("analysis.insights_generated", insights_generated)
 
-            logger.info(f"Analysis {analysis_id} completed in {processing_time:.2f}s")
-            logger.info(f"Annotations: {progress.reused_annotations} reused, {progress.new_annotations} new")
-            logger.info(f"Insights generated: {insights_generated}")
+            logger.info(f"╔══════════════════════════════════════════╗")
+            logger.info(f"║  Analysis {analysis_id} completed in {processing_time:.1f}s")
+            logger.info(f"║  Variants: {len(variants)} total, {len(annotation_results)} annotated")
+            logger.info(f"║  Annotations: {progress.reused_annotations} reused, {progress.new_annotations} new")
+            logger.info(f"║  Gene map: {len(self._rsid_gene_map)} RSIDs → {len(set(self._rsid_gene_map.values()))} genes")
+            logger.info(f"║  Insights: {insights_generated} generated")
+            logger.info(f"║  Throughput: {len(variants) / max(0.1, processing_time):.0f} variants/sec overall")
+            logger.info(f"╚══════════════════════════════════════════╝")
 
             return {
                 "success": True,
@@ -442,6 +476,20 @@ class ComprehensiveAnalysisService:
         finally:
             otel_context.detach(_ctx_token)
             root_span.end()
+            # Persist logs to DB before clearing from memory
+            try:
+                logs = log_collector.get_logs(analysis_id)
+                if logs:
+                    from ..db.database import async_session_factory
+                    async with async_session_factory() as session:
+                        await session.execute(
+                            update(GeneticAnalysis)
+                            .where(GeneticAnalysis.id == analysis_id)
+                            .values(job_logs=logs)
+                        )
+                        await session.commit()
+            except Exception as e:
+                logger.debug(f"Failed to persist job logs: {e}")
             log_collector.clear_active_job()
             try:
                 if self.api_service:
@@ -491,9 +539,13 @@ class ComprehensiveAnalysisService:
         rsids = [str(v.rsid) for v in variants_with_rsid]
 
         logger.info(f"Processing {len(variants_with_rsid)} variants with RSIDs out of {len(variants)} total")
+        if len(variants) > len(variants_with_rsid):
+            logger.info(f"  Skipped {len(variants) - len(variants_with_rsid)} variants without valid RS ID")
 
         existing_annotations = await annotation_service.get_existing_annotations(rsids)
         progress.reused_annotations = len(existing_annotations)
+        logger.info(f"  Existing annotations in cache: {len(existing_annotations)}/{len(rsids)} "
+                    f"({100 * len(existing_annotations) / max(1, len(rsids)):.1f}%)")
 
         # Backfill local sources (ClinVar Local, AlphaMissense) for existing
         # annotations that were created before those sources were added
@@ -522,6 +574,10 @@ class ComprehensiveAnalysisService:
         # If the only remote API is 'ensembl' (we have local ensembl data) or none,
         # use bulk local annotation — 100x+ faster than per-variant HTTP calls
         use_bulk_local = not remote_enabled or remote_enabled <= {'ensembl'}
+        if variants_needing_annotation:
+            logger.info(f"  Annotation path: {'bulk local' if use_bulk_local else 'remote API'} "
+                        f"| Remote APIs enabled: {sorted(remote_enabled) if remote_enabled else 'none'} "
+                        f"| Local sources: {sorted(set(enabled_sources or []) - remote_api_names)}")
 
         if variants_needing_annotation and use_bulk_local:
             logger.info(f"Using bulk local annotation path (remote APIs: {remote_enabled or 'none'})")
@@ -631,12 +687,19 @@ class ComprehensiveAnalysisService:
                 await vep_svc.ensure_loaded()
             do_ensembl = vep_svc.is_loaded
 
-        do_1kg = enabled_sources is None or '1000genomes' in enabled_sources
+        do_1kg = enabled_sources is None or 'thousand_genomes' in enabled_sources
         tkg_svc = None
         if do_1kg:
             from .thousand_genomes_local import get_thousand_genomes_service
             tkg_svc = get_thousand_genomes_service()
             do_1kg = tkg_svc.is_loaded
+
+        do_am = enabled_sources is None or 'alpha_missense' in enabled_sources
+        am_svc = None
+        if do_am:
+            from ..utils.alpha_missense import get_alpha_missense_service
+            am_svc = get_alpha_missense_service()
+            do_am = am_svc.available
 
         # Build missing lists from existing annotations
         missing_cv = [
@@ -653,24 +716,54 @@ class ComprehensiveAnalysisService:
         ]
         missing_1kg = [
             rsid for rsid, data in existing_annotations.items()
-            if do_1kg and '1000genomes' not in data.get('annotations', {})
+            if do_1kg and 'thousand_genomes' not in data.get('annotations', {})
+        ]
+        missing_am = [
+            rsid for rsid, data in existing_annotations.items()
+            if do_am and 'alpha_missense' not in data.get('annotations', {})
         ]
 
-        if not missing_cv and not missing_gnomad and not missing_ensembl and not missing_1kg:
+        if not missing_cv and not missing_gnomad and not missing_ensembl and not missing_1kg and not missing_am:
             # Skip to BQ backfill check below
             pass
         else:
+            import time as _time
+            backfill_t0 = _time.monotonic()
+            logger.info(
+                f"Local source backfill starting — "
+                f"ClinVar: {len(missing_cv)}, gnomAD: {len(missing_gnomad)}, "
+                f"Ensembl: {len(missing_ensembl)}, 1000G: {len(missing_1kg)}, "
+                f"AlphaMissense: {len(missing_am)}"
+            )
             # --- Batch lookups (parallel-friendly: each uses its own read session) ---
             cv_results: Dict[str, Optional[Dict]] = {}
             gn_results: Dict[str, Optional[Dict]] = {}
             ens_results: Dict[str, Optional[Dict]] = {}
+
+            # Pre-build rsid→variant map once (used by gnomAD and AlphaMissense)
+            rsid_to_variant = {str(v.rsid): v for v in variants if v.rsid}
 
             if missing_cv:
                 logger.info(f"Backfilling ClinVar Local for {len(missing_cv)} existing annotations")
                 cv_results = await cv_svc.lookup_batch(missing_cv)
             if missing_gnomad:
                 logger.info(f"Backfilling gnomAD for {len(missing_gnomad)} existing annotations")
-                gn_results = await gnomad_svc.lookup_batch(missing_gnomad)
+                # Build position tuples from variants for position-based lookup
+                gn_pos_tuples = []
+                for rsid in missing_gnomad:
+                    v = rsid_to_variant.get(rsid)
+                    if v:
+                        marker = getattr(v, 'marker', None)
+                        if marker and marker.chromosome and marker.position and marker.ref_allele:
+                            gn_pos_tuples.append((
+                                rsid,
+                                marker.chromosome,
+                                marker.position,
+                                marker.ref_allele,
+                                marker.alt_alleles or '',
+                            ))
+                if gn_pos_tuples:
+                    gn_results = await gnomad_svc.lookup_batch_by_position(gn_pos_tuples)
             if missing_ensembl:
                 logger.info(f"Backfilling Ensembl VEP for {len(missing_ensembl)} existing annotations")
                 ens_results = await vep_svc.lookup_batch(missing_ensembl)
@@ -680,9 +773,33 @@ class ComprehensiveAnalysisService:
                 logger.info(f"Backfilling 1000G for {len(missing_1kg)} existing annotations")
                 tkg_results = await tkg_svc.lookup_batch(missing_1kg)
 
+            am_results: Dict[str, Optional[Dict]] = {}
+            if missing_am:
+                logger.info(f"Backfilling AlphaMissense for {len(missing_am)} existing annotations")
+                am_batch = []
+                for rsid in missing_am:
+                    v = rsid_to_variant.get(rsid)
+                    if v:
+                        marker = getattr(v, 'marker', None)
+                        if marker and marker.chromosome and marker.position and marker.ref_allele and marker.alt_alleles:
+                            for alt in str(marker.alt_alleles).split(','):
+                                alt = alt.strip()
+                                if alt:
+                                    am_batch.append({
+                                        'rsid': rsid,
+                                        'chromosome': str(marker.chromosome),
+                                        'position': int(marker.position),
+                                        'ref_allele': str(marker.ref_allele),
+                                        'alt_allele': alt,
+                                    })
+                                    break
+                if am_batch:
+                    am_results = am_svc.lookup_variants_batch(am_batch)
+
             # --- Batch DB updates using executemany (pipelined via asyncpg) ---
             from sqlalchemy import bindparam
             cv_updated = gn_updated = ens_updated = 0
+            logger.info("Local source lookups complete, writing results to DB...")
 
             # Build update params for each source
             cv_params = []
@@ -707,7 +824,13 @@ class ComprehensiveAnalysisService:
             for rsid, tkg_data in tkg_results.items():
                 if tkg_data and tkg_data.get('found'):
                     tkg_params.append({'b_rsid': rsid, 'b_data': tkg_data})
-                    existing_annotations[rsid]['annotations']['1000genomes'] = tkg_data
+                    existing_annotations[rsid]['annotations']['thousand_genomes'] = tkg_data
+
+            am_params = []
+            for rsid, am_data in am_results.items():
+                if am_data and am_data.get('found'):
+                    am_params.append({'b_rsid': rsid, 'b_data': am_data})
+                    existing_annotations[rsid]['annotations']['alpha_missense'] = am_data
 
             async with async_session_factory() as session:
                 if cv_params:
@@ -747,7 +870,17 @@ class ComprehensiveAnalysisService:
                     )
                     tkg_updated = len(tkg_params)
 
-                if cv_updated or gn_updated or ens_updated or tkg_updated:
+                am_updated = 0
+                if am_params:
+                    await session.execute(
+                        update(SharedVariantAnnotation)
+                        .where(SharedVariantAnnotation.rsid == bindparam('b_rsid'))
+                        .values(alpha_missense_data=bindparam('b_data')),
+                        am_params
+                    )
+                    am_updated = len(am_params)
+
+                if cv_updated or gn_updated or ens_updated or tkg_updated or am_updated:
                     await session.commit()
 
             if cv_updated:
@@ -758,6 +891,15 @@ class ComprehensiveAnalysisService:
                 logger.info(f"Backfilled Ensembl VEP data for {ens_updated}/{len(missing_ensembl)} annotations")
             if tkg_updated:
                 logger.info(f"Backfilled 1000G data for {tkg_updated}/{len(missing_1kg)} annotations")
+            if am_updated:
+                logger.info(f"Backfilled AlphaMissense data for {am_updated}/{len(missing_am)} annotations")
+
+            backfill_elapsed = _time.monotonic() - backfill_t0
+            logger.info(
+                f"Local source backfill complete in {backfill_elapsed:.1f}s — "
+                f"DB writes: CV={cv_updated}, gnomAD={gn_updated}, VEP={ens_updated}, "
+                f"1KG={tkg_updated}, AM={am_updated}"
+            )
 
         # --- BigQuery backfill (ChEMBL, FDA Drug, AlphaFold) ---
         bq_source_names = {'chembl', 'fda_drug', 'alphafold'}
@@ -875,14 +1017,28 @@ class ComprehensiveAnalysisService:
                 cv_found = sum(1 for v in cv_map.values() if v and v.get('found'))
                 logger.info(f"  ClinVar local batch: {cv_found}/{total} found ({time.time() - t0:.1f}s)")
 
-        # --- Step 2: Batch gnomAD local lookups ---
+        # --- Step 2: Batch gnomAD local lookups (position-based for TSV data) ---
         gn_map: Dict[str, Optional[Dict]] = {}
         if enabled_sources is None or 'gnomad' in enabled_sources:
             from .gnomad_local import get_gnomad_service
             gnomad_svc = get_gnomad_service()
             if gnomad_svc.is_loaded:
                 t0 = time.time()
-                gn_map = await gnomad_svc.lookup_batch(unique_rsids)
+                # Build position tuples from markers for position-based lookup
+                pos_tuples = []
+                for rsid in unique_rsids:
+                    v = rsid_to_variants[rsid][0]
+                    marker = getattr(v, 'marker', None)
+                    if marker and marker.chromosome and marker.position and marker.ref_allele:
+                        pos_tuples.append((
+                            rsid,
+                            marker.chromosome,
+                            marker.position,
+                            marker.ref_allele,
+                            marker.alt_alleles or '',
+                        ))
+                if pos_tuples:
+                    gn_map = await gnomad_svc.lookup_batch_by_position(pos_tuples)
                 gn_found = sum(1 for v in gn_map.values() if v and v.get('found'))
                 logger.info(f"  gnomAD local batch: {gn_found}/{total} found ({time.time() - t0:.1f}s)")
 
@@ -902,7 +1058,7 @@ class ComprehensiveAnalysisService:
 
         # --- Step 2.6: Batch 1000 Genomes local lookups ---
         tkg_map: Dict[str, Optional[Dict]] = {}
-        if enabled_sources is None or '1000genomes' in enabled_sources:
+        if enabled_sources is None or 'thousand_genomes' in enabled_sources:
             from .thousand_genomes_local import get_thousand_genomes_service
             tkg_svc = get_thousand_genomes_service()
             if tkg_svc.is_loaded:
@@ -910,6 +1066,34 @@ class ComprehensiveAnalysisService:
                 tkg_map = await tkg_svc.lookup_batch(unique_rsids)
                 tkg_found = sum(1 for v in tkg_map.values() if v and v.get('found'))
                 logger.info(f"  1000G local batch: {tkg_found}/{total} found ({time.time() - t0:.1f}s)")
+
+        # --- Step 2.7: Batch AlphaMissense local lookups ---
+        am_map: Dict[str, Optional[Dict]] = {}
+        if enabled_sources is None or 'alpha_missense' in enabled_sources:
+            from ..utils.alpha_missense import get_alpha_missense_service
+            am_svc = get_alpha_missense_service()
+            if am_svc.available:
+                t0 = time.time()
+                am_variants = []
+                for rsid in unique_rsids:
+                    v = rsid_to_variants[rsid][0]
+                    marker = getattr(v, 'marker', None)
+                    if marker and marker.chromosome and marker.position and marker.ref_allele and marker.alt_alleles:
+                        for alt in str(marker.alt_alleles).split(','):
+                            alt = alt.strip()
+                            if alt:
+                                am_variants.append({
+                                    'rsid': rsid,
+                                    'chromosome': str(marker.chromosome),
+                                    'position': int(marker.position),
+                                    'ref_allele': str(marker.ref_allele),
+                                    'alt_allele': alt,
+                                })
+                                break  # one alt per rsid is enough
+                if am_variants:
+                    am_map = am_svc.lookup_variants_batch(am_variants)
+                am_found = sum(1 for v in am_map.values() if v and v.get('found'))
+                logger.info(f"  AlphaMissense local batch: {am_found}/{total} found ({time.time() - t0:.1f}s)")
 
         await asyncio.sleep(0)
 
@@ -938,6 +1122,7 @@ class ComprehensiveAnalysisService:
                 gn_val = _val(gn_map.get(rsid))
                 ens_val = _val(ens_map.get(rsid))
                 tkg_val = _val(tkg_map.get(rsid))
+                am_val = _val(am_map.get(rsid))
                 first_variant = rsid_to_variants[rsid][0]
                 marker_id = getattr(first_variant, 'marker_id', None)
 
@@ -947,6 +1132,7 @@ class ComprehensiveAnalysisService:
                     gnomad_data=gn_val,
                     ensembl_data=ens_val,
                     thousand_genomes_data=tkg_val,
+                    alpha_missense_data=am_val,
                     annotation_status='partial',
                     total_api_calls=0,
                     usage_count=1,
@@ -978,6 +1164,10 @@ class ComprehensiveAnalysisService:
                         thousand_genomes_data=func.coalesce(
                             SharedVariantAnnotation.thousand_genomes_data,
                             stmt.excluded.thousand_genomes_data,
+                        ),
+                        alpha_missense_data=func.coalesce(
+                            SharedVariantAnnotation.alpha_missense_data,
+                            stmt.excluded.alpha_missense_data,
                         ),
                     ),
                 ).returning(SharedVariantAnnotation.id, SharedVariantAnnotation.rsid)
@@ -1013,6 +1203,7 @@ class ComprehensiveAnalysisService:
                 gn_val = _val(gn_map.get(rsid))
                 ens_val = _val(ens_map.get(rsid))
                 tkg_val = _val(tkg_map.get(rsid))
+                am_val = _val(am_map.get(rsid))
 
                 ann_data: Dict[str, Any] = {
                     'rsid': rsid,
@@ -1031,6 +1222,9 @@ class ComprehensiveAnalysisService:
                     ann_data['success_count'] += 1
                 if tkg_val:
                     ann_data['annotations']['thousand_genomes'] = tkg_val
+                    ann_data['success_count'] += 1
+                if am_val:
+                    ann_data['annotations']['alpha_missense'] = am_val
                     ann_data['success_count'] += 1
 
                 ann_data['pathogenicity_score'] = scorer.score_variant(
@@ -1315,6 +1509,7 @@ class ComprehensiveAnalysisService:
                 delete(tbl).where(tbl.analysis_id == analysis_id)
             )
         await session.flush()
+        logger.info(f"  Cleared {len(insight_tables)} insight tables for fresh generation")
 
         # Build the shared context for all generators
         ctx = GeneratorContext(
@@ -1338,11 +1533,11 @@ class ComprehensiveAnalysisService:
 
                 count = await gen_func(ctx)
                 insights_generated += count
-                logger.info(f"Generated {count} {gen_name} insights")
+                logger.info(f"  [{gen_idx + 1}/{total_generators}] {gen_name}: {count} insights")
             except AnalysisCancelled:
                 raise
             except Exception as e:
-                logger.error(f"Error in {gen_name}: {e}")
+                logger.error(f"  [{gen_idx + 1}/{total_generators}] {gen_name}: FAILED — {e}")
                 continue
 
         return insights_generated

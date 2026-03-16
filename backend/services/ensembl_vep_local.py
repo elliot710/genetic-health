@@ -358,9 +358,14 @@ class EnsemblVepLocalService:
         if not self._db:
             return {}
         results: Dict[str, Optional[Dict[str, Any]]] = {}
+        total = len(rsids)
+        total_batches = (total + 499) // 500
+        import time as _time
+        t0 = _time.monotonic()
         # SQLite has a variable limit (~999), so batch the query
         for start in range(0, len(rsids), 500):
             chunk = rsids[start:start + 500]
+            batch_num = start // 500 + 1
             placeholders = ','.join('?' * len(chunk))
             rows = self._db.execute(
                 f"SELECT rsid, data FROM vep_data WHERE rsid IN ({placeholders})",
@@ -368,6 +373,18 @@ class EnsemblVepLocalService:
             ).fetchall()
             for rsid, blob in rows:
                 results[rsid] = json.loads(zlib.decompress(blob))
+
+            if batch_num % 20 == 0 or batch_num == total_batches:
+                elapsed = _time.monotonic() - t0
+                rate = (start + len(chunk)) / elapsed if elapsed > 0 else 0
+                logger.info(
+                    f"  Ensembl VEP batch {batch_num}/{total_batches}: "
+                    f"{start + len(chunk)}/{total} queried, {len(results)} found "
+                    f"({rate:.0f} rsids/s, {elapsed:.1f}s elapsed)"
+                )
+
+        elapsed = _time.monotonic() - t0
+        logger.info(f"  Ensembl VEP complete: {len(results)}/{total} found in {elapsed:.1f}s")
         return results
 
 

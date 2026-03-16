@@ -1,13 +1,13 @@
 """Wellness metrics insight generator."""
 from ...db.models import WellnessMetric
-from .base import GeneratorContext, generate_from_maps
+from .base import GeneratorContext, generate_from_maps, zygosity_adjust
 
 
 async def generate_wellness_metrics(ctx: GeneratorContext) -> int:
     def from_rsid(aid, rsid, genotype, info):
         return WellnessMetric(
             analysis_id=aid, metric_name=info['metric'],
-            genetic_predisposition=info['predisposition'],
+            genetic_predisposition=zygosity_adjust(info['predisposition'], genotype, ref_allele=info.get('_ref_allele')),
             optimization_score=info['score'],
             lifestyle_recommendations=info['recommendations'],
             associated_variants=[rsid]

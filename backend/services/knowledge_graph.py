@@ -35,7 +35,10 @@ async def build_knowledge_graph(user_id: int, session: AsyncSession) -> dict:
     # Find latest analysis
     result = await session.execute(
         select(GeneticAnalysis)
-        .where(GeneticAnalysis.user_id == user_id)
+        .where(
+            GeneticAnalysis.user_id == user_id,
+            GeneticAnalysis.deleted_at.is_(None),
+        )
         .order_by(GeneticAnalysis.upload_date.desc())
         .limit(1)
     )

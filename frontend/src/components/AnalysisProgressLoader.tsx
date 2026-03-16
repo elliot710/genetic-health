@@ -139,6 +139,7 @@ export default function AnalysisProgressLoader({
   }
 
   const progressPercentage = Math.max(0, Math.min(100, progress.progress_percentage || 0));
+  const isUploadingVariants = (progress.current_step || '').includes('uploading_variants');
   const remainingTime = progress.estimated_completion 
     ? Math.max(0, new Date(progress.estimated_completion).getTime() - new Date().getTime())
     : null;
@@ -177,7 +178,11 @@ export default function AnalysisProgressLoader({
               )}
               <div>
                 <h2 className={`text-xl font-semibold ${theme.text.primary}`}>
-                  {progress.status === 'pending' ? 'Preparing Genetic Analysis' : 'Analyzing Genetic Data'}
+                  {isUploadingVariants 
+                    ? 'Preparing Genetic Data'
+                    : progress.status === 'pending' 
+                      ? 'Preparing Genetic Analysis' 
+                      : 'Analyzing Genetic Data'}
                 </h2>
                 <p className={`text-sm ${theme.text.tertiary} mt-1`}>
                   {progress.filename}
@@ -254,21 +259,22 @@ export default function AnalysisProgressLoader({
             </div>
             
             {[
-              { step: 'Variant Classification', status: progressPercentage > 5 ? 'completed' : progressPercentage > 0 ? 'current' : 'pending' },
-              { step: 'API Annotation', status: progressPercentage > 15 ? 'completed' : progressPercentage > 5 ? 'current' : 'pending' },
-              { step: 'Health & Wellness Analysis', status: progressPercentage > 25 ? 'completed' : progressPercentage > 15 ? 'current' : 'pending' },
-              { step: 'Food & Nutrition Insights', status: progressPercentage > 35 ? 'completed' : progressPercentage > 25 ? 'current' : 'pending' },
-              { step: 'Drug Response Prediction', status: progressPercentage > 45 ? 'completed' : progressPercentage > 35 ? 'current' : 'pending' },
-              { step: 'Physical Traits Analysis', status: progressPercentage > 55 ? 'completed' : progressPercentage > 45 ? 'current' : 'pending' },
-              { step: 'Sports & Fitness Insights', status: progressPercentage > 65 ? 'completed' : progressPercentage > 55 ? 'current' : 'pending' },
-              { step: 'Intelligence Analysis', status: progressPercentage > 70 ? 'completed' : progressPercentage > 65 ? 'current' : 'pending' },
-              { step: 'Personality Traits', status: progressPercentage > 75 ? 'completed' : progressPercentage > 70 ? 'current' : 'pending' },
-              { step: 'Ancestry & Origins', status: progressPercentage > 80 ? 'completed' : progressPercentage > 75 ? 'current' : 'pending' },
-              { step: 'Carrier Status Assessment', status: progressPercentage > 85 ? 'completed' : progressPercentage > 80 ? 'current' : 'pending' },
-              { step: 'Wellness Reports', status: progressPercentage > 90 ? 'completed' : progressPercentage > 85 ? 'current' : 'pending' },
-              { step: 'Methylation Pathways', status: progressPercentage > 95 ? 'completed' : progressPercentage > 90 ? 'current' : 'pending' },
-              { step: 'Detoxification Analysis', status: progressPercentage > 98 ? 'completed' : progressPercentage > 95 ? 'current' : 'pending' },
-              { step: 'Report Generation', status: progressPercentage >= 100 ? 'completed' : progressPercentage > 98 ? 'current' : 'pending' },
+              { step: 'Uploading Variants', status: isUploadingVariants ? 'current' : 'completed' },
+              { step: 'Variant Classification', status: isUploadingVariants ? 'pending' : progressPercentage > 5 ? 'completed' : progressPercentage > 0 ? 'current' : 'pending' },
+              { step: 'API Annotation', status: isUploadingVariants ? 'pending' : progressPercentage > 15 ? 'completed' : progressPercentage > 5 ? 'current' : 'pending' },
+              { step: 'Health & Wellness Analysis', status: isUploadingVariants ? 'pending' : progressPercentage > 25 ? 'completed' : progressPercentage > 15 ? 'current' : 'pending' },
+              { step: 'Food & Nutrition Insights', status: isUploadingVariants ? 'pending' : progressPercentage > 35 ? 'completed' : progressPercentage > 25 ? 'current' : 'pending' },
+              { step: 'Drug Response Prediction', status: isUploadingVariants ? 'pending' : progressPercentage > 45 ? 'completed' : progressPercentage > 35 ? 'current' : 'pending' },
+              { step: 'Physical Traits Analysis', status: isUploadingVariants ? 'pending' : progressPercentage > 55 ? 'completed' : progressPercentage > 45 ? 'current' : 'pending' },
+              { step: 'Sports & Fitness Insights', status: isUploadingVariants ? 'pending' : progressPercentage > 65 ? 'completed' : progressPercentage > 55 ? 'current' : 'pending' },
+              { step: 'Intelligence Analysis', status: isUploadingVariants ? 'pending' : progressPercentage > 70 ? 'completed' : progressPercentage > 65 ? 'current' : 'pending' },
+              { step: 'Personality Traits', status: isUploadingVariants ? 'pending' : progressPercentage > 75 ? 'completed' : progressPercentage > 70 ? 'current' : 'pending' },
+              { step: 'Ancestry & Origins', status: isUploadingVariants ? 'pending' : progressPercentage > 80 ? 'completed' : progressPercentage > 75 ? 'current' : 'pending' },
+              { step: 'Carrier Status Assessment', status: isUploadingVariants ? 'pending' : progressPercentage > 85 ? 'completed' : progressPercentage > 80 ? 'current' : 'pending' },
+              { step: 'Wellness Reports', status: isUploadingVariants ? 'pending' : progressPercentage > 90 ? 'completed' : progressPercentage > 85 ? 'current' : 'pending' },
+              { step: 'Methylation Pathways', status: isUploadingVariants ? 'pending' : progressPercentage > 95 ? 'completed' : progressPercentage > 90 ? 'current' : 'pending' },
+              { step: 'Detoxification Analysis', status: isUploadingVariants ? 'pending' : progressPercentage > 98 ? 'completed' : progressPercentage > 95 ? 'current' : 'pending' },
+              { step: 'Report Generation', status: isUploadingVariants ? 'pending' : progressPercentage >= 100 ? 'completed' : progressPercentage > 98 ? 'current' : 'pending' },
             ].map((item, index) => (
               <div key={index} className="flex items-center">
                 <div className={`w-4 h-4 rounded-full mr-3 flex items-center justify-center ${
@@ -304,6 +310,11 @@ export default function AnalysisProgressLoader({
                   <div>
                     <strong>Analysis queued...</strong> Your genetic data has been uploaded successfully and is waiting in the processing queue. 
                     We'll begin analyzing your {progress.total_variants.toLocaleString()} variants shortly.
+                  </div>
+                ) : isUploadingVariants ? (
+                  <div>
+                    <strong>Processing your upload...</strong> We're storing and deduplicating your genetic variants.
+                    Analysis will begin automatically once processing is complete.
                   </div>
                 ) : (
                   <div>

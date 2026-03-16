@@ -1,7 +1,7 @@
 """Carrier status insight generator."""
 import logging
 from ...db.models import CarrierStatus
-from .base import GeneratorContext, get_user_genotype, is_homozygous_reference
+from .base import GeneratorContext, get_user_genotype, get_ref_allele, is_homozygous_reference
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,8 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
         # Skip homozygous-reference genotypes — user doesn't carry
         # the alternate allele at this position.
         user_gt = get_user_genotype(variant)
-        if is_homozygous_reference(user_gt):
+        ref_allele = get_ref_allele(variant)
+        if is_homozygous_reference(user_gt, ref_allele):
             continue
 
         # Registry-based matching

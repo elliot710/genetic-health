@@ -1,14 +1,16 @@
 """Physical traits insight generator."""
 from ...db.models import PhysicalTrait
-from .base import GeneratorContext, generate_from_maps, get_trait_description
+from .base import GeneratorContext, generate_from_maps, get_trait_description, zygosity_adjust
 
 
 async def generate_physical_traits(ctx: GeneratorContext) -> int:
     def from_rsid(aid, rsid, genotype, info):
         return PhysicalTrait(
             analysis_id=aid, trait_name=info['trait'],
-            trait_category=info['category'], genetic_result=info['result'],
-            confidence=info['confidence'], associated_variants=[rsid],
+            trait_category=info['category'],
+            genetic_result=info['result'],
+            confidence=zygosity_adjust(info['confidence'], genotype, ref_allele=info.get('_ref_allele')),
+            associated_variants=[rsid],
             description=get_trait_description(info['trait'], info['result'])
         )
 

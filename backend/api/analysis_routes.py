@@ -74,7 +74,8 @@ async def start_analysis(
         result = await db.execute(
             select(GeneticAnalysis).where(
                 GeneticAnalysis.id == analysis_id,
-                GeneticAnalysis.user_id == current_user.id
+                GeneticAnalysis.user_id == current_user.id,
+                GeneticAnalysis.deleted_at.is_(None),
             )
         )
         analysis = result.scalar_one_or_none()
@@ -86,6 +87,16 @@ async def start_analysis(
             )
         
         # Update analysis status to processing using SQLAlchemy update
+        # Guard: if already processing (e.g. auto-started by upload), don't reset
+        current_status = getattr(analysis, 'analysis_status', None)
+        if current_status == 'processing':
+            return AnalysisResponse(
+                analysis_id=analysis_id,
+                status="processing",
+                message="Analysis is already in progress",
+                total_variants=getattr(analysis, 'total_variants', 0) or 0
+            )
+
         await db.execute(
             update(GeneticAnalysis)
             .where(GeneticAnalysis.id == analysis_id)
@@ -141,7 +152,8 @@ async def get_analysis_status(
         result = await db.execute(
             select(GeneticAnalysis).where(
                 GeneticAnalysis.id == analysis_id,
-                GeneticAnalysis.user_id == current_user.id
+                GeneticAnalysis.user_id == current_user.id,
+                GeneticAnalysis.deleted_at.is_(None),
             )
         )
         analysis = result.scalar_one_or_none()
@@ -192,7 +204,8 @@ async def stream_analysis_progress(
                     result = await session.execute(
                         select(GeneticAnalysis).where(
                             GeneticAnalysis.id == analysis_id,
-                            GeneticAnalysis.user_id == current_user.id
+                            GeneticAnalysis.user_id == current_user.id,
+                            GeneticAnalysis.deleted_at.is_(None),
                         )
                     )
                     analysis = result.scalar_one_or_none()
@@ -253,7 +266,8 @@ async def get_analysis_results(
         result = await db.execute(
             select(GeneticAnalysis).where(
                 GeneticAnalysis.id == analysis_id,
-                GeneticAnalysis.user_id == current_user.id
+                GeneticAnalysis.user_id == current_user.id,
+                GeneticAnalysis.deleted_at.is_(None),
             )
         )
         analysis = result.scalar_one_or_none()
@@ -309,7 +323,8 @@ async def cancel_analysis(
         result = await db.execute(
             select(GeneticAnalysis).where(
                 GeneticAnalysis.id == analysis_id,
-                GeneticAnalysis.user_id == current_user.id
+                GeneticAnalysis.user_id == current_user.id,
+                GeneticAnalysis.deleted_at.is_(None),
             )
         )
         analysis = result.scalar_one_or_none()
@@ -359,7 +374,8 @@ async def pause_analysis(
         result = await db.execute(
             select(GeneticAnalysis).where(
                 GeneticAnalysis.id == analysis_id,
-                GeneticAnalysis.user_id == current_user.id
+                GeneticAnalysis.user_id == current_user.id,
+                GeneticAnalysis.deleted_at.is_(None),
             )
         )
         analysis = result.scalar_one_or_none()
@@ -417,7 +433,8 @@ async def resume_analysis(
         result = await db.execute(
             select(GeneticAnalysis).where(
                 GeneticAnalysis.id == analysis_id,
-                GeneticAnalysis.user_id == current_user.id
+                GeneticAnalysis.user_id == current_user.id,
+                GeneticAnalysis.deleted_at.is_(None),
             )
         )
         analysis = result.scalar_one_or_none()
@@ -524,7 +541,7 @@ async def get_dashboard_data(
             select(GeneticAnalysis)
             .where(
                 GeneticAnalysis.user_id == current_user.id,
-                GeneticAnalysis.analysis_status != 'deleted',
+                GeneticAnalysis.deleted_at.is_(None),
             )
             .order_by(GeneticAnalysis.upload_date.desc())
         )
@@ -566,16 +583,43 @@ async def get_dashboard_data(
         # If a job is currently running and we have stale cache, return it —
         # the new insights aren't ready yet and the heavy queries would compete
         # with the analysis for DB resources.
+        # BUT only if the cache belongs to the same set of analyses (not stale
+        # from a prior upload that was since deleted).
         any_running = any(
             getattr(a, 'analysis_status', '') in ('processing', 'pending')
             for a in analyses
         )
-        if any_running and cached and cached.dashboard_json:
-            stale = cached.dashboard_json
-            # Update status so the frontend knows a job is in progress
-            if isinstance(stale.get("summary"), dict):
-                stale["summary"]["status"] = "processing"
-            return stale
+        if any_running:
+            current_ids = {str(a.id) for a in analyses}
+            cache_ids = set()
+            if cached and cached.analysis_fingerprint:
+                for part in cached.analysis_fingerprint.split("|"):
+                    aid = part.split(":")[0]
+                    cache_ids.add(aid)
+            # Only return stale cache if it overlaps with the current analyses
+            if cached and cached.dashboard_json and current_ids & cache_ids:
+                stale = cached.dashboard_json
+                if isinstance(stale.get("summary"), dict):
+                    stale["summary"]["status"] = "processing"
+                return stale
+            # No relevant cache — return a processing placeholder
+            primary = analyses[0]
+            return {
+                "summary": {
+                    "total_variants": sum(getattr(a, 'total_variants', 0) or 0 for a in analyses),
+                    "processed_variants": sum(getattr(a, 'processed_variants', 0) or 0 for a in analyses),
+                    "analyzed_variants": 0,
+                    "insights_found": 0,
+                    "analysis_id": getattr(primary, 'id', None),
+                    "status": "processing",
+                    "filename": getattr(primary, 'filename', None),
+                },
+                "health_risks": [], "ancestry_results": [], "sports_performance": [],
+                "nutrition_traits": [], "metabolic": {}, "carrier_status": [],
+                "drug_responses": [], "rare_mutations": [], "methylation_profiles": [],
+                "detoxification_profiles": [], "physical_traits": [], "intelligence": [],
+                "personality_traits": [], "wellness_traits": [], "uncommon_mutations": [],
+            }
         
         # Get the most recent completed analysis or the first one
         primary_analysis = None
@@ -598,7 +642,10 @@ async def get_dashboard_data(
         analyzed_count_result = await db.execute(
             select(func.count(func.distinct(VariantAnnotation.analysis_variant_id)))
             .join(GeneticAnalysis, VariantAnnotation.analysis_id == GeneticAnalysis.id)
-            .where(GeneticAnalysis.user_id == current_user.id)
+            .where(
+                GeneticAnalysis.user_id == current_user.id,
+                GeneticAnalysis.deleted_at.is_(None),
+            )
         )
         analyzed_variants = analyzed_count_result.scalar() or 0
         
@@ -609,6 +656,7 @@ async def get_dashboard_data(
             .join(SharedVariantAnnotation, VariantAnnotation.shared_annotation_id == SharedVariantAnnotation.id)
             .where(
                 GeneticAnalysis.user_id == current_user.id,
+                GeneticAnalysis.deleted_at.is_(None),
                 SharedVariantAnnotation.ensembl_data.isnot(None)
             )
         )
@@ -995,7 +1043,7 @@ async def list_user_analyses(
             select(GeneticAnalysis)
             .where(
                 GeneticAnalysis.user_id == current_user.id,
-                GeneticAnalysis.analysis_status != 'deleted',
+                GeneticAnalysis.deleted_at.is_(None),
             )
             .order_by(GeneticAnalysis.upload_date.desc())
             .offset(skip)

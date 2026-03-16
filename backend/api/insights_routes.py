@@ -55,7 +55,10 @@ async def generate_section_insight(
     from sqlalchemy import select, desc
     result = await session.execute(
         select(GeneticAnalysis)
-        .where(GeneticAnalysis.user_id == user.id)
+        .where(
+            GeneticAnalysis.user_id == user.id,
+            GeneticAnalysis.deleted_at.is_(None),
+        )
         .order_by(desc(GeneticAnalysis.upload_date))
         .limit(1)
     )

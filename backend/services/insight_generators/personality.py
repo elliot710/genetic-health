@@ -1,13 +1,14 @@
 """Personality trait insight generator."""
 from ...db.models import PersonalityTrait
-from .base import GeneratorContext, generate_from_maps
+from .base import GeneratorContext, generate_from_maps, zygosity_adjust
 
 
 async def generate_personality_traits(ctx: GeneratorContext) -> int:
     def from_rsid(aid, rsid, genotype, info):
         return PersonalityTrait(
             analysis_id=aid, trait_name=info['trait'],
-            genetic_tendency=info['tendency'], confidence_level=info['confidence'],
+            genetic_tendency=zygosity_adjust(info['tendency'], genotype, ref_allele=info.get('_ref_allele')),
+            confidence_level=info['confidence'],
             associated_variants=[rsid],
             behavioral_insights=info['insights']
         )

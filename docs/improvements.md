@@ -258,16 +258,11 @@ Use these in the service layer for serialization/deserialization. The DB column 
 
 ---
 
-### 3.4 Database: Add Soft Delete for Analyses
+### 3.4 ~~Database: Add Soft Delete for Analyses~~ ✅ DONE
 
-**Current state:** Deleting an analysis runs batched hard-deletes across many tables. The instant UI feedback uses a `status='deleted'` marker, but the actual records are physically removed.
+> **Resolved:** March 16, 2026
 
-**Problem:** No way to recover accidentally deleted data. The background deletion process is complex (50K row batches).
-
-**Recommended approach:** Add `deleted_at` timestamp to `genetic_analyses`. Filter by `deleted_at IS NULL` in all queries. Run a periodic cleanup job (nightly) for hard deletes of analyses deleted more than 30 days ago.
-
-**Effort:** Medium (1-2 days)
-**Impact:** Medium — data safety, simpler delete flow
+`deleted_at` timestamp column added to `genetic_analyses` (indexed). All delete endpoints now set `deleted_at` + `analysis_status='deleted'` instead of hard-deleting. All 20+ user-facing queries filter `deleted_at IS NULL`. Admin `POST /api/admin/purge-deleted?older_than_days=30` endpoint for manual hard-delete. Nightly background task auto-purges analyses soft-deleted > 30 days.
 
 ---
 

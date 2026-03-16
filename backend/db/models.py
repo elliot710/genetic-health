@@ -42,6 +42,12 @@ class GeneticAnalysis(Base):
     current_step = Column(String, default='initializing')  # Current processing step
     estimated_completion = Column(DateTime(timezone=True))  # Estimated completion time
     
+    # Soft delete
+    deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    
+    # Persisted job logs (JSON array of {ts, level, msg} entries)
+    job_logs = Column(JSON, nullable=True)
+    
     # Relationship to user
     user = relationship("User", back_populates="genetic_analyses")
     

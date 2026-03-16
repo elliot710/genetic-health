@@ -3,7 +3,7 @@ import logging
 from ...db.models import RareMutation
 from .base import (
     GeneratorContext, extract_gene_and_consequence, extract_frequency,
-    get_user_genotype, is_homozygous_reference,
+    get_user_genotype, get_ref_allele, is_homozygous_reference,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,8 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
         # identical at a rare ClinVar position, the user almost certainly
         # carries the reference allele, not the pathogenic alternate.
         user_gt = get_user_genotype(variant)
-        if is_homozygous_reference(user_gt):
+        ref_allele = get_ref_allele(variant)
+        if is_homozygous_reference(user_gt, ref_allele):
             continue
 
         # Extract frequency — must be truly rare (< 1%)

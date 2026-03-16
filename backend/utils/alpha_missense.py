@@ -338,7 +338,12 @@ class AlphaMissenseService:
         if not self.available:
             return results
 
-        for v in variants:
+        import time as _time
+        total = len(variants)
+        found_count = 0
+        t0 = _time.monotonic()
+
+        for idx, v in enumerate(variants):
             rsid = v.get("rsid", "")
             chrom = v.get("chromosome", "")
             pos = v.get("position")
@@ -354,8 +359,21 @@ class AlphaMissenseService:
                 results[rsid] = None
                 continue
 
-            results[rsid] = self.lookup_variant(chrom, int(pos), ref, alt)
+            result = self.lookup_variant(chrom, int(pos), ref, alt)
+            results[rsid] = result
+            if result and result.get("found"):
+                found_count += 1
 
+            if (idx + 1) % 50000 == 0 or idx + 1 == total:
+                elapsed = _time.monotonic() - t0
+                rate = (idx + 1) / elapsed if elapsed > 0 else 0
+                logger.info(
+                    f"  AlphaMissense {idx + 1}/{total}: "
+                    f"{found_count} found ({rate:.0f} variants/s, {elapsed:.1f}s elapsed)"
+                )
+
+        elapsed = _time.monotonic() - t0
+        logger.info(f"  AlphaMissense complete: {found_count}/{total} found in {elapsed:.1f}s")
         return results
 
     # ------------------------------------------------------------------

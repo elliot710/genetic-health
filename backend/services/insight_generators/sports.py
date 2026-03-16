@@ -1,13 +1,13 @@
 """Sports performance insight generator."""
 from ...db.models import SportsPerformance
-from .base import GeneratorContext, generate_from_maps
+from .base import GeneratorContext, generate_from_maps, zygosity_adjust
 
 
 async def generate_sports_performance(ctx: GeneratorContext) -> int:
     def from_rsid(aid, rsid, genotype, info):
         return SportsPerformance(
             analysis_id=aid, performance_category=info['category'],
-            genetic_advantage=info['advantage'],
+            genetic_advantage=zygosity_adjust(info['advantage'], genotype, ref_allele=info.get('_ref_allele')),
             sport_recommendations=info['recommendations'],
             associated_variants=[rsid],
             training_advice=info['advice']

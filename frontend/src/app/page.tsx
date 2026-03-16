@@ -5,7 +5,6 @@ import { Dna, LogOut, Upload } from 'lucide-react'
 import Dashboard from '@/components/Dashboard'
 import FileUpload from '@/components/FileUpload'
 import AuthForm from '@/components/AuthForm'
-import AnalysisProgressLoader from '@/components/AnalysisProgressLoader'
 import { getTheme } from '@/utils/theme'
 import { apiUrl } from '@/lib/api'
 import type { DashboardData } from '@/components/categories/types'
@@ -22,7 +21,6 @@ interface User {
 export default function Home() {
   const [analysisData, setAnalysisData] = useState<DashboardData | null>(null)
   const [analysisId, setAnalysisId] = useState<number | null>(null)
-  const [showProgressLoader, setShowProgressLoader] = useState(false)
   const [token, setToken] = useState<string | null>(null)
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
@@ -67,7 +65,15 @@ export default function Home() {
         const dashboardData = await dashboardResponse.json()
         console.log('Dashboard data received:', dashboardData)
         
-        if (dashboardData.summary && dashboardData.summary.total_variants > 0) {
+        const status = dashboardData.summary?.status
+        if (status === 'processing' || status === 'pending') {
+          // Analysis is running — show dashboard (empty panels) so user can navigate
+          console.log('Analysis is', status, '— showing dashboard')
+          if (dashboardData.summary.analysis_id) {
+            setAnalysisId(dashboardData.summary.analysis_id)
+          }
+          setAnalysisData(dashboardData)
+        } else if (dashboardData.summary && dashboardData.summary.total_variants > 0) {
           console.log('Found user data with', dashboardData.summary.total_variants, 'variants')
           
           if (dashboardData.summary.analysis_id) {
@@ -135,54 +141,12 @@ export default function Home() {
     
     if (newAnalysisId) {
       setAnalysisId(newAnalysisId)
-      
-      // Start the background analysis job
-      try {
-        const startResponse = await fetch(apiUrl(`/api/analysis/start/${newAnalysisId}`), {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({})
-        })
-        
-        if (startResponse.ok) {
-          console.log('Analysis job started successfully')
-          setShowProgressLoader(true)
-          setAnalysisData(null) // Clear any existing data to show progress
-        } else {
-          const errorText = await startResponse.text()
-          console.error('Failed to start analysis job:', startResponse.status, errorText)
-          setAnalysisData(data) // Show the upload data immediately if analysis start fails
-        }
-      } catch (error) {
-        console.error('Error starting analysis job:', error)
-        setAnalysisData(data) // Show the upload data immediately if analysis start fails
-      }
+      // Upload done — analysis runs in background. Load dashboard (will show as processing).
+      await loadExistingData()
     } else {
       setAnalysisData(data)
     }
-  }, [token])
-
-  const handleProgressComplete = useCallback(async (results: DashboardData) => {
-    console.log('Analysis progress completed:', results)
-    setShowProgressLoader(false)
-    
-    if (token) {
-      await loadExistingData()
-    }
-  }, [token, loadExistingData])
-
-  const handleProgressError = useCallback((error: string) => {
-    console.error('Analysis progress error:', error)
-    setShowProgressLoader(false)
-    
-    // Try to load any existing data
-    if (token) {
-      loadExistingData()
-    }
-  }, [token, loadExistingData])
+  }, [loadExistingData])
 
   const handleLogout = async () => {
     try {
@@ -191,7 +155,6 @@ export default function Home() {
     setToken(null)
     setUser(null)
     setAnalysisData(null)
-    setShowProgressLoader(false)
     setAnalysisId(null)
   }
 
@@ -218,50 +181,10 @@ export default function Home() {
   }
 
   console.log('Render - analysisData:', analysisData)
-  console.log('Render - showProgressLoader:', showProgressLoader) 
-  console.log('Render - will show upload screen?', !analysisData && !showProgressLoader)
 
   return (
     <main className="min-h-screen bg-white">
-      {showProgressLoader && analysisId ? (
-        <div className={`min-h-screen ${theme.background}`}>
-          {/* Header */}
-          <div className={`relative z-10 backdrop-blur-sm border-b ${theme.glass} ${theme.glassBorder}`}>
-            <div className="container mx-auto px-4 py-4 flex justify-between items-center">
-              <div className="flex items-center space-x-3">
-                <div className={`p-2 ${theme.primary.gradient} rounded-xl`}>
-                  <Dna className="h-8 w-8 text-white" />
-                </div>
-                <h1 className={`text-2xl font-bold ${theme.text.primary}`}>
-                  Genetic Health Analysis Toolkit
-                </h1>
-              </div>
-              <div className="flex items-center space-x-4">
-                <span className={`text-sm ${theme.text.secondary}`}>
-                  Welcome, {user?.full_name || user?.username}
-                </span>
-                <button
-                  onClick={handleLogout}
-                  className={`px-4 py-2 backdrop-blur-sm border rounded-xl font-medium transition-all duration-200 flex items-center space-x-2 ${theme.glass} ${theme.glassBorder} ${theme.text.primary}`}
-                >
-                  <LogOut className="h-4 w-4" />
-                  <span>Logout</span>
-                </button>
-              </div>
-            </div>
-          </div>
-          
-          {/* Progress Loader */}
-          <div className="container mx-auto px-4 py-8">
-            <AnalysisProgressLoader 
-              analysisId={analysisId}
-              isDarkMode={isDarkMode}
-              onComplete={handleProgressComplete}
-              onError={handleProgressError}
-            />
-          </div>
-        </div>
-      ) : !analysisData ? (
+      {!analysisData ? (
         <div className={`min-h-screen ${theme.background}`}>
           {/* Background Elements */}
           <div className="absolute inset-0 overflow-hidden">

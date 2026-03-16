@@ -9,7 +9,7 @@ import yaml
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, delete, case, cast, literal_column
+from sqlalchemy import select, func, delete, case, cast, literal_column, text, update
 from sqlalchemy.types import Integer as SAInteger
 from typing import List, Optional
 from pydantic import BaseModel
@@ -108,7 +108,10 @@ async def list_users(
             User,
             func.count(GeneticAnalysis.id).label("analysis_count")
         )
-        .outerjoin(GeneticAnalysis, User.id == GeneticAnalysis.user_id)
+        .outerjoin(
+            GeneticAnalysis,
+            (User.id == GeneticAnalysis.user_id) & (GeneticAnalysis.deleted_at.is_(None))
+        )
         .group_by(User.id)
         .order_by(User.created_at.desc())
     )
@@ -155,7 +158,10 @@ async def update_user(
 
     # Get analysis count
     count_result = await db.execute(
-        select(func.count(GeneticAnalysis.id)).where(GeneticAnalysis.user_id == user_id)
+        select(func.count(GeneticAnalysis.id)).where(
+            GeneticAnalysis.user_id == user_id,
+            GeneticAnalysis.deleted_at.is_(None),
+        )
     )
     count = count_result.scalar() or 0
 
@@ -1836,6 +1842,7 @@ async def list_jobs(
     query = (
         select(GeneticAnalysis, User.email, User.username)
         .join(User, GeneticAnalysis.user_id == User.id)
+        .where(GeneticAnalysis.deleted_at.is_(None))
         .order_by(GeneticAnalysis.upload_date.desc())
     )
     if status_filter and status_filter in ('pending', 'processing', 'completed', 'failed'):
@@ -1877,7 +1884,7 @@ async def cancel_job(
     analysis = result.scalar_one_or_none()
     if not analysis:
         raise HTTPException(status_code=404, detail="Job not found")
-    if analysis.analysis_status not in ('pending', 'processing'):
+    if analysis.analysis_status not in ('pending', 'processing', 'paused'):
         raise HTTPException(status_code=400, detail=f"Cannot cancel job with status '{analysis.analysis_status}'")
 
     await db.execute(
@@ -1887,6 +1894,71 @@ async def cancel_job(
     )
     await db.commit()
     return {"detail": f"Job {job_id} cancelled"}
+
+
+@router.post("/jobs/{job_id}/pause")
+async def pause_job(
+    job_id: int,
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Pause a running analysis job. The background task will stop at the next checkpoint."""
+    from sqlalchemy import update
+    result = await db.execute(
+        select(GeneticAnalysis).where(GeneticAnalysis.id == job_id)
+    )
+    analysis = result.scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if analysis.analysis_status not in ('processing', 'pending'):
+        raise HTTPException(status_code=400, detail=f"Cannot pause job with status '{analysis.analysis_status}'")
+
+    await db.execute(
+        update(GeneticAnalysis)
+        .where(GeneticAnalysis.id == job_id)
+        .values(analysis_status="paused")
+    )
+    await db.commit()
+    return {"detail": f"Job {job_id} paused — will stop at next checkpoint"}
+
+
+@router.post("/jobs/{job_id}/resume")
+async def resume_job(
+    job_id: int,
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Resume a paused analysis job from where it left off."""
+    from sqlalchemy import update
+    result = await db.execute(
+        select(GeneticAnalysis).where(GeneticAnalysis.id == job_id)
+    )
+    analysis = result.scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if analysis.analysis_status != 'paused':
+        raise HTTPException(status_code=400, detail=f"Cannot resume job with status '{analysis.analysis_status}'")
+
+    await db.execute(
+        update(GeneticAnalysis)
+        .where(GeneticAnalysis.id == job_id)
+        .values(analysis_status="processing")
+    )
+    await db.commit()
+
+    user_id = analysis.user_id
+
+    async def run_analysis():
+        try:
+            from ..core.container import ServiceManager
+            async with ServiceManager() as service_manager:
+                analysis_service = service_manager.get_analysis_service(user_id)
+                await analysis_service.process_analysis(job_id)
+        except Exception as e:
+            logger.error(f"Admin-resumed analysis {job_id} failed: {e}")
+
+    asyncio.create_task(run_analysis())
+    return {"detail": f"Job {job_id} resumed"}
 
 
 @router.post("/jobs/{job_id}/restart")
@@ -1948,12 +2020,75 @@ async def delete_job(
     analysis = result.scalar_one_or_none()
     if not analysis:
         raise HTTPException(status_code=404, detail="Job not found")
-    if analysis.analysis_status == 'processing':
-        raise HTTPException(status_code=400, detail="Cannot delete a job that is currently processing. Cancel it first.")
 
-    await db.delete(analysis)
+    # Soft-delete so background tasks see the record is gone
+    analysis.analysis_status = 'deleted'
+    from sqlalchemy import func as sa_func
+    analysis.deleted_at = sa_func.now()
     await db.commit()
+
     return {"detail": f"Job {job_id} deleted"}
+
+
+@router.post("/purge-deleted")
+async def purge_deleted_analyses(
+    older_than_days: int = Query(30, ge=1, description="Hard-delete analyses soft-deleted more than N days ago"),
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Hard-delete analyses (and cascaded children) that were soft-deleted more than `older_than_days` days ago."""
+    from datetime import timedelta
+    from ..db.database import async_session_factory
+
+    cutoff = func.now() - text(f"interval '{int(older_than_days)} days'")
+    result = await db.execute(
+        select(GeneticAnalysis.id).where(
+            GeneticAnalysis.deleted_at.isnot(None),
+            GeneticAnalysis.deleted_at < cutoff,
+        )
+    )
+    ids = [row[0] for row in result.all()]
+
+    if not ids:
+        return {"detail": "No analyses to purge", "purged": 0}
+
+    BATCH = 50_000
+    async def _batched_delete(table: str):
+        total = 0
+        while True:
+            async with async_session_factory() as s:
+                r = await s.execute(
+                    text(f"DELETE FROM {table} WHERE ctid IN ("
+                         f"SELECT ctid FROM {table} WHERE analysis_id = ANY(:ids) LIMIT :lim)"),
+                    {"ids": ids, "lim": BATCH},
+                )
+                await s.commit()
+                deleted = r.rowcount
+            total += deleted
+            if deleted < BATCH:
+                break
+        return total
+
+    # Big tables first (batched)
+    await _batched_delete("variant_annotations")
+    await _batched_delete("analysis_variants")
+
+    # Insight tables + parent
+    async with async_session_factory() as s:
+        async with s.begin():
+            for tbl in [
+                "health_risks", "drug_responses", "physical_traits",
+                "nutrition_traits", "sports_performance", "cognitive_profiles",
+                "personality_traits", "ancestry_results", "carrier_status",
+                "wellness_metrics", "methylation_profiles",
+                "detoxification_profiles", "rare_mutations", "uncommon_mutations",
+                "dashboard_cache",
+            ]:
+                await s.execute(text(f"DELETE FROM {tbl} WHERE analysis_id = ANY(:ids)"), {"ids": ids})
+            await s.execute(text("DELETE FROM genetic_analyses WHERE id = ANY(:ids)"), {"ids": ids})
+
+    logger.info(f"Admin purge: hard-deleted {len(ids)} analyses older than {older_than_days} days")
+    return {"detail": f"Purged {len(ids)} analyses", "purged": len(ids), "ids": ids}
 
 
 @router.get("/jobs/{job_id}/logs")
@@ -1962,11 +2097,31 @@ async def get_job_logs(
     last_n: Optional[int] = Query(None, description="Return only the last N log entries"),
     admin: User = Depends(require_admin),
 ):
-    """Get in-memory log entries for a specific analysis job."""
+    """Get log entries for a specific analysis job.
+    
+    Returns in-memory logs if the job is still running, otherwise
+    falls back to persisted logs from the database.
+    """
     from ..services.job_logs import JobLogCollector
     collector = JobLogCollector.get_instance()
     logs = collector.get_logs(job_id, last_n=last_n)
-    return {"job_id": job_id, "count": len(logs), "logs": logs}
+    source = "memory"
+
+    # Fall back to persisted DB logs when in-memory logs are empty
+    if not logs:
+        from ..db.database import async_session_factory
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(GeneticAnalysis.job_logs).where(GeneticAnalysis.id == job_id)
+            )
+            row = result.scalar_one_or_none()
+            if row:
+                logs = row if isinstance(row, list) else []
+                if last_n and logs:
+                    logs = logs[-last_n:]
+                source = "database"
+
+    return {"job_id": job_id, "count": len(logs), "logs": logs, "source": source}
 
 
 # ======================================================================

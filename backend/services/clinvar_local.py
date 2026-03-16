@@ -96,9 +96,15 @@ class ClinVarLocalService:
             return {}
         results: Dict[str, Optional[Dict[str, Any]]] = {}
         batch_size = 2000
+        total = len(rsids)
+        total_batches = (total + batch_size - 1) // batch_size
+        found_count = 0
+        import time as _time
+        t0 = _time.monotonic()
         async with async_session_factory() as session:
             for i in range(0, len(rsids), batch_size):
                 chunk = rsids[i:i + batch_size]
+                batch_num = i // batch_size + 1
                 # Yield to event loop between chunks so HTTP handlers can run
                 if i > 0:
                     await asyncio.sleep(0.01)
@@ -157,7 +163,19 @@ class ClinVarLocalService:
                         results[rsid_key] = {"found": False, "source": "clinvar_local"}
                         continue
                     results[rsid_key] = self._aggregate_rows(rsid_key, rows, gene_cond_map, gene_stats_map)
+                    found_count += 1
 
+                if batch_num % 10 == 0 or batch_num == total_batches:
+                    elapsed = _time.monotonic() - t0
+                    rate = (i + len(chunk)) / elapsed if elapsed > 0 else 0
+                    logger.info(
+                        f"  ClinVar Local batch {batch_num}/{total_batches}: "
+                        f"{i + len(chunk)}/{total} queried, {found_count} found "
+                        f"({rate:.0f} rsids/s, {elapsed:.1f}s elapsed)"
+                    )
+
+        elapsed = _time.monotonic() - t0
+        logger.info(f"  ClinVar Local complete: {found_count}/{total} found in {elapsed:.1f}s")
         return results
 
     def _aggregate_rows(

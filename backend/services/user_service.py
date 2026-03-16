@@ -84,7 +84,10 @@ class UserService:
         """Get all genetic analyses for a user"""
         result = await self.db.execute(
             select(GeneticAnalysis)
-            .where(GeneticAnalysis.user_id == user_id)
+            .where(
+                GeneticAnalysis.user_id == user_id,
+                GeneticAnalysis.deleted_at.is_(None),
+            )
             .options(selectinload(GeneticAnalysis.variants))
             .order_by(GeneticAnalysis.upload_date.desc())
         )

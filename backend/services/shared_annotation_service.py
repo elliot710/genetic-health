@@ -17,16 +17,26 @@ logger = logging.getLogger(__name__)
 
 
 class SharedVariantAnnotationService:
-    """Service for managing shared variant annotations across users."""
+    """Service for managing shared variant annotations across users.
+    
+    Uses short-lived sessions per operation to avoid holding DB connections
+    for extended periods during long-running analyses.
+    """
 
-    def __init__(self, session: AsyncSession):
-        self.session = session
+    def __init__(self, session: AsyncSession = None):
+        self.session = session  # Legacy: only used by remote API path (save_annotation)
         self._annotation_cache: Dict[str, Dict[str, Any]] = {}
 
     async def get_existing_annotations(self, rsids: List[str]) -> Dict[str, Dict[str, Any]]:
-        """Get existing annotations for a list of RSIDs from shared annotations table."""
+        """Get existing annotations for a list of RSIDs from shared annotations table.
+        
+        Uses short-lived sessions per batch to release connections back to the
+        pool between iterations, preventing pool exhaustion during long analyses.
+        """
         if not rsids:
             return {}
+
+        from ..db.database import async_session_factory
 
         batch_size = 500
         annotation_map = {}
@@ -47,16 +57,17 @@ class SharedVariantAnnotationService:
 
             await asyncio.sleep(0.01)
 
-            result = await self.session.execute(
-                select(SharedVariantAnnotation).where(
-                    SharedVariantAnnotation.rsid.in_(batch_rsids),
-                    SharedVariantAnnotation.annotation_status.in_(['completed', 'partial'])
+            # Short-lived session per batch — releases connection between batches
+            async with async_session_factory() as session:
+                result = await session.execute(
+                    select(SharedVariantAnnotation).where(
+                        SharedVariantAnnotation.rsid.in_(batch_rsids),
+                        SharedVariantAnnotation.annotation_status.in_(['completed', 'partial'])
+                    )
                 )
-            )
+                existing_annotations = result.scalars().all()
 
-            existing_annotations = result.scalars().all()
-            await asyncio.sleep(0.01)
-
+            # Process results outside of session (pure CPU, no DB connection held)
             for annotation in existing_annotations:
                 merged_data: Dict[str, Any] = {
                     'rsid': annotation.rsid,
@@ -113,18 +124,18 @@ class SharedVariantAnnotationService:
             # Chunk usage_count updates to stay under PostgreSQL's 32767 parameter limit
             found_rsids = list(annotation_map.keys())
             UPDATE_BATCH = 30000
-            for j in range(0, len(found_rsids), UPDATE_BATCH):
-                batch = found_rsids[j:j + UPDATE_BATCH]
-                await self.session.execute(
-                    update(SharedVariantAnnotation)
-                    .where(SharedVariantAnnotation.rsid.in_(batch))
-                    .values(
-                        usage_count=SharedVariantAnnotation.usage_count + 1,
-                        last_updated_at=func.now()
+            async with async_session_factory() as update_session:
+                for j in range(0, len(found_rsids), UPDATE_BATCH):
+                    batch = found_rsids[j:j + UPDATE_BATCH]
+                    await update_session.execute(
+                        update(SharedVariantAnnotation)
+                        .where(SharedVariantAnnotation.rsid.in_(batch))
+                        .values(
+                            usage_count=SharedVariantAnnotation.usage_count + 1,
+                            last_updated_at=func.now()
+                        )
                     )
-                )
-
-        await self.session.commit()
+                await update_session.commit()
         elapsed = time.time() - lookup_start
         logger.info(f"Found {len(annotation_map)} existing shared annotations for {len(rsids)} requested RSIDs ({elapsed:.1f}s)")
         return annotation_map
@@ -195,7 +206,7 @@ class SharedVariantAnnotationService:
 
             # Look up 1000 Genomes Phase 3 data
             thousand_genomes_data_val = None
-            if enabled_sources is None or '1000genomes' in enabled_sources:
+            if enabled_sources is None or 'thousand_genomes' in enabled_sources:
                 from .thousand_genomes_local import get_thousand_genomes_service
                 tkg_svc = get_thousand_genomes_service()
                 if tkg_svc.is_loaded:
@@ -327,20 +338,24 @@ class SharedVariantAnnotationService:
                 set_=conflict_set,
             ).returning(SharedVariantAnnotation.id)
 
-            result = await self.session.execute(stmt)
-            shared_annotation_id = result.scalar_one()
+            # Use a short-lived session for each save operation
+            from ..db.database import async_session_factory
+            async with async_session_factory() as save_session:
+                result = await save_session.execute(stmt)
+                shared_annotation_id = result.scalar_one()
 
-            # Use INSERT ... ON CONFLICT DO NOTHING to handle resume/retry
-            from sqlalchemy.dialects.postgresql import insert as pg_insert
-            va_stmt = pg_insert(VariantAnnotation).values(
-                analysis_id=analysis_id,
-                analysis_variant_id=analysis_variant_id,
-                shared_annotation_id=shared_annotation_id,
-                rsid=rsid
-            ).on_conflict_do_nothing(
-                constraint='uq_variant_annotations_analysis_variant'
-            )
-            await self.session.execute(va_stmt)
+                # Use INSERT ... ON CONFLICT DO NOTHING to handle resume/retry
+                from sqlalchemy.dialects.postgresql import insert as pg_insert
+                va_stmt = pg_insert(VariantAnnotation).values(
+                    analysis_id=analysis_id,
+                    analysis_variant_id=analysis_variant_id,
+                    shared_annotation_id=shared_annotation_id,
+                    rsid=rsid
+                ).on_conflict_do_nothing(
+                    constraint='uq_variant_annotations_analysis_variant'
+                )
+                await save_session.execute(va_stmt)
+                await save_session.commit()
             return True
 
         except Exception as e:
