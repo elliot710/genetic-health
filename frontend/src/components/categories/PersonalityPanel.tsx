@@ -10,6 +10,7 @@ import {
   StatusBadge,
   DisclaimerCard,
   VariantLinks,
+  ZygosityBadge,
   advantageToSeverity,
   MasonryLayout,
   cleanCondition,
@@ -183,6 +184,7 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
 
                 <div className="flex flex-wrap gap-1.5">
                   {trait.gene?.startsWith('rs') && <Badge variant="secondary" className="text-xs font-mono">{trait.gene}{data?.genotype_map?.[trait.gene] ? ` ${data.genotype_map[trait.gene]}` : ''}</Badge>}
+                  {trait.gene?.startsWith('rs') && <ZygosityBadge genotype={data?.genotype_map?.[trait.gene]} />}
                   {!trait.gene?.startsWith('rs') && trait.gene && trait.gene !== 'Multiple markers' && <Badge variant="outline" className="text-xs">{trait.gene}</Badge>}
                 </div>
 

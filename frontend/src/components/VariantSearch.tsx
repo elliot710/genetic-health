@@ -1045,9 +1045,14 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
               {/* ── ClinVar Local Conditions ── */}
               {lookupResults.annotations?.clinvar_local && (() => {
                 const cv = lookupResults.annotations.clinvar_local
-                const conditions = cv.conditions || []
+                const rawConditions = cv.conditions || []
                 const genes = cv.genes || []
                 const clinsig = cv.clinical_significance
+                // Split pipe-delimited conditions, filter "not provided", deduplicate
+                const conditions = [...new Set(
+                  rawConditions.flatMap((c: string) => c.split('|').map((s: string) => s.trim()))
+                    .filter((s: string) => s && s.toLowerCase() !== 'not provided')
+                )]
                 if (!conditions.length && !genes.length) return null
                 return (
                   <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>

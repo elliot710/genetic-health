@@ -1,9 +1,9 @@
 """
-Unified gnomAD lookup service — PG-backed local data with BigQuery fallback.
+Unified gnomAD lookup service — SQLite cache → PG → BigQuery fallback.
 
-Looks up variants first in the local gnomad_variants table (populated by ETL).
-If not found locally and BigQuery is configured, falls back to on-demand BQ query.
-Results from BigQuery are cached locally for future reuse.
+Primary lookup path: SQLite cache (built from tabix-indexed CADD TSV files).
+Falls back to PostgreSQL gnomad_variants table, then BigQuery on-demand.
+Gene constraint lookups always use PG (small table, rarely changes).
 
 Usage:
     svc = get_gnomad_service()
@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.database import async_session_factory
 from ..db.models import GnomadVariant, GnomadGeneConstraint
+from .gnomad_cache import get_gnomad_cache_service
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +42,13 @@ _POP_NAMES = {
 
 
 class GnomadLocalService:
-    """PostgreSQL-backed gnomAD lookup with optional BigQuery fallback."""
+    """SQLite-cached gnomAD lookup with PG and BigQuery fallback."""
 
     def __init__(self):
         self._variant_count: Optional[int] = None
         self._constraint_count: Optional[int] = None
         self._available: Optional[bool] = None
+        self._cache = get_gnomad_cache_service()
 
     # ------------------------------------------------------------------
     # Properties
@@ -54,11 +56,16 @@ class GnomadLocalService:
 
     @property
     def is_loaded(self) -> bool:
+        # Consider loaded if cache OR PG has data
+        if self._cache.is_loaded and self._cache.variant_count > 0:
+            return True
         return self._variant_count is not None and self._variant_count > 0
 
     @property
     def variant_count(self) -> int:
-        return self._variant_count or 0
+        cache_count = self._cache.variant_count if self._cache.is_loaded else 0
+        pg_count = self._variant_count or 0
+        return cache_count + pg_count
 
     @property
     def constraint_count(self) -> int:
@@ -69,7 +76,7 @@ class GnomadLocalService:
     # ------------------------------------------------------------------
 
     async def ensure_loaded(self) -> bool:
-        """Check that the gnomad_variants table has data."""
+        """Check that gnomAD data is available (SQLite cache, PG, or both)."""
         try:
             async with async_session_factory() as session:
                 result = await session.execute(
@@ -82,12 +89,15 @@ class GnomadLocalService:
                 )
                 self._constraint_count = result.scalar() or 0
 
-            self._available = self._variant_count > 0
-            if self._available:
+            self._available = self._variant_count > 0 or self._cache.is_loaded
+            if self._variant_count > 0:
                 logger.info("gnomAD PG: %d variants, %d gene constraints available",
                             self._variant_count, self._constraint_count)
-            else:
-                logger.warning("gnomAD PG: tables empty — run ETL import or use BigQuery")
+            if self._cache.is_loaded:
+                logger.info("gnomAD SQLite cache: %d variants available",
+                            self._cache.variant_count)
+            if not self._available:
+                logger.warning("gnomAD: no data — run ETL import or place TSV files in data_sources/gnomad/")
             return self._available
         except Exception as e:
             logger.warning("gnomAD PG check failed: %s", e)
@@ -99,8 +109,14 @@ class GnomadLocalService:
     # ------------------------------------------------------------------
 
     async def lookup(self, rsid: str, *, local_only: bool = False) -> Optional[Dict[str, Any]]:
-        """Look up a variant by rsID. Tries local PG first, then BigQuery."""
-        # Try local first
+        """Look up a variant by rsID. Tries cache → PG → BigQuery."""
+        # Try SQLite cache first (fastest)
+        if self._cache.is_loaded:
+            cached = await self._cache.lookup(rsid)
+            if cached and cached.get('found'):
+                return cached
+
+        # Try local PG
         async with async_session_factory() as session:
             result = await self._lookup_by_rsid(session, rsid)
             if result and result.get('found'):
@@ -135,22 +151,35 @@ class GnomadLocalService:
         return {"found": False, "source": "gnomad", "chrom": chrom, "pos": pos}
 
     async def lookup_batch(self, rsids: List[str]) -> Dict[str, Optional[Dict[str, Any]]]:
-        """Batch lookup by rsIDs using IN clause. Returns {rsid: result_or_none}."""
+        """Batch lookup by rsIDs. Tries cache → PG (for remaining). Returns {rsid: result_or_none}."""
         if not rsids:
             return {}
+
         results: Dict[str, Optional[Dict[str, Any]]] = {}
+
+        # 1) Try SQLite cache first — returns all hits
+        remaining = list(rsids)
+        if self._cache.is_loaded:
+            cached = await self._cache.lookup_batch(remaining)
+            for rsid, data in cached.items():
+                if data and data.get('found'):
+                    results[rsid] = data
+            remaining = [r for r in remaining if r not in results]
+
+        if not remaining:
+            return results
+
+        # 2) Fallback to PG for anything not in cache
         batch_size = 2000
         async with async_session_factory() as session:
-            for i in range(0, len(rsids), batch_size):
-                chunk = rsids[i:i + batch_size]
-                # Yield to event loop between chunks so HTTP handlers can run
+            for i in range(0, len(remaining), batch_size):
+                chunk = remaining[i:i + batch_size]
                 if i > 0:
                     await asyncio.sleep(0.01)
                 result = await session.execute(
                     select(GnomadVariant).where(GnomadVariant.rsid.in_(chunk))
                 )
                 rows = result.scalars().all()
-                # Group rows by rsid (multiple alt alleles possible)
                 by_rsid: Dict[str, list] = {}
                 for row in rows:
                     by_rsid.setdefault(row.rsid, []).append(row)

@@ -13,6 +13,7 @@ import {
   DisclaimerCard,
   capacityToSeverity,
   VariantLinks,
+  ZygosityBadge,
   formatLabel,
   MasonryLayout,
 } from './shared'
@@ -164,7 +165,10 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
                 </div>
 
                 {rsid && (
-                  <Badge variant="secondary" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>
+                  <>
+                    <Badge variant="secondary" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>
+                    <ZygosityBadge genotype={data?.genotype_map?.[rsid]} />
+                  </>
                 )}
 
                 {description && (

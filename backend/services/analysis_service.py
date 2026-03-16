@@ -376,6 +376,19 @@ class ComprehensiveAnalysisService:
             progress.phase_progress = 1.0
             await self._update_progress(analysis_id, progress, force_percentage=100)
 
+            # Invalidate dashboard cache so next load picks up new results
+            try:
+                from ..db.models import DashboardCache
+                async with async_session_factory() as inv_session:
+                    await inv_session.execute(
+                        DashboardCache.__table__.delete().where(
+                            DashboardCache.user_id == analysis.user_id
+                        )
+                    )
+                    await inv_session.commit()
+            except Exception:
+                logger.debug("Dashboard cache invalidation skipped (table may not exist yet)")
+
             processing_time = time.time() - start_time
 
             root_span.set_attribute("analysis.processing_time_s", round(processing_time, 2))

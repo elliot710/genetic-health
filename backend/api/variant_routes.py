@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func as sa_func
+from sqlalchemy import select, func as sa_func, literal_column
 import re
 
 from ..services.genetic_api_service import GeneticAPIService
@@ -797,58 +797,63 @@ async def get_variant_categories(
     Returns category distribution for the user's annotated variants.
     Categories are derived from Ensembl most_severe_consequence.
     """
-    result = await db.execute(
-        select(GeneticAnalysis)
-        .where(
-            GeneticAnalysis.user_id == current_user.id,
-            GeneticAnalysis.analysis_status == 'completed'
+    try:
+        result = await db.execute(
+            select(GeneticAnalysis)
+            .where(
+                GeneticAnalysis.user_id == current_user.id,
+                GeneticAnalysis.analysis_status == 'completed'
+            )
+            .order_by(GeneticAnalysis.upload_date.desc())
+            .limit(1)
         )
-        .order_by(GeneticAnalysis.upload_date.desc())
-        .limit(1)
-    )
-    analysis = result.scalar_one_or_none()
-    if not analysis:
-        return {"categories": []}
+        analysis = result.scalar_one_or_none()
+        if not analysis:
+            return {"categories": []}
 
-    # Count ALL user variants, LEFT JOIN to annotations for consequence data
-    total_result = await db.execute(
-        select(sa_func.count(AnalysisVariant.id))
-        .where(AnalysisVariant.analysis_id == analysis.id)
-    )
-    total_variants = total_result.scalar() or 0
-
-    # Get annotated variants with their ensembl consequence
-    rows = (await db.execute(
-        select(SharedVariantAnnotation.ensembl_data)
-        .join(GeneticMarker, SharedVariantAnnotation.marker_id == GeneticMarker.id)
-        .join(AnalysisVariant, AnalysisVariant.marker_id == GeneticMarker.id)
-        .where(
-            AnalysisVariant.analysis_id == analysis.id,
-            SharedVariantAnnotation.ensembl_data.isnot(None),
+        # Count ALL user variants
+        total_result = await db.execute(
+            select(sa_func.count(AnalysisVariant.id))
+            .where(AnalysisVariant.analysis_id == analysis.id)
         )
-    )).all()
+        total_variants = total_result.scalar() or 0
 
-    # Count annotated variants by category
-    category_counts: dict[str, int] = {}
-    annotated_count = 0
-    for (ensembl_data,) in rows:
-        consequence = None
-        if ensembl_data and not ensembl_data.get('error'):
-            entries = ensembl_data.get('data', [])
-            if entries and isinstance(entries, list) and len(entries) > 0:
-                consequence = entries[0].get('most_severe_consequence')
-        cat = get_variant_category(consequence)
-        category_counts[cat] = category_counts.get(cat, 0) + 1
-        annotated_count += 1
+        # Extract only the consequence string at the SQL level (avoids loading full JSON)
+        consequence_col = literal_column(
+            "ensembl_data -> 'data' -> 0 ->> 'most_severe_consequence'"
+        ).label("consequence")
 
-    # All unannotated variants go into "Unknown"
-    unannotated = total_variants - annotated_count
-    if unannotated > 0:
-        category_counts['Unknown'] = category_counts.get('Unknown', 0) + unannotated
+        rows = (await db.execute(
+            select(consequence_col)
+            .select_from(SharedVariantAnnotation)
+            .join(GeneticMarker, SharedVariantAnnotation.marker_id == GeneticMarker.id)
+            .join(AnalysisVariant, AnalysisVariant.marker_id == GeneticMarker.id)
+            .where(
+                AnalysisVariant.analysis_id == analysis.id,
+                SharedVariantAnnotation.ensembl_data.isnot(None),
+            )
+        )).all()
 
-    categories = [
-        {"name": name, "count": count}
-        for name, count in sorted(category_counts.items(), key=lambda x: -x[1])
-    ]
+        # Count annotated variants by category
+        category_counts: dict[str, int] = {}
+        annotated_count = 0
+        for (consequence,) in rows:
+            cat = get_variant_category(consequence)
+            category_counts[cat] = category_counts.get(cat, 0) + 1
+            annotated_count += 1
 
-    return {"categories": categories, "total_variants": total_variants, "annotated_variants": annotated_count}
+        # All unannotated variants go into "Unknown"
+        unannotated = total_variants - annotated_count
+        if unannotated > 0:
+            category_counts['Unknown'] = category_counts.get('Unknown', 0) + unannotated
+
+        categories = [
+            {"name": name, "count": count}
+            for name, count in sorted(category_counts.items(), key=lambda x: -x[1])
+        ]
+
+        return {"categories": categories, "total_variants": total_variants, "annotated_variants": annotated_count}
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Error in get_variant_categories: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load variant categories")

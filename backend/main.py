@@ -92,9 +92,24 @@ async def lifespan(app: FastAPI):
     gnomad_svc = get_gnomad_service()
     ok = await gnomad_svc.ensure_loaded()
     if ok:
-        print(f"✅ gnomAD PG: {gnomad_svc.variant_count} variants, {gnomad_svc.constraint_count} gene constraints")
+        print(f"✅ gnomAD PG: {gnomad_svc._variant_count or 0} variants, {gnomad_svc.constraint_count} gene constraints")
     else:
         print("⚠️ gnomAD PG: table empty — run ETL import via admin panel")
+
+    # Preload gnomAD SQLite cache in background (targeted tabix reads)
+    from .services.gnomad_cache import get_gnomad_cache_service
+    gnomad_cache = get_gnomad_cache_service()
+    async def _preload_gnomad_cache():
+        try:
+            ok = await gnomad_cache.ensure_loaded()
+            if ok:
+                print(f"✅ gnomAD cache: {gnomad_cache.variant_count} variants cached from CADD TSV")
+            else:
+                print("⚠️ gnomAD cache: no tabix-indexed TSV files found in data_sources/gnomad/")
+        except Exception as e:
+            print(f"⚠️ gnomAD cache preload failed: {e}")
+    asyncio.create_task(_preload_gnomad_cache())
+    print("⏳ gnomAD cache: preloading CADD TSV cache in background...")
 
     # Check gnomAD BigQuery availability
     try:
@@ -207,11 +222,12 @@ async def startup_event():
         'backend.services.ensembl_vep_local',
         'backend.services.clinvar_local',
         'backend.services.gnomad_local',
+        'backend.services.gnomad_cache',
         'backend.services.thousand_genomes_local',
         'backend.services.ensembl_local',
     ]:
         logging.getLogger(name).addHandler(job_handler)
-    
+
     # Start the analysis queue processor
     analysis_queue = get_analysis_queue()
     await analysis_queue.start()
@@ -253,7 +269,7 @@ async def startup_event():
     gnomad_svc = get_gnomad_service()
     ok = await gnomad_svc.ensure_loaded()
     if ok:
-        print(f"✅ gnomAD PG: {gnomad_svc.variant_count} variants, {gnomad_svc.constraint_count} gene constraints")
+        print(f"✅ gnomAD PG: {gnomad_svc._variant_count or 0} variants, {gnomad_svc.constraint_count} gene constraints")
     else:
         print("⚠️ gnomAD PG: table empty — run ETL import via admin panel")
 

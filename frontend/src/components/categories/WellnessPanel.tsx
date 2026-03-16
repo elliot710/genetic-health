@@ -10,6 +10,7 @@ import {
   StatusBadge,
   DisclaimerCard,
   VariantLinks,
+  ZygosityBadge,
   capacityToSeverity,
   formatLabel,
   MasonryLayout,
@@ -203,7 +204,10 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
                 <div className="flex flex-wrap gap-1.5">
                   {trait.associated_variants && trait.associated_variants.length > 0
                     ? trait.associated_variants.map((v, i) => (
-                        <Badge key={i} variant="secondary" className="text-xs font-mono">{v}{data?.genotype_map?.[v] ? ` ${data.genotype_map[v]}` : ''}</Badge>
+                        <React.Fragment key={i}>
+                          <Badge variant="secondary" className="text-xs font-mono">{v}{data?.genotype_map?.[v] ? ` ${data.genotype_map[v]}` : ''}</Badge>
+                          <ZygosityBadge genotype={data?.genotype_map?.[v]} />
+                        </React.Fragment>
                       ))
                     : trait.gene && trait.gene !== 'Multiple' && (
                         <Badge variant="secondary" className="text-xs">{trait.gene}</Badge>

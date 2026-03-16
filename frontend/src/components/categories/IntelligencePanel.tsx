@@ -11,6 +11,7 @@ import {
   ScoreBar,
   DisclaimerCard,
   VariantLinks,
+  ZygosityBadge,
   advantageToSeverity,
   formatLabel,
   MasonryLayout,
@@ -184,6 +185,7 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
 
                 <div className="flex flex-wrap gap-1.5">
                   {rsid && <Badge variant="secondary" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>}
+                  {rsid && <ZygosityBadge genotype={data?.genotype_map?.[rsid]} />}
                   {gene && <Badge variant="outline" className="text-xs">{gene}</Badge>}
                 </div>
 

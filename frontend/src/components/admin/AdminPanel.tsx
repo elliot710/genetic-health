@@ -110,6 +110,7 @@ interface IncompleteAnnotation {
   rsid: string
   annotation_status: string | null
   failed_sources: string[] | null
+  missing_sources: string[]
   total_api_calls: number
   ensembl: string  // "found" | "no_data" | "missing"
   clinvar: string
@@ -272,6 +273,9 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const [incompleteAnnotations, setIncompleteAnnotations] = useState<IncompleteAnnotation[]>([])
   const [incompleteSummary, setIncompleteSummary] = useState<IncompleteAnnotationSummary | null>(null)
   const [incompleteFilter, setIncompleteFilter] = useState<string>('partial')
+  const [incompletePage, setIncompletePage] = useState(0)
+  const [incompleteTotalCount, setIncompleteTotalCount] = useState(0)
+  const INCOMPLETE_PAGE_SIZE = 50
   const [retriggeringIds, setRetriggeringIds] = useState<Set<number>>(new Set())
   const [bulkRetriggering, setBulkRetriggering] = useState(false)
   const [retriggerFeedback, setRetriggerFeedback] = useState<{ id: number; message: string; type: 'success' | 'info' | 'error' } | null>(null)
@@ -603,10 +607,14 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
 
   const fetchIncompleteAnnotations = useCallback(async () => {
     try {
-      const res = await authFetch(`${API}/annotations/incomplete?status_filter=${incompleteFilter}&limit=100`, { headers })
-      if (res.ok) setIncompleteAnnotations(await res.json())
+      const res = await authFetch(`${API}/annotations/incomplete?status_filter=${incompleteFilter}&limit=${INCOMPLETE_PAGE_SIZE}&offset=${incompletePage * INCOMPLETE_PAGE_SIZE}`, { headers })
+      if (res.ok) {
+        const data = await res.json()
+        setIncompleteAnnotations(data.items)
+        setIncompleteTotalCount(data.total_count)
+      }
     } catch { /* ignore */ }
-  }, [headers, incompleteFilter])
+  }, [headers, incompleteFilter, incompletePage])
 
   useEffect(() => { fetchIncompleteSummary() }, [fetchIncompleteSummary])
   useEffect(() => { fetchIncompleteAnnotations() }, [fetchIncompleteAnnotations])
@@ -1742,7 +1750,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                   <select
                     className="text-sm rounded-md border px-2 py-1 bg-background"
                     value={incompleteFilter}
-                    onChange={e => setIncompleteFilter(e.target.value)}
+                    onChange={e => { setIncompleteFilter(e.target.value); setIncompletePage(0) }}
                   >
                     <option value="partial">Partial</option>
                     <option value="failed">Failed</option>
@@ -1774,6 +1782,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
               {incompleteAnnotations.length === 0 ? (
                 <p className={`text-center py-8 ${theme.text.tertiary}`}>No incomplete annotations found</p>
               ) : (
+                <>
                 <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
@@ -1784,7 +1793,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                           {SOURCE_DISPLAY_NAMES[src] || src}
                         </TableHead>
                       ))}
-                      <TableHead>Failed Sources</TableHead>
+                      <TableHead>Missing Sources</TableHead>
                       <TableHead>Uses</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
@@ -1807,8 +1816,10 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                         })}
                         <TableCell>
                           <div className="flex flex-wrap gap-1">
-                            {(a.failed_sources || []).map(src => (
-                              <Badge key={src} variant="destructive" className="text-xs">{src}</Badge>
+                            {(a.missing_sources || []).map(src => (
+                              <Badge key={src} variant="destructive" className="text-xs">
+                                {SOURCE_DISPLAY_NAMES[src] || src}
+                              </Badge>
                             ))}
                           </div>
                         </TableCell>
@@ -1829,6 +1840,34 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                   </TableBody>
                 </Table>
                 </div>
+                {/* Pagination controls */}
+                {incompleteTotalCount > INCOMPLETE_PAGE_SIZE && (
+                  <div className="flex items-center justify-between mt-4 pt-4 border-t">
+                    <span className="text-sm text-muted-foreground">
+                      Showing {incompletePage * INCOMPLETE_PAGE_SIZE + 1}–{Math.min((incompletePage + 1) * INCOMPLETE_PAGE_SIZE, incompleteTotalCount)} of {incompleteTotalCount}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm" variant="outline"
+                        disabled={incompletePage === 0}
+                        onClick={() => setIncompletePage(p => p - 1)}
+                      >
+                        Previous
+                      </Button>
+                      <span className="text-sm">
+                        Page {incompletePage + 1} of {Math.ceil(incompleteTotalCount / INCOMPLETE_PAGE_SIZE)}
+                      </span>
+                      <Button
+                        size="sm" variant="outline"
+                        disabled={(incompletePage + 1) * INCOMPLETE_PAGE_SIZE >= incompleteTotalCount}
+                        onClick={() => setIncompletePage(p => p + 1)}
+                      >
+                        Next
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                </>
               )}
             </CardContent>
           </Card>

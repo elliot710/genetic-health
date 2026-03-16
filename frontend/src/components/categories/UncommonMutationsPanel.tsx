@@ -10,6 +10,7 @@ import {
   StatusBadge,
   DisclaimerCard,
   VariantLinks,
+  ZygosityBadge,
   clinicalSignificanceToSeverity,
   formatLabel,
   MasonryLayout,
@@ -170,6 +171,7 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
 
                 <div className="flex flex-wrap gap-1.5">
                   {mutation.rsid && <Badge variant="secondary" className="text-xs font-mono">{mutation.rsid}{data?.genotype_map?.[mutation.rsid] ? ` ${data.genotype_map[mutation.rsid]}` : ''}</Badge>}
+                  {mutation.rsid && <ZygosityBadge genotype={data?.genotype_map?.[mutation.rsid]} />}
                   {mutation.effect_size && <Badge variant="outline" className="text-xs">Effect: {mutation.effect_size}</Badge>}
                 </div>
 

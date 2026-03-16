@@ -11,6 +11,7 @@ import {
   StatusBadge,
   DisclaimerCard,
   VariantLinks,
+  ZygosityBadge,
   clinicalSignificanceToSeverity,
   formatLabel,
   MasonryLayout,
@@ -34,7 +35,7 @@ export default function RareMutationsPanel({ data, isDarkMode = false, token }: 
   const [searchQuery, setSearchQuery] = useState('')
   const [significanceFilter, setSignificanceFilter] = useState<string>('all')
   const [mutationTypeFilter, setMutationTypeFilter] = useState<string>('all')
-  const [groupBy, setGroupBy] = useState<GroupByOption>('gene')
+  const [groupBy, setGroupBy] = useState<GroupByOption>('none')
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const theme = useThemeClasses(isDarkMode)
 
@@ -286,6 +287,7 @@ export default function RareMutationsPanel({ data, isDarkMode = false, token }: 
                 <div className="flex flex-wrap gap-1.5">
                   {gene && <Badge variant="secondary" className="text-xs">{gene}</Badge>}
                   {rsid && <Badge variant="outline" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>}
+                  {rsid && <ZygosityBadge genotype={data?.genotype_map?.[rsid]} />}
                   {mutation.mutation_type && (
                     <Badge variant="outline" className="text-xs">{formatLabel(mutation.mutation_type)}</Badge>
                   )}

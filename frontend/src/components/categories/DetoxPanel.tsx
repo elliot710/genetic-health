@@ -14,6 +14,7 @@ import {
   capacityToSeverity,
   sensitivityToSeverity,
   VariantLinks,
+  ZygosityBadge,
   formatLabel,
   MasonryLayout,
 } from './shared'
@@ -226,7 +227,10 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                   {item.associated_variants?.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-2">
                       {item.associated_variants.map((v: string) => (
-                        <Badge key={v} variant="secondary" className="text-xs font-mono">{v}{data?.genotype_map?.[v] ? ` ${data.genotype_map[v]}` : ''}</Badge>
+                        <React.Fragment key={v}>
+                          <Badge variant="secondary" className="text-xs font-mono">{v}{data?.genotype_map?.[v] ? ` ${data.genotype_map[v]}` : ''}</Badge>
+                          <ZygosityBadge genotype={data?.genotype_map?.[v]} />
+                        </React.Fragment>
                       ))}
                     </div>
                   )}

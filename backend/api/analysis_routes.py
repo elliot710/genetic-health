@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional, List
 from pydantic import BaseModel
 
 from ..db.database import get_session, async_session_factory
-from ..db.models import GeneticAnalysis, HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait, SportsPerformance, CognitiveProfile, PersonalityTrait, AncestryResult, CarrierStatus, WellnessMetric, MethylationProfile, DetoxificationProfile, RareMutation, UncommonMutation
+from ..db.models import GeneticAnalysis, HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait, SportsPerformance, CognitiveProfile, PersonalityTrait, AncestryResult, CarrierStatus, WellnessMetric, MethylationProfile, DetoxificationProfile, RareMutation, UncommonMutation, DashboardCache
 from ..core.container import ServiceManager
 from .auth_routes import get_current_user
 
@@ -503,6 +503,12 @@ def _clean_trait_name(raw: str) -> str:
     return parts[0].strip().title() if parts else raw
 
 
+def _analysis_fingerprint(analyses) -> str:
+    """Hash of analysis IDs + statuses to detect any changes."""
+    parts = sorted(f"{a.id}:{a.analysis_status}:{a.processed_variants or 0}" for a in analyses)
+    return "|".join(parts)
+
+
 @router.get("/dashboard-data")
 async def get_dashboard_data(
     db: AsyncSession = Depends(get_session),
@@ -510,6 +516,7 @@ async def get_dashboard_data(
 ):
     """
     Get comprehensive dashboard data for the current user.
+    Serves from a per-user cache when available; rebuilds on cache miss.
     """
     try:
         # Get all analyses for the user (exclude soft-deleted)
@@ -546,6 +553,15 @@ async def get_dashboard_data(
                 "wellness_traits": [],
                 "uncommon_mutations": []
             }
+
+        # Check dashboard cache — single row read instead of 18+ queries
+        fingerprint = _analysis_fingerprint(analyses)
+        cache_row = await db.execute(
+            select(DashboardCache).where(DashboardCache.user_id == current_user.id)
+        )
+        cached = cache_row.scalar_one_or_none()
+        if cached and cached.analysis_fingerprint == fingerprint:
+            return cached.dashboard_json
         
         # Get the most recent completed analysis or the first one
         primary_analysis = None
@@ -875,7 +891,24 @@ async def get_dashboard_data(
             for row in genotype_query.all():
                 genotype_map[row.rsid] = row.genotype
         dashboard_data["genotype_map"] = genotype_map
-        
+
+        # Persist to dashboard cache
+        try:
+            if cached:
+                cached.dashboard_json = dashboard_data
+                cached.analysis_fingerprint = fingerprint
+                cached.refreshed_at = func.now()
+            else:
+                db.add(DashboardCache(
+                    user_id=current_user.id,
+                    dashboard_json=dashboard_data,
+                    analysis_fingerprint=fingerprint,
+                ))
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            logger.warning("Failed to persist dashboard cache – returning fresh data")
+
         return dashboard_data
         
     except Exception as e:

@@ -10,6 +10,7 @@ import {
   ScoreBar,
   DisclaimerCard,
   VariantLinks,
+  ZygosityBadge,
   riskToSeverity,
   getRiskBarColor,
   MasonryLayout,
@@ -305,6 +306,7 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                       {risk.gene}{risk.gene.startsWith('rs') && data?.genotype_map?.[risk.gene] ? ` ${data.genotype_map[risk.gene]}` : ''}
                     </Badge>
                   )}
+                  {risk.gene?.startsWith('rs') && <ZygosityBadge genotype={data?.genotype_map?.[risk.gene]} />}
                   {risk.clinicalSignificance && (
                     <Badge variant="outline" className="text-xs">{risk.clinicalSignificance}</Badge>
                   )}

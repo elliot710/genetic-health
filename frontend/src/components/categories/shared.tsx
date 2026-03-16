@@ -490,6 +490,30 @@ export function VariantLinks({ rsid, gene, token, isDarkMode = false, alphaMisse
 
 // ─── Clickable Rsid Badge ──────────────────────────────────────
 
+// ─── Zygosity Badge ────────────────────────────────────────────
+
+/** Determine if genotype is homozygous (both alleles identical) or heterozygous */
+export function getZygosity(genotype?: string): 'homo' | 'het' | null {
+  if (!genotype || genotype.length !== 2) return null
+  return genotype[0] === genotype[1] ? 'homo' : 'het'
+}
+
+export function ZygosityBadge({ genotype }: { genotype?: string }) {
+  const zyg = getZygosity(genotype)
+  if (!zyg) return null
+  const isHomo = zyg === 'homo'
+  return (
+    <Badge
+      variant="outline"
+      className={`text-xs ${isHomo ? 'bg-red-500/10 text-red-500 border-red-500/20' : 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20'}`}
+    >
+      {isHomo ? 'Homozygous' : 'Heterozygous'}
+    </Badge>
+  )
+}
+
+// ─── Clickable Rsid Badge (with zygosity) ──────────────────────
+
 interface ClickableRsidBadgeProps {
   rsid: string
   gene?: string
@@ -515,6 +539,7 @@ export function ClickableRsidBadge({ rsid, gene, genotype, token, isDarkMode = f
       >
         {rsid}{genotype ? ` ${genotype}` : ''}
       </Badge>
+      <ZygosityBadge genotype={genotype} />
       {validRsid && token && (
         <VariantDetailDialog
           rsid={rsid}

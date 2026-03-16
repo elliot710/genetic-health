@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, Suspense } from 'react'
 import {
   Apple, Brain, Dumbbell, Heart, Zap, Palette,
   AlertTriangle, Shield, Search,
   Dna, Activity, Users, Home,
+  Loader2,
 } from 'lucide-react'
 import { getTheme } from '../utils/theme'
 import { apiUrl } from '@/lib/api'
@@ -22,28 +23,29 @@ import DashboardOverview from './dashboard/DashboardOverview'
 import DeleteDataDialog from './dashboard/DeleteDataDialog'
 import NotificationToast from './dashboard/NotificationToast'
 
-// Category panels
-import FoodNutritionPanel from './categories/FoodNutritionPanel'
-import IntelligencePanel from './categories/IntelligencePanel'
-import PhysicalTraitsPanel from './categories/PhysicalTraitsPanel'
-import PersonalityPanel from './categories/PersonalityPanel'
-import SportsPanel from './categories/SportsPanel'
-import HealthPanel from './categories/HealthPanel'
-import DrugResponsesPanel from './categories/DrugResponsesPanel'
-import AncestryPanel from './categories/AncestryPanel'
-import CarrierStatusPanel from './categories/CarrierStatusPanel'
-import WellnessPanel from './categories/WellnessPanel'
-import MethylationPanel from './categories/MethylationPanel'
-import DetoxPanel from './categories/DetoxPanel'
-import RareMutationsPanel from './categories/RareMutationsPanel'
-import UncommonMutationsPanel from './categories/UncommonMutationsPanel'
+// Category panels — lazy-loaded (only one visible at a time)
+const FoodNutritionPanel = React.lazy(() => import('./categories/FoodNutritionPanel'))
+const IntelligencePanel = React.lazy(() => import('./categories/IntelligencePanel'))
+const PhysicalTraitsPanel = React.lazy(() => import('./categories/PhysicalTraitsPanel'))
+const PersonalityPanel = React.lazy(() => import('./categories/PersonalityPanel'))
+const SportsPanel = React.lazy(() => import('./categories/SportsPanel'))
+const HealthPanel = React.lazy(() => import('./categories/HealthPanel'))
+const DrugResponsesPanel = React.lazy(() => import('./categories/DrugResponsesPanel'))
+const AncestryPanel = React.lazy(() => import('./categories/AncestryPanel'))
+const CarrierStatusPanel = React.lazy(() => import('./categories/CarrierStatusPanel'))
+const WellnessPanel = React.lazy(() => import('./categories/WellnessPanel'))
+const MethylationPanel = React.lazy(() => import('./categories/MethylationPanel'))
+const DetoxPanel = React.lazy(() => import('./categories/DetoxPanel'))
+const RareMutationsPanel = React.lazy(() => import('./categories/RareMutationsPanel'))
+const UncommonMutationsPanel = React.lazy(() => import('./categories/UncommonMutationsPanel'))
+const SmartInsights = React.lazy(() => import('./SmartInsights'))
+const KnowledgeGraph = React.lazy(() => import('./KnowledgeGraph'))
+const AdminPanel = React.lazy(() => import('./admin/AdminPanel'))
+const SettingsPanel = React.lazy(() => import('./SettingsPanel'))
+const VariantSearch = React.lazy(() => import('./VariantSearch'))
+
 import { ErrorState, useThemeClasses } from './categories/shared'
 import { RiskDistributionChart, FunctionalCategoriesChart, OverviewSummaryPie } from './categories/GenomicCharts'
-import SmartInsights from './SmartInsights'
-import KnowledgeGraph from './KnowledgeGraph'
-import AdminPanel from './admin/AdminPanel'
-import SettingsPanel from './SettingsPanel'
-import VariantSearch from './VariantSearch'
 import AnalysisProgressLoader from './AnalysisProgressLoader'
 
 interface DashboardProps {
@@ -403,7 +405,13 @@ export default function Dashboard({
                 onBack={() => analysis.setShowProgress(false)}
               />
             ) : (
-              renderCategoryContent()
+              <Suspense fallback={
+                <div className="flex items-center justify-center py-24">
+                  <Loader2 className="h-8 w-8 animate-spin opacity-40" />
+                </div>
+              }>
+                {renderCategoryContent()}
+              </Suspense>
             )}
           </div>
         </main>

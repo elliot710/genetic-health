@@ -754,7 +754,6 @@ class EnsemblGene(Base):
 
     __table_args__ = (
         Index('ix_ensembl_genes_chr_range', 'chromosome', 'start_pos', 'end_pos'),
-        Index('ix_ensembl_genes_symbol', 'gene_symbol'),
     )
 
 
@@ -834,3 +833,18 @@ class ThousandGenomesVariant(Base):
         Index('ix_1kg_chrom_pos_ref_alt', 'chrom', 'pos', 'ref', 'alt', unique=True),
         Index('ix_1kg_maf', 'maf'),
     )
+
+
+class DashboardCache(Base):
+    """Pre-computed dashboard JSON per user.
+
+    Refreshed when an analysis completes.  The endpoint reads one row
+    instead of 18+ queries across 14 insight tables.
+    """
+    __tablename__ = 'dashboard_cache'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, unique=True, index=True)
+    dashboard_json = Column(JSON, nullable=False)
+    analysis_fingerprint = Column(String, nullable=True)
+    refreshed_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -9,7 +9,8 @@ import yaml
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, delete
+from sqlalchemy import select, func, delete, case, cast, literal_column
+from sqlalchemy.types import Integer as SAInteger
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime
@@ -1252,6 +1253,7 @@ class IncompleteAnnotationResponse(BaseModel):
     rsid: str
     annotation_status: Optional[str] = None
     failed_sources: Optional[list] = None
+    missing_sources: List[str] = []  # derived: enabled sources with status "missing"
     total_api_calls: int = 0
     # Source status: "found" = has data, "no_data" = confirmed absence, "missing" = never queried/error
     ensembl: str = "missing"
@@ -1273,6 +1275,13 @@ class IncompleteAnnotationResponse(BaseModel):
         from_attributes = True
 
 
+class PaginatedIncompleteResponse(BaseModel):
+    items: List[IncompleteAnnotationResponse]
+    total_count: int
+    limit: int
+    offset: int
+
+
 class IncompleteAnnotationSummary(BaseModel):
     total_annotations: int
     complete: int
@@ -1280,6 +1289,39 @@ class IncompleteAnnotationSummary(BaseModel):
     failed: int
     enabled_sources: List[str] = []  # all enabled sources (for table columns)
     active_sources: List[str] = []   # high-coverage sources (used for counts)
+
+
+def _has_failed_sources():
+    """Safe SQL expression: true when failed_sources is a non-empty JSON array.
+
+    Avoids ``json_array_length`` crash on JSON null / scalar values.
+    """
+    return (
+        SharedVariantAnnotation.failed_sources.isnot(None)
+        & (func.json_typeof(SharedVariantAnnotation.failed_sources) == 'array')
+        & (
+            case(
+                (func.json_typeof(SharedVariantAnnotation.failed_sources) == 'array',
+                 func.json_array_length(SharedVariantAnnotation.failed_sources)),
+                else_=0,
+            ) > 0
+        )
+    )
+
+
+def _no_failed_sources():
+    """Safe SQL expression: true when failed_sources is NULL, not an array, or empty."""
+    return (
+        SharedVariantAnnotation.failed_sources.is_(None)
+        | (func.json_typeof(SharedVariantAnnotation.failed_sources) != 'array')
+        | (
+            case(
+                (func.json_typeof(SharedVariantAnnotation.failed_sources) == 'array',
+                 func.json_array_length(SharedVariantAnnotation.failed_sources)),
+                else_=0,
+            ) == 0
+        )
+    )
 
 
 async def _get_all_enabled_source_names(db: AsyncSession) -> List[str]:
@@ -1391,11 +1433,7 @@ async def get_incomplete_summary(
 
     failed_result = await db.execute(
         select(func.count()).select_from(SharedVariantAnnotation)
-        .where(
-            SharedVariantAnnotation.failed_sources.isnot(None),
-            func.json_typeof(SharedVariantAnnotation.failed_sources) == 'array',
-            func.json_array_length(SharedVariantAnnotation.failed_sources) > 0,
-        )
+        .where(_has_failed_sources())
     )
     failed = failed_result.scalar() or 0
 
@@ -1409,10 +1447,10 @@ async def get_incomplete_summary(
     )
 
 
-@router.get("/annotations/incomplete", response_model=List[IncompleteAnnotationResponse])
+@router.get("/annotations/incomplete", response_model=PaginatedIncompleteResponse)
 async def list_incomplete_annotations(
     status_filter: Optional[str] = Query('partial', pattern="^(partial|failed|all)$"),
-    limit: int = Query(100, ge=1, le=500),
+    limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_session),
     admin: User = Depends(require_admin),
@@ -1427,57 +1465,63 @@ async def list_incomplete_annotations(
     from sqlalchemy import and_
 
     enabled = await _get_enabled_source_names(db)
+    all_enabled = await _get_all_enabled_source_names(db)
     incomplete_cond = _build_incomplete_condition(enabled)
 
     if incomplete_cond is None:
-        return []
+        return PaginatedIncompleteResponse(items=[], total_count=0, limit=limit, offset=offset)
 
-    q = select(SharedVariantAnnotation).where(incomplete_cond)
+    base_q = select(SharedVariantAnnotation).where(incomplete_cond)
 
     if status_filter == 'failed':
-        q = q.where(
-            SharedVariantAnnotation.failed_sources.isnot(None),
-            func.json_typeof(SharedVariantAnnotation.failed_sources) == 'array',
-            func.json_array_length(SharedVariantAnnotation.failed_sources) > 0,
-        )
+        base_q = base_q.where(_has_failed_sources())
     elif status_filter == 'partial':
         # Exclude rows that have recorded failures — show only "never queried" gaps
-        q = q.where(
-            (SharedVariantAnnotation.failed_sources.is_(None))
-            | (func.json_typeof(SharedVariantAnnotation.failed_sources) != 'array')
-            | (func.json_array_length(SharedVariantAnnotation.failed_sources) == 0)
-        )
+        base_q = base_q.where(_no_failed_sources())
     # 'all' — no extra filter
 
-    q = q.order_by(SharedVariantAnnotation.usage_count.desc()).limit(limit).offset(offset)
+    # Total count for pagination
+    count_q = select(func.count()).select_from(base_q.subquery())
+    total_count = (await db.execute(count_q)).scalar() or 0
+
+    q = base_q.order_by(SharedVariantAnnotation.usage_count.desc()).limit(limit).offset(offset)
 
     result = await db.execute(q)
     annotations = result.scalars().all()
 
-    return [
-        IncompleteAnnotationResponse(
+    items = []
+    for a in annotations:
+        src_statuses = {
+            'ensembl': source_status(a.ensembl_data),
+            'clinvar': source_status(a.clinvar_data),
+            'clinpgx': source_status(a.pharmgkb_data),
+            'snpedia': source_status(a.snpedia_data),
+            'litvar': source_status(a.litvar_data),
+            'alpha_missense': source_status(a.alpha_missense_data),
+            'clinvar_local': source_status(a.clinvar_local_data),
+            'gnomad': source_status(a.gnomad_data),
+            'chembl': source_status(a.chembl_data),
+            'fda_drug': source_status(a.fda_drug_data),
+            'alphafold': source_status(a.alphafold_data),
+        }
+        # Derive missing_sources: enabled sources that are "missing" (never queried)
+        missing = [s for s in all_enabled if src_statuses.get(s) == 'missing']
+        items.append(IncompleteAnnotationResponse(
             id=a.id,
             rsid=a.rsid,
             annotation_status=a.annotation_status,
-            failed_sources=a.failed_sources,
+            failed_sources=a.failed_sources if isinstance(a.failed_sources, list) else [],
+            missing_sources=missing,
             total_api_calls=a.total_api_calls or 0,
-            ensembl=source_status(a.ensembl_data),
-            clinvar=source_status(a.clinvar_data),
-            clinpgx=source_status(a.pharmgkb_data),
-            snpedia=source_status(a.snpedia_data),
-            litvar=source_status(a.litvar_data),
-            alpha_missense=source_status(a.alpha_missense_data),
-            clinvar_local=source_status(a.clinvar_local_data),
-            gnomad=source_status(a.gnomad_data),
-            chembl=source_status(a.chembl_data),
-            fda_drug=source_status(a.fda_drug_data),
-            alphafold=source_status(a.alphafold_data),
             first_annotated_at=a.first_annotated_at,
             last_updated_at=a.last_updated_at,
             usage_count=a.usage_count or 0,
-        )
-        for a in annotations
-    ]
+            **src_statuses,
+        ))
+
+    return PaginatedIncompleteResponse(
+        items=items, total_count=total_count, limit=limit, offset=offset,
+    )
 
 
 @router.post("/annotations/retrigger/{annotation_id}")
