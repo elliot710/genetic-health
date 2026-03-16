@@ -420,6 +420,7 @@ function CategoryHighlights({
   if (Array.isArray(data.drug_responses) && data.drug_responses.length > 0) {
     const poor = data.drug_responses.filter((r: DrugResponse) => r.response_type === 'poor' || r.response_type === 'poor_metabolizer').length
     const rapid = data.drug_responses.filter((r: DrugResponse) => r.response_type === 'rapid' || r.response_type === 'ultrarapid_metabolizer').length
+    const normal = data.drug_responses.length - poor - rapid
     categoryCards.push({
       id: 'drug-responses',
       title: 'Drug Responses',
@@ -429,6 +430,7 @@ function CategoryHighlights({
         { label: 'Total', value: data.drug_responses.length },
         ...(poor > 0 ? [{ label: 'Poor metab.', value: poor, color: isDarkMode ? 'text-red-400' : 'text-red-600' }] : []),
         ...(rapid > 0 ? [{ label: 'Rapid metab.', value: rapid, color: isDarkMode ? 'text-amber-400' : 'text-amber-600' }] : []),
+        ...(poor === 0 && rapid === 0 && normal > 0 ? [{ label: 'Normal metab.', value: normal, color: isDarkMode ? 'text-green-400' : 'text-green-600' }] : []),
       ],
       summary: `${data.drug_responses.length} drug-gene interactions`,
       hasData: true,
@@ -439,6 +441,7 @@ function CategoryHighlights({
   if (Array.isArray(data.nutrition_traits) && data.nutrition_traits.length > 0) {
     const slow = data.nutrition_traits.filter((n: NutritionTrait) => n.metabolism_type === 'slow').length
     const deficient = data.nutrition_traits.filter((n: NutritionTrait) => n.metabolism_type === 'deficient').length
+    const normal = data.nutrition_traits.length - slow - deficient
     categoryCards.push({
       id: 'food-nutrition',
       title: 'Nutrition',
@@ -448,6 +451,7 @@ function CategoryHighlights({
         { label: 'Total', value: data.nutrition_traits.length },
         ...(slow > 0 ? [{ label: 'Slow metab.', value: slow, color: isDarkMode ? 'text-amber-400' : 'text-amber-600' }] : []),
         ...(deficient > 0 ? [{ label: 'Deficient', value: deficient, color: isDarkMode ? 'text-red-400' : 'text-red-600' }] : []),
+        ...(slow === 0 && deficient === 0 && normal > 0 ? [{ label: 'Normal', value: normal, color: isDarkMode ? 'text-green-400' : 'text-green-600' }] : []),
       ],
       summary: `${data.nutrition_traits.length} nutritional markers`,
       hasData: true,
@@ -457,6 +461,7 @@ function CategoryHighlights({
   // Sports Performance
   if (Array.isArray(data.sports_performance) && data.sports_performance.length > 0) {
     const highAdv = data.sports_performance.filter((s: SportsPerformance) => s.genetic_advantage === 'high').length
+    const modAdv = data.sports_performance.filter((s: SportsPerformance) => s.genetic_advantage === 'moderate').length
     categoryCards.push({
       id: 'sports',
       title: 'Sports Performance',
@@ -465,6 +470,7 @@ function CategoryHighlights({
       items: [
         { label: 'Total', value: data.sports_performance.length },
         ...(highAdv > 0 ? [{ label: 'High advantage', value: highAdv, color: isDarkMode ? 'text-green-400' : 'text-green-600' }] : []),
+        ...(modAdv > 0 ? [{ label: 'Moderate', value: modAdv, color: isDarkMode ? 'text-blue-400' : 'text-blue-600' }] : []),
       ],
       summary: `${data.sports_performance.length} performance metrics`,
       hasData: true,
@@ -519,6 +525,7 @@ function CategoryHighlights({
         ...(impaired > 0 ? [{ label: 'Impaired', value: impaired, color: isDarkMode ? 'text-red-400' : 'text-red-600' }] : []),
         ...(reduced > 0 ? [{ label: 'Reduced', value: reduced, color: isDarkMode ? 'text-amber-400' : 'text-amber-600' }] : []),
         ...(normal > 0 ? [{ label: 'Normal', value: normal, color: isDarkMode ? 'text-green-400' : 'text-green-600' }] : []),
+        ...(impaired === 0 && reduced === 0 && normal === 0 ? [{ label: 'Total', value: data.methylation_profiles.length }] : []),
       ],
       summary: `${data.methylation_profiles.length} genes profiled`,
       hasData: true,
@@ -529,14 +536,17 @@ function CategoryHighlights({
   if (Array.isArray(data.detoxification_profiles) && data.detoxification_profiles.length > 0) {
     const impaired = data.detoxification_profiles.filter((d: DetoxProfile) => d.detox_capacity === 'impaired' || d.detox_capacity === 'slow').length
     const normal = data.detoxification_profiles.filter((d: DetoxProfile) => d.detox_capacity === 'normal').length
+    const other = data.detoxification_profiles.length - impaired - normal
     categoryCards.push({
       id: 'detox',
       title: 'Detoxification',
       icon: Zap,
       gradient: 'from-lime-500 to-green-500',
       items: [
+        { label: 'Pathways', value: data.detoxification_profiles.length },
         ...(impaired > 0 ? [{ label: 'Impaired/Slow', value: impaired, color: isDarkMode ? 'text-red-400' : 'text-red-600' }] : []),
         ...(normal > 0 ? [{ label: 'Normal', value: normal, color: isDarkMode ? 'text-green-400' : 'text-green-600' }] : []),
+        ...(other > 0 && impaired === 0 && normal === 0 ? [{ label: 'Other', value: other }] : []),
       ],
       summary: `${data.detoxification_profiles.length} pathways analyzed`,
       hasData: true,
@@ -618,6 +628,7 @@ function CategoryHighlights({
         ...(wellnessImpaired > 0 ? [{ label: 'Impaired', value: wellnessImpaired, color: isDarkMode ? 'text-red-400' : 'text-red-600' }] : []),
         ...(wellnessVariant > 0 ? [{ label: 'Variant Detected', value: wellnessVariant, color: isDarkMode ? 'text-amber-400' : 'text-amber-600' }] : []),
         ...(wellnessNormal > 0 ? [{ label: 'Normal', value: wellnessNormal, color: isDarkMode ? 'text-green-400' : 'text-green-600' }] : []),
+        ...(wellnessImpaired === 0 && wellnessVariant === 0 && wellnessNormal === 0 ? [{ label: 'Total', value: data.wellness_traits.length }] : []),
       ],
       summary: `${data.wellness_traits.length} wellness metrics`,
       hasData: true,
@@ -634,6 +645,7 @@ function CategoryHighlights({
       icon: AlertTriangle,
       gradient: 'from-red-500 to-rose-600',
       items: [
+        { label: 'Total', value: data.rare_mutations.length },
         ...(pathogenic > 0 ? [{ label: 'Pathogenic', value: pathogenic, color: isDarkMode ? 'text-red-400' : 'text-red-600' }] : []),
         ...(likelyPath > 0 ? [{ label: 'Likely pathogenic', value: likelyPath, color: isDarkMode ? 'text-orange-400' : 'text-orange-600' }] : []),
       ],
@@ -645,6 +657,7 @@ function CategoryHighlights({
   // Uncommon Mutations
   if (Array.isArray(data.uncommon_mutations) && data.uncommon_mutations.length > 0) {
     const protective = data.uncommon_mutations.filter((m: UncommonMutation) => m.mutation_type === 'protective_rare').length
+    const nonProtective = data.uncommon_mutations.length - protective
     categoryCards.push({
       id: 'uncommon-mutations',
       title: 'Uncommon Mutations',
@@ -653,6 +666,7 @@ function CategoryHighlights({
       items: [
         { label: 'Total', value: data.uncommon_mutations.length },
         ...(protective > 0 ? [{ label: 'Protective', value: protective, color: isDarkMode ? 'text-green-400' : 'text-green-600' }] : []),
+        ...(protective === 0 && nonProtective > 0 ? [{ label: 'Variants', value: nonProtective }] : []),
       ],
       summary: protective > 0 ? `${protective} protective variant${protective > 1 ? 's' : ''}` : `${data.uncommon_mutations.length} uncommon variants`,
       hasData: true,
@@ -690,17 +704,19 @@ function CategoryHighlights({
                 </div>
                 <ChevronRight className={`h-4 w-4 ${theme.text.muted} group-hover:translate-x-0.5 transition-transform`} />
               </div>
-              {card.items.length > 0 && (
-                <div className="flex flex-wrap gap-x-4 gap-y-1 mb-2">
+              {card.items.length > 0 ? (
+                <div className={`grid gap-3 mb-3 ${card.items.length >= 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
                   {card.items.map((item, idx) => (
-                    <div key={idx} className="flex items-baseline gap-1 max-w-full overflow-hidden">
-                      <span className={`text-base font-bold shrink-0 ${item.color || theme.text.primary}`}>{item.value}</span>
-                      <span className={`text-xs ${theme.text.muted} truncate`}>{item.label}</span>
+                    <div key={idx} className="min-w-0">
+                      <p className={`text-lg font-bold leading-tight ${item.color || theme.text.primary}`}>{item.value}</p>
+                      <p className={`text-[11px] ${theme.text.muted} truncate leading-tight mt-0.5`}>{item.label}</p>
                     </div>
                   ))}
                 </div>
+              ) : (
+                <div className="mb-3" />
               )}
-              <p className={`text-xs ${theme.text.secondary} truncate`}>{card.summary}</p>
+              <p className={`text-xs ${theme.text.secondary}`}>{card.summary}</p>
             </div>
           )
         })}

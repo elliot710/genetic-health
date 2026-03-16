@@ -24,7 +24,10 @@ async def get_personality_wellness_data(
         
         # Get all analyses for this user
         analyses_result = await db.execute(
-            select(GeneticAnalysis).where(GeneticAnalysis.user_id == user_id)
+            select(GeneticAnalysis).where(
+                GeneticAnalysis.user_id == user_id,
+                GeneticAnalysis.deleted_at.is_(None),
+            )
         )
         analyses = analyses_result.scalars().all()
         

@@ -34,7 +34,9 @@ class AnalysisQueue:
         self._queue: asyncio.Queue = asyncio.Queue()
         self._running_jobs: Dict[int, QueuedAnalysis] = {}  # analysis_id -> QueuedAnalysis
         self._user_running_count: Dict[int, int] = {}  # user_id -> count of running jobs
-        self._jobs_lock = asyncio.Lock()  # Protects _running_jobs and _user_running_count
+        self._queued_analysis_ids: set = set()  # Track which analysis IDs are in queue
+        self._queued_user_ids: Dict[int, int] = {}  # analysis_id -> user_id for queued items
+        self._jobs_lock = asyncio.Lock()  # Protects _running_jobs, _user_running_count, and queued sets
         self._processing_task: Optional[asyncio.Task] = None
         self._shutdown = False
         
@@ -55,7 +57,13 @@ class AnalysisQueue:
                 pass
         logger.info("Analysis queue processor stopped")
     
-    async def enqueue_analysis(self, analysis_id: int, user_id: int, priority: int = 0) -> bool:
+    async def enqueue_analysis(
+        self,
+        analysis_id: int,
+        user_id: int,
+        priority: int = 0,
+        _bypass_limit: bool = False,
+    ) -> bool:
         """
         Add an analysis to the queue
         
@@ -63,6 +71,7 @@ class AnalysisQueue:
             analysis_id: ID of the analysis to process
             user_id: ID of the user who owns the analysis
             priority: Priority level (higher = more important)
+            _bypass_limit: Skip per-user limit (used for startup recovery)
             
         Returns:
             True if successfully queued, False if already running/queued
@@ -73,13 +82,25 @@ class AnalysisQueue:
                 logger.warning(f"Analysis {analysis_id} is already running")
                 return False
             
-            # Check if we have too many jobs queued for this user (prevent spam)
-            user_queued_count = self._queue.qsize()  # Approximate queue size check
-            user_running_count = self._user_running_count.get(user_id, 0)
-            
-            if user_queued_count + user_running_count >= 2:  # Limit to 2 concurrent analyses per user
-                logger.warning(f"User {user_id} has reached maximum concurrent analysis limit")
+            # Check for duplicate in queue
+            if analysis_id in self._queued_analysis_ids:
+                logger.warning(f"Analysis {analysis_id} is already queued")
                 return False
+            
+            if not _bypass_limit:
+                # Count this user's queued + running jobs
+                user_running_count = self._user_running_count.get(user_id, 0)
+                user_queued_count = sum(
+                    1 for aid in self._queued_analysis_ids
+                    if self._queued_user_ids.get(aid) == user_id
+                )
+                
+                if user_queued_count + user_running_count >= 2:
+                    logger.warning(f"User {user_id} has reached maximum concurrent analysis limit")
+                    return False
+        
+            self._queued_analysis_ids.add(analysis_id)
+            self._queued_user_ids[analysis_id] = user_id
         
         queued_analysis = QueuedAnalysis(
             analysis_id=analysis_id,
@@ -129,6 +150,8 @@ class AnalysisQueue:
             queued_analysis.started_at = datetime.utcnow()
             self._running_jobs[analysis_id] = queued_analysis
             self._user_running_count[user_id] = self._user_running_count.get(user_id, 0) + 1
+            self._queued_analysis_ids.discard(analysis_id)
+            self._queued_user_ids.pop(analysis_id, None)
         
         logger.info(f"Starting analysis {analysis_id} for user {user_id}")
         

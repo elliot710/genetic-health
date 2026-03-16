@@ -228,18 +228,29 @@ class SharedVariantAnnotationService:
                 pharmgkb_data=annotations.get('clinpgx'),
                 snpedia_data=annotations.get('snpedia'),
                 litvar_data=annotations.get('litvar'),
-                alpha_missense_data=am_data,
-                clinvar_local_data=cv_local_data,
-                gnomad_data=gnomad_data_val,
-                thousand_genomes_data=thousand_genomes_data_val,
-                chembl_data=chembl_data_val,
-                fda_drug_data=fda_drug_data_val,
-                alphafold_data=alphafold_data_val,
                 annotation_status=status,
                 failed_sources=failed if failed else None,
                 total_api_calls=success_count,
                 usage_count=1
             )
+            # Only set local source columns when there's actual data (not None).
+            # Leaving them out of the INSERT keeps SQL NULL → backfill will
+            # populate them later.  Previously, None was written as JSON null
+            # which is NOT the same as SQL NULL.
+            if am_data is not None:
+                values['alpha_missense_data'] = am_data
+            if cv_local_data is not None:
+                values['clinvar_local_data'] = cv_local_data
+            if gnomad_data_val is not None:
+                values['gnomad_data'] = gnomad_data_val
+            if thousand_genomes_data_val is not None:
+                values['thousand_genomes_data'] = thousand_genomes_data_val
+            if chembl_data_val is not None:
+                values['chembl_data'] = chembl_data_val
+            if fda_drug_data_val is not None:
+                values['fda_drug_data'] = fda_drug_data_val
+            if alphafold_data_val is not None:
+                values['alphafold_data'] = alphafold_data_val
             if marker_id is not None:
                 values['marker_id'] = marker_id
             stmt = insert(SharedVariantAnnotation).values(**values)

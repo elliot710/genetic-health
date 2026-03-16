@@ -701,27 +701,51 @@ class ComprehensiveAnalysisService:
             am_svc = get_alpha_missense_service()
             do_am = am_svc.available
 
-        # Build missing lists from existing annotations
-        missing_cv = [
-            rsid for rsid, data in existing_annotations.items()
-            if do_clinvar and 'clinvar_local' not in data.get('annotations', {})
-        ]
-        missing_gnomad = [
-            rsid for rsid, data in existing_annotations.items()
-            if do_gnomad and 'gnomad' not in data.get('annotations', {})
-        ]
-        missing_ensembl = [
-            rsid for rsid, data in existing_annotations.items()
-            if do_ensembl and 'ensembl' not in data.get('annotations', {})
-        ]
-        missing_1kg = [
-            rsid for rsid, data in existing_annotations.items()
-            if do_1kg and 'thousand_genomes' not in data.get('annotations', {})
-        ]
-        missing_am = [
-            rsid for rsid, data in existing_annotations.items()
-            if do_am and 'alpha_missense' not in data.get('annotations', {})
-        ]
+        # Build missing lists by querying the DB directly for columns that are
+        # SQL NULL or JSON null (save_annotation historically stored Python None
+        # as JSON null instead of SQL NULL).  A column with real data (found=true
+        # or found=false) means the source was already checked.
+        all_rsids_for_backfill = list(existing_annotations.keys())
+        missing_cv: list = []
+        missing_gnomad: list = []
+        missing_ensembl: list = []
+        missing_1kg: list = []
+        missing_am: list = []
+
+        if do_clinvar or do_gnomad or do_ensembl or do_1kg or do_am:
+            from ..db.database import async_session_factory as _asf
+            from ..db.models import SharedVariantAnnotation as SVA
+            from sqlalchemy import or_, cast, String
+
+            def _col_empty(col):
+                """True when column is SQL NULL or contains JSON literal null."""
+                return or_(col.is_(None), cast(col, String) == 'null')
+
+            BACKFILL_BATCH = 5000
+            for bi in range(0, len(all_rsids_for_backfill), BACKFILL_BATCH):
+                chunk = all_rsids_for_backfill[bi:bi + BACKFILL_BATCH]
+                async with _asf() as _sess:
+                    rows = (await _sess.execute(
+                        select(
+                            SVA.rsid,
+                            _col_empty(SVA.clinvar_local_data).label('cv_empty'),
+                            _col_empty(SVA.gnomad_data).label('gn_empty'),
+                            _col_empty(SVA.ensembl_data).label('ens_empty'),
+                            _col_empty(SVA.thousand_genomes_data).label('tkg_empty'),
+                            _col_empty(SVA.alpha_missense_data).label('am_empty'),
+                        ).where(SVA.rsid.in_(chunk))
+                    )).all()
+                for row in rows:
+                    if do_clinvar and row.cv_empty:
+                        missing_cv.append(row.rsid)
+                    if do_gnomad and row.gn_empty:
+                        missing_gnomad.append(row.rsid)
+                    if do_ensembl and row.ens_empty:
+                        missing_ensembl.append(row.rsid)
+                    if do_1kg and row.tkg_empty:
+                        missing_1kg.append(row.rsid)
+                    if do_am and row.am_empty:
+                        missing_am.append(row.rsid)
 
         if not missing_cv and not missing_gnomad and not missing_ensembl and not missing_1kg and not missing_am:
             # Skip to BQ backfill check below
@@ -748,22 +772,34 @@ class ComprehensiveAnalysisService:
                 cv_results = await cv_svc.lookup_batch(missing_cv)
             if missing_gnomad:
                 logger.info(f"Backfilling gnomAD for {len(missing_gnomad)} existing annotations")
-                # Build position tuples from variants for position-based lookup
-                gn_pos_tuples = []
-                for rsid in missing_gnomad:
-                    v = rsid_to_variant.get(rsid)
-                    if v:
-                        marker = getattr(v, 'marker', None)
-                        if marker and marker.chromosome and marker.position and marker.ref_allele:
-                            gn_pos_tuples.append((
-                                rsid,
-                                marker.chromosome,
-                                marker.position,
-                                marker.ref_allele,
-                                marker.alt_alleles or '',
-                            ))
-                if gn_pos_tuples:
-                    gn_results = await gnomad_svc.lookup_batch_by_position(gn_pos_tuples)
+                # Try rsid-based lookup first (checks SQLite cache → PG)
+                gn_results = await gnomad_svc.lookup_batch(missing_gnomad)
+                # Collect rsids that were NOT found by rsid lookup
+                gn_rsid_misses = [
+                    rsid for rsid in missing_gnomad
+                    if not (gn_results.get(rsid) and gn_results[rsid].get('found'))
+                ]
+                # Fall back to position-based lookup for remaining (covers indels in PG)
+                if gn_rsid_misses:
+                    gn_pos_tuples = []
+                    for rsid in gn_rsid_misses:
+                        v = rsid_to_variant.get(rsid)
+                        if v:
+                            marker = getattr(v, 'marker', None)
+                            if marker and marker.chromosome and marker.position and marker.ref_allele:
+                                gn_pos_tuples.append((
+                                    rsid,
+                                    marker.chromosome,
+                                    marker.position,
+                                    marker.ref_allele,
+                                    marker.alt_alleles or '',
+                                ))
+                    if gn_pos_tuples:
+                        gn_pos_results = await gnomad_svc.lookup_batch_by_position(gn_pos_tuples)
+                        # Merge position results into main results
+                        for rsid, data in gn_pos_results.items():
+                            if data and data.get('found'):
+                                gn_results[rsid] = data
             if missing_ensembl:
                 logger.info(f"Backfilling Ensembl VEP for {len(missing_ensembl)} existing annotations")
                 ens_results = await vep_svc.lookup_batch(missing_ensembl)
@@ -801,36 +837,53 @@ class ComprehensiveAnalysisService:
             cv_updated = gn_updated = ens_updated = 0
             logger.info("Local source lookups complete, writing results to DB...")
 
-            # Build update params for each source
+            # Build update params for each source (save both found AND not-found
+            # so the backfill doesn't re-query the same rsids on every run)
+            _NOT_FOUND_CV = {"found": False, "source": "clinvar_local"}
+            _NOT_FOUND_GN = {"found": False, "source": "gnomad_local"}
+            _NOT_FOUND_ENS = {"found": False, "source": "ensembl_vep_local"}
+            _NOT_FOUND_TKG = {"found": False, "source": "1000genomes_local"}
+            _NOT_FOUND_AM = {"found": False, "source": "alpha_missense"}
+
             cv_params = []
             for rsid, cv_data in cv_results.items():
                 if cv_data and cv_data.get('found'):
                     cv_params.append({'b_rsid': rsid, 'b_data': cv_data})
                     existing_annotations[rsid]['annotations']['clinvar_local'] = cv_data
+                else:
+                    cv_params.append({'b_rsid': rsid, 'b_data': _NOT_FOUND_CV})
 
             gn_params = []
             for rsid, gn_data in gn_results.items():
                 if gn_data and gn_data.get('found'):
                     gn_params.append({'b_rsid': rsid, 'b_data': gn_data})
                     existing_annotations[rsid]['annotations']['gnomad'] = gn_data
+                else:
+                    gn_params.append({'b_rsid': rsid, 'b_data': _NOT_FOUND_GN})
 
             ens_params = []
             for rsid, ens_data in ens_results.items():
                 if ens_data and ens_data.get('found'):
                     ens_params.append({'b_rsid': rsid, 'b_data': ens_data})
                     existing_annotations[rsid]['annotations']['ensembl'] = ens_data
+                else:
+                    ens_params.append({'b_rsid': rsid, 'b_data': _NOT_FOUND_ENS})
 
             tkg_params = []
             for rsid, tkg_data in tkg_results.items():
                 if tkg_data and tkg_data.get('found'):
                     tkg_params.append({'b_rsid': rsid, 'b_data': tkg_data})
                     existing_annotations[rsid]['annotations']['thousand_genomes'] = tkg_data
+                else:
+                    tkg_params.append({'b_rsid': rsid, 'b_data': _NOT_FOUND_TKG})
 
             am_params = []
             for rsid, am_data in am_results.items():
                 if am_data and am_data.get('found'):
                     am_params.append({'b_rsid': rsid, 'b_data': am_data})
                     existing_annotations[rsid]['annotations']['alpha_missense'] = am_data
+                else:
+                    am_params.append({'b_rsid': rsid, 'b_data': _NOT_FOUND_AM})
 
             async with async_session_factory() as session:
                 if cv_params:
@@ -1017,28 +1070,39 @@ class ComprehensiveAnalysisService:
                 cv_found = sum(1 for v in cv_map.values() if v and v.get('found'))
                 logger.info(f"  ClinVar local batch: {cv_found}/{total} found ({time.time() - t0:.1f}s)")
 
-        # --- Step 2: Batch gnomAD local lookups (position-based for TSV data) ---
+        # --- Step 2: Batch gnomAD local lookups (rsid first, then position fallback) ---
         gn_map: Dict[str, Optional[Dict]] = {}
         if enabled_sources is None or 'gnomad' in enabled_sources:
             from .gnomad_local import get_gnomad_service
             gnomad_svc = get_gnomad_service()
             if gnomad_svc.is_loaded:
                 t0 = time.time()
-                # Build position tuples from markers for position-based lookup
-                pos_tuples = []
-                for rsid in unique_rsids:
-                    v = rsid_to_variants[rsid][0]
-                    marker = getattr(v, 'marker', None)
-                    if marker and marker.chromosome and marker.position and marker.ref_allele:
-                        pos_tuples.append((
-                            rsid,
-                            marker.chromosome,
-                            marker.position,
-                            marker.ref_allele,
-                            marker.alt_alleles or '',
-                        ))
-                if pos_tuples:
-                    gn_map = await gnomad_svc.lookup_batch_by_position(pos_tuples)
+                # Try rsid-based lookup first (checks SQLite cache → PG)
+                gn_map = await gnomad_svc.lookup_batch(unique_rsids)
+                # Collect rsids not found by rsid lookup
+                gn_rsid_misses = [
+                    rsid for rsid in unique_rsids
+                    if not (gn_map.get(rsid) and gn_map[rsid].get('found'))
+                ]
+                # Fall back to position-based lookup for remaining
+                if gn_rsid_misses:
+                    pos_tuples = []
+                    for rsid in gn_rsid_misses:
+                        v = rsid_to_variants[rsid][0]
+                        marker = getattr(v, 'marker', None)
+                        if marker and marker.chromosome and marker.position and marker.ref_allele:
+                            pos_tuples.append((
+                                rsid,
+                                marker.chromosome,
+                                marker.position,
+                                marker.ref_allele,
+                                marker.alt_alleles or '',
+                            ))
+                    if pos_tuples:
+                        gn_pos_results = await gnomad_svc.lookup_batch_by_position(pos_tuples)
+                        for rsid, data in gn_pos_results.items():
+                            if data and data.get('found'):
+                                gn_map[rsid] = data
                 gn_found = sum(1 for v in gn_map.values() if v and v.get('found'))
                 logger.info(f"  gnomAD local batch: {gn_found}/{total} found ({time.time() - t0:.1f}s)")
 

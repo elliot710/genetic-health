@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
     await analysis_queue.start()
     print("🚀 Analysis queue processor started")
 
-    # Detect and re-queue stale analyses left in 'processing' state
+    # Detect and re-queue analyses left in 'processing' or 'pending' state
     # (e.g. from a server restart or container hot-reload)
     try:
         from .db.database import async_session_factory
@@ -56,14 +56,26 @@ async def lifespan(app: FastAPI):
         from .db.models import GeneticAnalysis
         async with async_session_factory() as session:
             result = await session.execute(
-                select(GeneticAnalysis.id, GeneticAnalysis.user_id, GeneticAnalysis.current_step)
-                .where(GeneticAnalysis.analysis_status == 'processing')
+                select(
+                    GeneticAnalysis.id,
+                    GeneticAnalysis.user_id,
+                    GeneticAnalysis.current_step,
+                    GeneticAnalysis.analysis_status,
+                )
+                .where(
+                    GeneticAnalysis.analysis_status.in_(['processing', 'pending']),
+                    GeneticAnalysis.deleted_at.is_(None),
+                )
+                .order_by(GeneticAnalysis.id)
             )
             stale = result.all()
             if stale:
-                for analysis_id, user_id, step in stale:
-                    print(f"🔄 Re-queuing stale analysis {analysis_id} (was at step: {step})")
-                    await analysis_queue.enqueue_analysis(analysis_id, user_id)
+                for analysis_id, user_id, step, status in stale:
+                    print(f"🔄 Re-queuing {status} analysis {analysis_id} "
+                          f"(user {user_id}, step: {step or 'none'})")
+                    await analysis_queue.enqueue_analysis(
+                        analysis_id, user_id, _bypass_limit=True,
+                    )
                 print(f"🔄 Re-queued {len(stale)} stale analyses for resume")
             else:
                 print("✅ No stale analyses found")
@@ -232,111 +244,13 @@ async def health_check():
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database and analysis queue on startup"""
-    await init_db()
-    
-    # Install per-job log handler on analysis-related loggers
-    from .services.job_logs import JobLogHandler
-    job_handler = JobLogHandler()
-    job_handler.setLevel(logging.INFO)
-    for name in [
-        'backend.services.analysis_service',
-        'backend.services.genetic_api_service',
-        'backend.services.ensembl_vep_local',
-        'backend.services.clinvar_local',
-        'backend.services.gnomad_local',
-        'backend.services.gnomad_cache',
-        'backend.services.thousand_genomes_local',
-        'backend.services.ensembl_local',
-    ]:
-        logging.getLogger(name).addHandler(job_handler)
-
-    # Start the analysis queue processor
-    analysis_queue = get_analysis_queue()
-    await analysis_queue.start()
-    print("🚀 Analysis queue processor started")
-
-    # Detect and re-queue stale analyses left in 'processing' state
-    # (e.g. from a server restart or container hot-reload)
-    try:
-        from .db.database import async_session_factory
-        from sqlalchemy import select, update as sa_update
-        from .db.models import GeneticAnalysis
-        async with async_session_factory() as session:
-            result = await session.execute(
-                select(GeneticAnalysis.id, GeneticAnalysis.user_id, GeneticAnalysis.current_step)
-                .where(GeneticAnalysis.analysis_status == 'processing')
-            )
-            stale = result.all()
-            if stale:
-                for analysis_id, user_id, step in stale:
-                    print(f"🔄 Re-queuing stale analysis {analysis_id} (was at step: {step})")
-                    await analysis_queue.enqueue_analysis(analysis_id, user_id)
-                print(f"🔄 Re-queued {len(stale)} stale analyses for resume")
-            else:
-                print("✅ No stale analyses found")
-    except Exception as e:
-        print(f"⚠️ Stale analysis check failed: {e}")
-
-    # Check ClinVar PG availability (instant — just counts rows)
-    from .services.clinvar_local import get_clinvar_local_service
-    cv_svc = get_clinvar_local_service()
-    ok = await cv_svc.ensure_loaded()
-    if ok:
-        print(f"✅ ClinVar PG: {cv_svc.variant_count} rows available")
-    else:
-        print("⚠️ ClinVar PG: table empty — run ETL import via admin panel")
-
-    # Check gnomAD PG availability (instant — just counts rows)
-    from .services.gnomad_local import get_gnomad_service
-    gnomad_svc = get_gnomad_service()
-    ok = await gnomad_svc.ensure_loaded()
-    if ok:
-        print(f"✅ gnomAD PG: {gnomad_svc._variant_count or 0} variants, {gnomad_svc.constraint_count} gene constraints")
-    else:
-        print("⚠️ gnomAD PG: table empty — run ETL import via admin panel")
-
-    # Check gnomAD BigQuery availability
-    try:
-        from .services.gnomad_bigquery import get_gnomad_bigquery_service
-        bq_svc = get_gnomad_bigquery_service()
-        if await bq_svc.is_available():
-            print("✅ gnomAD BigQuery: credentials configured — fallback enabled")
-        else:
-            print("ℹ️ gnomAD BigQuery: not configured — set GOOGLE_APPLICATION_CREDENTIALS to enable")
-    except Exception as e:
-        print(f"ℹ️ gnomAD BigQuery: unavailable ({e})")
-
-    # Check 1000 Genomes Phase 3 PG availability
-    from .services.thousand_genomes_local import get_thousand_genomes_service
-    tkg_svc = get_thousand_genomes_service()
-    ok = await tkg_svc.ensure_loaded()
-    if ok:
-        print(f"✅ 1000 Genomes PG: {tkg_svc.variant_count} variants available")
-    else:
-        print("⚠️ 1000 Genomes PG: table empty — run ETL import via admin panel")
-
-    # Preload Ensembl VEP cache in background (takes ~15min, don't block startup)
-    from .services.ensembl_vep_local import get_ensembl_vep_service
-    vep_svc = get_ensembl_vep_service()
-    async def _preload_vep():
-        try:
-            ok = await vep_svc.ensure_loaded()
-            if ok:
-                print(f"✅ Ensembl VEP: {vep_svc.variant_count} variants cached from VCF files")
-            else:
-                print("⚠️ Ensembl VEP: no VCF files found or no known rsids")
-        except Exception as e:
-            print(f"⚠️ Ensembl VEP preload failed: {e}")
-    asyncio.create_task(_preload_vep())
-    print("⏳ Ensembl VEP: preloading VCF cache in background...")
+    """Legacy startup hook — kept as no-op since lifespan() handles everything."""
+    pass
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Clean shutdown of analysis queue"""
-    analysis_queue = get_analysis_queue()
-    await analysis_queue.stop()
-    print("🛑 Analysis queue processor stopped")
+    """Legacy shutdown hook — kept as no-op since lifespan() handles everything."""
+    pass
 
 if __name__ == "__main__":
     import uvicorn

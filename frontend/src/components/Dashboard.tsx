@@ -93,7 +93,8 @@ export default function Dashboard({
   const [activeCategory, setActiveCategory] = useState(() => {
     if (typeof window !== 'undefined') {
       const hash = window.location.hash.slice(1)
-      return hash || 'overview'
+      // admin/tab → admin (sub-tab handled by AdminPanel)
+      return (hash.startsWith('admin/') ? 'admin' : hash) || 'overview'
     }
     return 'overview'
   })
@@ -166,8 +167,11 @@ export default function Dashboard({
   // ── URL hash sync ─────────────────────────────────────────
   useEffect(() => {
     if (typeof window !== 'undefined') {
+      const currentHash = window.location.hash.slice(1)
+      // Don't overwrite admin sub-tab hashes (admin/data, admin/rules etc.)
+      if (activeCategory === 'admin' && currentHash.startsWith('admin')) return
       const newHash = activeCategory === 'overview' ? '' : activeCategory
-      if (window.location.hash.slice(1) !== newHash) {
+      if (currentHash !== newHash) {
         window.history.replaceState(null, '', newHash ? `#${newHash}` : window.location.pathname)
       }
     }
@@ -176,7 +180,7 @@ export default function Dashboard({
   useEffect(() => {
     const onHashChange = () => {
       const hash = window.location.hash.slice(1)
-      setActiveCategory(hash || 'overview')
+      setActiveCategory((hash.startsWith('admin/') ? 'admin' : hash) || 'overview')
     }
     window.addEventListener('hashchange', onHashChange)
     return () => window.removeEventListener('hashchange', onHashChange)

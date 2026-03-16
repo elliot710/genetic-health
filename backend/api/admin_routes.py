@@ -2388,3 +2388,63 @@ async def sync_panels_from_mappings(
     from ..services.auto_categorizer import sync_panels_from_mappings
     cat_list = [c.strip() for c in categories.split(",")] if categories else None
     return await sync_panels_from_mappings(categories=cat_list)
+
+
+# --- Annotation sentinel reset ---
+
+class SentinelResetResponse(BaseModel):
+    detail: str
+    source: str
+    reset_count: int
+
+@router.post("/annotation-sources/{source_name}/reset-sentinels", response_model=SentinelResetResponse)
+async def reset_source_sentinels(
+    source_name: str,
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Reset 'found: false' sentinels for a local source back to NULL.
+
+    Use this after importing new data into a local source table (e.g. after
+    1000G ETL, gnomAD import, ClinVar update) so the next analysis backfill
+    will re-query the source with the updated data.
+
+    Only resets entries where found=false — entries with found=true (real data)
+    are left untouched.
+    """
+    from ..services.annotation_constants import SOURCE_TO_COLUMN, LOCAL_SOURCES
+
+    if source_name not in SOURCE_TO_COLUMN:
+        raise HTTPException(status_code=400, detail=f"Unknown source: {source_name}")
+    if source_name not in LOCAL_SOURCES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Sentinel reset is only for local sources. {source_name} is a remote API source.",
+        )
+
+    col_name = SOURCE_TO_COLUMN[source_name]
+    col = getattr(SharedVariantAnnotation, f'{col_name}_data')
+
+    # Reset found:false entries to NULL so backfill will re-check them
+    from sqlalchemy import cast, String, or_
+    result = await db.execute(
+        update(SharedVariantAnnotation)
+        .where(
+            col.isnot(None),
+            or_(
+                cast(col, String).like('%"found": false%'),
+                cast(col, String).like('%"found":false%'),
+            ),
+        )
+        .values(**{f'{col_name}_data': None})
+    )
+    await db.commit()
+
+    reset_count = result.rowcount
+    logger.info(f"Admin reset {reset_count} '{source_name}' sentinels to NULL")
+
+    return SentinelResetResponse(
+        detail=f"Reset {reset_count} stale '{source_name}' sentinels to NULL. Next analysis backfill will re-query this source.",
+        source=source_name,
+        reset_count=reset_count,
+    )
