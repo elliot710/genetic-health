@@ -32,6 +32,7 @@ const GROUP_BY_LABELS: Record<CarrierGroupBy, string> = {
 
 interface MappedCarrier {
   condition: string
+  conditions: string[]
   gene: string
   rsids: string[]
   status: string
@@ -76,10 +77,10 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
   const carrierData: CarrierCondition[] = data?.carrier_status ?? []
   const hasRealData = carrierData.length > 0
 
-  // Map raw API data to our display model
+  // Map raw API data to our display model, deduplicating by rsid set
   const allCarriers: MappedCarrier[] = useMemo(() => {
     if (!hasRealData) return []
-    return carrierData.map((c) => ({
+    const raw = carrierData.map((c) => ({
       condition: c.condition,
       gene: c.gene || extractGene(c.condition),
       rsids: c.associated_variants || [],
@@ -87,6 +88,36 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
       inheritance: c.inheritance_pattern || c.inheritance || 'Unknown',
       counselingRecommended: c.genetic_counseling_recommended ?? false,
     }))
+
+    // Deduplicate: merge entries that share the same rsid set
+    const byRsidKey = new Map<string, MappedCarrier>()
+    for (const item of raw) {
+      const rsidKey = item.rsids.length > 0 ? [...item.rsids].sort().join(',') : `__no_rsid_${item.condition}`
+      const existing = byRsidKey.get(rsidKey)
+      if (existing) {
+        // Merge condition names
+        if (!existing.conditions.some(c => c.toLowerCase() === item.condition.toLowerCase())) {
+          existing.conditions.push(item.condition)
+          existing.condition = existing.conditions.map(c => cleanCondition(c)).join(' / ')
+        }
+        // Keep the more specific gene
+        if (!existing.gene && item.gene) existing.gene = item.gene
+        // Keep counseling flag if either recommends it
+        if (item.counselingRecommended) existing.counselingRecommended = true
+        // Keep the most severe status
+        const severity = ['affected', 'carrier', 'non-carrier']
+        if (severity.indexOf(normalizeStatus(item.status)) < severity.indexOf(normalizeStatus(existing.status))) {
+          existing.status = item.status
+        }
+        // Keep the more specific inheritance
+        if (existing.inheritance === 'Unknown' && item.inheritance !== 'Unknown') {
+          existing.inheritance = item.inheritance
+        }
+      } else {
+        byRsidKey.set(rsidKey, { ...item, conditions: [item.condition] })
+      }
+    }
+    return Array.from(byRsidKey.values())
   }, [carrierData, hasRealData])
 
   // Unique statuses for filter dropdown
@@ -191,7 +222,6 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
     return Object.entries(counts)
       .map(([label, count]) => ({ label, count }))
       .sort((a, b) => b.count - a.count)
-      .slice(0, 12)
   }, [allCarriers])
 
   // Gather counseling-recommended conditions

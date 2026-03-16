@@ -8,6 +8,7 @@ import os
 import json
 import logging
 import hashlib
+from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -26,8 +27,19 @@ GEMINI_MODEL = os.environ.get("LLM_MODEL_GEMINI", "gemini-2.5-flash-lite")
 MAX_TOKENS = 1200
 CACHE_TTL_HOURS = 24
 
-# Global enable/disable toggle (persists in memory, admin-controlled)
-_insights_enabled: bool = True
+# Global enable/disable toggle — persisted to file so it survives restarts
+_STATE_FILE = Path(__file__).resolve().parent.parent.parent / ".insights_state"
+
+def _load_enabled_state() -> bool:
+    """Load persisted enabled state. Falls back to AI_INSIGHTS_ENABLED env var, then False."""
+    if _STATE_FILE.exists():
+        try:
+            return _STATE_FILE.read_text().strip() == "1"
+        except OSError:
+            pass
+    return os.environ.get("AI_INSIGHTS_ENABLED", "false").lower() in ("1", "true", "yes")
+
+_insights_enabled: bool = _load_enabled_state()
 
 # In-memory insight cache  {hash → (timestamp, result)}
 _insight_cache: dict[str, tuple[datetime, dict]] = {}
@@ -276,8 +288,12 @@ def get_llm_status() -> dict:
 
 
 def set_insights_enabled(enabled: bool) -> dict:
-    """Enable or disable AI insights for all users. Returns new status."""
+    """Enable or disable AI insights for all users. Persists across restarts."""
     global _insights_enabled
     _insights_enabled = enabled
+    try:
+        _STATE_FILE.write_text("1" if enabled else "0")
+    except OSError:
+        logger.warning("Could not persist insights state to file")
     logger.info(f"AI Insights {'enabled' if enabled else 'disabled'} by admin")
     return get_llm_status()

@@ -1,7 +1,7 @@
 'use client'
 
-import React, { useState } from 'react'
-import { LucideIcon, AlertCircle, AlertTriangle, CheckCircle, Flame, Info, ExternalLink, RefreshCw, Search } from 'lucide-react'
+import React, { useState, useEffect, useMemo } from 'react'
+import { LucideIcon, AlertCircle, AlertTriangle, CheckCircle, Flame, Info, ExternalLink, RefreshCw, Search, ChevronRight, ChevronDown, LayoutGrid } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
@@ -380,7 +380,20 @@ interface PathogenicityBarProps {
  * Uses the same ScoringEngine output as VariantDetailDialog for consistency.
  */
 export function PathogenicityBar({ rsid, pathogenicityMap, theme }: PathogenicityBarProps) {
-  const entry = pathogenicityMap?.[rsid]
+  const [override, setOverride] = useState<{ score: number; classification: string } | null>(null)
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail
+      if (detail?.rsid === rsid) {
+        setOverride({ score: detail.score, classification: detail.classification })
+      }
+    }
+    window.addEventListener('pathogenicity-update', handler)
+    return () => window.removeEventListener('pathogenicity-update', handler)
+  }, [rsid])
+
+  const entry = override || pathogenicityMap?.[rsid]
   if (!entry) return null
 
   return (
@@ -703,6 +716,106 @@ export function MasonryLayout({ children }: { children: React.ReactNode }) {
     <div className="flex flex-col md:flex-row gap-4">
       <div className="flex-1 space-y-4">{col1}</div>
       <div className="flex-1 space-y-4">{col2}</div>
+    </div>
+  )
+}
+
+// ─── Grouping Utilities ─────────────────────────────────────────
+
+interface GroupItem<T> { key: string; label: string; items: T[] }
+
+export function useGrouping<T>(
+  items: T[],
+  groupBy: string,
+  getGroupKey: (item: T) => string,
+  allLabel = 'All Items'
+) {
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+
+  const groups: GroupItem<T>[] = useMemo(() => {
+    if (groupBy === 'none') return [{ key: 'all', label: allLabel, items }]
+    const map = new Map<string, T[]>()
+    for (const item of items) {
+      const key = getGroupKey(item)
+      if (!map.has(key)) map.set(key, [])
+      map.get(key)!.push(item)
+    }
+    return Array.from(map.entries())
+      .map(([key, groupItems]) => ({
+        key,
+        label: key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+        items: groupItems,
+      }))
+      .sort((a, b) => b.items.length - a.items.length)
+  }, [items, groupBy, getGroupKey, allLabel])
+
+  const toggleGroup = (key: string) => {
+    setCollapsedGroups(prev => {
+      const next = new Set(prev)
+      next.has(key) ? next.delete(key) : next.add(key)
+      return next
+    })
+  }
+
+  const resetCollapsed = () => setCollapsedGroups(new Set())
+
+  return { groups, collapsedGroups, toggleGroup, resetCollapsed }
+}
+
+export function GroupHeader({
+  groupKey,
+  label,
+  count,
+  isCollapsed,
+  onToggle,
+  theme,
+}: {
+  groupKey: string
+  label: string
+  count: number
+  isCollapsed: boolean
+  onToggle: (key: string) => void
+  theme: ThemeClasses
+}) {
+  return (
+    <button
+      className={`w-full flex items-center justify-between py-2.5 px-4 rounded-lg ${theme.glass} border ${theme.border} mb-3 hover:opacity-80 transition-opacity cursor-pointer`}
+      onClick={() => onToggle(groupKey)}
+    >
+      <div className="flex items-center gap-2">
+        {isCollapsed
+          ? <ChevronRight className={`h-4 w-4 ${theme.textSecondary}`} />
+          : <ChevronDown className={`h-4 w-4 ${theme.textSecondary}`} />}
+        <span className={`font-semibold text-sm ${theme.textPrimary}`}>{label}</span>
+      </div>
+      <span className={`text-sm font-medium ${theme.textSecondary}`}>{count}</span>
+    </button>
+  )
+}
+
+export function GroupBySelect({
+  value,
+  onChange,
+  options,
+  theme,
+}: {
+  value: string
+  onChange: (value: string) => void
+  options: Record<string, string>
+  theme: ThemeClasses
+}) {
+  return (
+    <div className="relative min-w-40">
+      <LayoutGrid className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} focus:outline-none text-sm appearance-none cursor-pointer`}
+      >
+        {Object.entries(options).map(([key, label]) => (
+          <option key={key} value={key}>{label}</option>
+        ))}
+      </select>
     </div>
   )
 }

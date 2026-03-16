@@ -75,10 +75,13 @@ export default function SmartInsights({ isDarkMode, token, section, title }: Sma
   const isConfigured = status?.openai_configured || status?.anthropic_configured || status?.gemini_configured
   const isEnabled = status?.enabled !== false
 
+  // Completely hide when disabled by admin
+  if (status && !isEnabled) return null
+
   return (
     <SectionCard
       title={title || 'AI Insights'}
-      description={!isEnabled ? 'AI Insights are disabled by admin' : !isConfigured ? 'Configure an LLM API key to enable' : undefined}
+      description={!isConfigured ? 'Configure an LLM API key to enable' : undefined}
       theme={theme}
     >
       <div className="space-y-4">
@@ -116,17 +119,6 @@ export default function SmartInsights({ isDarkMode, token, section, title }: Sma
             </button>
           </div>
         </div>
-
-        {/* Disabled state */}
-        {!isEnabled && !insight && (
-          <div className={`flex items-start gap-3 p-4 rounded-xl border ${isDarkMode ? 'bg-slate-500/5 border-slate-500/20' : 'bg-slate-50 border-slate-200'}`}>
-            <AlertCircle className={`h-5 w-5 shrink-0 mt-0.5 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`} />
-            <div>
-              <p className={`text-sm font-medium ${theme.textPrimary}`}>AI Insights Disabled</p>
-              <p className={`text-xs ${theme.textSecondary} mt-1`}>An administrator has disabled AI-powered insights for all users.</p>
-            </div>
-          </div>
-        )}
 
         {/* Not configured state */}
         {isEnabled && !isConfigured && !insight && (

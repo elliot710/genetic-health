@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useCallback } from 'react'
 import { Apple, Coffee, Utensils, Wheat, ChefHat, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { CapacityChart } from './GenomicCharts'
@@ -16,6 +16,9 @@ import {
   formatLabel,
   MasonryLayout,
   cleanCondition,
+  useGrouping,
+  GroupHeader,
+  GroupBySelect,
 } from './shared'
 import type { CategoryPanelProps, NutritionTrait } from './types'
 
@@ -25,6 +28,7 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [sensitivityFilter, setSensitivityFilter] = useState<string>('all')
+  const [groupBy, setGroupBy] = useState('none')
 
 
 
@@ -76,6 +80,16 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
     return list
   }, [nutritionTraits, searchQuery, sensitivityFilter])
 
+  const NUTRITION_GROUP_OPTIONS: Record<string, string> = { none: 'No Grouping', sensitivity: 'Sensitivity Level' }
+  const getGroupKey = useCallback((trait: { sensitivity: string }) => {
+    if (groupBy === 'sensitivity') {
+      const s = (trait.sensitivity || 'moderate').toLowerCase()
+      return s.charAt(0).toUpperCase() + s.slice(1) + ' Sensitivity'
+    }
+    return 'All'
+  }, [groupBy])
+  const { groups, collapsedGroups, toggleGroup, resetCollapsed } = useGrouping(filteredTraits, groupBy, getGroupKey)
+
   const allRecommendations = useMemo(() => {
     const seen = new Set<string>()
     const result: string[] = []
@@ -85,7 +99,7 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
         if (!seen.has(key) && key) { seen.add(key); result.push(rec) }
       }
     }
-    return result.slice(0, 8)
+    return result
   }, [nutritionTraits])
 
   const headerProps = {
@@ -154,11 +168,16 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
             ))}
           </select>
         </div>
+        <GroupBySelect options={NUTRITION_GROUP_OPTIONS} value={groupBy} onChange={v => { setGroupBy(v); resetCollapsed() }} theme={theme} />
       </div>
 
       <SectionCard title={`Metabolic Traits${filteredTraits.length !== nutritionTraits.length ? ` (${filteredTraits.length} of ${nutritionTraits.length})` : ''}`} theme={theme}>
+        {groups.map(({ key, label, items }) => (
+          <div key={key}>
+            {groupBy !== 'none' && <GroupHeader groupKey={key} label={label} count={items.length} isCollapsed={collapsedGroups.has(key)} onToggle={toggleGroup} theme={theme} />}
+            {!collapsedGroups.has(key) && (
         <MasonryLayout>
-          {filteredTraits.map((trait, index) => {
+          {items.map((trait, index) => {
             const Icon = trait.icon
             const itemKey = `nutrition-${index}`
             const isExpanded = selectedItem === itemKey
@@ -212,6 +231,9 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
             )
           })}
         </MasonryLayout>
+            )}
+          </div>
+        ))}
       </SectionCard>
 
       {allRecommendations.length > 0 && (

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react'
+import React, { useState, useMemo, useEffect, useCallback } from 'react'
 import { Heart, AlertTriangle, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import {
@@ -16,6 +16,9 @@ import {
   getRiskBarColor,
   MasonryLayout,
   cleanCondition,
+  useGrouping,
+  GroupHeader,
+  GroupBySelect,
 } from './shared'
 import { getThemeClass } from '../../utils/theme'
 import { RiskDistributionChart } from './GenomicCharts'
@@ -53,6 +56,7 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [riskFilter, setRiskFilter] = useState<string>('all')
+  const [groupBy, setGroupBy] = useState('none')
 
   const [variantAnnotations, setVariantAnnotations] = useState<Record<string, VariantAnnotation>>({})
 
@@ -225,6 +229,16 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
     return list
   }, [healthRisks, searchQuery, riskFilter])
 
+  const HEALTH_GROUP_OPTIONS: Record<string, string> = { none: 'No Grouping', riskLevel: 'Risk Level', gene: 'Gene' }
+  const getGroupKey = useCallback((risk: MappedHealthRisk): string => {
+    switch (groupBy) {
+      case 'riskLevel': return risk.riskLevel ? `${risk.riskLevel.charAt(0).toUpperCase()}${risk.riskLevel.slice(1)} Risk` : 'Unknown'
+      case 'gene': return risk.gene && risk.gene !== 'Unknown' ? risk.gene : 'Unknown Gene'
+      default: return 'all'
+    }
+  }, [groupBy])
+  const { groups, collapsedGroups, toggleGroup, resetCollapsed } = useGrouping(filteredRisks, groupBy, getGroupKey, 'All Health Risks')
+
   const highRiskItems = healthRisks.filter((r: MappedHealthRisk) => r.riskLevel === 'high')
   const moderateRiskItems = healthRisks.filter((r: MappedHealthRisk) => r.riskLevel === 'moderate')
 
@@ -294,11 +308,18 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
             ))}
           </select>
         </div>
+        <GroupBySelect value={groupBy} onChange={v => { setGroupBy(v); resetCollapsed() }} options={HEALTH_GROUP_OPTIONS} theme={theme} />
       </div>
 
-      <SectionCard title={`Health Risk Assessment${filteredRisks.length !== healthRisks.length ? ` (${filteredRisks.length} of ${healthRisks.length})` : ''}`} theme={theme}>
+      <SectionCard title={`Health Risks${filteredRisks.length !== healthRisks.length ? ` (${filteredRisks.length} of ${healthRisks.length})` : ''}`} theme={theme}>
+        {groups.map(({ key, label, items }) => (
+          <div key={key} className="space-y-3">
+            {groupBy !== 'none' && (
+              <GroupHeader groupKey={key} label={label} count={items.length} isCollapsed={collapsedGroups.has(key)} onToggle={toggleGroup} theme={theme} />
+            )}
+            {!collapsedGroups.has(key) && (
         <MasonryLayout>
-          {filteredRisks.map((risk: MappedHealthRisk, index: number) => {
+          {items.map((risk: MappedHealthRisk, index: number) => {
             const itemKey = `health-${index}`
             const isExpanded = selectedItem === itemKey
             return (
@@ -422,6 +443,9 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
             )
           })}
         </MasonryLayout>
+            )}
+          </div>
+        ))}
       </SectionCard>
 
       {(highRiskItems.length > 0 || moderateRiskItems.length > 0) && (

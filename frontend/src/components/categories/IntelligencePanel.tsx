@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useCallback } from 'react'
 import { Brain, BookOpen, Lightbulb, Target, Puzzle, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { PercentileBarChart } from './GenomicCharts'
@@ -17,6 +17,9 @@ import {
   formatLabel,
   MasonryLayout,
   cleanCondition,
+  useGrouping,
+  GroupHeader,
+  GroupBySelect,
 } from './shared'
 import type { CategoryPanelProps, IntelligenceTrait } from './types'
 
@@ -26,6 +29,7 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [advantageFilter, setAdvantageFilter] = useState<string>('all')
+  const [groupBy, setGroupBy] = useState('none')
 
 
 
@@ -76,6 +80,16 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
     return list
   }, [cognitiveTraits, searchQuery, advantageFilter])
 
+  const INTELLIGENCE_GROUP_OPTIONS: Record<string, string> = { none: 'No Grouping', advantage: 'Genetic Advantage' }
+  const getGroupKey = useCallback((trait: { result: string }) => {
+    if (groupBy === 'advantage') {
+      const r = (trait.result || 'moderate').toLowerCase()
+      return r.charAt(0).toUpperCase() + r.slice(1) + ' Advantage'
+    }
+    return 'All'
+  }, [groupBy])
+  const { groups, collapsedGroups, toggleGroup, resetCollapsed } = useGrouping(filteredTraits, groupBy, getGroupKey)
+
   const allSuggestions = useMemo(() => {
     const seen = new Set<string>()
     const result: string[] = []
@@ -85,7 +99,7 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
         if (!seen.has(key) && key) { seen.add(key); result.push(s) }
       }
     }
-    return result.slice(0, 8)
+    return result
   }, [cognitiveTraits])
 
   const headerProps = {
@@ -154,11 +168,16 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
             ))}
           </select>
         </div>
+        <GroupBySelect options={INTELLIGENCE_GROUP_OPTIONS} value={groupBy} onChange={v => { setGroupBy(v); resetCollapsed() }} theme={theme} />
       </div>
 
       <SectionCard title={`Cognitive Abilities${filteredTraits.length !== cognitiveTraits.length ? ` (${filteredTraits.length} of ${cognitiveTraits.length})` : ''}`} theme={theme}>
+        {groups.map(({ key, label, items }) => (
+          <div key={key}>
+            {groupBy !== 'none' && <GroupHeader groupKey={key} label={label} count={items.length} isCollapsed={collapsedGroups.has(key)} onToggle={toggleGroup} theme={theme} />}
+            {!collapsedGroups.has(key) && (
         <MasonryLayout>
-          {filteredTraits.map((trait, index) => {
+          {items.map((trait, index) => {
             const Icon = trait.icon
             const itemKey = `intelligence-${index}`
             const isExpanded = selectedItem === itemKey
@@ -223,6 +242,9 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
             )
           })}
         </MasonryLayout>
+            )}
+          </div>
+        ))}
       </SectionCard>
 
       {allSuggestions.length > 0 && (

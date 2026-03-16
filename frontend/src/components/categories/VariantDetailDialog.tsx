@@ -320,7 +320,22 @@ export default function VariantDetailDialog({
       credentials: 'include',
     })
       .then((res) => res.json())
-      .then((data) => setDetails(data))
+      .then((data) => {
+        setDetails(data)
+        // Broadcast updated pathogenicity score so panel cards can sync
+        if (forceRefresh && data?.pathogenicity_score) {
+          const ps = data.pathogenicity_score
+          window.dispatchEvent(new CustomEvent('pathogenicity-update', {
+            detail: {
+              rsid,
+              score: Math.round(ps.composite_score * 100),
+              classification: ps.classification || 'unknown',
+              confidence: ps.confidence || 'none',
+              evidence_count: ps.evidence_count || 0,
+            },
+          }))
+        }
+      })
       .catch(() => setDetails({ found: false, rsid }))
       .finally(() => {
         setLoading(false)

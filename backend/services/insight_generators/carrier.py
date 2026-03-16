@@ -83,9 +83,8 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
                 genetic_counseling_recommended=needs_counseling
             ))
 
-    # Prioritize counseling-recommended conditions but cap at 100
+    # Prioritize counseling-recommended conditions
     carrier_results.sort(key=lambda c: (0 if c.genetic_counseling_recommended else 1, c.condition))
-    carrier_results = carrier_results[:100]
 
     for c in carrier_results:
         ctx.session.add(c)

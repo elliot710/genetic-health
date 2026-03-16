@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from 'react'
-import { Search, ChevronRight, Filter } from 'lucide-react'
+import React, { useState, useMemo, useCallback } from 'react'
+import { Dna, ChevronRight, Filter, Search } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import type { CategoryPanelProps } from './types'
 import {
@@ -16,6 +16,9 @@ import {
   formatLabel,
   MasonryLayout,
   cleanCondition,
+  useGrouping,
+  GroupHeader,
+  GroupBySelect,
 } from './shared'
 
 
@@ -37,6 +40,7 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [relevanceFilter, setRelevanceFilter] = useState<string>('all')
+  const [groupBy, setGroupBy] = useState('none')
 
   const processUncommonMutations = (): UncommonMutation[] => {
     if (data?.uncommon_mutations && Array.isArray(data.uncommon_mutations) && data.uncommon_mutations.length > 0) {
@@ -70,6 +74,17 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
     return list
   }, [mutations, searchQuery, relevanceFilter])
 
+  const UNCOMMON_GROUP_OPTIONS: Record<string, string> = { none: 'No Grouping', clinical_relevance: 'Clinical Relevance', effect_size: 'Effect Size', research_status: 'Research Status' }
+  const getGroupKey = useCallback((m: UncommonMutation): string => {
+    switch (groupBy) {
+      case 'clinical_relevance': return formatLabel(m.clinical_relevance || 'unknown')
+      case 'effect_size': return formatLabel(m.effect_size || 'unknown')
+      case 'research_status': return formatLabel(m.research_status || 'unknown')
+      default: return 'all'
+    }
+  }, [groupBy])
+  const { groups, collapsedGroups, toggleGroup, resetCollapsed } = useGrouping(filteredMutations, groupBy, getGroupKey, 'All Mutations')
+
   const getSummary = () => {
     const summary: Record<string, number> = {}
     mutations.forEach((m) => {
@@ -80,7 +95,7 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
   }
 
   const headerProps = {
-    icon: Search,
+    icon: Dna,
     iconColorClass: 'text-blue-400',
     gradientFrom: 'from-blue-500/20',
     gradientTo: 'to-indigo-500/20',
@@ -141,6 +156,7 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
             ))}
           </select>
         </div>
+        <GroupBySelect value={groupBy} onChange={v => { setGroupBy(v); resetCollapsed() }} options={UNCOMMON_GROUP_OPTIONS} theme={theme} />
         {(searchQuery || relevanceFilter !== 'all') && (
           <span className={`text-xs ${theme.textSecondary} self-center`}>
             {filteredMutations.length} of {mutations.length}
@@ -149,8 +165,14 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
       </div>
 
       <SectionCard title="Uncommon Variant Analysis" theme={theme}>
+        {groups.map(({ key, label, items }) => (
+          <div key={key} className="space-y-3">
+            {groupBy !== 'none' && (
+              <GroupHeader groupKey={key} label={label} count={items.length} isCollapsed={collapsedGroups.has(key)} onToggle={toggleGroup} theme={theme} />
+            )}
+            {!collapsedGroups.has(key) && (
         <MasonryLayout>
-          {filteredMutations.map((mutation, index) => {
+          {items.map((mutation, index) => {
             const itemKey = `uncommon-${index}`
             const isExpanded = selectedItem === itemKey
             return (
@@ -214,6 +236,9 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
             )
           })}
         </MasonryLayout>
+            )}
+          </div>
+        ))}
       </SectionCard>
 
       <SectionCard title="Summary" theme={theme}>

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useCallback } from 'react'
 import { Zap, Eye, Ruler, Palette, Sun, ChevronRight, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { CapacityChart } from './GenomicCharts'
@@ -16,6 +16,9 @@ import {
   formatLabel,
   MasonryLayout,
   cleanCondition,
+  useGrouping,
+  GroupHeader,
+  GroupBySelect,
 } from './shared'
 import type { CategoryPanelProps, PhysicalTrait } from './types'
 
@@ -25,6 +28,7 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [confidenceFilter, setConfidenceFilter] = useState<string>('all')
+  const [groupBy, setGroupBy] = useState('none')
 
   const getPhysicalTraits = () => {
     const physicalTraits = Array.isArray(data?.physical_traits) ? data.physical_traits as PhysicalTrait[] : []
@@ -61,6 +65,23 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
     }
     return list
   }, [physicalTraits, searchQuery, confidenceFilter])
+
+  const PHYSICAL_GROUP_OPTIONS: Record<string, string> = { none: 'No Grouping', confidence: 'Confidence Level', category: 'Trait Category' }
+  const getGroupKey = useCallback((t: typeof physicalTraits[0]): string => {
+    switch (groupBy) {
+      case 'confidence': return `${(t.confidence || 'moderate').charAt(0).toUpperCase()}${(t.confidence || 'moderate').slice(1)} Confidence`
+      case 'category': {
+        const c = (t.category || '').toLowerCase()
+        if (c.includes('eye')) return 'Eye Traits'
+        if (c.includes('hair')) return 'Hair Traits'
+        if (c.includes('skin') || c.includes('pigment')) return 'Skin & Pigmentation'
+        if (c.includes('height') || c.includes('build')) return 'Body Structure'
+        return 'Other'
+      }
+      default: return 'all'
+    }
+  }, [groupBy])
+  const { groups, collapsedGroups, toggleGroup, resetCollapsed } = useGrouping(filteredTraits, groupBy, getGroupKey, 'All Physical Traits')
 
   const getTraitIcon = (category: string) => {
     const categoryLower = category.toLowerCase()
@@ -146,11 +167,18 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
             ))}
           </select>
         </div>
+        <GroupBySelect value={groupBy} onChange={v => { setGroupBy(v); resetCollapsed() }} options={PHYSICAL_GROUP_OPTIONS} theme={theme} />
       </div>
 
       <SectionCard title={`Physical Characteristics${filteredTraits.length !== physicalTraits.length ? ` (${filteredTraits.length} of ${physicalTraits.length})` : ''}`} theme={theme}>
+        {groups.map(({ key, label, items }) => (
+          <div key={key} className="space-y-3">
+            {groupBy !== 'none' && (
+              <GroupHeader groupKey={key} label={label} count={items.length} isCollapsed={collapsedGroups.has(key)} onToggle={toggleGroup} theme={theme} />
+            )}
+            {!collapsedGroups.has(key) && (
         <MasonryLayout>
-          {filteredTraits.map((trait, index) => {
+          {items.map((trait, index) => {
             const itemKey = `trait-${index}`
             const isExpanded = selectedItem === itemKey
             const rsid = trait.gene?.startsWith('rs') ? trait.gene : undefined
@@ -189,6 +217,9 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
             )
           })}
         </MasonryLayout>
+            )}
+          </div>
+        ))}
       </SectionCard>
 
       <DisclaimerCard theme={theme} />

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useCallback } from 'react'
 import { Dumbbell, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { CapacityChart } from './GenomicCharts'
@@ -16,6 +16,9 @@ import {
   formatLabel,
   MasonryLayout,
   cleanCondition,
+  useGrouping,
+  GroupHeader,
+  GroupBySelect,
 } from './shared'
 import type { CategoryPanelProps, SportsPerformance } from './types'
 
@@ -25,6 +28,7 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [advantageFilter, setAdvantageFilter] = useState<string>('all')
+  const [groupBy, setGroupBy] = useState('none')
 
   const getAthleticTraits = () => {
     const sportsData = Array.isArray(data?.sports_performance) ? data.sports_performance as SportsPerformance[] : []
@@ -64,6 +68,16 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
     return list
   }, [athleticTraits, searchQuery, advantageFilter])
 
+  const SPORTS_GROUP_OPTIONS: Record<string, string> = { none: 'No Grouping', advantage: 'Genetic Advantage' }
+  const getGroupKey = useCallback((trait: { result: string }) => {
+    if (groupBy === 'advantage') {
+      const r = (trait.result || 'moderate').toLowerCase()
+      return r.charAt(0).toUpperCase() + r.slice(1) + ' Advantage'
+    }
+    return 'All'
+  }, [groupBy])
+  const { groups, collapsedGroups, toggleGroup, resetCollapsed } = useGrouping(filteredTraits, groupBy, getGroupKey)
+
   const allRecommendations = useMemo(() => {
     const seen = new Set<string>()
     const result: string[] = []
@@ -75,7 +89,7 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
         }
       }
     }
-    return result.slice(0, 8)
+    return result
   }, [athleticTraits])
 
   const headerProps = {
@@ -144,11 +158,16 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
             ))}
           </select>
         </div>
+        <GroupBySelect options={SPORTS_GROUP_OPTIONS} value={groupBy} onChange={v => { setGroupBy(v); resetCollapsed() }} theme={theme} />
       </div>
 
       <SectionCard title={`Athletic Traits${filteredTraits.length !== athleticTraits.length ? ` (${filteredTraits.length} of ${athleticTraits.length})` : ''}`} theme={theme}>
+        {groups.map(({ key, label, items }) => (
+          <div key={key}>
+            {groupBy !== 'none' && <GroupHeader groupKey={key} label={label} count={items.length} isCollapsed={collapsedGroups.has(key)} onToggle={toggleGroup} theme={theme} />}
+            {!collapsedGroups.has(key) && (
         <MasonryLayout>
-          {filteredTraits.map((trait, index) => {
+          {items.map((trait, index) => {
             const itemKey = `sport-${index}`
             const isExpanded = selectedItem === itemKey
             const rsid = trait.gene?.startsWith('rs') ? trait.gene : undefined
@@ -198,6 +217,9 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
             )
           })}
         </MasonryLayout>
+            )}
+          </div>
+        ))}
       </SectionCard>
 
       {allRecommendations.length > 0 && (

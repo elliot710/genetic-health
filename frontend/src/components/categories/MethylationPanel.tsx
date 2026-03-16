@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useCallback } from 'react'
 import { Dna, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { CapacityChart } from './GenomicCharts'
@@ -17,6 +17,9 @@ import {
   ZygosityBadge,
   formatLabel,
   MasonryLayout,
+  useGrouping,
+  GroupHeader,
+  GroupBySelect,
 } from './shared'
 import type { CategoryPanelProps, MethylationProfile } from './types'
 
@@ -24,6 +27,7 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
   const [selectedGene, setSelectedGene] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [capacityFilter, setCapacityFilter] = useState<string>('all')
+  const [groupBy, setGroupBy] = useState('none')
   const theme = useThemeClasses(isDarkMode)
 
   const profiles: MethylationProfile[] = data?.methylation_profiles || []
@@ -65,6 +69,16 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
     }
     return list
   }, [profiles, searchQuery, capacityFilter])
+
+  const METHYL_GROUP_OPTIONS: Record<string, string> = { none: 'No Grouping', capacity: 'Methylation Capacity', gene: 'Gene' }
+  const getGroupKey = useCallback((p: MethylationProfile): string => {
+    switch (groupBy) {
+      case 'capacity': return formatLabel(p.methylation_capacity || 'normal')
+      case 'gene': return p.gene || 'Unknown'
+      default: return 'all'
+    }
+  }, [groupBy])
+  const { groups, collapsedGroups, toggleGroup, resetCollapsed } = useGrouping(filteredProfiles, groupBy, getGroupKey, 'All Markers')
 
   const headerProps = {
     icon: Dna,
@@ -126,6 +140,7 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
             ))}
           </select>
         </div>
+        <GroupBySelect value={groupBy} onChange={v => { setGroupBy(v); resetCollapsed() }} options={METHYL_GROUP_OPTIONS} theme={theme} />
         {(searchQuery || capacityFilter !== 'all') && (
           <span className={`text-xs ${theme.textSecondary} self-center`}>
             {filteredProfiles.length} of {profiles.length}
@@ -140,8 +155,14 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
       )}
 
       <SectionCard title="Methylation Markers" theme={theme}>
+        {groups.map(({ key, label, items }) => (
+          <div key={key} className="space-y-3">
+            {groupBy !== 'none' && (
+              <GroupHeader groupKey={key} label={label} count={items.length} isCollapsed={collapsedGroups.has(key)} onToggle={toggleGroup} theme={theme} />
+            )}
+            {!collapsedGroups.has(key) && (
         <MasonryLayout>
-          {filteredProfiles.map((item, index) => {
+          {items.map((item, index) => {
             const rsid = item.associated_variants?.[0] || item.variant
             const capacity = item.methylation_capacity || 'normal'
             const geneKey = `${item.gene}-${index}`
@@ -197,6 +218,9 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
             )
           })}
         </MasonryLayout>
+            )}
+          </div>
+        ))}
       </SectionCard>
 
       {allSupplements.length > 0 && (

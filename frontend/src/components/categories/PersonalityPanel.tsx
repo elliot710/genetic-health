@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useCallback } from 'react'
 import { Brain, Heart, Users, Target, Zap, Palette, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { TraitRadarChart } from './GenomicCharts'
@@ -15,6 +15,9 @@ import {
   advantageToSeverity,
   MasonryLayout,
   cleanCondition,
+  useGrouping,
+  GroupHeader,
+  GroupBySelect,
 } from './shared'
 import type { CategoryPanelProps, DashboardData, PersonalityTraitData } from './types'
 import type { LucideIcon } from 'lucide-react'
@@ -34,6 +37,8 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
   const theme = useThemeClasses(isDarkMode)
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const [scoreFilter, setScoreFilter] = useState<string>('all')
+  const [groupBy, setGroupBy] = useState('none')
 
   const getTraitIcon = (traitName: string) => {
     const name = traitName?.toLowerCase() || ''
@@ -84,10 +89,19 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
   const personalityTraits = getPersonalityTraits()
 
   const filteredTraits = useMemo(() => {
-    if (!searchQuery.trim()) return personalityTraits
-    const q = searchQuery.toLowerCase()
-    return personalityTraits.filter(t => t.trait.toLowerCase().includes(q) || t.gene.toLowerCase().includes(q))
-  }, [personalityTraits, searchQuery])
+    let list = personalityTraits
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      list = list.filter(t => t.trait.toLowerCase().includes(q) || t.gene.toLowerCase().includes(q))
+    }
+    if (scoreFilter !== 'all') {
+      list = list.filter(t => {
+        const level = t.score >= 75 ? 'high' : t.score >= 50 ? 'moderate' : 'low'
+        return level === scoreFilter
+      })
+    }
+    return list
+  }, [personalityTraits, searchQuery, scoreFilter])
 
   const allCharacteristics = useMemo(() => {
     const seen = new Set<string>()
@@ -98,8 +112,15 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
         if (!seen.has(key) && key) { seen.add(key); result.push(c) }
       }
     }
-    return result.slice(0, 8)
+    return result
   }, [personalityTraits])
+
+  const PERSONALITY_GROUP_OPTIONS: Record<string, string> = { none: 'No Grouping', score: 'Score Level' }
+  const getGroupKey = useCallback((t: PersonalityTrait): string => {
+    if (groupBy === 'score') return t.score >= 75 ? 'High Score' : t.score >= 50 ? 'Moderate Score' : 'Low Score'
+    return 'all'
+  }, [groupBy])
+  const { groups, collapsedGroups, toggleGroup, resetCollapsed } = useGrouping(filteredTraits, groupBy, getGroupKey, 'All Traits')
 
   const headerProps = {
     icon: Palette,
@@ -153,16 +174,35 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
             onChange={e => setSearchQuery(e.target.value)}
             className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} placeholder:${theme.textSecondary} focus:outline-none focus:ring-2 focus:ring-pink-500/40 text-sm`}
           />
-        </div>
+        </div>        <div className="relative min-w-40">
+          <Filter className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+          <select
+            value={scoreFilter}
+            onChange={e => setScoreFilter(e.target.value)}
+            className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} focus:outline-none focus:ring-2 focus:ring-pink-500/40 text-sm appearance-none cursor-pointer`}
+          >
+            <option value="all">All Score Levels</option>
+            <option value="high">High (\u226575%)</option>
+            <option value="moderate">Moderate (50\u201374%)</option>
+            <option value="low">Low (&lt;50%)</option>
+          </select>
+        </div>        <GroupBySelect value={groupBy} onChange={v => { setGroupBy(v); resetCollapsed() }} options={PERSONALITY_GROUP_OPTIONS} theme={theme} />
       </div>
 
       <SectionCard title={`Personality Profile${filteredTraits.length !== personalityTraits.length ? ` (${filteredTraits.length} of ${personalityTraits.length})` : ''}`} theme={theme}>
+        {groups.map(({ key, label, items }) => (
+          <div key={key} className="space-y-3">
+            {groupBy !== 'none' && (
+              <GroupHeader groupKey={key} label={label} count={items.length} isCollapsed={collapsedGroups.has(key)} onToggle={toggleGroup} theme={theme} />
+            )}
+            {!collapsedGroups.has(key) && (
         <MasonryLayout>
-          {filteredTraits.map((trait: PersonalityTrait, index: number) => {
+          {items.map((trait: PersonalityTrait, index: number) => {
             const IconComponent = trait.icon
             const itemKey = `personality-${index}`
             const isExpanded = selectedItem === itemKey
             const scoreLabel = trait.score >= 75 ? 'high' : trait.score >= 50 ? 'moderate' : 'low'
+            const scoreDisplay = scoreLabel.charAt(0).toUpperCase() + scoreLabel.slice(1)
             return (
               <div
                 key={index}
@@ -176,7 +216,7 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
                     </div>
                     <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{cleanCondition(trait.trait)}</h4>
                     <StatusBadge
-                      label={`${trait.score}%`}
+                      label={scoreDisplay}
                       severity={advantageToSeverity(scoreLabel)}
                     />
                   </div>
@@ -213,6 +253,9 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
             )
           })}
         </MasonryLayout>
+            )}
+          </div>
+        ))}
       </SectionCard>
 
       {allCharacteristics.length > 0 && (

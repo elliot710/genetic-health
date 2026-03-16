@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useCallback } from 'react'
 import { Activity, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { CategoryDistributionChart } from './GenomicCharts'
@@ -16,6 +16,9 @@ import {
   formatLabel,
   MasonryLayout,
   cleanCondition,
+  useGrouping,
+  GroupHeader,
+  GroupBySelect,
 } from './shared'
 import type { CategoryPanelProps } from './types'
 
@@ -35,6 +38,7 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
+  const [groupBy, setGroupBy] = useState('none')
   const wellnessTraits = useMemo(() => {
     const traits = Array.isArray(data?.wellness_traits) ? data.wellness_traits : []
     return traits.map((t) => ({
@@ -106,6 +110,17 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
     return list
   }, [wellnessTraits, searchQuery, categoryFilter])
 
+  const WELLNESS_GROUP_OPTIONS: Record<string, string> = { none: 'No Grouping', category: 'Category', value: 'Status' }
+  const getGroupKey = useCallback((trait: WellnessTrait) => {
+    if (groupBy === 'category') return trait.category || 'General'
+    if (groupBy === 'value') {
+      const v = (trait.value || 'normal').toLowerCase()
+      return v.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+    }
+    return 'All'
+  }, [groupBy])
+  const { groups, collapsedGroups, toggleGroup, resetCollapsed } = useGrouping(filteredTraits, groupBy, getGroupKey, 'All Traits')
+
   const allRecommendations = useMemo(() => {
     const seen = new Set<string>()
     const result: string[] = []
@@ -115,7 +130,7 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
         if (!seen.has(key) && key) { seen.add(key); result.push(rec) }
       }
     }
-    return result.slice(0, 8)
+    return result
   }, [wellnessTraits])
 
   if (wellnessTraits.length === 0) {
@@ -173,16 +188,24 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
             </select>
           </div>
         )}
+        <GroupBySelect value={groupBy} onChange={v => { setGroupBy(v); resetCollapsed() }} options={WELLNESS_GROUP_OPTIONS} theme={theme} />
       </div>
 
-      <SectionCard title={`Wellness Markers${filteredTraits.length !== wellnessTraits.length ? ` (${filteredTraits.length} of ${wellnessTraits.length})` : ''}`} theme={theme}>
+      <SectionCard title={`Wellness Traits${filteredTraits.length !== wellnessTraits.length ? ` (${filteredTraits.length} of ${wellnessTraits.length})` : ''}`} theme={theme}>
         {filteredTraits.length === 0 ? (
           <div className={`py-10 text-center text-sm ${theme.textSecondary}`}>
             No traits match your search.
           </div>
         ) : (
+        <>
+        {groups.map(({ key, label, items }) => (
+          <div key={key} className="space-y-3">
+            {groupBy !== 'none' && (
+              <GroupHeader groupKey={key} label={label} count={items.length} isCollapsed={collapsedGroups.has(key)} onToggle={toggleGroup} theme={theme} />
+            )}
+            {!collapsedGroups.has(key) && (
         <MasonryLayout>
-          {filteredTraits.map((trait, index) => {
+          {items.map((trait, index) => {
             const itemKey = `wellness-${index}`
             const isExpanded = selectedItem === itemKey
             return (
@@ -243,6 +266,10 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
             )
           })}
         </MasonryLayout>
+            )}
+          </div>
+        ))}
+        </>
         )}
       </SectionCard>
 

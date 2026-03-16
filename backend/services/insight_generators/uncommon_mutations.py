@@ -50,9 +50,6 @@ async def generate_uncommon_mutations(ctx: GeneratorContext) -> int:
                 associated_variants=[variant_rsid]
             ))
 
-            if len(uncommon_mutations) >= 20:
-                break
-
     for m in uncommon_mutations:
         ctx.session.add(m)
     return len(uncommon_mutations)

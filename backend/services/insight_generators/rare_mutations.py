@@ -142,13 +142,12 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
             associated_variants=[variant_rsid]
         ))
 
-    # Sort by clinical priority and cap at 150 most significant
+    # Sort by clinical priority
     sig_priority = {
         'pathogenic': 0, 'likely_pathogenic': 1, 'risk_factor': 2,
         'conflicting': 3, 'uncertain': 4
     }
     rare_mutations.sort(key=lambda m: (sig_priority.get(m.clinical_significance, 5), m.population_frequency))
-    rare_mutations = rare_mutations[:150]
 
     for m in rare_mutations:
         ctx.session.add(m)

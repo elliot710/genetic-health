@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useCallback } from 'react'
 import { Pill, Info, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { DrugResponseChart } from './GenomicCharts'
@@ -13,6 +13,9 @@ import {
   PathogenicityBar,
   riskToSeverity,
   MasonryLayout,
+  useGrouping,
+  GroupHeader,
+  GroupBySelect,
 } from './shared'
 import type { CategoryPanelProps, DrugResponse } from './types'
 
@@ -32,6 +35,7 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [riskFilter, setRiskFilter] = useState<string>('all')
+  const [groupBy, setGroupBy] = useState('none')
 
   const getDrugResponses = () => {
     const drugResponses = Array.isArray(data?.drug_responses) ? data.drug_responses as DrugResponse[] : []
@@ -106,6 +110,16 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
     return list
   }, [drugResponses, searchQuery, riskFilter])
 
+  const DRUG_GROUP_OPTIONS: Record<string, string> = { none: 'No Grouping', gene: 'Gene', risk: 'Risk Level' }
+  const getGroupKey = useCallback((d: MappedDrugResponse): string => {
+    switch (groupBy) {
+      case 'gene': return d.gene || 'Unknown Gene'
+      case 'risk': return d.risk ? `${d.risk.charAt(0).toUpperCase()}${d.risk.slice(1)} Risk` : 'Unknown'
+      default: return 'all'
+    }
+  }, [groupBy])
+  const { groups, collapsedGroups, toggleGroup, resetCollapsed } = useGrouping(filteredDrugs, groupBy, getGroupKey, 'All Drugs')
+
   const headerProps = {
     icon: Pill,
     iconColorClass: 'text-blue-400',
@@ -154,11 +168,18 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
             ))}
           </select>
         </div>
+        <GroupBySelect value={groupBy} onChange={v => { setGroupBy(v); resetCollapsed() }} options={DRUG_GROUP_OPTIONS} theme={theme} />
       </div>
 
       <SectionCard title={`Drug Interactions${filteredDrugs.length !== drugResponses.length ? ` (${filteredDrugs.length} of ${drugResponses.length})` : ''}`} theme={theme}>
+        {groups.map(({ key, label, items }) => (
+          <div key={key} className="space-y-3">
+            {groupBy !== 'none' && (
+              <GroupHeader groupKey={key} label={label} count={items.length} isCollapsed={collapsedGroups.has(key)} onToggle={toggleGroup} theme={theme} />
+            )}
+            {!collapsedGroups.has(key) && (
         <MasonryLayout>
-          {filteredDrugs.map((drug: MappedDrugResponse, index: number) => {
+          {items.map((drug: MappedDrugResponse, index: number) => {
             const itemKey = `drug-${index}`
             const isExpanded = selectedItem === itemKey
             return (
@@ -207,6 +228,9 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
             )
           })}
         </MasonryLayout>
+            )}
+          </div>
+        ))}
       </SectionCard>
 
       <DisclaimerCard

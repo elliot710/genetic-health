@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from backend.services.genetic_api_service import GeneticAPIService
 from backend.db.database import get_session
-from backend.db.models import SharedVariantAnnotation, VariantLookupCache, AnnotationSourceConfig
+from backend.db.models import SharedVariantAnnotation, VariantLookupCache, AnnotationSourceConfig, DashboardCache
 from backend.utils.alpha_missense import get_alpha_missense_service, AlphaMissenseService
 from .auth_routes import get_current_user
 from backend.db.schemas import User
@@ -415,6 +415,12 @@ async def get_variant_details(
                     existing_ann.pharmgkb_data = raw.get("clinpgx")
                     existing_ann.snpedia_data = raw.get("snpedia")
                     existing_ann.litvar_data = raw.get("litvar")
+                    # Invalidate dashboard cache so pathogenicity scores recompute
+                    await db.execute(
+                        DashboardCache.__table__.delete().where(
+                            DashboardCache.user_id == current_user.id
+                        )
+                    )
                     await db.commit()
                     await db.refresh(existing_ann)
                     annotation = existing_ann
