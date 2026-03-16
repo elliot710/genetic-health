@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useMemo } from 'react'
 import { Search, ChevronRight, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import type { CategoryPanelProps } from './types'
@@ -15,7 +15,7 @@ import {
   MasonryLayout,
   cleanCondition,
 } from './shared'
-import { apiUrl } from '@/lib/api'
+
 
 interface UncommonMutation {
   rsid: string
@@ -36,36 +36,7 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
   const [searchQuery, setSearchQuery] = useState('')
   const [relevanceFilter, setRelevanceFilter] = useState<string>('all')
 
-  const [realMutations, setRealMutations] = useState<UncommonMutation[]>([])
-  const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
-    const loadUncommonMutations = async () => {
-      if (!token) return
-
-      setLoading(true)
-      try {
-        const response = await fetch(apiUrl('/api/analysis/dashboard-data'), {
-          credentials: 'include',
-        })
-
-        if (response.ok) {
-          const dashboardData = await response.json()
-          const mutations = dashboardData.uncommon_mutations || dashboardData.analysis_results?.uncommon_mutations || []
-          setRealMutations(mutations)
-        }
-      } catch {
-        // silently handle fetch errors
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    loadUncommonMutations()
-  }, [token])
-
   const processUncommonMutations = (): UncommonMutation[] => {
-    if (realMutations.length > 0) return realMutations
     if (data?.uncommon_mutations && Array.isArray(data.uncommon_mutations) && data.uncommon_mutations.length > 0) {
       return data.uncommon_mutations
     }
@@ -119,7 +90,7 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
     theme,
   }
 
-  if (mutations.length === 0 && !loading) {
+  if (mutations.length === 0) {
     return (
       <div className="space-y-6">
         <CategoryHeader {...headerProps} />

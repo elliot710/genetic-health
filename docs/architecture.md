@@ -407,7 +407,7 @@ The frontend is a **single-page application** using Next.js App Router but witho
 
 ```
 ┌──────────────┐     ┌───────────────┐     ┌─────────────────┐     ┌──────────────────┐
-│   AuthForm   │────▶│ModernFileUpload│────▶│ AnalysisProgress│────▶│ ModernDashboard  │
+│   AuthForm   │────▶│  FileUpload   │────▶│ AnalysisProgress│────▶│    Dashboard     │
 │              │     │               │     │   Loader        │     │  (13 panels)     │
 │ Login or     │     │ Drag-drop     │     │                 │     │                  │
 │ Register     │     │ VCF/CSV       │     │ Polls /status   │     │ Hash-based nav:  │
@@ -430,9 +430,9 @@ The frontend is a **single-page application** using Next.js App Router but witho
 ```
 app/page.tsx  (SPA orchestrator, ~360 LOC)
 ├── AuthForm.tsx  (login/register, ~300 LOC)
-├── ModernFileUpload.tsx  (drag-drop upload, ~280 LOC)
+├── FileUpload.tsx  (drag-drop upload, ~280 LOC)
 ├── AnalysisProgressLoader.tsx  (progress polling, ~250 LOC)
-└── ModernDashboard.tsx  (dashboard orchestrator, ~1900 LOC)
+└── Dashboard.tsx  (dashboard orchestrator, ~1900 LOC)
     ├── Overview tab
     │   ├── GenomicCharts.tsx  (11 chart types, ~600 LOC)
     │   ├── VariantSearch.tsx  (variant lookup, ~450 LOC)
@@ -807,7 +807,7 @@ Rules evaluated in priority order (lower number = higher priority).
 
 | File | LOC | Purpose |
 |------|-----|---------|
-| `components/ModernDashboard.tsx` | 1,900 | Dashboard orchestrator |
+| `components/Dashboard.tsx` | 1,900 | Dashboard orchestrator |
 | `components/categories/GenomicCharts.tsx` | ~600 | Chart library (11 types) |
 | `components/categories/shared.tsx` | ~500 | Shared components + utilities |
 | `components/categories/AncestryPanel.tsx` | ~500 | Ancestry + world map |

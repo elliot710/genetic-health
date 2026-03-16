@@ -2,25 +2,13 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { Dna, LogOut, Upload } from 'lucide-react'
-import Dashboard from '@/components/ModernDashboard'
-import FileUpload from '@/components/ModernFileUpload'
+import Dashboard from '@/components/Dashboard'
+import FileUpload from '@/components/FileUpload'
 import AuthForm from '@/components/AuthForm'
 import AnalysisProgressLoader from '@/components/AnalysisProgressLoader'
 import { getTheme } from '@/utils/theme'
 import { apiUrl } from '@/lib/api'
-
-interface AnalysisData {
-  summary?: {
-    total_variants?: number
-    data_sources?: string[]
-    analysis_id?: string
-    upload_info?: Record<string, unknown>
-  }
-  health_risks?: Record<string, unknown>
-  drug_interactions?: Record<string, unknown>
-  recommendations?: string[]
-  real_data?: Record<string, unknown>
-}
+import type { DashboardData } from '@/components/categories/types'
 
 interface User {
   id?: string
@@ -32,7 +20,7 @@ interface User {
 }
 
 export default function Home() {
-  const [analysisData, setAnalysisData] = useState<AnalysisData | null>(null)
+  const [analysisData, setAnalysisData] = useState<DashboardData | null>(null)
   const [analysisId, setAnalysisId] = useState<number | null>(null)
   const [showProgressLoader, setShowProgressLoader] = useState(false)
   const [token, setToken] = useState<string | null>(null)
@@ -141,7 +129,7 @@ export default function Home() {
     checkSession()
   }
 
-  const handleAnalysisComplete = useCallback(async (data: AnalysisData, newAnalysisId?: number) => {
+  const handleAnalysisComplete = useCallback(async (data: DashboardData, newAnalysisId?: number) => {
     console.log('Analysis complete with data:', data, 'analysisId:', newAnalysisId)
     
     if (newAnalysisId) {
@@ -176,7 +164,7 @@ export default function Home() {
     }
   }, [token])
 
-  const handleProgressComplete = useCallback(async (results: Record<string, unknown>) => {
+  const handleProgressComplete = useCallback(async (results: DashboardData) => {
     console.log('Analysis progress completed:', results)
     setShowProgressLoader(false)
     

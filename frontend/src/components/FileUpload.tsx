@@ -1,32 +1,45 @@
 'use client'
 
-'use client'
-
 import { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { Upload, File, AlertCircle, CheckCircle } from 'lucide-react'
+import { 
+  Upload, File, AlertCircle, CheckCircle, 
+  Dna, Shield, Info, ExternalLink 
+} from 'lucide-react'
+import { getTheme } from '../utils/theme'
 import { apiUrl } from '@/lib/api'
+import { Button } from '@/components/ui/button'
+import type { DashboardData } from '@/components/categories/types'
 
 interface FileUploadProps {
-  onAnalysisComplete: (data: Record<string, unknown>) => void
+  onAnalysisComplete: (data: DashboardData, analysisId?: number) => void
   token: string
+  isDarkMode: boolean
 }
 
-export default function FileUpload({ onAnalysisComplete, token }: FileUploadProps) {
+export default function FileUpload({ onAnalysisComplete, token, isDarkMode }: FileUploadProps) {
   const [isLoading, setIsLoading] = useState(false)
   const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'processing' | 'success' | 'error'>('idle')
   const [fileName, setFileName] = useState('')
   const [error, setError] = useState('')
+  const [progress, setProgress] = useState(0)
+  const theme = getTheme(isDarkMode)
 
-  const handleFileUpload = async (file: File, fileType: 'vcf' | 'csv') => {
+  const handleFileUpload = useCallback(async (file: File, fileType: 'vcf' | 'csv') => {
     setIsLoading(true)
     setUploadStatus('uploading')
     setFileName(file.name)
     setError('')
+    setProgress(0)
 
     try {
       const formData = new FormData()
       formData.append('file', file)
+
+      // Simulate progress for upload
+      const progressInterval = setInterval(() => {
+        setProgress(prev => Math.min(prev + 10, 90))
+      }, 200)
 
       // Upload file to backend with authentication
       const uploadResponse = await fetch(apiUrl(`/upload/${fileType}`), {
@@ -35,6 +48,9 @@ export default function FileUpload({ onAnalysisComplete, token }: FileUploadProp
         body: formData,
       })
 
+      clearInterval(progressInterval)
+      setProgress(100)
+
       if (!uploadResponse.ok) {
         const errorData = await uploadResponse.json()
         throw new Error(errorData.detail || 'Upload failed')
@@ -42,61 +58,72 @@ export default function FileUpload({ onAnalysisComplete, token }: FileUploadProp
 
       const uploadResult = await uploadResponse.json()
       setUploadStatus('processing')
+      setProgress(0)
 
-      // Get the actual analysis data from the uploaded file
+      // Analysis is automatically queued by the upload endpoint
+      console.log('Upload successful, analysis queued automatically:', uploadResult)
+
+      // Simulate analysis progress
+      const analysisInterval = setInterval(() => {
+        setProgress(prev => Math.min(prev + 15, 90))
+      }, 300)
+
+      // Wait for simulated analysis time
+      setTimeout(() => {
+        clearInterval(analysisInterval)
+        setProgress(100)
+      }, 2000)
+
+      // Use the upload result stats instead of trying to fetch incomplete analysis
       const analysisId = uploadResult.analysis_id
       
-      // Fetch the real analysis results from the database
-      const analysisResponse = await fetch(apiUrl(`/upload/analysis/${analysisId}`), {
-        method: 'GET',
-        credentials: 'include',
-      })
-
-      if (!analysisResponse.ok) {
-        const errorData = await analysisResponse.json()
-        throw new Error(errorData.detail || 'Failed to fetch analysis results')
-      }
-
-      const analysisResult = await analysisResponse.json()
-      
-      // Transform the real data into the format expected by Dashboard
-      const dashboardData = {
+      // Transform the upload stats into the format expected by Dashboard
+      const dashboardData: DashboardData = {
         summary: {
-          total_variants: analysisResult.sample_variants?.length || uploadResult.genetic_variants_found || uploadResult.total_rows,
-          data_sources: [uploadResult.filename],
+          total_variants: uploadResult.stats?.total_variants || 0,
+          data_sources: [file.name],
           analysis_id: analysisId,
-          upload_info: uploadResult
-        },
-        health_risks: {
-          overall_score: 85, // Will be updated when background analysis completes
-          risk_categories: analysisResult.health_risks?.reduce((acc: Record<string, { score: number; variants: string[] }>, risk: { condition: string; risk_level: string; associated_variants?: string[] }) => {
-            acc[risk.condition] = {
-              score: risk.risk_level === 'high' ? 90 : risk.risk_level === 'moderate' ? 60 : 30,
-              variants: risk.associated_variants || []
-            }
-            return acc
-          }, {}) || {}
+          status: 'processing',
+          upload_info: uploadResult,
         },
         drug_interactions: {
-          high_risk_genes: analysisResult.drug_responses?.filter((dr: { response_type: string }) => dr.response_type === 'poor_metabolizer').map((dr: { gene: string }) => dr.gene) || [],
-          moderate_risk_genes: analysisResult.drug_responses?.filter((dr: { response_type: string }) => dr.response_type === 'intermediate_metabolizer').map((dr: { gene: string }) => dr.gene) || [],
-          affected_drug_classes: [...new Set(analysisResult.drug_responses?.map((dr: { drug: string }) => dr.drug) || [])]
+          high_risk_genes: [],
+          moderate_risk_genes: [],
+          affected_drug_classes: []
         },
-        recommendations: [
-          `Successfully uploaded ${uploadResult.filename} with ${uploadResult.genetic_variants_found || uploadResult.total_rows} data points`,
-          ...(analysisResult.health_risks?.map((risk: { recommendations: string[] }) => risk.recommendations).flat() || []),
-          "Genetic analysis is processing in the background - refresh for updated results",
-          "Consult with a healthcare provider for personalized recommendations"
-        ],
         real_data: {
-          variants: analysisResult.sample_variants || [],
-          analysis: analysisResult.analysis,
+          variants: [],
           upload_result: uploadResult
         }
       }
       
       setUploadStatus('success')
-      onAnalysisComplete(dashboardData)
+      
+      // Pass the analysis ID to trigger progress tracking
+      onAnalysisComplete(dashboardData, analysisId)
+      
+      // Wait a moment to let the background analysis begin, then fetch the latest dashboard data
+      setTimeout(async () => {
+        try {
+          // Fetch the updated dashboard data which includes the new upload
+          const dashboardResponse = await fetch(apiUrl('/api/analysis/dashboard-data'), {
+            credentials: 'include',
+          })
+          
+          if (dashboardResponse.ok) {
+            const dashboardData = await dashboardResponse.json()
+            console.log('Fetched updated dashboard data after upload:', dashboardData)
+            onAnalysisComplete(dashboardData, analysisId)
+          } else {
+            console.error('Failed to fetch updated dashboard data')
+            // Continue with progress tracking using the analysis ID
+          }
+        } catch (error) {
+          console.error('Error fetching updated dashboard data:', error)
+          // Continue with progress tracking using the analysis ID
+        }
+      }, 2000)
+
     } catch (error) {
       console.error('Error processing file:', error)
       let errorMessage = 'An error occurred while processing your file.'
@@ -116,7 +143,7 @@ export default function FileUpload({ onAnalysisComplete, token }: FileUploadProp
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [token, onAnalysisComplete])
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     const file = acceptedFiles[0]
@@ -125,111 +152,266 @@ export default function FileUpload({ onAnalysisComplete, token }: FileUploadProp
       
       if (fileExtension === 'vcf') {
         handleFileUpload(file, 'vcf')
-      } else if (fileExtension === 'csv') {
+      } else if (fileExtension === 'csv' || fileExtension === 'txt') {
         handleFileUpload(file, 'csv')
       } else {
-        setError('Please upload a VCF or CSV file')
+        setError('Please upload a VCF, CSV, or TXT file containing genetic data')
         setUploadStatus('error')
       }
     }
-  }, [token])
+  }, [handleFileUpload])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: {
-      'text/plain': ['.vcf'],
-      'text/csv': ['.csv']
+      'text/plain': ['.vcf', '.txt'],
+      'text/csv': ['.csv'],
+      'application/vnd.ms-excel': ['.csv']
     },
     multiple: false,
     disabled: isLoading
   })
 
+  const resetUpload = () => {
+    setUploadStatus('idle')
+    setError('')
+    setFileName('')
+    setProgress(0)
+  }
+
   const getStatusDisplay = () => {
     switch (uploadStatus) {
       case 'uploading':
         return (
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-2"></div>
-            <p className="text-sm text-gray-600">Uploading {fileName}...</p>
+          <div className="text-center space-y-4">
+            <div className="flex items-center justify-center">
+              <Upload className={`h-8 w-8 animate-bounce ${theme.primary.text}`} />
+            </div>
+            <div className="space-y-2">
+              <p className={`text-lg font-medium ${theme.text.primary}`}>Uploading {fileName}</p>
+              <div className={`w-64 rounded-full h-2 mx-auto ${theme.glassSecondary}`}>
+                <div 
+                  className={`h-2 rounded-full transition-all duration-300 ${theme.primary.bg}`}
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+              <p className={`text-sm ${theme.text.tertiary}`}>{progress}% complete</p>
+            </div>
           </div>
         )
       case 'processing':
         return (
-          <div className="text-center">
-            <div className="animate-pulse flex items-center justify-center mb-2">
-              <File className="h-8 w-8 text-blue-600" />
+          <div className="text-center space-y-4">
+            <div className="flex items-center justify-center">
+              <Dna className={`h-8 w-8 animate-spin ${theme.text.accent}`} />
             </div>
-            <p className="text-sm text-gray-600">Analyzing genetic data...</p>
+            <div className="space-y-2">
+              <p className={`text-lg font-medium ${theme.text.primary}`}>Analyzing genetic data</p>
+              <div className={`w-64 rounded-full h-2 mx-auto ${theme.glassSecondary}`}>
+                <div 
+                  className="h-2 rounded-full transition-all duration-300 bg-gradient-to-r from-teal-500 to-cyan-500"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+              <p className={`text-sm ${theme.text.tertiary}`}>Processing {fileName}...</p>
+            </div>
           </div>
         )
       case 'success':
         return (
-          <div className="text-center text-green-600">
-            <CheckCircle className="h-8 w-8 mx-auto mb-2" />
-            <p className="text-sm">Analysis complete!</p>
+          <div className={`text-center space-y-4 ${theme.success.text}`}>
+            <CheckCircle className="h-12 w-12 mx-auto animate-pulse" />
+            <div>
+              <p className="text-lg font-medium">Upload complete!</p>
+              <p className={`text-sm ${theme.text.tertiary}`}>Analyzing your data...</p>
+            </div>
           </div>
         )
       case 'error':
         return (
-          <div className="text-center text-red-600">
-            <AlertCircle className="h-8 w-8 mx-auto mb-2" />
-            <p className="text-sm">{error}</p>
-            <button
-              onClick={() => {
-                setUploadStatus('idle')
-                setError('')
-                setFileName('')
-              }}
-              className="mt-2 text-sm text-blue-600 hover:text-blue-700 underline"
-            >
+          <div className="text-center space-y-4">
+            <AlertCircle className={`h-8 w-8 mx-auto ${theme.error.text}`} />
+            <div className="space-y-2">
+              <p className={`text-lg font-medium ${theme.error.text}`}>Upload failed</p>
+              <p className={`text-sm max-w-md mx-auto ${theme.text.tertiary}`}>{error}</p>
+            </div>
+            <Button onClick={resetUpload} size="sm">
               Try again
-            </button>
+            </Button>
           </div>
         )
       default:
         return (
-          <div className="text-center">
-            <Upload className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-            <p className="text-xl font-semibold text-gray-900 mb-2">
-              Upload your genetic data
-            </p>
-            <p className="text-gray-600 mb-4">
-              Drop your VCF or CSV file here, or click to browse
-            </p>
-            <div className="text-sm text-gray-500">
-              <p>Supported formats:</p>
-              <p>• VCF files from genetic testing companies</p>
-              <p>• CSV files with genetic variant data</p>
+          <div className="text-center space-y-6">
+            <div className="space-y-4">
+              <Upload className={`h-16 w-16 mx-auto transition-colors ${
+                isDragActive ? theme.primary.text : theme.text.muted
+              }`} />
+              <div>
+                <p className={`text-2xl font-bold mb-2 ${theme.text.primary}`}>
+                  {isDragActive ? 'Drop your file here' : 'Upload your genetic data'}
+                </p>
+                <p className={`text-lg ${theme.text.tertiary}`}>
+                  {isDragActive ? 'Release to start analysis' : 'Drag and drop or click to browse'}
+                </p>
+              </div>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-4 max-w-md mx-auto text-sm">
+              <div className={`p-3 rounded-lg border ${theme.glassSecondary} ${theme.primary.border}`}>
+                <File className={`h-5 w-5 mx-auto mb-1 ${theme.primary.text}`} />
+                <p className={`font-medium ${theme.text.primary}`}>VCF Files</p>
+                <p className={theme.text.secondary}>Raw genetic variants</p>
+              </div>
+              <div className={`p-3 rounded-lg border ${theme.glassSecondary} ${theme.primary.border}`}>
+                <File className={`h-5 w-5 mx-auto mb-1 ${theme.text.accent}`} />
+                <p className={`font-medium ${theme.text.primary}`}>CSV/TXT Files</p>
+                <p className={theme.text.secondary}>Genetic data tables</p>
+              </div>
             </div>
           </div>
         )
     }
   }
 
+  const dataProviders = [
+    {
+      name: '23andMe',
+      description: 'Download raw data from your account dashboard',
+      url: 'https://you.23andme.com/tools/data-download/',
+    },
+    {
+      name: 'AncestryDNA',
+      description: 'Request raw data download from settings',
+      url: 'https://www.ancestry.com/dna/',
+    },
+    {
+      name: 'MyHeritage',
+      description: 'Export raw DNA data from your account',
+      url: 'https://www.myheritage.com/dna',
+    },
+    {
+      name: 'FamilyTreeDNA',
+      description: 'Download from your results page',
+      url: 'https://www.familytreedna.com/',
+    }
+  ]
+
   return (
-    <div className="max-w-2xl mx-auto">
-      <div
-        {...getRootProps()}
-        className={`
-          border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors
-          ${isDragActive ? 'border-blue-400 bg-blue-50' : 'border-gray-300 hover:border-gray-400'}
-          ${isLoading ? 'cursor-not-allowed opacity-50' : ''}
-        `}
-      >
-        <input {...getInputProps()} />
-        {getStatusDisplay()}
+    <div className="max-w-4xl mx-auto space-y-8">
+      {/* Main Upload Area */}
+      <div className={`rounded-2xl shadow-lg border overflow-hidden backdrop-blur-xl ${theme.glass} ${theme.glassBorder}`}>
+        <div
+          {...getRootProps()}
+          className={`
+            p-12 text-center cursor-pointer transition-all duration-200
+            ${isDragActive 
+              ? isDarkMode ? 'bg-teal-500/20' : 'bg-teal-50'
+              : theme.interactive.hover
+            }
+            ${isLoading ? 'cursor-not-allowed' : ''}
+          `}
+        >
+          <input {...getInputProps()} />
+          {getStatusDisplay()}
+        </div>
       </div>
 
+      {/* Information Sections */}
       {uploadStatus === 'idle' && (
-        <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
-          <h3 className="text-lg font-semibold text-blue-900 mb-2">
-            How to get your genetic data:
-          </h3>
-          <div className="text-sm text-blue-800 space-y-2">
-            <p>• <strong>23andMe:</strong> Download raw data from your account</p>
-            <p>• <strong>AncestryDNA:</strong> Request raw data download</p>
-            <p>• <strong>MyHeritage:</strong> Export your raw DNA data</p>
-            <p>• <strong>FamilyTreeDNA:</strong> Download your raw data file</p>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Data Providers */}
+          <div className={`rounded-xl shadow-sm border p-6 backdrop-blur-xl ${theme.glass} ${theme.glassBorder}`}>
+            <div className="flex items-center mb-4">
+              <Dna className={`h-6 w-6 mr-2 ${theme.primary.text}`} />
+              <h3 className={`text-lg font-semibold ${theme.text.primary}`}>
+                Get Your Genetic Data
+              </h3>
+            </div>
+            <div className="space-y-3">
+              {dataProviders.map((provider, index) => (
+                <div key={index} className={`p-3 rounded-lg border ${theme.glassSecondary} ${theme.glassSecondaryBorder}`}>
+                  <div className="flex justify-between items-start">
+                    <div className="flex-1">
+                      <h4 className={`font-medium ${theme.text.primary}`}>{provider.name}</h4>
+                      <p className={`text-sm ${theme.text.tertiary}`}>{provider.description}</p>
+                    </div>
+                    <a 
+                      href={provider.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`ml-2 p-1 rounded transition-colors ${theme.interactive.hover}`}
+                    >
+                      <ExternalLink className={`h-4 w-4 ${theme.text.secondary}`} />
+                    </a>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Privacy & Security */}
+          <div className={`rounded-xl shadow-sm border p-6 backdrop-blur-xl ${theme.glass} ${theme.glassBorder}`}>
+            <div className="flex items-center mb-4">
+              <Shield className={`h-6 w-6 mr-2 ${theme.success.text}`} />
+              <h3 className={`text-lg font-semibold ${theme.text.primary}`}>
+                Privacy & Security
+              </h3>
+            </div>
+            <div className="space-y-4">
+              <div className="flex items-start space-x-3">
+                <CheckCircle className={`h-5 w-5 mt-0.5 flex-shrink-0 ${theme.success.text}`} />
+                <div>
+                  <p className={`font-medium ${theme.text.primary}`}>Data Processing</p>
+                  <p className={`text-sm ${theme.text.tertiary}`}>Your data is not stored permanently.</p>
+                </div>
+              </div>
+              <div className="flex items-start space-x-3">
+                <CheckCircle className={`h-5 w-5 mt-0.5 flex-shrink-0 ${theme.success.text}`} />
+                <div>
+                  <p className={`font-medium ${theme.text.primary}`}>Encrypted Transfer</p>
+                  <p className={`text-sm ${theme.text.tertiary}`}>All data transfers use HTTPS encryption</p>
+                </div>
+              </div>
+              <div className="flex items-start space-x-3">
+                <CheckCircle className={`h-5 w-5 mt-0.5 flex-shrink-0 ${theme.success.text}`} />
+                <div>
+                  <p className={`font-medium ${theme.text.primary}`}>User Control</p>
+                  <p className={`text-sm ${theme.text.tertiary}`}>You can delete your data at any time</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* File Format Information */}
+      {uploadStatus === 'idle' && (
+        <div className={`border rounded-xl p-6 backdrop-blur-xl ${theme.glass} ${theme.primary.border}`}>
+          <div className="flex items-start space-x-3">
+            <Info className={`h-6 w-6 mt-0.5 flex-shrink-0 ${theme.primary.text}`} />
+            <div>
+              <h3 className={`text-lg font-semibold mb-2 ${theme.text.primary}`}>
+                Supported File Formats
+              </h3>
+              <div className={`grid grid-cols-1 md:grid-cols-2 gap-4 text-sm ${theme.text.secondary}`}>
+                <div>
+                  <p className={`font-medium ${theme.text.primary}`}>VCF Files (.vcf)</p>
+                  <p>Standard format for genetic variants with detailed annotations</p>
+                </div>
+                <div>
+                  <p className={`font-medium ${theme.text.primary}`}>CSV/TXT Files (.csv, .txt)</p>
+                  <p>Tabular genetic data from testing companies</p>
+                </div>
+              </div>
+              <div className={`mt-4 p-3 rounded-lg ${theme.glassSecondary}`}>
+                <p className={`text-sm ${theme.text.secondary}`}>
+                  <strong>Note:</strong> Files are automatically detected and parsed. 
+                  Our system handles various formats including 23andMe, AncestryDNA, 
+                  and other major genetic testing platforms.
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       )}

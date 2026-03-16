@@ -541,8 +541,8 @@ export default function VariantDetailDialog({
                 {details.clinvar?.entries && details.clinvar.entries.length > 0 && (
                   <div className={`mt-3 space-y-2 rounded-lg border ${isDarkMode ? 'border-orange-500/20 bg-orange-500/5' : 'border-orange-200 bg-orange-50/50'} p-3`}>
                     <span className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider`}>ClinVar Reports</span>
-                    {details.clinvar.entries.map((entry) => (
-                      <div key={entry.uid} className={`flex items-start justify-between gap-2 text-xs ${isDarkMode ? 'border-b border-white/5 pb-1.5' : 'border-b border-gray-200/50 pb-1.5'} last:border-0`}>
+                    {details.clinvar.entries.map((entry, idx) => (
+                      <div key={`${entry.uid}-${idx}`} className={`flex items-start justify-between gap-2 text-xs ${isDarkMode ? 'border-b border-white/5 pb-1.5' : 'border-b border-gray-200/50 pb-1.5'} last:border-0`}>
                         <div className="flex-1 min-w-0">
                           <div className="flex flex-wrap gap-1 mb-0.5">
                             {entry.clinical_significance.map((sig) => (

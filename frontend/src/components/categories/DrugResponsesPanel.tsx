@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react'
+import React, { useState, useMemo } from 'react'
 import { Pill, Info, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { DrugResponseChart } from './GenomicCharts'
@@ -14,7 +14,7 @@ import {
   MasonryLayout,
 } from './shared'
 import type { CategoryPanelProps, DrugResponse } from './types'
-import { apiUrl } from '@/lib/api'
+
 
 interface MappedDrugResponse {
   drug: string
@@ -32,39 +32,10 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
   const [searchQuery, setSearchQuery] = useState('')
   const [riskFilter, setRiskFilter] = useState<string>('all')
 
-  const [realDrugResponses, setRealDrugResponses] = useState<DrugResponse[]>([])
-  const [loading, setLoading] = useState(false)
-  
-  // Load real drug responses from API
-  useEffect(() => {
-    const loadDrugResponses = async () => {
-      if (!token) return
-      
-      setLoading(true)
-      try {
-        const response = await fetch(apiUrl('/api/analysis/dashboard-data'), {
-          credentials: 'include',
-        })
-        
-        if (response.ok) {
-          const drugData = await response.json()
-          setRealDrugResponses(drugData.drug_responses || [])
-        }
-      } catch (error) {
-        // silently handle fetch errors
-      } finally {
-        setLoading(false)
-      }
-    }
-    
-    loadDrugResponses()
-  }, [token])
-
-  // Use real drug response data if available
   const getDrugResponses = () => {
-    // First priority: Real API data
-    if (realDrugResponses.length > 0) {
-      return realDrugResponses
+    const drugResponses = Array.isArray(data?.drug_responses) ? data.drug_responses as DrugResponse[] : []
+    if (drugResponses.length > 0) {
+      return drugResponses
         .filter((dr: DrugResponse) => {
           // Filter out generic "General medications" entries
           const drugName = dr.drug || ''
@@ -101,18 +72,6 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
           genotype: dr.variants_involved?.join(', ') || 'Multiple variants',
           variants: dr.variants_involved || []
         }))
-    }
-    
-    // Loading state
-    if (loading) {
-      return [{
-        drug: 'Loading Drug Responses...',
-        gene: 'Multiple Genes',
-        response: 'Processing pharmacogenomic analysis',
-        recommendation: 'Loading your genetic drug response predictions...',
-        risk: 'pending',
-        genotype: 'Analyzing variants...'
-      }]
     }
     
     // Show processing message when no data available

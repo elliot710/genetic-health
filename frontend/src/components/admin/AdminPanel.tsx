@@ -1794,7 +1794,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                       <TableRow key={a.id}>
                         <TableCell className="font-mono text-sm">{a.rsid}</TableCell>
                         {(incompleteSummary?.enabled_sources ?? []).map(src => {
-                          const status = (a as Record<string, unknown>)[src] as string | undefined
+                          const status = a[src as keyof IncompleteAnnotation] as string | undefined
                           return (
                             <TableCell key={src} className="text-center px-2">
                               {status === 'found'

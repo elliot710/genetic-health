@@ -558,8 +558,16 @@ const SKIP_CONDITIONS = new Set([
 
 export function cleanCondition(raw?: string | null): string {
   if (!raw) return 'Unknown'
-  if (!raw.includes('|') && !raw.includes(';')) return raw
-  const parts = raw.replace(/;/g, '|').split('|')
+  // Convert snake_case to spaced words first
+  let cleaned = raw.replace(/[_]+/g, ' ').trim()
+  if (!cleaned.includes('|') && !cleaned.includes(';')) {
+    // Title-case if it looks like a slug (all lowercase, no capitals)
+    if (cleaned === cleaned.toLowerCase()) {
+      return toTitleCase(cleaned)
+    }
+    return cleaned
+  }
+  const parts = cleaned.replace(/;/g, '|').split('|')
   for (const part of parts) {
     const trimmed = part.trim()
     if (trimmed && !SKIP_CONDITIONS.has(trimmed.toLowerCase())) {

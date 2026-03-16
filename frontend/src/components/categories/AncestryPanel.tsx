@@ -14,7 +14,7 @@ import {
   SectionCard,
   DisclaimerCard,
 } from './shared'
-import type { CategoryPanelProps } from './types'
+import type { CategoryPanelProps, AncestryResult } from './types'
 
 const GEO_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json'
 
@@ -354,8 +354,8 @@ export default function AncestryPanel({ isDarkMode = false, data }: CategoryPane
     let composition: AncestryRegion[] = first?.composition || []
     if (composition.length === 0) {
       composition = results
-        .filter((r: Record<string, unknown>) => r.population)
-        .map((r: Record<string, unknown>) => ({
+        .filter((r: AncestryResult) => r.population)
+        .map((r: AncestryResult) => ({
           region: String(r.population),
           percentage: parseFloat(String(r.percentage)) || 0,
         }))

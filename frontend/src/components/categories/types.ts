@@ -198,15 +198,16 @@ export interface UncommonMutation {
 export interface DashboardData {
   summary?: {
     total_variants: number
-    processed_variants: number
-    analyzed_variants: number
-    insights_found: number
+    processed_variants?: number
+    analyzed_variants?: number
+    insights_found?: number
     analysis_id: number
-    status: string
-    upload_date: string
-    filename: string
+    status?: string
+    upload_date?: string
+    filename?: string
     upload_info?: { filename?: string; [key: string]: unknown }
     data_sources?: string[]
+    [key: string]: unknown
   }
   health_risks?: HealthRisk[] | { details?: HealthRisk[] }
   drug_responses?: DrugResponse[] | { details?: DrugResponse[] }

@@ -14,6 +14,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell,
 } from 'recharts'
+import type { Payload } from 'recharts/types/component/DefaultTooltipContent'
 import { Badge } from './ui/badge'
 import { useThemeClasses, CategoryHeader, EmptyState, SectionCard } from './categories/shared'
 import { apiUrl } from '@/lib/api'
@@ -79,23 +80,21 @@ const RELATION_COLORS: Record<string, string> = {
 
 const PALETTE = ['#8b5cf6', '#06b6d4', '#ef4444', '#f59e0b', '#22c55e', '#ec4899', '#3b82f6', '#14b8a6', '#f97316', '#a855f7']
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const GlassTooltip = ({ active, payload, label, isDarkMode }: any) => {
+const GlassTooltip = ({ active, payload, label, isDarkMode }: { active?: boolean; payload?: ReadonlyArray<Payload>; label?: React.ReactNode; isDarkMode?: boolean }) => {
   if (!active || !payload?.length) return null
   return (
     <div className={`px-3 py-2 rounded-lg border text-xs shadow-xl backdrop-blur-xl ${
       isDarkMode ? 'bg-slate-800/90 border-slate-600/60 text-gray-200' : 'bg-white/90 border-gray-200 text-gray-800'
     }`}>
-      {label && <p className="font-semibold mb-1">{label}</p>}
-      {payload.map((p: any, i: number) => (
+      {label && <p className="font-semibold mb-1">{String(label)}</p>}
+      {payload.map((p, i: number) => (
         <p key={i} style={{ color: p.color || p.fill }}>
-          {p.name}: <span className="font-bold">{typeof p.value === 'number' ? p.value.toLocaleString() : p.value}</span>
+          {p.name}: <span className="font-bold">{typeof p.value === 'number' ? p.value.toLocaleString() : String(p.value)}</span>
         </p>
       ))}
     </div>
   )
 }
-/* eslint-enable @typescript-eslint/no-explicit-any */
 
 const axisStyle = (dark: boolean) => ({ fill: dark ? '#94a3b8' : '#64748b', fontSize: 11 })
 const gridStroke = (dark: boolean) => dark ? 'rgba(148,163,184,0.12)' : 'rgba(100,116,139,0.15)'

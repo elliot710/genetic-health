@@ -103,15 +103,15 @@ def _validate_variant(self, variant: dict) -> bool:
 
 ## 2. High-Priority Improvements
 
-### 2.1 Extract `ModernDashboard.tsx` — God Component
+### 2.1 Extract `Dashboard.tsx` — God Component
 
-**Current state:** `ModernDashboard.tsx` is 1,900 LOC with 50+ hooks, hash-based routing, analysis polling, data fetching, deletion logic, notification system, and rendering of 13+ panels.
+**Current state:** `Dashboard.tsx` is 1,900 LOC with 50+ hooks, hash-based routing, analysis polling, data fetching, deletion logic, notification system, and rendering of 13+ panels.
 
 **Problem:** Extremely difficult to maintain, test, or reason about. Every change risks breaking something unrelated. A single state update re-renders the entire dashboard.
 
 **Recommended decomposition:**
 ```
-ModernDashboard.tsx (orchestrator, ~200 LOC)
+Dashboard.tsx (orchestrator, ~200 LOC)
 ├── hooks/useDashboardData.ts      — data fetching + refresh logic
 ├── hooks/useAnalysisPolling.ts    — analysis progress polling
 ├── hooks/useDashboardNavigation.ts — hash-based routing
@@ -129,13 +129,13 @@ ModernDashboard.tsx (orchestrator, ~200 LOC)
 
 ### 2.2 Duplicate Data Fetching Across Panels
 
-**Current state:** Multiple panels independently fetch `GET /api/analysis/dashboard-data`. During analysis polling, this endpoint is called on every status check. `ModernDashboard` fetches it, `page.tsx` fetches it, and some panels fetch it individually.
+**Current state:** Multiple panels independently fetch `GET /api/analysis/dashboard-data`. During analysis polling, this endpoint is called on every status check. `Dashboard` fetches it, `page.tsx` fetches it, and some panels fetch it individually.
 
 **Problem:** Redundant API calls. The backend queries all 13 insight tables every time, even when only one panel is visible.
 
 **Recommended approach:**
 
-**Option A (simpler):** Lift data fetching to `ModernDashboard` only. Pass data down as props (already partially done). Remove all panel-level fetches.
+**Option A (simpler):** Lift data fetching to `Dashboard` only. Pass data down as props (already partially done). Remove all panel-level fetches.
 
 **Option B (better):** Use React Query / TanStack Query for:
 - Automatic deduplication of identical requests
@@ -476,7 +476,7 @@ Refresh after analysis completion. The dashboard-data endpoint reads from the vi
 
 ### 4.4 Frontend: Code Splitting for Category Panels
 
-**Current state:** All 13 panels are imported and bundled together in `ModernDashboard.tsx`, even though only one is visible at a time.
+**Current state:** All 13 panels are imported and bundled together in `Dashboard.tsx`, even though only one is visible at a time.
 
 **Improvement:** Use `React.lazy()` + `Suspense` for category panels:
 ```typescript
@@ -577,7 +577,7 @@ app = FastAPI(lifespan=lifespan)
 ```
 🔴 Critical:   frontend/src/app/page.tsx (hardcoded URL, JWT in localStorage)
 🔴 Critical:   backend/core/auth.py (SECRET_KEY default)
-🟡 High:       frontend/src/components/ModernDashboard.tsx (1900 LOC god component)
+🟡 High:       frontend/src/components/Dashboard.tsx (1900 LOC god component)
 🟡 High:       backend/services/analysis_service.py (2698 LOC, 13 generators mixed in)
 🟡 High:       backend/api/annotation_routes.py (979 LOC, complex response assembly)
 🟡 High:       backend/api/variant_routes.py (853 LOC, mixed concerns)

@@ -3,6 +3,7 @@ import { AlertCircle, Check, ChevronLeft, ChevronRight, Clock, Info, Loader2 } f
 import { getTheme } from '../utils/theme';
 import { Button } from '@/components/ui/button';
 import { apiUrl } from '@/lib/api';
+import type { DashboardData } from '@/components/categories/types';
 
 interface AnalysisProgress {
   analysis_id: number;
@@ -18,7 +19,7 @@ interface AnalysisProgress {
 interface AnalysisProgressLoaderProps {
   analysisId: number;
   isDarkMode?: boolean;
-  onComplete?: (results: Record<string, unknown>) => void;
+  onComplete?: (results: DashboardData) => void;
   onError?: (error: string) => void;
   onBack?: () => void;
 }

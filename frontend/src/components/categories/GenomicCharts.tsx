@@ -13,6 +13,7 @@ import {
   AreaChart, Area,
 } from 'recharts'
 import type { PieLabelRenderProps } from 'recharts'
+import type { Payload } from 'recharts/types/component/DefaultTooltipContent'
 
 // ── Theme-aware colour palettes ────────────────────────────────────
 const RISK_COLORS = { high: '#ef4444', moderate: '#f59e0b', low: '#22c55e', unknown: '#94a3b8' }
@@ -26,17 +27,16 @@ const axisStyle = (dark: boolean) => ({ fill: dark ? '#94a3b8' : '#64748b', font
 const gridStroke = (dark: boolean) => dark ? 'rgba(148,163,184,0.12)' : 'rgba(100,116,139,0.15)'
 
 // Custom tooltip matching the glassmorphism theme
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const GlassTooltip = ({ active, payload, label, isDarkMode }: any) => {
+const GlassTooltip = ({ active, payload, label, isDarkMode }: { active?: boolean; payload?: ReadonlyArray<Payload>; label?: React.ReactNode; isDarkMode?: boolean }) => {
   if (!active || !payload?.length) return null
   return (
     <div className={`px-3 py-2 rounded-lg border text-xs shadow-xl backdrop-blur-xl ${
       isDarkMode ? 'bg-slate-800/90 border-slate-600/60 text-gray-200' : 'bg-white/90 border-gray-200 text-gray-800'
     }`}>
-      {label && <p className="font-semibold mb-1">{label}</p>}
-      {payload.map((p: any, i: number) => (
+      {label && <p className="font-semibold mb-1">{String(label)}</p>}
+      {payload.map((p, i: number) => (
         <p key={i} style={{ color: p.color || p.fill }}>
-          {p.name}: <span className="font-bold">{typeof p.value === 'number' ? p.value.toLocaleString() : p.value}</span>
+          {p.name}: <span className="font-bold">{typeof p.value === 'number' ? p.value.toLocaleString() : String(p.value)}</span>
         </p>
       ))}
     </div>

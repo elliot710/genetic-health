@@ -57,6 +57,54 @@ interface LookupBasicInfo {
 
 interface LookupAnnotationSource {
   found?: boolean
+  [key: string]: unknown
+}
+
+interface ClinvarLocalAnnotation extends LookupAnnotationSource {
+  conditions?: string[]
+  genes?: string[]
+  clinical_significance?: string
+}
+
+interface GnomadLocalAnnotation extends LookupAnnotationSource {
+  af?: number
+  ac?: number
+  an?: number
+  hom?: number
+}
+
+interface GnomadConstraintAnnotation extends LookupAnnotationSource {
+  gene?: string
+  pli?: number
+  loeuf?: number
+  interpretation?: string
+}
+
+interface EnsemblLocalAnnotation extends LookupAnnotationSource {
+  gene_symbol?: string
+  gene_id?: string
+  biotype?: string
+  transcript_count?: number
+  chromosome?: string
+  start?: number
+  end?: number
+  strand?: number
+  description?: string
+}
+
+interface ChemblDrug {
+  drug_name?: string
+  max_phase?: number
+  mechanism?: string
+}
+
+interface ChemblAnnotation extends LookupAnnotationSource {
+  drugs?: ChemblDrug[]
+}
+
+interface AlphaFoldAnnotation extends LookupAnnotationSource {
+  uniprot_id?: string
+  avg_plddt?: number
 }
 
 interface PopulationEntry {
@@ -83,7 +131,17 @@ interface LookupResult {
     minor_allele?: string
     populations?: Record<string, PopulationEntry>
   }
-  annotations?: Record<string, LookupAnnotationSource>
+  annotations?: {
+    ensembl?: LookupAnnotationSource
+    clinvar?: LookupAnnotationSource
+    clinvar_local?: ClinvarLocalAnnotation
+    gnomad_local?: GnomadLocalAnnotation
+    gnomad_constraint?: GnomadConstraintAnnotation
+    ensembl_local?: EnsemblLocalAnnotation
+    bq_chembl?: ChemblAnnotation
+    bq_alphafold?: AlphaFoldAnnotation
+    [key: string]: LookupAnnotationSource | undefined
+  }
   literature?: {
     snpedia_found?: boolean
     title?: string
@@ -986,10 +1044,10 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
 
               {/* ── ClinVar Local Conditions ── */}
               {lookupResults.annotations?.clinvar_local && (() => {
-                const cv = lookupResults.annotations.clinvar_local as Record<string, unknown>
-                const conditions = (cv.conditions as string[]) || []
-                const genes = (cv.genes as string[]) || []
-                const clinsig = cv.clinical_significance as string | undefined
+                const cv = lookupResults.annotations.clinvar_local
+                const conditions = cv.conditions || []
+                const genes = cv.genes || []
+                const clinsig = cv.clinical_significance
                 if (!conditions.length && !genes.length) return null
                 return (
                   <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
@@ -1031,11 +1089,11 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
 
               {/* ── gnomAD Local Frequencies ── */}
               {lookupResults.annotations?.gnomad_local?.found && (() => {
-                const gn = lookupResults.annotations.gnomad_local as Record<string, unknown>
-                const af = gn.af as number | undefined
-                const ac = gn.ac as number | undefined
-                const an = gn.an as number | undefined
-                const hom = gn.hom as number | undefined
+                const gn = lookupResults.annotations.gnomad_local
+                const af = gn.af
+                const ac = gn.ac
+                const an = gn.an
+                const hom = gn.hom
                 return (
                   <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
                     <h4 className={`font-bold ${t.text.primary} mb-3 flex items-center gap-2`}>
@@ -1076,15 +1134,15 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
 
               {/* ── Gene Constraint (gnomAD) ── */}
               {lookupResults.annotations?.gnomad_constraint && (() => {
-                const gc = lookupResults.annotations.gnomad_constraint as Record<string, unknown>
-                const pli = gc.pli as number | undefined
-                const loeuf = gc.loeuf as number | undefined
-                const interp = gc.interpretation as string | undefined
+                const gc = lookupResults.annotations.gnomad_constraint
+                const pli = gc.pli
+                const loeuf = gc.loeuf
+                const interp = gc.interpretation
                 return (
                   <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
                     <h4 className={`font-bold ${t.text.primary} mb-3 flex items-center gap-2`}>
                       <BarChart3 className="h-4 w-4 text-teal-500" />
-                      Gene Constraint — {gc.gene as string}
+                      Gene Constraint — {gc.gene}
                     </h4>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                       {pli != null && (
@@ -1116,40 +1174,40 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
 
               {/* ── Ensembl Local Gene Info ── */}
               {lookupResults.annotations?.ensembl_local?.found && (() => {
-                const eg = lookupResults.annotations.ensembl_local as Record<string, unknown>
+                const eg = lookupResults.annotations.ensembl_local
                 return (
                   <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
                     <h4 className={`font-bold ${t.text.primary} mb-3 flex items-center gap-2`}>
                       <Database className="h-4 w-4 text-emerald-500" />
-                      Ensembl Gene — {eg.gene_symbol as string}
+                      Ensembl Gene — {eg.gene_symbol}
                     </h4>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
                       <div>
                         <div className={`text-xs ${t.text.muted}`}>Gene ID</div>
-                        <div className={`font-mono ${t.text.primary}`}>{eg.gene_id as string}</div>
+                        <div className={`font-mono ${t.text.primary}`}>{eg.gene_id}</div>
                       </div>
                       <div>
                         <div className={`text-xs ${t.text.muted}`}>Biotype</div>
-                        <div className={t.text.primary}>{(eg.biotype as string || '').replace(/_/g, ' ')}</div>
+                        <div className={t.text.primary}>{(eg.biotype || '').replace(/_/g, ' ')}</div>
                       </div>
                       {eg.transcript_count && (
                         <div>
                           <div className={`text-xs ${t.text.muted}`}>Transcripts</div>
-                          <div className={t.text.primary}>{eg.transcript_count as number}</div>
+                          <div className={t.text.primary}>{eg.transcript_count}</div>
                         </div>
                       )}
                       {eg.chromosome && (
                         <div className="col-span-2 sm:col-span-3">
                           <div className={`text-xs ${t.text.muted}`}>Location</div>
                           <div className={`font-mono ${t.text.primary}`}>
-                            chr{eg.chromosome as string}:{(eg.start as number)?.toLocaleString()}-{(eg.end as number)?.toLocaleString()} ({eg.strand === 1 ? '+' : '-'})
+                            chr{eg.chromosome}:{eg.start?.toLocaleString()}-{eg.end?.toLocaleString()} ({eg.strand === 1 ? '+' : '-'})
                           </div>
                         </div>
                       )}
                       {eg.description && (
                         <div className="col-span-2 sm:col-span-3">
                           <div className={`text-xs ${t.text.muted}`}>Description</div>
-                          <div className={`${t.text.secondary} text-xs`}>{eg.description as string}</div>
+                          <div className={`${t.text.secondary} text-xs`}>{eg.description}</div>
                         </div>
                       )}
                     </div>
@@ -1159,8 +1217,8 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
 
               {/* ── ChEMBL Drug Data ── */}
               {lookupResults.annotations?.bq_chembl?.found && (() => {
-                const ch = lookupResults.annotations.bq_chembl as Record<string, unknown>
-                const drugs = (ch.drugs as Array<Record<string, unknown>>) || []
+                const ch = lookupResults.annotations.bq_chembl
+                const drugs = ch.drugs || []
                 if (!drugs.length) return null
                 return (
                   <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
@@ -1172,13 +1230,13 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
                       {drugs.slice(0, 6).map((d, i) => (
                         <div key={i} className={`flex items-center justify-between gap-3 px-3 py-2 rounded-lg ${isDarkMode ? 'bg-slate-800/40' : 'bg-gray-50'}`}>
                           <div>
-                            <span className={`text-sm font-medium ${t.text.primary}`}>{d.drug_name as string}</span>
+                            <span className={`text-sm font-medium ${t.text.primary}`}>{d.drug_name}</span>
                             {d.max_phase != null && (
-                              <span className={`ml-2 text-xs ${t.text.muted}`}>Phase {d.max_phase as number}</span>
+                              <span className={`ml-2 text-xs ${t.text.muted}`}>Phase {d.max_phase}</span>
                             )}
                           </div>
                           {d.mechanism && (
-                            <span className={`text-xs ${t.text.secondary} truncate max-w-[200px]`}>{d.mechanism as string}</span>
+                            <span className={`text-xs ${t.text.secondary} truncate max-w-[200px]`}>{d.mechanism}</span>
                           )}
                         </div>
                       ))}
@@ -1192,7 +1250,7 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
 
               {/* ── AlphaFold Structure ── */}
               {lookupResults.annotations?.bq_alphafold?.found && (() => {
-                const af = lookupResults.annotations.bq_alphafold as Record<string, unknown>
+                const af = lookupResults.annotations.bq_alphafold
                 return (
                   <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
                     <h4 className={`font-bold ${t.text.primary} mb-3 flex items-center gap-2`}>
@@ -1203,16 +1261,16 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
                       {af.uniprot_id && (
                         <div>
                           <div className={`text-xs ${t.text.muted}`}>UniProt ID</div>
-                          <div className={`font-mono ${t.text.primary}`}>{af.uniprot_id as string}</div>
+                          <div className={`font-mono ${t.text.primary}`}>{af.uniprot_id}</div>
                         </div>
                       )}
                       {af.avg_plddt != null && (
                         <div>
                           <div className={`text-xs ${t.text.muted}`}>Avg. pLDDT</div>
                           <div className={`font-mono font-medium ${
-                            (af.avg_plddt as number) > 90 ? 'text-green-400' :
-                            (af.avg_plddt as number) > 70 ? 'text-amber-400' : 'text-red-400'
-                          }`}>{(af.avg_plddt as number).toFixed(1)}</div>
+                            af.avg_plddt > 90 ? 'text-green-400' :
+                            af.avg_plddt > 70 ? 'text-amber-400' : 'text-red-400'
+                          }`}>{af.avg_plddt.toFixed(1)}</div>
                         </div>
                       )}
                     </div>

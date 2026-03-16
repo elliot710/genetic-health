@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react'
+import React, { useState, useMemo } from 'react'
 import { Activity, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { WellnessScoreChart } from './GenomicCharts'
@@ -16,7 +16,7 @@ import {
   cleanCondition,
 } from './shared'
 import type { CategoryPanelProps } from './types'
-import { apiUrl } from '@/lib/api'
+
 
 interface WellnessTrait {
   name: string
@@ -33,43 +33,18 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
-  const [wellnessTraits, setWellnessTraits] = useState<WellnessTrait[]>([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    const fetchWellnessData = async () => {
-      if (!token) {
-        setLoading(false)
-        return
-      }
-
-      try {
-        const response = await fetch(apiUrl('/api/analysis/dashboard-data'), {
-          credentials: 'include',
-        })
-
-        if (response.ok) {
-          const dashboardData = await response.json()
-          const traits = dashboardData.wellness_traits || []
-          setWellnessTraits(traits.map((t: Record<string, unknown>) => ({
-            name: (t.trait || 'Unknown Trait') as string,
-            category: (t.category || 'General') as string,
-            value: (t.value || 'Normal') as string,
-            gene: (t.gene || 'Multiple') as string,
-            confidence: (t.confidence || 'Medium') as string,
-            recommendations: Array.isArray(t.recommendations) ? t.recommendations as string[] : [],
-            associated_variants: Array.isArray(t.associated_variants) ? t.associated_variants as string[] : [],
-          })))
-        }
-      } catch {
-        // silently handle fetch errors
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    fetchWellnessData()
-  }, [token])
+  const wellnessTraits = useMemo(() => {
+    const traits = Array.isArray(data?.wellness_traits) ? data.wellness_traits : []
+    return traits.map((t) => ({
+      name: t.trait || t.name || 'Unknown Trait',
+      category: t.category || 'General',
+      value: t.value || 'Normal',
+      gene: t.gene || 'Multiple',
+      confidence: t.confidence || 'Medium',
+      recommendations: Array.isArray(t.recommendations) ? t.recommendations : [],
+      associated_variants: [] as string[],
+    }))
+  }, [data?.wellness_traits])
 
   const headerProps = {
     icon: Activity,
@@ -114,7 +89,7 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
     return result.slice(0, 8)
   }, [wellnessTraits])
 
-  if (wellnessTraits.length === 0 && !loading) {
+  if (wellnessTraits.length === 0) {
     return (
       <div className="space-y-6">
         <CategoryHeader {...headerProps} />

@@ -52,9 +52,7 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
   const [searchQuery, setSearchQuery] = useState('')
   const [riskFilter, setRiskFilter] = useState<string>('all')
 
-  const [realHealthRisks, setRealHealthRisks] = useState<HealthRisk[]>([])
   const [variantAnnotations, setVariantAnnotations] = useState<Record<string, VariantAnnotation>>({})
-  const [loading, setLoading] = useState(false)
 
 
 
@@ -102,41 +100,20 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
 
 
 
+  // Fetch variant annotations when data is available
   useEffect(() => {
-    const loadHealthRisks = async () => {
-      if (!token) return
-
-      setLoading(true)
-      try {
-        const response = await fetch(apiUrl('/api/analysis/dashboard-data'), {
-          credentials: 'include',
-        })
-
-        if (response.ok) {
-          const healthData = await response.json()
-          setRealHealthRisks(healthData.health_risks || [])
-
-          if (healthData.health_risks) {
-            healthData.health_risks.forEach((risk: HealthRisk) => {
-              if (risk.associated_variants && risk.associated_variants.length > 0) {
-                risk.associated_variants.forEach((variant: string) => {
-                  if (variant && variant !== 'Unknown') {
-                    getVariantAnnotations(variant)
-                  }
-                })
-              }
-            })
+    if (!token || !data?.health_risks) return
+    const risks = Array.isArray(data.health_risks) ? data.health_risks as HealthRisk[] : []
+    risks.forEach((risk: HealthRisk) => {
+      if (risk.associated_variants && risk.associated_variants.length > 0) {
+        risk.associated_variants.forEach((variant: string) => {
+          if (variant && variant !== 'Unknown') {
+            getVariantAnnotations(variant)
           }
-        }
-      } catch {
-        // silently handle fetch errors
-      } finally {
-        setLoading(false)
+        })
       }
-    }
-
-    loadHealthRisks()
-  }, [token])
+    })
+  }, [token, data?.health_risks])
 
   const getRiskLevel = (level: string) => {
     return level.charAt(0).toUpperCase() + level.slice(1)
@@ -152,8 +129,9 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
   }
 
   const getHealthRisks = () => {
-    if (realHealthRisks.length > 0) {
-      return realHealthRisks
+    const healthRisks = Array.isArray(data?.health_risks) ? data.health_risks as HealthRisk[] : []
+    if (healthRisks.length > 0) {
+      return healthRisks
         .map((risk: HealthRisk) => ({
           condition: cleanCondition(risk.condition),
           risk: getRiskLevel(risk.risk_level),
@@ -191,7 +169,7 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
         })
     }
 
-    if (loading) {
+    if (!data) {
       return [{
         condition: 'Loading Health Risks...',
         risk: 'Processing',
@@ -244,7 +222,7 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
     theme,
   }
 
-  if (healthRisks.length === 0 && !loading) {
+  if (healthRisks.length === 0) {
     return (
       <div className="space-y-6">
         <CategoryHeader {...headerProps} />

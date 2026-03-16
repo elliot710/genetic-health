@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react'
+import React, { useState, useMemo } from 'react'
 import { Brain, BookOpen, Lightbulb, Target, Puzzle, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { PercentileBarChart } from './GenomicCharts'
@@ -17,7 +17,7 @@ import {
   cleanCondition,
 } from './shared'
 import type { CategoryPanelProps, IntelligenceTrait } from './types'
-import { apiUrl } from '@/lib/api'
+
 
 export default function IntelligencePanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
   const theme = useThemeClasses(isDarkMode)
@@ -25,33 +25,7 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
   const [searchQuery, setSearchQuery] = useState('')
   const [advantageFilter, setAdvantageFilter] = useState<string>('all')
 
-  const [realIntelligenceData, setRealIntelligenceData] = useState<IntelligenceTrait[]>([])
-  const [loading, setLoading] = useState(false)
 
-  useEffect(() => {
-    const loadIntelligenceData = async () => {
-      if (!token) return
-
-      setLoading(true)
-      try {
-        const response = await fetch(apiUrl('/api/analysis/dashboard-data'), {
-          credentials: 'include',
-        })
-
-        if (response.ok) {
-          const dashboardData = await response.json()
-          const intelligence = dashboardData.intelligence || dashboardData.analysis_results?.intelligence || []
-          setRealIntelligenceData(intelligence)
-        }
-      } catch (error) {
-        // silently handle fetch errors
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    loadIntelligenceData()
-  }, [token])
 
   const getTraitIcon = (trait: string) => {
     const traitLower = trait.toLowerCase()
@@ -64,8 +38,9 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
   }
 
   const getCognitiveTraits = () => {
-    if (realIntelligenceData.length > 0) {
-      return realIntelligenceData.map((trait: IntelligenceTrait) => ({
+    const intelligenceData = Array.isArray(data?.intelligence) ? data.intelligence as IntelligenceTrait[] : []
+    if (intelligenceData.length > 0) {
+      return intelligenceData.map((trait: IntelligenceTrait) => ({
         trait: trait.cognitive_ability || trait.trait_name,
         gene: trait.associated_variants?.[0] || 'Multiple',
         result: trait.genetic_advantage || trait.genetic_result || 'moderate',
@@ -74,18 +49,6 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
         icon: getTraitIcon(trait.cognitive_ability || trait.trait_name),
         suggestions: trait.enhancement_suggestions || [],
       }))
-    }
-
-    if (loading) {
-      return [{
-        trait: 'Loading Intelligence Analysis...',
-        gene: 'Multiple',
-        result: 'processing',
-        score: 0,
-        description: 'Loading your genetic intelligence analysis...',
-        icon: Brain,
-        suggestions: [] as string[],
-      }]
     }
 
     return []
@@ -136,7 +99,7 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
     theme,
   }
 
-  if (cognitiveTraits.length === 0 && !loading) {
+  if (cognitiveTraits.length === 0) {
     return (
       <div className="space-y-6">
         <CategoryHeader {...headerProps} />

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react'
+import React, { useState, useMemo } from 'react'
 import { Brain, Heart, Users, Target, Zap, Palette, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { TraitRadarChart } from './GenomicCharts'
@@ -16,7 +16,7 @@ import {
 } from './shared'
 import type { CategoryPanelProps, DashboardData, PersonalityTraitData } from './types'
 import type { LucideIcon } from 'lucide-react'
-import { apiUrl } from '@/lib/api'
+
 
 interface PersonalityTrait {
   trait: string
@@ -32,34 +32,6 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
   const theme = useThemeClasses(isDarkMode)
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
-  const [personalityData, setPersonalityData] = useState<DashboardData | null>(null)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    const fetchPersonalityData = async () => {
-      if (!token) {
-        setLoading(false)
-        return
-      }
-
-      try {
-        const response = await fetch(apiUrl('/api/analysis/dashboard-data'), {
-          credentials: 'include',
-        })
-
-        if (response.ok) {
-          const dashboardData = await response.json()
-          setPersonalityData(dashboardData)
-        }
-      } catch (error) {
-        // silently handle fetch errors
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    fetchPersonalityData()
-  }, [token])
 
   const getTraitIcon = (traitName: string) => {
     const name = traitName?.toLowerCase() || ''
@@ -88,8 +60,8 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
   }
 
   const getPersonalityTraits = (): PersonalityTrait[] => {
-    if (personalityData?.personality_traits && personalityData.personality_traits.length > 0) {
-      return personalityData.personality_traits.map((trait: PersonalityTraitData) => {
+    if (data?.personality_traits && data.personality_traits.length > 0) {
+      return data.personality_traits.map((trait: PersonalityTraitData) => {
         const name = trait.trait || 'Unknown Trait'
         const styles = getTraitStyles(name)
         return {
@@ -140,7 +112,7 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
     theme,
   }
 
-  if (personalityTraits.length === 0 && !loading) {
+  if (personalityTraits.length === 0) {
     return (
       <div className="space-y-6">
         <CategoryHeader {...headerProps} />

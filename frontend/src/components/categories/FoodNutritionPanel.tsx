@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react'
+import React, { useState, useMemo } from 'react'
 import { Apple, Coffee, Utensils, Wheat, ChefHat, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { CapacityChart } from './GenomicCharts'
@@ -16,7 +16,7 @@ import {
   cleanCondition,
 } from './shared'
 import type { CategoryPanelProps, NutritionTrait } from './types'
-import { apiUrl } from '@/lib/api'
+
 
 export default function FoodNutritionPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
   const theme = useThemeClasses(isDarkMode)
@@ -24,33 +24,7 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
   const [searchQuery, setSearchQuery] = useState('')
   const [sensitivityFilter, setSensitivityFilter] = useState<string>('all')
 
-  const [realNutritionTraits, setRealNutritionTraits] = useState<NutritionTrait[]>([])
-  const [loading, setLoading] = useState(false)
 
-  useEffect(() => {
-    const loadNutritionTraits = async () => {
-      if (!token) return
-
-      setLoading(true)
-      try {
-        const response = await fetch(apiUrl('/api/analysis/dashboard-data'), {
-          credentials: 'include',
-        })
-
-        if (response.ok) {
-          const dashboardData = await response.json()
-          const traits = dashboardData.nutrition_traits || dashboardData.analysis_results?.nutrition_traits || []
-          setRealNutritionTraits(traits)
-        }
-      } catch (error) {
-        // silently handle fetch errors
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    loadNutritionTraits()
-  }, [token])
 
   const getTraitIcon = (trait: string) => {
     const traitLower = trait.toLowerCase()
@@ -62,9 +36,10 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
   }
 
   const getNutritionTraits = () => {
-    if (realNutritionTraits.length > 0) {
-      return realNutritionTraits.map((trait: NutritionTrait) => ({
-        trait: trait.nutrient || trait.trait_name,
+    const nutritionTraits = Array.isArray(data?.nutrition_traits) ? data.nutrition_traits as NutritionTrait[] : []
+    if (nutritionTraits.length > 0) {
+      return nutritionTraits.map((trait: NutritionTrait) => ({
+        trait: trait.nutrient || trait.trait_name || 'Unknown',
         gene: trait.associated_variants?.[0] || 'Multiple',
         status: trait.metabolism_type || trait.genetic_result || 'normal',
         sensitivity: trait.sensitivity_level || 'moderate',
@@ -74,18 +49,6 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
           : trait.dietary_recommendations ? [trait.dietary_recommendations] : [],
         icon: getTraitIcon(trait.nutrient || trait.trait_name || ''),
       }))
-    }
-
-    if (loading) {
-      return [{
-        trait: 'Loading Nutrition Analysis...',
-        gene: 'Multiple',
-        status: 'Processing',
-        sensitivity: 'moderate',
-        description: 'Loading your genetic nutrition analysis...',
-        recommendations: [] as string[],
-        icon: ChefHat,
-      }]
     }
 
     return []
@@ -136,7 +99,7 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
     theme,
   }
 
-  if (nutritionTraits.length === 0 && !loading) {
+  if (nutritionTraits.length === 0) {
     return (
       <div className="space-y-6">
         <CategoryHeader {...headerProps} />

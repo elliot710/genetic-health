@@ -54,9 +54,9 @@ frontend/src/
 │   ├── page.tsx            # SPA entrypoint: Auth → Upload → Dashboard flow
 │   └── globals.css
 ├── components/
-│   ├── ModernDashboard.tsx  # Orchestrates all category panels + navigation
+│   ├── Dashboard.tsx        # Orchestrates all category panels + navigation
 │   ├── AuthForm.tsx         # Login/register with theme toggle
-│   ├── ModernFileUpload.tsx # Drag-drop VCF/CSV upload with progress
+│   ├── FileUpload.tsx       # Drag-drop VCF/CSV upload with progress
 │   ├── VariantSearch.tsx    # Variant lookup interface
 │   ├── SettingsPanel.tsx    # User profile & preferences
 │   ├── categories/          # 13 specialized panels + shared utilities

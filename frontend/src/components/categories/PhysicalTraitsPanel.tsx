@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react'
+import React, { useState, useMemo } from 'react'
 import { Zap, Eye, Ruler, Palette, Sun, ChevronRight, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { CapacityChart } from './GenomicCharts'
@@ -16,7 +16,7 @@ import {
   cleanCondition,
 } from './shared'
 import type { CategoryPanelProps, PhysicalTrait } from './types'
-import { apiUrl } from '@/lib/api'
+
 
 export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
   const theme = useThemeClasses(isDarkMode)
@@ -24,37 +24,10 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
   const [searchQuery, setSearchQuery] = useState('')
   const [confidenceFilter, setConfidenceFilter] = useState<string>('all')
 
-  const [realPhysicalTraits, setRealPhysicalTraits] = useState<PhysicalTrait[]>([])
-  const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
-    const loadPhysicalTraits = async () => {
-      if (!token) return
-
-      setLoading(true)
-      try {
-        const response = await fetch(apiUrl('/api/analysis/dashboard-data'), {
-          credentials: 'include',
-        })
-
-        if (response.ok) {
-          const dashboardData = await response.json()
-          const traits = dashboardData.physical_traits || dashboardData.analysis_results?.physical_traits || []
-          setRealPhysicalTraits(traits)
-        }
-      } catch (error) {
-        // silently handle fetch errors
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    loadPhysicalTraits()
-  }, [token])
-
   const getPhysicalTraits = () => {
-    if (realPhysicalTraits.length > 0) {
-      return realPhysicalTraits.map((trait: PhysicalTrait) => ({
+    const physicalTraits = Array.isArray(data?.physical_traits) ? data.physical_traits as PhysicalTrait[] : []
+    if (physicalTraits.length > 0) {
+      return physicalTraits.map((trait: PhysicalTrait) => ({
         category: trait.trait_name || trait.category,
         trait: trait.genetic_result || trait.trait_value || trait.result,
         gene: trait.associated_variants?.[0] || trait.associated_gene || 'Multiple',
@@ -62,28 +35,6 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
         description: trait.description || `Genetic analysis shows predisposition for ${trait.trait_name || trait.category}`,
         confidence: trait.confidence || 'moderate',
       }))
-    }
-
-    if (data?.physical_traits && data.physical_traits.length > 0) {
-      return data.physical_traits.map((trait: PhysicalTrait) => ({
-        category: trait.trait_name || trait.category,
-        trait: trait.genetic_result || trait.trait_value || trait.result,
-        gene: trait.associated_variants?.[0] || trait.associated_gene || 'Multiple',
-        probability: trait.confidence === 'high' ? 85 : trait.confidence === 'moderate' ? 65 : 45,
-        description: trait.description || `Genetic analysis shows predisposition for ${trait.trait_name || trait.category}`,
-        confidence: trait.confidence || 'moderate',
-      }))
-    }
-
-    if (loading) {
-      return [{
-        category: 'Loading Physical Traits...',
-        trait: 'Processing',
-        gene: 'Multiple',
-        probability: 0,
-        description: 'Loading your genetic physical trait analysis...',
-        confidence: 'pending',
-      }]
     }
 
     return []
@@ -140,7 +91,7 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
     theme,
   }
 
-  if (physicalTraits.length === 0 && !loading) {
+  if (physicalTraits.length === 0) {
     return (
       <div className="space-y-6">
         <CategoryHeader {...headerProps} />

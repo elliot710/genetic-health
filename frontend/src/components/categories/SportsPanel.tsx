@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react'
+import React, { useState, useMemo } from 'react'
 import { Dumbbell, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { CapacityChart } from './GenomicCharts'
@@ -16,7 +16,7 @@ import {
   cleanCondition,
 } from './shared'
 import type { CategoryPanelProps, SportsPerformance } from './types'
-import { apiUrl } from '@/lib/api'
+
 
 export default function SportsPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
   const theme = useThemeClasses(isDarkMode)
@@ -24,37 +24,10 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
   const [searchQuery, setSearchQuery] = useState('')
   const [advantageFilter, setAdvantageFilter] = useState<string>('all')
 
-  const [realSportsData, setRealSportsData] = useState<SportsPerformance[]>([])
-  const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
-    const loadSportsData = async () => {
-      if (!token) return
-
-      setLoading(true)
-      try {
-        const response = await fetch(apiUrl('/api/analysis/dashboard-data'), {
-          credentials: 'include',
-        })
-
-        if (response.ok) {
-          const dashboardData = await response.json()
-          const sports = dashboardData.sports_performance || dashboardData.analysis_results?.sports_performance || []
-          setRealSportsData(sports)
-        }
-      } catch (error) {
-        // silently handle fetch errors
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    loadSportsData()
-  }, [token])
-
   const getAthleticTraits = () => {
-    if (realSportsData.length > 0) {
-      return realSportsData.map((trait: SportsPerformance) => ({
+    const sportsData = Array.isArray(data?.sports_performance) ? data.sports_performance as SportsPerformance[] : []
+    if (sportsData.length > 0) {
+      return sportsData.map((trait: SportsPerformance) => ({
         trait: trait.performance_category || trait.trait_name || trait.category,
         gene: trait.associated_variants?.[0] || 'Multiple',
         result: trait.genetic_advantage || trait.genetic_result,
@@ -64,17 +37,6 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
           ? trait.sport_recommendations.join(', ')
           : trait.sport_recommendations || trait.training_advice || 'Consult with sports trainer',
       }))
-    }
-
-    if (loading) {
-      return [{
-        trait: 'Loading Sports Analysis...',
-        gene: 'Multiple',
-        result: 'Processing',
-        score: 0,
-        description: 'Loading your genetic sports performance analysis...',
-        recommendation: 'Analysis in progress...',
-      }]
     }
 
     return []
@@ -127,7 +89,7 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
     theme,
   }
 
-  if (athleticTraits.length === 0 && !loading) {
+  if (athleticTraits.length === 0) {
     return (
       <div className="space-y-6">
         <CategoryHeader {...headerProps} />
