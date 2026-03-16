@@ -1,8 +1,8 @@
 # Genetic Health Analysis Toolkit — Architecture Documentation
 
-> **Last updated:** March 15, 2026
+> **Last updated:** March 16, 2026
 > **Codebase size:** ~64K LOC backend (Python), ~11K LOC frontend (TypeScript/React)
-> **Database migrations:** 38 Alembic revisions
+> **Database migrations:** 4 Alembic revisions (squashed from 38)
 
 ---
 
@@ -118,7 +118,7 @@ Three containers orchestrated with `docker-compose.yml`:
 | Variable | Purpose | Required |
 |----------|---------|----------|
 | `DATABASE_URL` | PostgreSQL connection (asyncpg) | Yes |
-| `SECRET_KEY` | JWT signing key (HS256) | Yes (has dev default) |
+| `SECRET_KEY` | JWT signing key (HS256) | Yes (no default — fails on startup if missing) |
 | `NCBI_API_KEY` | NCBI E-utilities rate limit boost (3→10 req/s) | Recommended |
 | `ALPHA_MISSENSE_DATA_DIR` | Path to AlphaMissense tabix files | Optional |
 | `CLINVAR_DATA_DIR` | Path to ClinVar TSV/VCF files | Optional |
@@ -166,12 +166,35 @@ The FastAPI app initializes in this order:
 
 | Service | File | LOC | Responsibility |
 |---------|------|-----|---------------|
-| `ComprehensiveAnalysisService` | `analysis_service.py` | ~2700 | Main analysis engine — annotates variants and populates all 13 insight tables |
+| `ComprehensiveAnalysisService` | `analysis_service.py` | ~1000 | Main analysis orchestrator — coordinates annotation and delegates to 14 insight generators |
 | `SharedVariantAnnotationService` | `analysis_service.py` | ~200 | Manages shared annotation cache (dedup across users) |
 | `AnalysisQueue` | `analysis_queue.py` | ~180 | Singleton background job queue with concurrency limits |
 | `VariantUploader` | `variant_uploader.py` | ~150 | VCF/CSV parsing → GeneticMarker dedup + AnalysisVariant creation |
 | `ScoringEngine` | `scoring_engine.py` | ~200 | Composite pathogenicity scoring from multiple data sources |
 | `AutoCategorizer` | `auto_categorizer.py` | ~150 | Rule-based variant-to-category assignment |
+
+#### Insight Generators (`services/insight_generators/`, 14 files)
+
+Extracted from `analysis_service.py` — each file generates one insight category:
+
+| Generator | File | Category Table |
+|-----------|------|---------------|
+| Health | `health.py` | `health_risks` |
+| Drug Response | `drug_response.py` | `drug_responses` |
+| Ancestry | `ancestry.py` | `ancestry_results` |
+| Carrier | `carrier.py` | `carrier_status` |
+| Rare Mutations | `rare_mutations.py` | `rare_mutations` |
+| Uncommon Mutations | `uncommon_mutations.py` | `uncommon_mutations` |
+| Methylation | `methylation.py` | `methylation_profiles` |
+| Detoxification | `detox.py` | `detoxification_profiles` |
+| Wellness | `wellness.py` | `wellness_metrics` |
+| Physical Traits | `physical_traits.py` | `physical_traits` |
+| Sports | `sports.py` | `sports_performance` |
+| Nutrition | `nutrition.py` | `nutrition_traits` |
+| Cognitive | `cognitive.py` | `cognitive_profiles` |
+| Personality | `personality.py` | `personality_traits` |
+
+Each follows the pattern: `async def generate(session, analysis_id, annotations, ...) -> List[Model]`.
 
 #### Data Source Services (Local)
 
@@ -246,7 +269,11 @@ GeneticAnalysisException (base)
 
 PostgreSQL 15 with async SQLAlchemy 2.0 + asyncpg driver. Connection pool: 20 base + 40 overflow (60 max), 30-minute recycle, pre-ping enabled.
 
-**38 Alembic migrations** track the schema evolution from initial user/analysis tables through the full deduplication architecture, local data ETL tables, admin config, and discovery system.
+**4 Alembic migrations** (squashed from original 38) track the schema:
+- `001_baseline` — Full schema creation (all tables, indexes, constraints)
+- `002_insight_indexes` — Targeted indexes for insight table queries
+- `003_drop_unused_indexes` — Dropped ~21GB of unused indexes
+- `004_dashboard_cache` — Dashboard cache table with fingerprint-based invalidation
 
 ### 4.2 Entity-Relationship Diagram
 
@@ -432,13 +459,18 @@ app/page.tsx  (SPA orchestrator, ~360 LOC)
 ├── AuthForm.tsx  (login/register, ~300 LOC)
 ├── FileUpload.tsx  (drag-drop upload, ~280 LOC)
 ├── AnalysisProgressLoader.tsx  (progress polling, ~250 LOC)
-└── Dashboard.tsx  (dashboard orchestrator, ~1900 LOC)
+└── Dashboard.tsx  (dashboard orchestrator, ~1050 LOC)
+    ├── dashboard/DashboardHeader.tsx   (user menu, theme toggle)
+    ├── dashboard/DashboardSidebar.tsx  (navigation sidebar)
+    ├── dashboard/DashboardOverview.tsx (overview tab content)
+    ├── dashboard/DeleteDataDialog.tsx  (confirmation dialog + deletion)
+    ├── dashboard/NotificationToast.tsx (toast notifications)
     ├── Overview tab
-    │   ├── GenomicCharts.tsx  (11 chart types, ~600 LOC)
-    │   ├── VariantSearch.tsx  (variant lookup, ~450 LOC)
-    │   ├── SmartInsights.tsx  (LLM insights, experimental)
-    │   └── KnowledgeGraph.tsx  (graph viz, experimental)
-    ├── 13 Category Panels  (each ~250-500 LOC)
+    │   ├── GenomicCharts.tsx  (11 chart types, ~600 LOC)  [lazy]
+    │   ├── VariantSearch.tsx  (variant lookup, ~450 LOC)  [lazy]
+    │   ├── SmartInsights.tsx  (LLM insights, experimental) [lazy]
+    │   └── KnowledgeGraph.tsx  (graph viz, experimental)  [lazy]
+    ├── 13 Category Panels  (each ~250-500 LOC, all lazy-loaded)
     │   ├── HealthPanel.tsx
     │   ├── DrugResponsesPanel.tsx
     │   ├── AncestryPanel.tsx  (with world map)
@@ -478,6 +510,7 @@ Reusable building blocks for all 13 category panels:
 |-----------|---------|
 | `CategoryHeader` | Panel title with item count badge |
 | `EmptyState` | No-data display with icon and message |
+| `ErrorState` | Error display with icon, message, and optional retry button |
 | `SectionCard` | Card wrapper for panel sections |
 | `StatusBadge` | Severity-colored badge (danger/warning/success/info/neutral) |
 | `ScoreBar` | Progress bar with label and percentage |
@@ -485,25 +518,29 @@ Reusable building blocks for all 13 category panels:
 | `ClickableRsidBadge` | Badge that opens variant detail dialog |
 | `MasonryLayout` | Responsive grid wrapper |
 | `DisclaimerCard` | Medical/research disclaimer |
+| `useGrouping` | Hook for group-by state management (groupKey, expanded, toggle) |
+| `GroupHeader` | Collapsible group header with item count |
+| `GroupBySelect` | Dropdown to select grouping dimension |
 
 **Severity mappers** (consistent UX across panels): `riskToSeverity()`, `capacityToSeverity()`, `advantageToSeverity()`, `sensitivityToSeverity()`, `clinicalSignificanceToSeverity()`, `carrierStatusToSeverity()`
 
 ### 5.6 API Integration Pattern
 
-All API calls use direct `fetch()` — no API client abstraction:
+API calls are centralized in `frontend/src/lib/api.ts`:
 
 ```typescript
-const response = await fetch('http://localhost:8000/api/endpoint', {
-  method: 'GET',
-  headers: {
-    'Authorization': `Bearer ${token}`,
-    'Content-Type': 'application/json'
-  }
+import { apiUrl, apiFetch } from '@/lib/api';
+
+// apiUrl() resolves NEXT_PUBLIC_API_URL or defaults to http://localhost:8000
+const response = await fetch(apiUrl('/api/endpoint'), {
+  headers: { 'Authorization': `Bearer ${token}` }
 });
-const data = await response.json();
+
+// apiFetch() wraps fetch with auth headers and error handling
+const data = await apiFetch('/api/endpoint', { token });
 ```
 
-**Error handling:** Most panel data fetches catch errors silently (console.log only). User-facing errors shown in auth, upload, and settings forms.
+**Error handling:** Most panel data fetches use `ErrorState` component for failures. User-facing errors shown in auth, upload, and settings forms.
 
 ### 5.7 UI Component Library
 
@@ -657,7 +694,8 @@ During analysis, the system prefers local sources over remote APIs:
 
 ### 8.1 Authentication
 
-- **JWT (HS256)** with 10-day expiry (`ACCESS_TOKEN_EXPIRE_MINUTES = 14400`)
+- **JWT (HS256)** with 120-minute access token expiry + 7-day refresh tokens
+- **`SECRET_KEY`** environment variable is **required** — app raises `RuntimeError` on startup if not set
 - **bcrypt** password hashing
 - **Bearer token** in `Authorization` header for all protected routes
 - **`get_current_user`** dependency on all routes except `/auth/login`, `/auth/register`, `/health`

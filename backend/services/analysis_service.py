@@ -254,7 +254,7 @@ class ComprehensiveAnalysisService:
             "analysis.process",
             attributes={"analysis.id": analysis_id, "analysis.strategy": strategy},
         )
-        _ctx_token = otel_context.attach(otel_trace.use_span(root_span))
+        _ctx_token = otel_context.attach(otel_trace.set_span_in_context(root_span))
 
         try:
             await self.initialize_services()
@@ -426,7 +426,7 @@ class ComprehensiveAnalysisService:
         except Exception as e:
             root_span.record_exception(e)
             root_span.set_attribute("error", True)
-            logger.error(f"Analysis {analysis_id} failed: {str(e)}")
+            logger.error(f"Analysis {analysis_id} failed: {str(e)}", exc_info=True)
             try:
                 await self._update_analysis_status(analysis_id, "failed", f"Failed: {str(e)}")
             except Exception:
@@ -498,7 +498,7 @@ class ComprehensiveAnalysisService:
         # Backfill local sources (ClinVar Local, AlphaMissense) for existing
         # annotations that were created before those sources were added
         enabled_sources = await self._load_enabled_sources()
-        await self._backfill_local_sources(existing_annotations, enabled_sources, variants_with_rsid)
+        await self._backfill_local_sources(existing_annotations, enabled_sources, variants_with_rsid, analysis_id)
 
         variants_needing_annotation = [
             v for v in variants_with_rsid
@@ -601,6 +601,7 @@ class ComprehensiveAnalysisService:
         existing_annotations: Dict[str, Dict[str, Any]],
         enabled_sources: Optional[List[str]],
         variants: List[AnalysisVariant],
+        analysis_id: int = 0,
     ):
         """Backfill local sources for existing annotations using a single session."""
         from ..db.database import async_session_factory

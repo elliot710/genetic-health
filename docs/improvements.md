@@ -1,6 +1,7 @@
 # Improvements & Refactoring Opportunities
 
-> **Analysis date:** March 15, 2026
+> **Analysis date:** March 16, 2026 (updated)
+> **Original analysis:** March 15, 2026
 > **Scope:** Full-stack review of backend, frontend, database, infrastructure, and security
 
 This document identifies concrete improvements organized by priority and effort. Each item explains the current state, the problem, and the recommended approach.
@@ -19,25 +20,11 @@ This document identifies concrete improvements organized by priority and effort.
 
 ## 1. Critical Issues
 
-### 1.1 Hardcoded API Base URL in Frontend
+### 1.1 ~~Hardcoded API Base URL in Frontend~~ ✅ DONE
 
-**Current state:** Every `fetch()` call in the frontend uses `http://localhost:8000` as a hardcoded string.
+> **Resolved:** March 16, 2026
 
-**Problem:** This breaks in any non-local environment (staging, production, Docker networking changes). Despite `NEXT_PUBLIC_API_URL` being set in `docker-compose.yml`, it's not used in the actual code.
-
-**Fix:**
-```typescript
-// Create frontend/src/lib/api.ts
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-
-export function apiUrl(path: string): string {
-  return `${API_BASE}${path}`;
-}
-```
-Replace all `fetch('http://localhost:8000/...')` with `fetch(apiUrl('/...'))`.
-
-**Effort:** Low (2-3 hours)
-**Impact:** High — prerequisite for any deployment beyond localhost
+`frontend/src/lib/api.ts` now exists with `apiUrl()` and `apiFetch()` helpers. All fetch calls use the centralized API base URL via `NEXT_PUBLIC_API_URL` environment variable.
 
 ---
 
@@ -58,21 +45,11 @@ Replace all `fetch('http://localhost:8000/...')` with `fetch(apiUrl('/...'))`.
 
 ---
 
-### 1.3 Secret Key Has Development Default
+### 1.3 ~~Secret Key Has Development Default~~ ✅ DONE
 
-**Current state:** `core/auth.py` falls back to a hardcoded default `SECRET_KEY` if the environment variable isn't set.
+> **Resolved:** March 16, 2026
 
-**Problem:** If deployed without setting `SECRET_KEY`, all JWTs are signed with a known key. Anyone can forge admin tokens.
-
-**Fix:** Remove the default. Fail loudly on startup if `SECRET_KEY` is not set:
-```python
-SECRET_KEY = os.getenv("SECRET_KEY")
-if not SECRET_KEY:
-    raise RuntimeError("SECRET_KEY environment variable must be set")
-```
-
-**Effort:** Trivial (30 minutes)
-**Impact:** Critical for any deployment
+`core/auth.py` now raises `RuntimeError` if `SECRET_KEY` is not set. No more hardcoded default. Token expiry reduced to 120 minutes (access) with 7-day refresh tokens.
 
 ---
 
@@ -103,27 +80,18 @@ def _validate_variant(self, variant: dict) -> bool:
 
 ## 2. High-Priority Improvements
 
-### 2.1 Extract `Dashboard.tsx` — God Component
+### 2.1 ~~Extract `Dashboard.tsx` — God Component~~ ✅ DONE
 
-**Current state:** `Dashboard.tsx` is 1,900 LOC with 50+ hooks, hash-based routing, analysis polling, data fetching, deletion logic, notification system, and rendering of 13+ panels.
+> **Resolved:** March 16, 2026
 
-**Problem:** Extremely difficult to maintain, test, or reason about. Every change risks breaking something unrelated. A single state update re-renders the entire dashboard.
+`Dashboard.tsx` decomposed from ~1,900 LOC to ~1,050 LOC. Extracted 5 sub-components:
+- `dashboard/DashboardHeader.tsx` — user menu, theme toggle
+- `dashboard/DashboardSidebar.tsx` — navigation sidebar
+- `dashboard/DashboardOverview.tsx` — overview tab content
+- `dashboard/DeleteDataDialog.tsx` — confirmation dialog + deletion
+- `dashboard/NotificationToast.tsx` — toast notifications
 
-**Recommended decomposition:**
-```
-Dashboard.tsx (orchestrator, ~200 LOC)
-├── hooks/useDashboardData.ts      — data fetching + refresh logic
-├── hooks/useAnalysisPolling.ts    — analysis progress polling
-├── hooks/useDashboardNavigation.ts — hash-based routing
-├── components/DashboardSidebar.tsx — navigation sidebar
-├── components/DashboardHeader.tsx  — user menu, theme toggle
-├── components/DashboardContent.tsx — panel switcher (renders active panel)
-├── components/OverviewTab.tsx      — charts, variant search, insights
-└── components/DeleteDataDialog.tsx — confirmation dialog + deletion
-```
-
-**Effort:** High (3-5 days)
-**Impact:** High — makes the dashboard maintainable and testable
+All 13+ category panels are now lazy-loaded via `React.lazy()` (see §4.4).
 
 ---
 
@@ -157,37 +125,17 @@ Each panel fetches only its own data. Combined with TanStack Query, this gives o
 
 ---
 
-### 2.3 Analysis Service is 2,700 LOC — Extract Insight Generators
+### 2.3 ~~Analysis Service is 2,700 LOC — Extract Insight Generators~~ ✅ DONE
 
-**Current state:** `analysis_service.py` (2,698 LOC) contains the entire analysis pipeline: annotation fetching, scoring, and all 13 category-specific insight generation functions.
+> **Resolved:** March 16, 2026
 
-**Problem:** Single-file complexity makes it hard to understand, test, or modify individual categories without risk.
+`analysis_service.py` reduced from ~2,700 LOC to ~1,000 LOC. All 14 insight generators extracted to `services/insight_generators/`:
+- `health.py`, `drug_response.py`, `ancestry.py`, `carrier.py`
+- `rare_mutations.py`, `uncommon_mutations.py`, `methylation.py`, `detox.py`
+- `wellness.py`, `physical_traits.py`, `sports.py`, `nutrition.py`
+- `cognitive.py`, `personality.py`
 
-**Recommended decomposition:**
-```
-services/
-├── analysis_service.py          (orchestrator only, ~500 LOC)
-│   ├── process_analysis()       — main pipeline coordination
-│   ├── _annotate_variants()     — Phase 2 annotation logic
-│   └── _enrich_bigquery()       — Phase 3 BigQuery enrichment
-├── shared_annotation_service.py (extracted from analysis_service.py, ~300 LOC)
-├── insight_generators/
-│   ├── __init__.py
-│   ├── health_generator.py      — health_risks population
-│   ├── drug_generator.py        — drug_responses population
-│   ├── ancestry_generator.py    — ancestry_results population
-│   ├── carrier_generator.py     — carrier_status population
-│   ├── rare_mutation_generator.py
-│   ├── trait_generator.py       — physical_traits, sports, nutrition, cognitive, personality
-│   ├── methylation_generator.py
-│   ├── detox_generator.py
-│   └── wellness_generator.py
-```
-
-Each generator has a single `async def generate(session, analysis_id, annotations) -> List[Model]` function.
-
-**Effort:** High (3-5 days)
-**Impact:** High — testability, maintainability, ability to modify one category without risk
+Each generator follows `async def generate(session, analysis_id, annotations, ...) -> List[Model]`.
 
 ---
 
@@ -227,30 +175,11 @@ eventSource.onmessage = (event) => {
 
 ---
 
-### 2.5 Error Handling: Silent Failures in Frontend
+### 2.5 ~~Error Handling: Silent Failures in Frontend~~ ✅ DONE
 
-**Current state:** Most panel data fetches catch errors with `console.error()` only. Users see an empty panel with no indication that something failed.
+> **Resolved:** March 16, 2026
 
-**Problem:** Users can't distinguish "no data" from "fetch failed." No way to retry. Debug difficulty.
-
-**Fix:** Add a standardized error state to each panel:
-```typescript
-// In shared.tsx
-export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
-  return (
-    <div className="flex flex-col items-center gap-2 py-8 text-sm text-muted-foreground">
-      <AlertCircle className="h-8 w-8 text-destructive" />
-      <p>{message}</p>
-      {onRetry && <Button variant="ghost" size="sm" onClick={onRetry}>Retry</Button>}
-    </div>
-  );
-}
-```
-
-Also consider a global error boundary with toast notifications.
-
-**Effort:** Medium (1-2 days)
-**Impact:** High for UX — users should know when something fails
+`ErrorState` component added to `categories/shared.tsx` with icon, message, and optional retry button. Used across panels for fetch failure states.
 
 ---
 
@@ -281,46 +210,23 @@ Use `pytest-asyncio` + `httpx.AsyncClient` + test database fixture.
 
 ## 3. Medium-Priority Refactoring
 
-### 3.1 Create a Shared API Client in Frontend
+### 3.1 ~~Create a Shared API Client in Frontend~~ ✅ DONE
 
-**Current state:** Every component has raw `fetch()` calls with identical auth header logic, error handling, and JSON parsing.
+> **Resolved:** March 16, 2026
 
-**Problem:** Duplicated boilerplate across ~20 components. Inconsistent error handling. If auth flow changes (e.g., cookie-based), every file needs updating.
-
-**Fix:** Create a small API client:
-```typescript
-// lib/api.ts
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-
-export async function api<T>(path: string, options?: RequestInit & { token?: string }): Promise<T> {
-  const { token, ...fetchOptions } = options || {};
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  
-  const response = await fetch(`${API_BASE}${path}`, { ...fetchOptions, headers });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new ApiError(response.status, error.detail);
-  }
-  return response.json();
-}
-```
-
-**Effort:** Medium (1-2 days)
-**Impact:** Medium — reduces boilerplate, centralizes auth and error handling
+`frontend/src/lib/api.ts` provides `apiUrl()` and `apiFetch()` with centralized auth headers, error handling, and JSON parsing. Used across panels.
 
 ---
 
-### 3.2 Consolidate Duplicate/Legacy Components
+### 3.2 Consolidate Duplicate/Legacy Components (Partially Done)
 
-**Current state:** Several components appear to be legacy versions kept alongside newer replacements:
-- `FileUpload.tsx` (legacy) vs `ModernFileUpload.tsx` (current)
-- `ThemeHelper.tsx` appears redundant with `utils/theme.ts`
-- `GeneticAnnotation.tsx` appears to overlap with `VariantDetailDialog.tsx`
+**Current state:** `ModernFileUpload.tsx` has been removed. Two legacy files remain:
+- `ThemeHelper.tsx` — appears redundant with `utils/theme.ts`
+- `GeneticAnnotation.tsx` — appears to overlap with `VariantDetailDialog.tsx`
 
-**Fix:** Audit each, confirm which is used, remove the dead files.
+**Remaining work:** Audit the two remaining files, confirm they are unused, remove.
 
-**Effort:** Low (1-2 hours)
+**Effort:** Low (1 hour)
 **Impact:** Low — reduces confusion for new contributors
 
 ---
@@ -442,16 +348,11 @@ This gives visibility into bottlenecks without digging through logs.
 
 ---
 
-### 4.2 Use Alembic's Multi-Head Strategy or Squash Migrations
+### 4.2 ~~Use Alembic's Multi-Head Strategy or Squash Migrations~~ ✅ DONE
 
-**Current state:** 38 migrations with several `merge` migrations to resolve multiple heads.
+> **Resolved:** March 16, 2026
 
-**Problem:** Migration history is complex. New developers need to understand the full evolution. Some intermediate migrations may no longer be meaningful.
-
-**Fix:** Once schema is stable, squash all migrations into a single "baseline" migration. Keep the `init-db.sql` for fresh installs.
-
-**Effort:** Low (1-2 hours, but requires testing)
-**Impact:** Low — developer experience
+Migrations squashed from 38 files to 4: `001_baseline` (full schema), `002_insight_indexes`, `003_drop_unused_indexes`, `004_dashboard_cache`. `init-db.sql` handles fresh installs.
 
 ---
 
@@ -474,19 +375,11 @@ Refresh after analysis completion. The dashboard-data endpoint reads from the vi
 
 ---
 
-### 4.4 Frontend: Code Splitting for Category Panels
+### 4.4 ~~Frontend: Code Splitting for Category Panels~~ ✅ DONE
 
-**Current state:** All 13 panels are imported and bundled together in `Dashboard.tsx`, even though only one is visible at a time.
+> **Resolved:** March 16, 2026
 
-**Improvement:** Use `React.lazy()` + `Suspense` for category panels:
-```typescript
-const HealthPanel = React.lazy(() => import('./categories/HealthPanel'));
-const DrugResponsesPanel = React.lazy(() => import('./categories/DrugResponsesPanel'));
-// ...
-```
-
-**Effort:** Low (1-2 hours)
-**Impact:** Low — reduces initial bundle size, improves FCP
+17 panels lazy-loaded via `React.lazy()` + `Suspense` in `Dashboard.tsx`. Includes all 13 category panels plus `GenomicCharts`, `VariantSearch`, `SmartInsights`, and `KnowledgeGraph`.
 
 ---
 
@@ -567,18 +460,18 @@ app = FastAPI(lifespan=lifespan)
 
 | Severity | Count | Items |
 |----------|-------|-------|
-| **Critical** | 4 | Hardcoded API URL, JWT in localStorage, Secret Key default, File input validation |
-| **High** | 6 | God component, duplicate fetching, analysis_service.py size, no tests, error handling, polling |
-| **Medium** | 7 | API client, JSON type safety, soft delete, pharmgkb rename, N+1 queries, ClinPGx rate limit, legacy components |
-| **Low** | 8 | Tracing, migration squash, materialized views, code splitting, backups, lifespan API, health check, skeletons |
+| **Critical** | 2 | JWT in localStorage, File input validation |
+| **High** | 3 | Duplicate fetching, no tests, polling → SSE |
+| **Medium** | 6 | JSON type safety, soft delete, pharmgkb rename, N+1 queries, ClinPGx rate limit, legacy components (2 remain) |
+| **Low** | 6 | Tracing, materialized views, backups, lifespan API, health check, skeletons |
+| **✅ Resolved** | 8 | Hardcoded API URL, Secret Key default, Dashboard decomp, analysis_service extraction, ErrorState, API client, migration squash, code splitting |
 
 ### Technical Debt Hotspots (by file)
 
 ```
-🔴 Critical:   frontend/src/app/page.tsx (hardcoded URL, JWT in localStorage)
-🔴 Critical:   backend/core/auth.py (SECRET_KEY default)
-🟡 High:       frontend/src/components/Dashboard.tsx (1900 LOC god component)
-🟡 High:       backend/services/analysis_service.py (2698 LOC, 13 generators mixed in)
+🔴 Critical:   frontend/src/app/page.tsx (JWT in localStorage)
+🟡 High:       frontend/src/components/Dashboard.tsx (~1050 LOC, down from 1900 — still orchestrates all panels)
+🟡 High:       backend/services/analysis_service.py (~1000 LOC, down from 2700 — orchestrator only now)
 🟡 High:       backend/api/annotation_routes.py (979 LOC, complex response assembly)
 🟡 High:       backend/api/variant_routes.py (853 LOC, mixed concerns)
 🟠 Medium:     backend/db/models.py (835 LOC, could split by domain)
@@ -598,6 +491,20 @@ The architecture has several strong design decisions that should be preserved:
 4. **Admin discovery pipeline** — The auto-discovery of markers with admin approval is a clever way to grow the variant catalog organically.
 
 5. **Category rules engine** — `CategoryRule` table provides configurable, priority-ordered rules for variant categorization without code changes.
+
+6. **Insight generator architecture** — 14 independent generators in `services/insight_generators/` with clean interfaces. Each category can be modified and tested independently.
+
+7. **Dashboard code splitting** — 17 lazy-loaded panels via `React.lazy()` reduces initial bundle size significantly.
+
+8. **Shared panel components** — `useGrouping`, `GroupHeader`, `GroupBySelect`, `ErrorState`, `CategoryHeader`, `SectionCard`, `StatusBadge`, etc. in `categories/shared.tsx` provide consistent UX across all panels.
+
+9. **Carrier deduplication** — rsid-based dedup in `CarrierStatusPanel` merges duplicate variants into single cards with combined condition names.
+
+10. **Consistent pathogenicity scoring** — `ScoringEngine` and standardized `pathogenicityScore` display across all 12+ panels.
+
+11. **Dashboard cache** — Fingerprint-based invalidation with `dashboard_cache` table avoids redundant recomputation.
+
+12. **Database optimization** — Squashed migrations (4 files), targeted indexes, dropped 21GB unused indexes, PostgreSQL tuning.
 
 6. **DI container** — Simple but effective. The transient registration for API services prevents cache leaking between users.
 

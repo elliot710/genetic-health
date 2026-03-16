@@ -562,6 +562,20 @@ async def get_dashboard_data(
         cached = cache_row.scalar_one_or_none()
         if cached and cached.analysis_fingerprint == fingerprint:
             return cached.dashboard_json
+
+        # If a job is currently running and we have stale cache, return it —
+        # the new insights aren't ready yet and the heavy queries would compete
+        # with the analysis for DB resources.
+        any_running = any(
+            getattr(a, 'analysis_status', '') in ('processing', 'pending')
+            for a in analyses
+        )
+        if any_running and cached and cached.dashboard_json:
+            stale = cached.dashboard_json
+            # Update status so the frontend knows a job is in progress
+            if isinstance(stale.get("summary"), dict):
+                stale["summary"]["status"] = "processing"
+            return stale
         
         # Get the most recent completed analysis or the first one
         primary_analysis = None
