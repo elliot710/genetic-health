@@ -93,6 +93,13 @@ export default function AnalysisProgressLoader({
         try {
           const parsed = JSON.parse(data);
           const errorMsg = parsed.error || 'Analysis error occurred.';
+          // "Analysis not found" means the data was deleted — close silently without
+          // surfacing an error UI; Dashboard.handleAnalysisError will dismiss the loader.
+          if (errorMsg.toLowerCase().includes('not found')) {
+            eventSource.close();
+            if (onError) onError(errorMsg);
+            return;
+          }
           setError(errorMsg);
           if (onError) onError(errorMsg);
         } catch {

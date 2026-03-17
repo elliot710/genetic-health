@@ -226,8 +226,10 @@ export default function Dashboard({
   }
 
   const handleAnalysisError = (error: string) => {
-    console.error('Analysis error:', error)
     analysis.setShowProgress(false)
+    // "Analysis not found" means the analysis was deleted — not a real error, ignore silently
+    if (error.toLowerCase().includes('not found')) return
+    showNotification(error || 'Analysis error occurred', 'error')
   }
 
   const handleRefreshData = async () => {

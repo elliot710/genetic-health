@@ -904,401 +904,129 @@ class ComprehensiveAnalysisService:
         variants: List[AnalysisVariant],
         analysis_id: int = 0,
     ):
-        """Backfill local sources for existing annotations using a single session."""
+        """Backfill local sources for existing annotations.
+
+        Only backfills columns that are NULL (never annotated) or JSON literal
+        null (old bug). Columns with {found: false} are genuine misses and are
+        NOT re-queried — the migration 009 resets broken entries to NULL.
+        """
         from ..db.database import async_session_factory
+        from .local_annotation import (
+            load_local_sources, build_rsid_variant_map,
+            run_all_lookups, chunked_db_write, NOT_FOUND, COL_MAP,
+        )
 
-        # --- Determine which sources need backfilling ---
-        do_clinvar = enabled_sources is None or 'clinvar_local' in enabled_sources
-        cv_svc = None
-        if do_clinvar:
-            from .clinvar_local import get_clinvar_local_service
-            cv_svc = get_clinvar_local_service()
-            do_clinvar = cv_svc.is_loaded
+        sources = await load_local_sources(enabled_sources)
+        active = sources.active_names
+        if not active:
+            logger.info("Local source backfill: no local sources loaded")
+            return
 
-        do_gnomad = enabled_sources is None or 'gnomad' in enabled_sources
-        gnomad_svc = None
-        if do_gnomad:
-            from .gnomad_local import get_gnomad_service
-            gnomad_svc = get_gnomad_service()
-            do_gnomad = gnomad_svc.is_loaded
+        # --- Find annotations with NULL columns (needs lookup) ---
+        all_rsids = list(existing_annotations.keys())
+        # Map source name → list of rsids needing that source
+        missing: Dict[str, List[str]] = {s: [] for s in active}
 
-        do_ensembl = enabled_sources is None or 'ensembl' in enabled_sources
-        vep_svc = None
-        if do_ensembl:
-            from .ensembl_vep_local import get_ensembl_vep_service
-            vep_svc = get_ensembl_vep_service()
-            if not vep_svc.is_loaded:
-                logger.info("VEP cache still loading in background, waiting for it to finish...")
-                await vep_svc.ensure_loaded()
-            do_ensembl = vep_svc.is_loaded
+        from ..db.models import SharedVariantAnnotation as SVA
+        from sqlalchemy import or_, cast, String
 
-        do_1kg = enabled_sources is None or 'thousand_genomes' in enabled_sources
-        tkg_svc = None
-        if do_1kg:
-            from .thousand_genomes_local import get_thousand_genomes_service
-            tkg_svc = get_thousand_genomes_service()
-            do_1kg = tkg_svc.is_loaded
+        def _col_empty(col):
+            """True when column is SQL NULL or contains JSON literal null."""
+            return or_(col.is_(None), cast(col, String) == 'null')
 
-        do_am = enabled_sources is None or 'alpha_missense' in enabled_sources
-        am_svc = None
-        if do_am:
-            from ..utils.alpha_missense import get_alpha_missense_service
-            am_svc = get_alpha_missense_service()
-            do_am = am_svc.available
+        BATCH = 5000
+        for bi in range(0, len(all_rsids), BATCH):
+            chunk = all_rsids[bi:bi + BATCH]
+            if bi > 0:
+                await asyncio.sleep(0)  # yield between DB query batches
+            async with async_session_factory() as sess:
+                cols = [SVA.rsid]
+                col_labels = []
+                for src_name in active:
+                    db_col = getattr(SVA, COL_MAP[src_name])
+                    label = f'{src_name}_empty'
+                    cols.append(_col_empty(db_col).label(label))
+                    col_labels.append((src_name, label))
 
-        do_gtx = enabled_sources is None or 'gnomad_tx' in enabled_sources
-        gtx_svc = None
-        if do_gtx:
-            from .gnomad_tx import get_gnomad_tx_service
-            gtx_svc = get_gnomad_tx_service()
-            do_gtx = gtx_svc.available
+                rows = (await sess.execute(
+                    select(*cols).where(SVA.rsid.in_(chunk))
+                )).all()
 
-        # Build missing lists by querying the DB directly for columns that need
-        # (re-)annotation.  For local/file/hybrid sources we treat three states
-        # as "needs lookup":
-        #   1. SQL NULL           — never annotated
-        #   2. JSON literal null  — old save_annotation None bug
-        #   3. {"found": false}   — previously returned not-found: re-check because
-        #                           the local service may not have been loaded at the
-        #                           time, or the underlying data file has been updated.
-        # For remote API sources only (1) and (2) are re-checked to avoid
-        # hammering rate-limited endpoints.
-        all_rsids_for_backfill = list(existing_annotations.keys())
-        missing_cv: list = []
-        missing_gnomad: list = []
-        missing_ensembl: list = []
-        missing_1kg: list = []
-        missing_am: list = []
-        missing_gtx: list = []
+            for row_idx, row in enumerate(rows):
+                if row_idx > 0 and row_idx % 500 == 0:
+                    await asyncio.sleep(0)
+                for src_name, label in col_labels:
+                    if getattr(row, label):
+                        missing[src_name].append(row.rsid)
 
-        if do_clinvar or do_gnomad or do_ensembl or do_1kg or do_am or do_gtx:
-            from ..db.database import async_session_factory as _asf
-            from ..db.models import SharedVariantAnnotation as SVA
-            from sqlalchemy import or_, cast, String
-
-            def _col_empty(col):
-                """True when column is SQL NULL or contains JSON literal null."""
-                return or_(col.is_(None), cast(col, String) == 'null')
-
-            def _col_stale_local(col):
-                """True when column needs a local-source lookup: NULL, JSON null,
-                or previously returned {found: false} (stale for fast local lookups)."""
-                return or_(
-                    col.is_(None),
-                    cast(col, String) == 'null',
-                    col.op('->>')('found') == 'false',
-                )
-
-            BACKFILL_BATCH = 5000
-            for bi in range(0, len(all_rsids_for_backfill), BACKFILL_BATCH):
-                chunk = all_rsids_for_backfill[bi:bi + BACKFILL_BATCH]
-                async with _asf() as _sess:
-                    rows = (await _sess.execute(
-                        select(
-                            SVA.rsid,
-                            _col_stale_local(SVA.clinvar_local_data).label('cv_empty'),
-                            _col_stale_local(SVA.gnomad_data).label('gn_empty'),
-                            _col_stale_local(SVA.ensembl_data).label('ens_empty'),
-                            _col_stale_local(SVA.thousand_genomes_data).label('tkg_empty'),
-                            _col_stale_local(SVA.alpha_missense_data).label('am_empty'),
-                            _col_stale_local(SVA.gnomad_tx_data).label('gtx_empty'),
-                        ).where(SVA.rsid.in_(chunk))
-                    )).all()
-                for row_idx, row in enumerate(rows):
-                    if row_idx > 0 and row_idx % 500 == 0:
-                        await asyncio.sleep(0)
-                    if do_clinvar and row.cv_empty:
-                        missing_cv.append(row.rsid)
-                    if do_gnomad and row.gn_empty:
-                        missing_gnomad.append(row.rsid)
-                    if do_ensembl and row.ens_empty:
-                        missing_ensembl.append(row.rsid)
-                    if do_1kg and row.tkg_empty:
-                        missing_1kg.append(row.rsid)
-                    if do_am and row.am_empty:
-                        missing_am.append(row.rsid)
-                    if do_gtx and row.gtx_empty:
-                        missing_gtx.append(row.rsid)
-
-        if not missing_cv and not missing_gnomad and not missing_ensembl and not missing_1kg and not missing_am and not missing_gtx:
-            # Nothing to backfill — all local source columns already have found=true data
+        total_missing = sum(len(v) for v in missing.values())
+        if total_missing == 0:
             logger.info(
-                f"Local source backfill: all {len(all_rsids_for_backfill)} cached annotations "
-                f"already have up-to-date local data (no backfill needed)"
+                f"Local source backfill: all {len(all_rsids)} annotations "
+                f"already have local data (no backfill needed)"
             )
-            pass
         else:
             import time as _time
             backfill_t0 = _time.monotonic()
-            logger.info(
-                f"Local source backfill starting — "
-                f"ClinVar: {len(missing_cv)}, gnomAD: {len(missing_gnomad)}, "
-                f"Ensembl: {len(missing_ensembl)}, 1000G: {len(missing_1kg)}, "
-                f"AlphaMissense: {len(missing_am)}, gnomAD-tx: {len(missing_gtx)}"
+            parts = ', '.join(f"{s}: {len(missing[s])}" for s in active)
+            logger.info(f"Local source backfill starting — {parts}")
+
+            rsid_to_variant = build_rsid_variant_map(variants)
+
+            # Pass per-source rsid lists so only sources with missing data are queried
+            results = await run_all_lookups(
+                sources, [], rsid_to_variant, per_source_rsids=missing,
             )
-            # --- Batch lookups (parallel-friendly: each uses its own read session) ---
-            cv_results: Dict[str, Optional[Dict]] = {}
-            gn_results: Dict[str, Optional[Dict]] = {}
-            ens_results: Dict[str, Optional[Dict]] = {}
 
-            # Pre-build rsid→variant map once (used by gnomAD and AlphaMissense)
-            rsid_to_variant = {str(v.rsid): v for v in variants if v.rsid}
+            # --- Build update params and write to DB ---
+            logger.info(f"Lookups done in {_time.monotonic() - backfill_t0:.1f}s, writing to DB...")
 
-            if missing_cv:
-                logger.info(f"Backfilling ClinVar Local for {len(missing_cv)} annotations...")
-                _src_t0 = _time.monotonic()
-                cv_results = await cv_svc.lookup_batch(missing_cv)
-                cv_found = sum(1 for v in cv_results.values() if v and v.get('found'))
-                logger.info(f"  ClinVar lookup done: {cv_found}/{len(missing_cv)} found ({_time.monotonic() - _src_t0:.1f}s)")
-            if missing_gnomad:
-                logger.info(f"Backfilling gnomAD for {len(missing_gnomad)} annotations (rsid lookup)...")
-                _src_t0 = _time.monotonic()
-                # Try rsid-based lookup first (checks SQLite cache → PG)
-                gn_results = await gnomad_svc.lookup_batch(missing_gnomad)
-                gn_rsid_found = sum(1 for v in gn_results.values() if v and v.get('found'))
-                logger.info(f"  gnomAD rsid lookup done: {gn_rsid_found}/{len(missing_gnomad)} found ({_time.monotonic() - _src_t0:.1f}s)")
-                # Collect rsids that were NOT found by rsid lookup
-                gn_rsid_misses = [
-                    rsid for rsid in missing_gnomad
-                    if not (gn_results.get(rsid) and gn_results[rsid].get('found'))
-                ]
-                # Fall back to position-based lookup for remaining (covers indels in PG)
-                if gn_rsid_misses:
-                    gn_pos_tuples = []
-                    for rsid in gn_rsid_misses:
-                        v = rsid_to_variant.get(rsid)
-                        if v:
-                            marker = getattr(v, 'marker', None)
-                            if marker and marker.chromosome and marker.position and marker.ref_allele:
-                                gn_pos_tuples.append((
-                                    rsid,
-                                    marker.chromosome,
-                                    marker.position,
-                                    marker.ref_allele,
-                                    marker.alt_alleles or '',
-                                ))
-                    if gn_pos_tuples:
-                        logger.info(f"  gnomAD position fallback: {len(gn_pos_tuples)} variants to check...")
-                        _src_t1 = _time.monotonic()
-                        gn_pos_results = await gnomad_svc.lookup_batch_by_position(gn_pos_tuples)
-                        gn_pos_found = sum(1 for v in gn_pos_results.values() if v and v.get('found'))
-                        logger.info(f"  gnomAD position fallback done: {gn_pos_found}/{len(gn_pos_tuples)} found ({_time.monotonic() - _src_t1:.1f}s)")
-                        # Merge position results into main results
-                        for rsid, data in gn_pos_results.items():
-                            if data and data.get('found'):
-                                gn_results[rsid] = data
-                gn_total_found = sum(1 for v in gn_results.values() if v and v.get('found'))
-                logger.info(f"  gnomAD total: {gn_total_found}/{len(missing_gnomad)} found")
-            if missing_ensembl:
-                logger.info(f"Backfilling Ensembl VEP for {len(missing_ensembl)} annotations...")
-                _src_t0 = _time.monotonic()
-                ens_results = await vep_svc.lookup_batch(missing_ensembl)
-                ens_found = sum(1 for v in ens_results.values() if v and v.get('found'))
-                logger.info(f"  Ensembl VEP lookup done: {ens_found}/{len(missing_ensembl)} found ({_time.monotonic() - _src_t0:.1f}s)")
+            ann_key_map = {
+                'clinvar_local': 'clinvar_local',
+                'gnomad': 'gnomad',
+                'ensembl': 'ensembl',
+                'thousand_genomes': 'thousand_genomes',
+                'alpha_missense': 'alpha_missense',
+                'gnomad_tx': 'gnomad_tx',
+            }
 
-            tkg_results: Dict[str, Optional[Dict]] = {}
-            if missing_1kg:
-                logger.info(f"Backfilling 1000G for {len(missing_1kg)} annotations...")
-                _src_t0 = _time.monotonic()
-                tkg_results = await tkg_svc.lookup_batch(missing_1kg)
-                tkg_found = sum(1 for v in tkg_results.values() if v and v.get('found'))
-                logger.info(f"  1000G lookup done: {tkg_found}/{len(missing_1kg)} found ({_time.monotonic() - _src_t0:.1f}s)")
+            for src_name, src_results in results.items():
+                col = COL_MAP[src_name]
+                needed_rsids = set(missing.get(src_name, []))
+                if not needed_rsids:
+                    continue
 
-            am_results: Dict[str, Optional[Dict]] = {}
-            if missing_am:
-                logger.info(f"Backfilling AlphaMissense for {len(missing_am)} annotations...")
-                _src_t0 = _time.monotonic()
-                am_batch = []
-                for rsid in missing_am:
-                    v = rsid_to_variant.get(rsid)
-                    if v:
-                        marker = getattr(v, 'marker', None)
-                        if marker and marker.chromosome and marker.position and marker.ref_allele and marker.alt_alleles:
-                            for alt in str(marker.alt_alleles).split(','):
-                                alt = alt.strip()
-                                if alt:
-                                    am_batch.append({
-                                        'rsid': rsid,
-                                        'chromosome': str(marker.chromosome),
-                                        'position': int(marker.position),
-                                        'ref_allele': str(marker.ref_allele),
-                                        'alt_allele': alt,
-                                    })
-                                    break
-                if am_batch:
-                    am_results = await asyncio.get_event_loop().run_in_executor(
-                        None, am_svc.lookup_variants_batch, am_batch
-                    )
-                am_found = sum(1 for v in am_results.values() if v and v.get('found'))
-                logger.info(f"  AlphaMissense lookup done: {am_found}/{len(missing_am)} found ({_time.monotonic() - _src_t0:.1f}s)")
+                params = []
+                for rsid, data in src_results.items():
+                    if rsid not in needed_rsids:
+                        continue
+                    if data and data.get('found'):
+                        params.append({'b_rsid': rsid, 'b_data': data})
+                        ann_key = ann_key_map[src_name]
+                        if rsid in existing_annotations:
+                            existing_annotations[rsid]['annotations'][ann_key] = data
+                    else:
+                        params.append({'b_rsid': rsid, 'b_data': NOT_FOUND[src_name]})
 
-            gtx_results: Dict[str, Optional[Dict]] = {}
-            if missing_gtx:
-                logger.info(f"Backfilling gnomAD tx_annotated for {len(missing_gtx)} annotations...")
-                _src_t0 = _time.monotonic()
-                gtx_tuples = []
-                for rsid in missing_gtx:
-                    v = rsid_to_variant.get(rsid)
-                    if v:
-                        marker = getattr(v, 'marker', None)
-                        if marker and marker.chromosome and marker.position and marker.ref_allele and marker.alt_alleles:
-                            gtx_tuples.append((
-                                rsid,
-                                str(marker.chromosome),
-                                int(marker.position),
-                                str(marker.ref_allele),
-                                str(marker.alt_alleles),
-                            ))
-                if gtx_tuples:
-                    gtx_results = await gtx_svc.lookup_batch(gtx_tuples)
-                gtx_found = sum(1 for v in gtx_results.values() if v and v.get('found'))
-                logger.info(f"  gnomAD tx_annotated lookup done: {gtx_found}/{len(missing_gtx)} found ({_time.monotonic() - _src_t0:.1f}s)")
-
-            backfill_lookup_elapsed = _time.monotonic() - backfill_t0
-            logger.info(f"All source lookups complete in {backfill_lookup_elapsed:.1f}s, writing results to DB...")
-
-            # --- Batch DB updates using executemany (pipelined via asyncpg) ---
-            from sqlalchemy import bindparam
-
-            # Build update params for each source (save both found AND not-found
-            # so the backfill doesn't re-query the same rsids on every run)
-            _NOT_FOUND_CV = {"found": False, "source": "clinvar_local"}
-            _NOT_FOUND_GN = {"found": False, "source": "gnomad_local"}
-            _NOT_FOUND_ENS = {"found": False, "source": "ensembl_vep_local"}
-            _NOT_FOUND_TKG = {"found": False, "source": "1000genomes_local"}
-            _NOT_FOUND_AM = {"found": False, "source": "alpha_missense"}
-            _NOT_FOUND_GTX = {"found": False, "source": "gnomad_tx"}
-
-            cv_params = []
-            for rsid, cv_data in cv_results.items():
-                if cv_data and cv_data.get('found'):
-                    cv_params.append({'b_rsid': rsid, 'b_data': cv_data})
-                    existing_annotations[rsid]['annotations']['clinvar_local'] = cv_data
-                else:
-                    cv_params.append({'b_rsid': rsid, 'b_data': _NOT_FOUND_CV})
-
-            gn_params = []
-            for rsid, gn_data in gn_results.items():
-                if gn_data and gn_data.get('found'):
-                    gn_params.append({'b_rsid': rsid, 'b_data': gn_data})
-                    existing_annotations[rsid]['annotations']['gnomad'] = gn_data
-                else:
-                    gn_params.append({'b_rsid': rsid, 'b_data': _NOT_FOUND_GN})
-
-            ens_params = []
-            for rsid, ens_data in ens_results.items():
-                if ens_data and ens_data.get('found'):
-                    ens_params.append({'b_rsid': rsid, 'b_data': ens_data})
-                    existing_annotations[rsid]['annotations']['ensembl'] = ens_data
-                else:
-                    ens_params.append({'b_rsid': rsid, 'b_data': _NOT_FOUND_ENS})
-
-            tkg_params = []
-            for rsid, tkg_data in tkg_results.items():
-                if tkg_data and tkg_data.get('found'):
-                    tkg_params.append({'b_rsid': rsid, 'b_data': tkg_data})
-                    existing_annotations[rsid]['annotations']['thousand_genomes'] = tkg_data
-                else:
-                    tkg_params.append({'b_rsid': rsid, 'b_data': _NOT_FOUND_TKG})
-
-            am_params = []
-            for rsid, am_data in am_results.items():
-                if am_data and am_data.get('found'):
-                    am_params.append({'b_rsid': rsid, 'b_data': am_data})
-                    existing_annotations[rsid]['annotations']['alpha_missense'] = am_data
-                else:
-                    am_params.append({'b_rsid': rsid, 'b_data': _NOT_FOUND_AM})
-
-            gtx_params = []
-            for rsid, gtx_data in gtx_results.items():
-                if gtx_data and gtx_data.get('found'):
-                    gtx_params.append({'b_rsid': rsid, 'b_data': gtx_data})
-                    existing_annotations[rsid]['annotations']['gnomad_tx'] = gtx_data
-                else:
-                    gtx_params.append({'b_rsid': rsid, 'b_data': _NOT_FOUND_GTX})
-
-            # --- Chunked DB writes to avoid long-held locks ---
-            WRITE_CHUNK = 5000
-
-            _sva_table = SharedVariantAnnotation.__table__
-
-            async def _chunked_update(col_name, params):
-                """Write updates in small chunks with intermediate commits."""
-                total = 0
-                total_params = len(params)
-                total_chunks = (total_params + WRITE_CHUNK - 1) // WRITE_CHUNK
-                write_t0 = _time.monotonic()
-                for ci in range(0, total_params, WRITE_CHUNK):
-                    chunk = params[ci:ci + WRITE_CHUNK]
-                    chunk_num = ci // WRITE_CHUNK + 1
-                    async with async_session_factory() as sess:
-                        conn = await sess.connection()
-                        await conn.execute(
-                            _sva_table.update()
-                            .where(_sva_table.c.rsid == bindparam('b_rsid'))
-                            .values(**{col_name: bindparam('b_data')}),
-                            chunk
-                        )
-                        await sess.commit()
-                    total += len(chunk)
-                    if ci > 0:
-                        await asyncio.sleep(0.02)  # yield between chunks
-                    if total_chunks > 1 and (chunk_num % 5 == 0 or chunk_num == total_chunks):
-                        elapsed = _time.monotonic() - write_t0
-                        logger.info(
-                            f"    {col_name} write chunk {chunk_num}/{total_chunks}: "
-                            f"{total}/{total_params} rows ({elapsed:.1f}s)"
-                        )
-                return total
-
-            sources_to_write = [
-                ('clinvar_local_data', cv_params, 'ClinVar'),
-                ('gnomad_data', gn_params, 'gnomAD'),
-                ('ensembl_data', ens_params, 'Ensembl VEP'),
-                ('thousand_genomes_data', tkg_params, '1000G'),
-                ('alpha_missense_data', am_params, 'AlphaMissense'),
-                ('gnomad_tx_data', gtx_params, 'gnomAD-tx'),
-            ]
-            cv_updated = gn_updated = ens_updated = tkg_updated = am_updated = gtx_updated = 0
-            write_results = [0] * len(sources_to_write)
-            for si, (col, params, label) in enumerate(sources_to_write):
                 if params:
-                    logger.info(f"  Writing {label}: {len(params)} rows to DB...")
-                    write_results[si] = await _chunked_update(col, params)
-            cv_updated, gn_updated, ens_updated, tkg_updated, am_updated, gtx_updated = write_results
+                    updated = await chunked_db_write(col, params)
+                    found = sum(1 for p in params if p['b_data'].get('found'))
+                    logger.info(f"  Backfilled {src_name}: {found} found, "
+                                f"{len(params) - found} not-found, {updated} written")
 
-            if cv_updated:
-                logger.info(f"Backfilled ClinVar Local data for {cv_updated}/{len(missing_cv)} annotations")
-            if gn_updated:
-                logger.info(f"Backfilled gnomAD data for {gn_updated}/{len(missing_gnomad)} annotations")
-            if ens_updated:
-                logger.info(f"Backfilled Ensembl VEP data for {ens_updated}/{len(missing_ensembl)} annotations")
-            if tkg_updated:
-                logger.info(f"Backfilled 1000G data for {tkg_updated}/{len(missing_1kg)} annotations")
-            if am_updated:
-                logger.info(f"Backfilled AlphaMissense data for {am_updated}/{len(missing_am)} annotations")
-            if gtx_updated:
-                logger.info(f"Backfilled gnomAD tx data for {gtx_updated}/{len(missing_gtx)} annotations")
-
-            backfill_elapsed = _time.monotonic() - backfill_t0
-            logger.info(
-                f"Local source backfill complete in {backfill_elapsed:.1f}s — "
-                f"DB writes: CV={cv_updated}, gnomAD={gn_updated}, VEP={ens_updated}, "
-                f"1KG={tkg_updated}, AM={am_updated}, GTX={gtx_updated}"
-            )
+            elapsed = _time.monotonic() - backfill_t0
+            logger.info(f"Local source backfill complete in {elapsed:.1f}s")
 
         # --- BigQuery backfill (ChEMBL, FDA Drug, AlphaFold) ---
         bq_source_names = {'chembl', 'fda_drug', 'alphafold'}
         enabled_bq = bq_source_names & set(enabled_sources) if enabled_sources else bq_source_names
         bq_col_map = {'chembl': 'chembl_data', 'fda_drug': 'fda_drug_data', 'alphafold': 'alphafold_data'}
         if enabled_bq:
-            # Find annotations missing any enabled BQ source
             missing_bq = {}
             for rsid, data in existing_annotations.items():
                 anns = data.get('annotations', {})
                 missing_for_rsid = {s for s in enabled_bq if s not in anns}
                 if missing_for_rsid:
-                    # Need gene symbol from ensembl data
                     ensembl_ann = anns.get('ensembl', {})
                     gene = None
                     if ensembl_ann and ensembl_ann.get('found') and ensembl_ann.get('data'):
@@ -1323,8 +1051,7 @@ class ComprehensiveAnalysisService:
                     bq_start = time.time()
                     commit_interval = 50
 
-                    # Accumulate updates between commits (same pattern as _bulk_enrich_bigquery)
-                    pending_updates: List[Tuple[str, Dict]] = []  # (rsid, update_vals)
+                    pending_updates: List[Tuple[str, Dict]] = []
 
                     _sva_t = SharedVariantAnnotation.__table__
 
@@ -1378,14 +1105,15 @@ class ComprehensiveAnalysisService:
     ) -> Dict[str, AnnotationResult]:
         """Annotate variants using only local data sources — no HTTP API calls.
 
-        Uses batch SQL (IN-clause) for ClinVar and gnomAD lookups, then bulk-
-        upserts shared_variant_annotations and creates variant_annotation links.
-        ~100x faster than per-variant remote API annotation.
+        Uses the shared local_annotation module for service loading and batch
+        lookups, then bulk-upserts shared_variant_annotations and creates
+        variant_annotation links.
         """
         from ..db.database import async_session_factory
         from sqlalchemy.dialects.postgresql import insert
+        from .local_annotation import load_local_sources, run_all_lookups
 
-        # Deduplicate rsids — multiple analysis_variants can share the same rsid
+        # Deduplicate rsids
         rsid_to_variants: Dict[str, List[AnalysisVariant]] = {}
         for v in variants:
             rsid_to_variants.setdefault(str(v.rsid), []).append(v)
@@ -1395,144 +1123,29 @@ class ComprehensiveAnalysisService:
         logger.info(f"Bulk local annotation: {total} unique RSIDs ({len(variants)} variants)")
         bulk_start = time.time()
 
-        # --- Step 1: Batch ClinVar local lookups ---
-        cv_map: Dict[str, Optional[Dict]] = {}
-        if enabled_sources is None or 'clinvar_local' in enabled_sources:
-            from .clinvar_local import get_clinvar_local_service
-            cv_svc = get_clinvar_local_service()
-            if cv_svc.is_loaded:
-                t0 = time.time()
-                cv_map = await cv_svc.lookup_batch(unique_rsids)
-                cv_found = sum(1 for v in cv_map.values() if v and v.get('found'))
-                logger.info(f"  ClinVar local batch: {cv_found}/{total} found ({time.time() - t0:.1f}s)")
+        # --- Load services and run lookups via shared module ---
+        sources = await load_local_sources(enabled_sources)
+        rsid_to_variant = {rsid: vlist[0] for rsid, vlist in rsid_to_variants.items()}
+        results = await run_all_lookups(sources, unique_rsids, rsid_to_variant)
 
-        # --- Step 2: Batch gnomAD local lookups (rsid first, then position fallback) ---
-        gn_map: Dict[str, Optional[Dict]] = {}
-        if enabled_sources is None or 'gnomad' in enabled_sources:
-            from .gnomad_local import get_gnomad_service
-            gnomad_svc = get_gnomad_service()
-            if gnomad_svc.is_loaded:
-                t0 = time.time()
-                # Try rsid-based lookup first (checks SQLite cache → PG)
-                gn_map = await gnomad_svc.lookup_batch(unique_rsids)
-                # Collect rsids not found by rsid lookup
-                gn_rsid_misses = [
-                    rsid for rsid in unique_rsids
-                    if not (gn_map.get(rsid) and gn_map[rsid].get('found'))
-                ]
-                # Fall back to position-based lookup for remaining
-                if gn_rsid_misses:
-                    pos_tuples = []
-                    for rsid in gn_rsid_misses:
-                        v = rsid_to_variants[rsid][0]
-                        marker = getattr(v, 'marker', None)
-                        if marker and marker.chromosome and marker.position and marker.ref_allele:
-                            pos_tuples.append((
-                                rsid,
-                                marker.chromosome,
-                                marker.position,
-                                marker.ref_allele,
-                                marker.alt_alleles or '',
-                            ))
-                    if pos_tuples:
-                        gn_pos_results = await gnomad_svc.lookup_batch_by_position(pos_tuples)
-                        for rsid, data in gn_pos_results.items():
-                            if data and data.get('found'):
-                                gn_map[rsid] = data
-                gn_found = sum(1 for v in gn_map.values() if v and v.get('found'))
-                logger.info(f"  gnomAD local batch: {gn_found}/{total} found ({time.time() - t0:.1f}s)")
-
-        # --- Step 2.5: Batch Ensembl VEP local lookups ---
-        ens_map: Dict[str, Optional[Dict]] = {}
-        if enabled_sources is None or 'ensembl' in enabled_sources:
-            from .ensembl_vep_local import get_ensembl_vep_service
-            vep_svc = get_ensembl_vep_service()
-            if not vep_svc.is_loaded:
-                logger.info("VEP cache still loading, waiting for it to finish before annotation...")
-                await vep_svc.ensure_loaded()
-            if vep_svc.is_loaded:
-                t0 = time.time()
-                ens_map = await vep_svc.lookup_batch(unique_rsids)
-                ens_found = sum(1 for v in ens_map.values() if v and v.get('found'))
-                logger.info(f"  Ensembl VEP local batch: {ens_found}/{total} found ({time.time() - t0:.1f}s)")
-
-        # --- Step 2.6: Batch 1000 Genomes local lookups ---
-        tkg_map: Dict[str, Optional[Dict]] = {}
-        if enabled_sources is None or 'thousand_genomes' in enabled_sources:
-            from .thousand_genomes_local import get_thousand_genomes_service
-            tkg_svc = get_thousand_genomes_service()
-            if tkg_svc.is_loaded:
-                t0 = time.time()
-                tkg_map = await tkg_svc.lookup_batch(unique_rsids)
-                tkg_found = sum(1 for v in tkg_map.values() if v and v.get('found'))
-                logger.info(f"  1000G local batch: {tkg_found}/{total} found ({time.time() - t0:.1f}s)")
-
-        # --- Step 2.7: Batch AlphaMissense local lookups ---
-        am_map: Dict[str, Optional[Dict]] = {}
-        if enabled_sources is None or 'alpha_missense' in enabled_sources:
-            from ..utils.alpha_missense import get_alpha_missense_service
-            am_svc = get_alpha_missense_service()
-            if am_svc.available:
-                t0 = time.time()
-                am_variants = []
-                for rsid in unique_rsids:
-                    v = rsid_to_variants[rsid][0]
-                    marker = getattr(v, 'marker', None)
-                    if marker and marker.chromosome and marker.position and marker.ref_allele and marker.alt_alleles:
-                        for alt in str(marker.alt_alleles).split(','):
-                            alt = alt.strip()
-                            if alt:
-                                am_variants.append({
-                                    'rsid': rsid,
-                                    'chromosome': str(marker.chromosome),
-                                    'position': int(marker.position),
-                                    'ref_allele': str(marker.ref_allele),
-                                    'alt_allele': alt,
-                                })
-                                break  # one alt per rsid is enough
-                if am_variants:
-                    am_map = await asyncio.get_event_loop().run_in_executor(
-                        None, am_svc.lookup_variants_batch, am_variants
-                    )
-                am_found = sum(1 for v in am_map.values() if v and v.get('found'))
-                logger.info(f"  AlphaMissense local batch: {am_found}/{total} found ({time.time() - t0:.1f}s)")
-
-        # --- Step 2.8: Batch gnomAD tx_annotated lookups (gene/csq/LoF/GTEx) ---
-        gtx_map: Dict[str, Optional[Dict]] = {}
-        if enabled_sources is None or 'gnomad_tx' in enabled_sources:
-            from .gnomad_tx import get_gnomad_tx_service
-            gtx_svc = get_gnomad_tx_service()
-            if gtx_svc.available:
-                t0 = time.time()
-                gtx_tuples = []
-                for rsid in unique_rsids:
-                    v = rsid_to_variants[rsid][0]
-                    marker = getattr(v, 'marker', None)
-                    if marker and marker.chromosome and marker.position and marker.ref_allele and marker.alt_alleles:
-                        gtx_tuples.append((
-                            rsid,
-                            str(marker.chromosome),
-                            int(marker.position),
-                            str(marker.ref_allele),
-                            str(marker.alt_alleles),
-                        ))
-                if gtx_tuples:
-                    gtx_map = await gtx_svc.lookup_batch(gtx_tuples)
-                gtx_found = sum(1 for v in gtx_map.values() if v and v.get('found'))
-                logger.info(f"  gnomAD tx_annotated batch: {gtx_found}/{total} found ({time.time() - t0:.1f}s)")
+        # Unpack into per-source maps for the upsert
+        cv_map = results.clinvar
+        gn_map = results.gnomad
+        ens_map = results.ensembl
+        tkg_map = results.thousand_genomes
+        am_map = results.alpha_missense
+        gtx_map = results.gnomad_tx
 
         await asyncio.sleep(0)
 
-        # --- Step 3: Bulk upsert shared_variant_annotations + create variant_annotations ---
+        # --- Bulk upsert shared_variant_annotations + create variant_annotations ---
         annotation_results: Dict[str, AnnotationResult] = {}
         batch_size = 500
         saved_count = 0
 
-        # Pre-import scoring engine once — not per-variant
         from .scoring_engine import get_scoring_engine
         scorer = get_scoring_engine()
 
-        # Pre-compute per-rsid values to avoid dict lookups in inner loop
         def _val(data):
             return data if data and data.get('found') else None
 
@@ -1541,7 +1154,6 @@ class ComprehensiveAnalysisService:
         for i in range(0, len(unique_rsids), batch_size):
             chunk_rsids = unique_rsids[i:i + batch_size]
 
-            # ── Build batch values ──
             batch_values = []
             for rsid in chunk_rsids:
                 cv_val = _val(cv_map.get(rsid))
@@ -1570,7 +1182,6 @@ class ComprehensiveAnalysisService:
                 batch_values.append(row)
 
             async with async_session_factory() as session:
-                # ── Multi-value upsert (one statement for the whole chunk) ──
                 stmt = insert(SharedVariantAnnotation).values(batch_values)
                 stmt = stmt.on_conflict_do_update(
                     index_elements=['rsid'],
@@ -1607,7 +1218,6 @@ class ComprehensiveAnalysisService:
                 result = await session.execute(stmt)
                 rsid_to_shared_id = {row.rsid: row.id for row in result.all()}
 
-                # ── Batch insert variant_annotation links ──
                 link_values = []
                 for rsid in chunk_rsids:
                     shared_id = rsid_to_shared_id.get(rsid)
@@ -1629,9 +1239,7 @@ class ComprehensiveAnalysisService:
 
                 await session.commit()
 
-            # ── Build in-memory annotation results (no DB, pure CPU) ──
-            # Yield at the midpoint of each 500-item chunk so HTTP handlers
-            # can get into the event loop during heavy bulk annotation.
+            # Build in-memory annotation results with event loop yields
             for idx_in_chunk, rsid in enumerate(chunk_rsids):
                 if idx_in_chunk > 0 and idx_in_chunk % 50 == 0:
                     await asyncio.sleep(0)
@@ -1677,7 +1285,6 @@ class ComprehensiveAnalysisService:
                 )
                 saved_count += 1
 
-            # Progress — throttle DB updates to every 2s to reduce connection churn
             progress.annotated_variants += sum(
                 len(rsid_to_variants[r]) for r in chunk_rsids
             )
@@ -1698,6 +1305,9 @@ class ComprehensiveAnalysisService:
                     f"  Bulk annotation: {saved_count}/{total} RSIDs "
                     f"({progress.annotated_variants} variants, {elapsed:.1f}s)"
                 )
+
+            # Yield generously so FastAPI can serve HTTP requests
+            await asyncio.sleep(0.01)
 
             # Yield generously so FastAPI can serve HTTP requests during heavy analysis
             await asyncio.sleep(0.01)
