@@ -635,32 +635,32 @@ async def get_dashboard_data(
         total_variants = sum(getattr(a, 'total_variants', 0) or 0 for a in analyses)
         processed_variants = sum(getattr(a, 'processed_variants', 0) or 0 for a in analyses)
         
-        # Count actual variant annotations for more accurate "analyzed" count
-        # Use DISTINCT analysis_variant_id to avoid inflated counts from
-        # duplicate links created during analysis resume/retry
-        from ..db.models import VariantAnnotation, SharedVariantAnnotation
-        analyzed_count_result = await db.execute(
-            select(func.count(func.distinct(VariantAnnotation.analysis_variant_id)))
-            .join(GeneticAnalysis, VariantAnnotation.analysis_id == GeneticAnalysis.id)
-            .where(
-                GeneticAnalysis.user_id == current_user.id,
-                GeneticAnalysis.deleted_at.is_(None),
-            )
+        # "Analyzed" = processed variants (includes both new and reused annotations)
+        analyzed_variants = processed_variants
+
+        # Count insights generated across all insight tables for this user
+        from ..db.models import (
+            HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait,
+            SportsPerformance, CognitiveProfile, PersonalityTrait,
+            AncestryResult, CarrierStatus, WellnessMetric,
+            MethylationProfile, DetoxificationProfile, RareMutation,
+            UncommonMutation,
         )
-        analyzed_variants = analyzed_count_result.scalar() or 0
-        
-        # Count insights (annotations with meaningful data) using shared annotations
-        insights_count_result = await db.execute(
-            select(func.count(func.distinct(VariantAnnotation.analysis_variant_id)))
-            .join(GeneticAnalysis, VariantAnnotation.analysis_id == GeneticAnalysis.id)
-            .join(SharedVariantAnnotation, VariantAnnotation.shared_annotation_id == SharedVariantAnnotation.id)
-            .where(
-                GeneticAnalysis.user_id == current_user.id,
-                GeneticAnalysis.deleted_at.is_(None),
-                SharedVariantAnnotation.ensembl_data.isnot(None)
+        analysis_ids_for_insights = [a.id for a in analyses]
+        insights_found = 0
+        for insight_tbl in (
+            HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait,
+            SportsPerformance, CognitiveProfile, PersonalityTrait,
+            AncestryResult, CarrierStatus, WellnessMetric,
+            MethylationProfile, DetoxificationProfile, RareMutation,
+            UncommonMutation,
+        ):
+            cnt_result = await db.execute(
+                select(func.count()).where(
+                    insight_tbl.analysis_id.in_(analysis_ids_for_insights)
+                )
             )
-        )
-        insights_found = insights_count_result.scalar() or 0
+            insights_found += (cnt_result.scalar() or 0)
         
         # Get upload date safely
         upload_date = getattr(primary_analysis, 'upload_date', None)

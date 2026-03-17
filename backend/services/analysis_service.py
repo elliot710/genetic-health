@@ -111,7 +111,7 @@ class ComprehensiveAnalysisService:
         from ..db.database import async_session_factory
         async with async_session_factory() as session:
             result = await session.execute(
-                select(VariantMapping).where(VariantMapping.is_active == True)
+                select(VariantMapping).where(VariantMapping.is_active)
             )
             rows = result.scalars().all()
 
@@ -189,10 +189,18 @@ class ComprehensiveAnalysisService:
         Returns a list of enabled source names, or None if the table
         doesn't exist yet / is empty (meaning use all sources).
 
-        Local sources (alpha_missense, clinvar_local) are always included
-        if not explicitly disabled, even if their config row doesn't exist yet."""
-        # Local sources that should always be enabled unless explicitly disabled
-        LOCAL_SOURCES = {'alpha_missense', 'clinvar_local', 'gnomad', 'thousand_genomes', 'ensembl_vep'}
+        Local sources are always included if not explicitly disabled,
+        even if their config row doesn't exist yet.
+
+        Note on naming:
+        - 'ensembl' controls both the remote Ensembl REST API and the
+          local Ensembl VEP service — they share the ensembl_data column.
+        - 'ensembl_vep' is treated as an alias for 'ensembl' to avoid
+          config confusion (both map to the same annotation path).
+        """
+        # Local sources that should always be enabled unless explicitly disabled.
+        # 'ensembl' here means the local VEP service (ensembl_vep_local.py).
+        LOCAL_SOURCES = {'alpha_missense', 'clinvar_local', 'thousand_genomes', 'ensembl'}
         try:
             from ..db.database import async_session_factory
             async with async_session_factory() as session:
@@ -211,10 +219,19 @@ class ComprehensiveAnalysisService:
                 else:
                     explicitly_disabled.add(name)
 
+            # Treat 'ensembl_vep' as alias for 'ensembl'
+            if 'ensembl_vep' in enabled:
+                enabled.add('ensembl')
+            if 'ensembl_vep' in explicitly_disabled and 'ensembl' not in enabled:
+                explicitly_disabled.add('ensembl')
+
             # Add local sources that aren't explicitly disabled
             for src in LOCAL_SOURCES:
                 if src not in explicitly_disabled:
                     enabled.add(src)
+
+            # Remove the alias — downstream code only checks 'ensembl'
+            enabled.discard('ensembl_vep')
 
             names = sorted(enabled)
             logger.info(f"Enabled annotation sources: {names}")
@@ -309,7 +326,7 @@ class ComprehensiveAnalysisService:
 
             # ── Phase 1: Build gene map (always — cheap, in-memory only) ──
             phase_start = time.time()
-            logger.info(f"═══ Phase 1/4: Building gene map ═══")
+            logger.info("═══ Phase 1/4: Building gene map ═══")
             all_rsids = [str(v.rsid) for v in variants if v.rsid]
             has_position = sum(1 for v in variants if v.chromosome and v.position)
             logger.info(f"  Input: {len(all_rsids)} RSIDs, {has_position} with chr:pos")
@@ -335,7 +352,7 @@ class ComprehensiveAnalysisService:
             progress.phase_progress = 0.0
             progress.current_step = "annotating_variants"
             await self._update_progress(analysis_id, progress)
-            logger.info(f"═══ Phase 2/4: Annotating variants ═══")
+            logger.info("═══ Phase 2/4: Annotating variants ═══")
             phase_start = time.time()
 
             with tracer.start_as_current_span("analysis.phase2.annotate_variants") as span:
@@ -361,9 +378,13 @@ class ComprehensiveAnalysisService:
             progress.phase_progress = 0.0
             progress.current_step = "enriching_bigquery"
             await self._update_progress(analysis_id, progress)
-            logger.info(f"═══ Phase 3/4: BigQuery enrichment ═══")
+            logger.info("═══ Phase 3/4: BigQuery enrichment ═══")
+            enabled_sources = await self._load_enabled_sources()
+            bq_source_names = {'chembl', 'fda_drug', 'alphafold'}
+            enabled_bq = bq_source_names & set(enabled_sources) if enabled_sources else bq_source_names
             logger.info(f"  Input: {len(annotation_results)} annotated variants | "
                         f"{len(set(self._rsid_gene_map.values()))} unique genes in map")
+            logger.info(f"  BigQuery sources: {sorted(enabled_bq) if enabled_bq else 'none enabled'}")
             phase_start = time.time()
             with tracer.start_as_current_span("analysis.phase3.bigquery_enrichment") as span:
                 span.set_attribute("annotation.count", len(annotation_results))
@@ -380,18 +401,16 @@ class ComprehensiveAnalysisService:
             # Count how many annotations have real data for context
             annotated_with_data = sum(1 for ar in annotation_results.values()
                                       if ar.annotation_data and ar.annotation_data.get('annotations'))
-            logger.info(f"═══ Phase 4/4: Generating insights ═══")
+            logger.info("═══ Phase 4/4: Generating insights ═══")
             logger.info(f"  Input: {annotated_with_data}/{len(annotation_results)} variants with annotation data")
             logger.info(f"  Generators: {len(ALL_GENERATORS)} — "
                         f"{', '.join(name for name, _ in ALL_GENERATORS)}")
             phase_start = time.time()
 
             with tracer.start_as_current_span("analysis.phase4.generate_insights") as span:
-                async with async_session_factory() as session:
-                    insights_generated = await self._generate_comprehensive_insights(
-                        variants, annotation_results, analysis_id, session, progress
-                    )
-                    await session.commit()
+                insights_generated = await self._generate_comprehensive_insights(
+                    variants, annotation_results, analysis_id, None, progress
+                )
                 span.set_attribute("insights.generated", insights_generated)
             phase_elapsed = time.time() - phase_start
             logger.info(f"═══ Phase 4/4 complete ({phase_elapsed:.1f}s) ═══")
@@ -424,14 +443,14 @@ class ComprehensiveAnalysisService:
             root_span.set_attribute("analysis.variants_processed", len(variants))
             root_span.set_attribute("analysis.insights_generated", insights_generated)
 
-            logger.info(f"╔══════════════════════════════════════════╗")
+            logger.info("╔══════════════════════════════════════════╗")
             logger.info(f"║  Analysis {analysis_id} completed in {processing_time:.1f}s")
             logger.info(f"║  Variants: {len(variants)} total, {len(annotation_results)} annotated")
             logger.info(f"║  Annotations: {progress.reused_annotations} reused, {progress.new_annotations} new")
             logger.info(f"║  Gene map: {len(self._rsid_gene_map)} RSIDs → {len(set(self._rsid_gene_map.values()))} genes")
             logger.info(f"║  Insights: {insights_generated} generated")
             logger.info(f"║  Throughput: {len(variants) / max(0.1, processing_time):.0f} variants/sec overall")
-            logger.info(f"╚══════════════════════════════════════════╝")
+            logger.info("╚══════════════════════════════════════════╝")
 
             return {
                 "success": True,
@@ -566,6 +585,11 @@ class ComprehensiveAnalysisService:
                 rsid=rsid, was_reused=True,
                 annotation_data=annotation_data, source='existing'
             )
+
+        # Count reused annotations as processed — they are analysed variants
+        # even though no new API calls were needed.
+        progress.annotated_variants = len(existing_annotations)
+        progress.processed_variants = len(existing_annotations)
 
         # Determine if any remote APIs would actually be called
         remote_api_names = {'ensembl', 'clinvar', 'clinpgx', 'snpedia'}
@@ -910,6 +934,8 @@ class ComprehensiveAnalysisService:
             # --- Chunked DB writes to avoid long-held locks ---
             WRITE_CHUNK = 5000
 
+            _sva_table = SharedVariantAnnotation.__table__
+
             async def _chunked_update(col_name, params):
                 """Write updates in small chunks with intermediate commits."""
                 total = 0
@@ -920,9 +946,10 @@ class ComprehensiveAnalysisService:
                     chunk = params[ci:ci + WRITE_CHUNK]
                     chunk_num = ci // WRITE_CHUNK + 1
                     async with async_session_factory() as sess:
-                        await sess.execute(
-                            update(SharedVariantAnnotation)
-                            .where(SharedVariantAnnotation.rsid == bindparam('b_rsid'))
+                        conn = await sess.connection()
+                        await conn.execute(
+                            _sva_table.update()
+                            .where(_sva_table.c.rsid == bindparam('b_rsid'))
                             .values(**{col_name: bindparam('b_data')}),
                             chunk
                         )
@@ -1010,15 +1037,18 @@ class ComprehensiveAnalysisService:
                     # Accumulate updates between commits (same pattern as _bulk_enrich_bigquery)
                     pending_updates: List[Tuple[str, Dict]] = []  # (rsid, update_vals)
 
+                    _sva_t = SharedVariantAnnotation.__table__
+
                     async def _flush_bq_backfill():
                         nonlocal pending_updates
                         if not pending_updates:
                             return
                         async with async_session_factory() as session:
+                            conn = await session.connection()
                             for rsid, vals in pending_updates:
-                                await session.execute(
-                                    update(SharedVariantAnnotation)
-                                    .where(SharedVariantAnnotation.rsid == rsid)
+                                await conn.execute(
+                                    _sva_t.update()
+                                    .where(_sva_t.c.rsid == rsid)
                                     .values(**vals)
                                 )
                             await session.commit()
@@ -1470,15 +1500,18 @@ class ComprehensiveAnalysisService:
             pending_updates: List[Tuple[List[str], Dict]] = []  # (rsids, update_vals)
             pending_mem: List[Tuple[List[str], Dict]] = []  # (rsids, mem_updates)
 
+            _sva_tbl = SharedVariantAnnotation.__table__
+
             async def _flush_pending():
                 nonlocal pending_updates, pending_mem
                 if not pending_updates:
                     return
                 async with async_session_factory() as session:
+                    conn = await session.connection()
                     for rsids_list, vals in pending_updates:
-                        await session.execute(
-                            update(SharedVariantAnnotation)
-                            .where(SharedVariantAnnotation.rsid.in_(rsids_list))
+                        await conn.execute(
+                            _sva_tbl.update()
+                            .where(_sva_tbl.c.rsid.in_(rsids_list))
                             .values(**vals)
                         )
                     await session.commit()
@@ -1575,7 +1608,15 @@ class ComprehensiveAnalysisService:
 
         Deletes any existing insights for this analysis first so that
         resume does not produce duplicates.
+
+        Each generator runs in its own DB session so that a connection
+        failure in one generator (e.g. ancestry taking >60 s to query
+        1000 Genomes) does not poison subsequent generators via a
+        PendingRollbackError cascade.
         """
+        from ..db.database import async_session_factory
+        from sqlalchemy import delete
+
         # Clean up any partial insights from a previous interrupted run
         insight_tables = [
             HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait,
@@ -1584,26 +1625,17 @@ class ComprehensiveAnalysisService:
             MethylationProfile, DetoxificationProfile, RareMutation,
             UncommonMutation,
         ]
-        from sqlalchemy import delete
-        for tbl in insight_tables:
-            await session.execute(
-                delete(tbl).where(tbl.analysis_id == analysis_id)
-            )
-        await session.flush()
+        async with async_session_factory() as cleanup_session:
+            for tbl in insight_tables:
+                await cleanup_session.execute(
+                    delete(tbl).where(tbl.analysis_id == analysis_id)
+                )
+            await cleanup_session.commit()
         logger.info(f"  Cleared {len(insight_tables)} insight tables for fresh generation")
-
-        # Build the shared context for all generators
-        ctx = GeneratorContext(
-            analysis_id=analysis_id,
-            variants=variants,
-            annotation_results=annotation_results,
-            session=session,
-            rsid_gene_map=self._rsid_gene_map,
-            registry=self._registry,
-        )
 
         insights_generated = 0
         total_generators = len(ALL_GENERATORS)
+        failed_generators: list[str] = []
 
         for gen_idx, (gen_name, gen_func) in enumerate(ALL_GENERATORS):
             await self._check_if_cancelled(analysis_id)
@@ -1612,14 +1644,29 @@ class ComprehensiveAnalysisService:
                 progress.phase_progress = gen_idx / total_generators
                 await self._update_progress(analysis_id, progress)
 
-                count = await gen_func(ctx)
+                # Fresh session per generator — isolates connection failures
+                async with async_session_factory() as gen_session:
+                    ctx = GeneratorContext(
+                        analysis_id=analysis_id,
+                        variants=variants,
+                        annotation_results=annotation_results,
+                        session=gen_session,
+                        rsid_gene_map=self._rsid_gene_map,
+                        registry=self._registry,
+                    )
+                    count = await gen_func(ctx)
+                    await gen_session.commit()
                 insights_generated += count
                 logger.info(f"  [{gen_idx + 1}/{total_generators}] {gen_name}: {count} insights")
             except AnalysisCancelled:
                 raise
             except Exception as e:
+                failed_generators.append(gen_name)
                 logger.error(f"  [{gen_idx + 1}/{total_generators}] {gen_name}: FAILED — {e}")
                 continue
+
+        if failed_generators:
+            logger.warning(f"  {len(failed_generators)} generator(s) failed: {', '.join(failed_generators)}")
 
         return insights_generated
 
