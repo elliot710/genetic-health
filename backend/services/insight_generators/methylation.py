@@ -14,9 +14,12 @@ async def generate_methylation_profiles(ctx: GeneratorContext) -> int:
         )
 
     def from_gene(aid, rsid, gene, consequence, info):
+        genotype = info.get('_genotype', '')
+        ref_allele = info.get('_ref_allele')
         return MethylationProfile(
             analysis_id=aid, gene=info['gene'],
-            variant=rsid, methylation_capacity=info['capacity'],
+            variant=rsid,
+            methylation_capacity=zygosity_adjust(info['capacity'], genotype, ref_allele=ref_allele) if genotype else info['capacity'],
             supplement_recommendations=info['supplements'],
             associated_variants=[rsid]
         )

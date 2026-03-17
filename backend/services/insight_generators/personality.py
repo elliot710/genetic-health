@@ -14,9 +14,12 @@ async def generate_personality_traits(ctx: GeneratorContext) -> int:
         )
 
     def from_gene(aid, rsid, gene, consequence, info):
+        genotype = info.get('_genotype', '')
+        ref_allele = info.get('_ref_allele')
         return PersonalityTrait(
             analysis_id=aid, trait_name=info['trait'],
-            genetic_tendency=info['tendency'], confidence_level=info['confidence'],
+            genetic_tendency=zygosity_adjust(info['tendency'], genotype, ref_allele=ref_allele) if genotype else info['tendency'],
+            confidence_level=info['confidence'],
             associated_variants=[rsid],
             behavioral_insights=info['insights']
         )

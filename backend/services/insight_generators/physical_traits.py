@@ -15,7 +15,10 @@ async def generate_physical_traits(ctx: GeneratorContext) -> int:
         )
 
     def from_gene(aid, rsid, gene, consequence, info):
+        genotype = info.get('_genotype', '')
+        ref_allele = info.get('_ref_allele')
         confidence = 'high' if consequence in ('missense_variant', 'stop_gained', 'frameshift_variant') else info['confidence']
+        confidence = zygosity_adjust(confidence, genotype, ref_allele=ref_allele) if genotype else confidence
         return PhysicalTrait(
             analysis_id=aid, trait_name=info['trait'],
             trait_category=info['category'], genetic_result=info['result'],

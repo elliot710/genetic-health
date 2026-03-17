@@ -284,6 +284,7 @@ class SharedVariantAnnotation(Base):
     alpha_missense_data = Column(JSON)  # AlphaMissense AI pathogenicity prediction (local data, NOT clinically validated)
     clinvar_local_data = Column(JSON)  # ClinVar local TSV data (variant_summary + citations + cross-refs + gene stats)
     gnomad_data = Column(JSON)  # gnomAD population frequencies + constraint metrics (local/BigQuery)
+    gnomad_tx_data = Column(JSON)  # gnomAD tx_annotated: gene/consequence/LoF/GTEx tissue expression (tabix)
     thousand_genomes_data = Column(JSON)  # 1000 Genomes Phase 3 population frequencies (local ETL)
     chembl_data = Column(JSON)  # ChEMBL drug mechanisms, indications, warnings (BigQuery)
     fda_drug_data = Column(JSON)  # FDA drug label CYP interactions (BigQuery)
@@ -441,6 +442,11 @@ class AnnotationSourceConfig(Base):
     display_name = Column(String, nullable=False)
     is_enabled = Column(Boolean, default=True, nullable=False)
     description = Column(String)
+    # source_type: 'api' = third-party HTTP API, 'database' = PostgreSQL-backed,
+    # 'file' = local tabix/TSV files in data_sources/ only,
+    # 'hybrid' = both local files in data_sources/ AND PostgreSQL import,
+    # 'bigquery' = Google BigQuery
+    source_type = Column(String, default='api')  # 'api' | 'database' | 'file' | 'hybrid' | 'bigquery'
     rate_limit = Column(Float)  # req/s — informational for the admin UI
     priority = Column(Integer, default=0)  # Lower = higher priority
     created_at = Column(DateTime(timezone=True), server_default=func.now())

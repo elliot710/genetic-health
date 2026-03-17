@@ -1,9 +1,54 @@
 """Carrier status insight generator."""
 import logging
 from ...db.models import CarrierStatus
-from .base import GeneratorContext, get_user_genotype, get_ref_allele, is_homozygous_reference
+from .base import (
+    GeneratorContext, get_user_genotype, get_ref_allele,
+    is_homozygous_reference, is_heterozygous, _parse_alleles,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _classify_carrier_status(user_gt: str, ref_allele: str, alt_allele: str) -> str:
+    """Determine carrier status from genotype + known ref/alt alleles.
+
+    Returns 'affected' (homozygous alt), 'carrier' (heterozygous), or
+    'unaffected' (homozygous ref / no alt match).
+    """
+    alleles = _parse_alleles(user_gt)
+    if not alleles:
+        return 'unaffected'
+
+    ref = (ref_allele or '').strip().upper()
+    alt = (alt_allele or '').strip().upper()
+
+    if ref and alt and ref != alt:
+        # We know both the reference and alternate alleles — exact classification
+        alt_count = sum(1 for a in alleles if a == alt)
+        if alt_count == 0:
+            return 'unaffected'
+        elif alt_count == len(alleles):
+            return 'affected'
+        else:
+            return 'carrier'
+
+    # Fallback: we only have ref_allele (common for consumer CSV where ref==alt)
+    if ref:
+        ref_count = sum(1 for a in alleles if a == ref)
+        if ref_count == len(alleles):
+            return 'unaffected'  # All reference
+        elif ref_count == 0:
+            # All non-reference — but we don't know if the non-ref allele
+            # is the pathogenic one. Be conservative: report as carrier, not affected.
+            return 'carrier'
+        else:
+            return 'carrier'  # Mix of ref + non-ref
+
+    # No ref_allele at all — heterozygous is the safest assumption for non-ref
+    if is_heterozygous(user_gt):
+        return 'carrier'
+
+    return 'unaffected'
 
 
 async def generate_carrier_status(ctx: GeneratorContext) -> int:
@@ -29,10 +74,20 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
             cond = info['condition']
             if cond not in seen_conditions:
                 seen_conditions.add(cond)
+                # Determine actual carrier status from genotype instead of
+                # blindly using the registry template (which always says 'carrier').
+                marker = getattr(variant, 'marker', None)
+                marker_alt = getattr(marker, 'alt_alleles', '') or ''
+                actual_status = _classify_carrier_status(
+                    user_gt or '', ref_allele or '', marker_alt
+                )
+                if actual_status == 'unaffected':
+                    seen_conditions.discard(cond)
+                    continue
                 carrier_results.append(CarrierStatus(
                     analysis_id=ctx.analysis_id,
                     condition=cond,
-                    carrier_status=info['status'],
+                    carrier_status=actual_status,
                     inheritance_pattern=info.get('inheritance', 'autosomal_recessive'),
                     associated_variants=[variant_rsid],
                     genetic_counseling_recommended=info.get('counseling', False)
@@ -58,8 +113,14 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
         if not gene_conditions:
             continue
 
-        genotype = getattr(variant, 'genotype', '') or ''
-        is_homozygous = len(set(genotype.replace('/', ''))) == 1 if genotype else False
+        # Determine carrier status using ref/alt alleles from ClinVar or marker
+        cv_alt = cv_local.get('alt_allele') or cv_local.get('alternate_allele') or ''
+        marker_alt = getattr(getattr(variant, 'marker', None), 'alt_alleles', '') or ''
+        alt_allele = cv_alt or marker_alt
+        status = _classify_carrier_status(user_gt or '', ref_allele or '', alt_allele)
+
+        if status == 'unaffected':
+            continue
 
         for gc in gene_conditions:
             disease = gc.get('disease', '')
@@ -67,7 +128,6 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
                 continue
             seen_conditions.add(disease)
 
-            status = 'affected' if is_homozygous else 'carrier'
             inheritance = 'autosomal_recessive'
             if 'dominant' in disease.lower():
                 inheritance = 'autosomal_dominant'

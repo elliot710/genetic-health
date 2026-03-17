@@ -2,24 +2,41 @@
 from ...db.models import HealthRisk
 from .base import (
     GeneratorContext, generate_from_maps, assess_risk_level,
-    get_health_recommendations,
+    get_health_recommendations, extract_gene_and_consequence,
+    risk_level_to_score, zygosity_adjust,
 )
 
 
 async def generate_health_risks(ctx: GeneratorContext) -> int:
     def from_rsid(aid, rsid, genotype, info):
-        risk_level = assess_risk_level(genotype, info['risk_multiplier'], ref_allele=info.get('_ref_allele'))
+        # Look up pathogenicity score from annotation data if available
+        annotation_result = ctx.annotation_results.get(rsid)
+        path_score = None
+        if annotation_result and annotation_result.annotation_data:
+            path_score = annotation_result.annotation_data.get('pathogenicity_score')
+        risk_level = assess_risk_level(
+            genotype, info['risk_multiplier'],
+            ref_allele=info.get('_ref_allele'),
+            pathogenicity_score=path_score,
+        )
+        # Use registry recommendations if available, fall back to built-in
+        recommendations = info.get('recommendations')
+        if not recommendations or recommendations == ['Consult with healthcare provider']:
+            recommendations = get_health_recommendations(info['condition'], risk_level)
         return HealthRisk(
             analysis_id=aid, condition=info['condition'],
-            risk_level=risk_level, risk_score=f"{info['risk_multiplier']}x",
+            risk_level=risk_level, risk_score=str(risk_level_to_score(risk_level)),
             associated_variants=[rsid],
-            recommendations=get_health_recommendations(info['condition'], risk_level)
+            recommendations=recommendations
         )
 
     def from_gene(aid, rsid, gene, consequence, info):
+        genotype = info.get('_genotype', '')
+        ref_allele = info.get('_ref_allele')
+        risk_level = zygosity_adjust(info['risk_level'], genotype, ref_allele=ref_allele)
         return HealthRisk(
             analysis_id=aid, condition=info['condition'],
-            risk_level=info['risk_level'], risk_score=info['risk_score'],
+            risk_level=risk_level, risk_score=str(risk_level_to_score(risk_level)),
             associated_variants=[rsid], recommendations=info['recommendations']
         )
 

@@ -19,9 +19,17 @@ async def generate_cognitive_profiles(ctx: GeneratorContext) -> int:
         )
 
     def from_gene(aid, rsid, gene, consequence, info):
+        genotype = info.get('_genotype', '')
+        ref_allele = info.get('_ref_allele')
         percentile = info['percentile']
         if consequence in ('missense_variant', 'stop_gained'):
             percentile = min(95, percentile + 10)
+        # Apply zygosity adjustment to percentile
+        if genotype and ref_allele:
+            if is_homozygous_reference(genotype, ref_allele):
+                percentile = max(1, percentile - 10)
+            elif not is_heterozygous(genotype):
+                percentile = min(99, percentile + 10)
         return CognitiveProfile(
             analysis_id=aid, cognitive_domain=info['domain'],
             genetic_score=info['score'], percentile=percentile,

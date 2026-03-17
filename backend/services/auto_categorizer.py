@@ -87,6 +87,10 @@ class AutoCategorizer:
                 if key not in candidates:
                     candidates[key] = entry
 
+                if len(candidates) >= MAX_MAPPINGS_PER_CATEGORY:
+                    break  # This rule filled the quota
+            # Don't break the outer loop — let remaining rules contribute
+            # new keys up to the cap
             if len(candidates) >= MAX_MAPPINGS_PER_CATEGORY:
                 break
 
@@ -204,7 +208,15 @@ class AutoCategorizer:
     async def _match_condition_keyword(
         self, session: AsyncSession, category: str, keyword: str, template: dict
     ) -> Dict[str, dict]:
-        """Match ClinVar variants where conditions contain a keyword."""
+        """Match ClinVar variants where conditions contain a keyword.
+        
+        Excludes variants with benign/likely_benign clinical significance
+        to avoid generating elevated-risk mappings for clinically benign variants.
+        """
+        # Exclude variants that are definitively benign — they should not
+        # receive elevated risk multipliers just because their condition
+        # string contains a keyword like "cancer" or "diabetes".
+        _BENIGN_SIGS = ('benign', 'likely benign', 'likely_benign')
         result = await session.execute(
             select(
                 ClinVarVariant.rsid,
@@ -214,6 +226,9 @@ class AutoCategorizer:
             )
             .where(ClinVarVariant.conditions.ilike(f"%{keyword}%"))
             .where(ClinVarVariant.rsid.isnot(None))
+            .where(~ClinVarVariant.clinical_significance.ilike('benign%'))
+            .where(~ClinVarVariant.clinical_significance.ilike('likely_benign%'))
+            .where(~ClinVarVariant.clinical_significance.ilike('likely benign%'))
             .distinct(ClinVarVariant.rsid)
             .limit(MAX_MAPPINGS_PER_CATEGORY)
         )
@@ -227,6 +242,19 @@ class AutoCategorizer:
             data.setdefault("clinical_significance", row[2] or "")
             data.setdefault("gene", row[1] or "")
             data.setdefault("source", "clinvar_auto")
+            # Adjust risk_multiplier based on actual clinical significance
+            # so pathogenic variants in the same keyword group get higher
+            # multipliers than VUS or risk-factor variants.
+            sig_lower = (row[2] or '').lower()
+            if 'pathogenic' in sig_lower and 'benign' not in sig_lower:
+                if 'likely' in sig_lower:
+                    data.setdefault("risk_multiplier", data.get("risk_multiplier", 1.5) * 1.0)
+                else:
+                    data["risk_multiplier"] = max(data.get("risk_multiplier", 1.5), 2.5)
+            elif 'uncertain' in sig_lower or 'conflicting' in sig_lower:
+                data["risk_multiplier"] = min(data.get("risk_multiplier", 1.5), 1.3)
+            elif 'risk' in sig_lower:
+                data.setdefault("risk_multiplier", 1.5)
             # Populate dedup-critical fields for category generators
             data.setdefault("trait", clean)
             data.setdefault("domain", clean)
@@ -423,7 +451,10 @@ class AutoCategorizer:
             data.setdefault("loeuf", loeuf)
             data.setdefault("mis_z", mis_z)
             data.setdefault("source", "gnomad_auto")
-            label = f"{gene} (constrained: {metric}={getattr(row, metric, '?')})"
+            # Use tuple indexing — row is a result tuple, not an ORM object
+            _metric_idx = {'pli': 1, 'loeuf': 2, 'mis_z': 3}
+            metric_val = row[_metric_idx.get(metric, 1)]
+            label = f"{gene} (constrained: {metric}={metric_val:.2f})" if isinstance(metric_val, (int, float)) else f"{gene} (constrained: {metric}={metric_val})"
             data.setdefault("trait", label)
             data.setdefault("category", label)
             data.setdefault("domain", label)

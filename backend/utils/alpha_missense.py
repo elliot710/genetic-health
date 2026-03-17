@@ -198,7 +198,10 @@ class AlphaMissenseService:
                     continue
                 row_ref = fields[2]
                 row_alt = fields[3]
-                if row_ref == ref and row_alt == alt:
+                # Accept exact match OR strand-flipped alleles (consumer arrays sometimes
+                # report alleles in the opposite orientation relative to the reference genome).
+                allele_match = (row_ref == ref and row_alt == alt) or (row_ref == alt and row_alt == ref)
+                if allele_match:
                     if has_uniprot:
                         # CHROM POS REF ALT genome uniprot_id transcript_id protein_variant am_pathogenicity am_class
                         try:
@@ -359,7 +362,11 @@ class AlphaMissenseService:
                 results[rsid] = None
                 continue
 
-            result = self.lookup_variant(chrom, int(pos), ref, alt)
+            # Use hg19 since all uploaded genetic data in this system is build37/GRCh37.
+            # Fall back to hg38 only if hg19 returns nothing and hg38 data is available.
+            result = self.lookup_variant(chrom, int(pos), ref, alt, genome="hg19")
+            if not (result and result.get("found")) and self.available:
+                result = self.lookup_variant(chrom, int(pos), ref, alt, genome="hg38")
             results[rsid] = result
             if result and result.get("found"):
                 found_count += 1

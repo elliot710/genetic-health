@@ -5,6 +5,7 @@ import asyncio
 import csv
 import io
 import logging
+import time
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, status
 from fastapi.responses import StreamingResponse
@@ -864,18 +865,24 @@ async def bulk_review_discoveries(
 # --- Annotation Source Configuration ---
 
 DEFAULT_SOURCES = [
-    {"source_name": "ensembl", "display_name": "Ensembl VEP", "is_enabled": True, "description": "Variant Effect Predictor — gene consequences, transcript impact, regulatory annotations", "rate_limit": 15.0, "priority": 1},
-    {"source_name": "clinvar", "display_name": "ClinVar (NCBI)", "is_enabled": True, "description": "Clinical significance classifications, disease associations, review status", "rate_limit": 10.0, "priority": 2},
-    {"source_name": "clinpgx", "display_name": "ClinPGx", "is_enabled": True, "description": "Pharmacogenomic annotations — drug-gene interactions and dosing guidelines", "rate_limit": 1.0, "priority": 3},
-    {"source_name": "snpedia", "display_name": "SNPedia", "is_enabled": True, "description": "Community-curated variant wiki — genotype-phenotype associations and research summaries", "rate_limit": 2.0, "priority": 4},
-    {"source_name": "alpha_missense", "display_name": "AlphaMissense", "is_enabled": True, "description": "AI-based missense pathogenicity predictions (local data, no API calls)", "rate_limit": None, "priority": 5},
-    {"source_name": "clinvar_local", "display_name": "ClinVar Local", "is_enabled": True, "description": "Local ClinVar TSV + VCF data — variant summary, citations, cross-refs, gene stats, HGVS, conflicts, allele frequencies, molecular consequences, oncogenicity (no API calls)", "rate_limit": None, "priority": 6},
-    {"source_name": "gnomad", "display_name": "gnomAD", "is_enabled": True, "description": "Genome Aggregation Database — population allele frequencies, gene constraint metrics, variant filtering (local data + BigQuery fallback)", "rate_limit": None, "priority": 7},
-    {"source_name": "chembl", "display_name": "ChEMBL (BigQuery)", "is_enabled": True, "description": "Drug mechanisms, indications, and safety warnings for gene targets — via Google BigQuery public data (ebi_chembl v33)", "rate_limit": None, "priority": 8},
-    {"source_name": "fda_drug", "display_name": "FDA Drug Labels (BigQuery)", "is_enabled": True, "description": "FDA drug labels with CYP enzyme interaction data and pharmacokinetics — via Google BigQuery public data", "rate_limit": None, "priority": 9},
-    {"source_name": "alphafold", "display_name": "AlphaFold (BigQuery)", "is_enabled": True, "description": "DeepMind AlphaFold protein structure confidence scores (pLDDT) — via Google BigQuery public data", "rate_limit": None, "priority": 10},
-    {"source_name": "thousand_genomes", "display_name": "1000 Genomes Phase 3", "is_enabled": True, "description": "Population allele frequencies from 1000 Genomes Phase 3 (AFR, AMR, EAS, EUR, SAS superpopulations) — local data, no API calls", "rate_limit": None, "priority": 11},
-    {"source_name": "ensembl_vep", "display_name": "Ensembl VEP (Local)", "is_enabled": True, "description": "Local Ensembl VEP variant annotations — per-chromosome VCFs, clinically associated, and phenotype associated variants (no API calls)", "rate_limit": None, "priority": 12},
+    # Third-party HTTP APIs
+    {"source_name": "ensembl", "display_name": "Ensembl VEP", "is_enabled": True, "source_type": "api", "description": "Variant Effect Predictor — gene consequences, transcript impact, regulatory annotations", "rate_limit": 15.0, "priority": 1},
+    {"source_name": "clinvar", "display_name": "ClinVar (NCBI)", "is_enabled": True, "source_type": "api", "description": "Clinical significance classifications, disease associations, review status", "rate_limit": 10.0, "priority": 2},
+    {"source_name": "clinpgx", "display_name": "ClinPGx", "is_enabled": True, "source_type": "api", "description": "Pharmacogenomic annotations — drug-gene interactions and dosing guidelines", "rate_limit": 1.0, "priority": 3},
+    {"source_name": "snpedia", "display_name": "SNPedia", "is_enabled": True, "source_type": "api", "description": "Community-curated variant wiki — genotype-phenotype associations and research summaries", "rate_limit": 2.0, "priority": 4},
+    # Local files (tabix/TSV in data_sources/)
+    {"source_name": "alpha_missense", "display_name": "AlphaMissense", "is_enabled": True, "source_type": "file", "description": "AI-based missense pathogenicity predictions — bgzip tabix files in data_sources/alpha_missense/", "rate_limit": None, "priority": 5},
+    {"source_name": "ensembl_vep", "display_name": "Ensembl VEP (Local)", "is_enabled": True, "source_type": "file", "description": "Local Ensembl VEP variant annotations — per-chromosome VCFs in data_sources/ensembl/ (SQLite cache)", "rate_limit": None, "priority": 6},
+    # Local files + PostgreSQL hybrid (ETL imports files → PG; raw files also in data_sources/)
+    {"source_name": "gnomad", "display_name": "gnomAD", "is_enabled": True, "source_type": "hybrid", "description": "gnomAD allele frequencies — tabix TSV files in data_sources/gnomad/ (SQLite cache primary path) + PostgreSQL import (run ETL to populate)", "rate_limit": None, "priority": 7},
+    {"source_name": "gnomad_tx", "display_name": "gnomAD tx-annotated", "is_enabled": True, "source_type": "file", "description": "gnomAD transcript annotation + GTEx tissue expression — data_sources/gnomad/all.possible.snvs.tx_annotated.GTEx.v7.021520.tsv.bgz", "rate_limit": None, "priority": 8},
+    # PostgreSQL-backed (data originally from local files, now imported into PG)
+    {"source_name": "clinvar_local", "display_name": "ClinVar Local", "is_enabled": True, "source_type": "hybrid", "description": "ClinVar — source files in data_sources/clinvar/ (VCF + TSV), ETL-imported into PostgreSQL for fast lookups", "rate_limit": None, "priority": 9},
+    {"source_name": "thousand_genomes", "display_name": "1000 Genomes Phase 3", "is_enabled": True, "source_type": "hybrid", "description": "1000 Genomes Phase 3 — source VCF in data_sources/ensembl/homo_sapiens/variation/vcf_vep/1000GENOMES-phase_3.vcf.gz, ETL-imported into PostgreSQL", "rate_limit": None, "priority": 10},
+    # Google BigQuery
+    {"source_name": "chembl", "display_name": "ChEMBL (BigQuery)", "is_enabled": True, "source_type": "bigquery", "description": "Drug mechanisms, indications, and safety warnings for gene targets — ebi_chembl v33 public dataset", "rate_limit": None, "priority": 11},
+    {"source_name": "fda_drug", "display_name": "FDA Drug Labels (BigQuery)", "is_enabled": True, "source_type": "bigquery", "description": "FDA drug labels with CYP enzyme interaction data and pharmacokinetics", "rate_limit": None, "priority": 12},
+    {"source_name": "alphafold", "display_name": "AlphaFold (BigQuery)", "is_enabled": True, "source_type": "bigquery", "description": "DeepMind AlphaFold protein structure confidence scores (pLDDT)", "rate_limit": None, "priority": 13},
 ]
 
 # Shared source-to-column mapping — single source of truth
@@ -910,10 +917,14 @@ class AnnotationSourceResponse(BaseModel):
     display_name: str
     is_enabled: bool
     description: Optional[str] = None
+    # 'api' = third-party HTTP API, 'database' = PostgreSQL only,
+    # 'file' = local tabix/TSV files only, 'hybrid' = files + PostgreSQL,
+    # 'bigquery' = Google BigQuery
+    source_type: str = 'api'
     rate_limit: Optional[float] = None
     priority: int = 0
-    annotated_count: int = 0  # How many variants have data from this source
-    missing_count: int = 0    # How many variants are missing data from this source
+    annotated_count: int = 0
+    missing_count: int = 0
 
     class Config:
         from_attributes = True
@@ -953,6 +964,7 @@ async def get_annotation_sources(
             display_name=src.display_name,
             is_enabled=src.is_enabled,
             description=src.description,
+            source_type=src.source_type or 'api',
             rate_limit=src.rate_limit,
             priority=src.priority,
             annotated_count=annotated,
@@ -979,6 +991,9 @@ async def update_annotation_source(
 
     if update.is_enabled is not None:
         config.is_enabled = update.is_enabled
+        # Invalidate the enabled-sources cache so the next summary poll recomputes coverage
+        global _enabled_sources_cache
+        _enabled_sources_cache = None
     if update.priority is not None:
         config.priority = update.priority
 
@@ -1004,6 +1019,7 @@ async def update_annotation_source(
         display_name=config.display_name,
         is_enabled=config.is_enabled,
         description=config.description,
+        source_type=config.source_type or 'api',
         rate_limit=config.rate_limit,
         priority=config.priority,
         annotated_count=annotated,
@@ -1341,14 +1357,29 @@ async def _get_all_enabled_source_names(db: AsyncSession) -> List[str]:
     return names if names else list(SOURCE_TO_COLUMN.keys())
 
 
+# Module-level cache for _get_enabled_source_names — the 12-column COUNT query
+# is expensive (full table scan) and its result changes only when a source is
+# enabled/disabled or a large batch of new annotations is processed.
+_enabled_sources_cache: Optional[List[str]] = None
+_enabled_sources_cache_ts: float = 0.0
+_ENABLED_SOURCES_TTL = 60.0  # seconds
+
+
 async def _get_enabled_source_names(db: AsyncSession) -> List[str]:
     """Return enabled source names that have been systematically applied.
 
-    A source is considered "active" only when it covers more than 50% of all
+    A source is considered 'active' only when it covers more than 50% of all
     annotations.  This avoids counting sources that were never called during
     bulk processing (e.g. remote APIs, niche local sources) as contributing
-    to "incompleteness".
+    to 'incompleteness'.
+
+    Result is cached for 60 seconds so that the expensive full-table COUNT
+    aggregation is not repeated on every admin poll.
     """
+    global _enabled_sources_cache, _enabled_sources_cache_ts
+    now = time.monotonic()
+    if _enabled_sources_cache is not None and now - _enabled_sources_cache_ts < _ENABLED_SOURCES_TTL:
+        return _enabled_sources_cache
     result = await db.execute(
         select(AnnotationSourceConfig.source_name)
         .where(AnnotationSourceConfig.is_enabled.is_(True))
@@ -1382,6 +1413,8 @@ async def _get_enabled_source_names(db: AsyncSession) -> List[str]:
         if non_null / total > 0.5:
             active.append(src)
 
+    _enabled_sources_cache = active
+    _enabled_sources_cache_ts = now
     return active
 
 

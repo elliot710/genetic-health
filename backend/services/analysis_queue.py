@@ -38,6 +38,7 @@ class AnalysisQueue:
         self._queued_user_ids: Dict[int, int] = {}  # analysis_id -> user_id for queued items
         self._jobs_lock = asyncio.Lock()  # Protects _running_jobs, _user_running_count, and queued sets
         self._processing_task: Optional[asyncio.Task] = None
+        self._running_tasks: set = set()  # Strong refs prevent GC before task completion
         self._shutdown = False
         
     async def start(self):
@@ -166,6 +167,16 @@ class AnalysisQueue:
                 result = await analysis_service.process_analysis(analysis_id)
                 logger.info(f"Completed analysis {analysis_id} for user {user_id}")
                 return result
+            except asyncio.CancelledError:
+                # Server is reloading (hot-reload) or shutting down — mark interrupted.
+                logger.warning(f"Analysis {analysis_id} cancelled (server reload/shutdown)")
+                try:
+                    await analysis_service._update_analysis_status(
+                        analysis_id, 'interrupted', 'server_reload'
+                    )
+                except Exception:
+                    pass
+                raise
             except Exception as e:
                 logger.error(f"Analysis {analysis_id} failed for user {user_id}: {e}")
                 raise
@@ -178,9 +189,12 @@ class AnalysisQueue:
                         self._user_running_count[user_id] = current_count - 1
                     else:
                         self._user_running_count.pop(user_id, None)
-        
-        # Start the job as a background task
-        asyncio.create_task(run_job())
+
+        # Track the task so it is not GC'd before completion, and so
+        # graceful shutdown can await it.
+        task = asyncio.create_task(run_job())
+        self._running_tasks.add(task)
+        task.add_done_callback(self._running_tasks.discard)
     
     def get_queue_status(self) -> Dict:
         """Get current queue status"""

@@ -1,4 +1,5 @@
 """Rare mutations insight generator."""
+import asyncio
 import logging
 from ...db.models import RareMutation
 from .base import (
@@ -12,7 +13,9 @@ logger = logging.getLogger(__name__)
 async def generate_rare_mutations(ctx: GeneratorContext) -> int:
     rare_mutations = []
 
-    for variant in ctx.variants:
+    for _idx, variant in enumerate(ctx.variants):
+        if _idx > 0 and _idx % 100 == 0:
+            await asyncio.sleep(0)
         variant_rsid = getattr(variant, 'rsid', None)
         if not variant_rsid:
             continue
@@ -61,13 +64,18 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
             clin_sigs = cv_local.get('clinical_significances', [])
             if clin_sigs:
                 raw_sig = clin_sigs[0].lower().replace('_', ' ')
-                if 'conflicting' in raw_sig:
+                # Check all significances for mixed pathogenic+benign conflicts
+                all_sigs_lower = ' '.join(s.lower().replace('_', ' ') for s in clin_sigs)
+                has_pathogenic = 'pathogenic' in all_sigs_lower
+                has_benign = 'benign' in all_sigs_lower
+
+                if 'conflicting' in raw_sig or (has_pathogenic and has_benign):
                     clinical_significance = 'conflicting'
                     penetrance = 'unknown'
-                elif 'pathogenic' in raw_sig and 'benign' not in raw_sig:
+                elif has_pathogenic and not has_benign:
                     clinical_significance = 'pathogenic' if 'likely' not in raw_sig else 'likely_pathogenic'
                     penetrance = 'moderate'
-                elif 'benign' in raw_sig and 'pathogenic' not in raw_sig:
+                elif has_benign and not has_pathogenic:
                     clinical_significance = 'benign' if 'likely' not in raw_sig else 'likely_benign'
                 elif 'risk' in raw_sig:
                     clinical_significance = 'risk_factor'
@@ -103,11 +111,30 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
         if not gene:
             continue
 
+        # Use scoring engine composite score to refine ambiguous classifications
+        pathogenicity_score = annotation_result.annotation_data.get('pathogenicity_score', {})
+        composite = pathogenicity_score.get('composite_score', 0.0) if isinstance(pathogenicity_score, dict) else 0.0
+        score_classification = pathogenicity_score.get('classification', '') if isinstance(pathogenicity_score, dict) else ''
+
+        # If ClinVar says uncertain/conflicting but scoring engine has strong
+        # evidence, upgrade the classification
+        if clinical_significance in ('uncertain', 'conflicting') and composite >= 0.60:
+            if score_classification in ('pathogenic', 'likely_pathogenic'):
+                clinical_significance = 'likely_pathogenic'
+                penetrance = 'low'
+                mutation_type_override = 'computationally_elevated'
+            else:
+                mutation_type_override = None
+        else:
+            mutation_type_override = None
+
         consequence_label = (consequence or 'variant').replace('_', ' ')
         mutation_name = f'{gene} {consequence_label}'
 
         # Determine mutation type from clinical significance
-        if clinical_significance in ('pathogenic', 'likely_pathogenic'):
+        if mutation_type_override:
+            mutation_type = mutation_type_override
+        elif clinical_significance in ('pathogenic', 'likely_pathogenic'):
             mutation_type = 'clinically_significant'
         elif clinical_significance == 'conflicting':
             mutation_type = 'conflicting_evidence'

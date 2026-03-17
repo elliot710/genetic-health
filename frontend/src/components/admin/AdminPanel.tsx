@@ -167,6 +167,7 @@ interface AnnotationSource {
   display_name: string
   is_enabled: boolean
   description: string | null
+  source_type: 'api' | 'database' | 'file' | 'hybrid' | 'bigquery'
   rate_limit: number | null
   priority: number
   annotated_count: number
@@ -206,6 +207,23 @@ const SOURCE_DISPLAY_NAMES: Record<string, string> = {
   chembl: 'ChEMBL',
   fda_drug: 'FDA Drug',
   alphafold: 'AlphaFold',
+}
+
+const SOURCE_TYPE_CONFIG: Record<string, { label: string; className: string }> = {
+  api:      { label: 'API',       className: 'text-blue-400 border-blue-500/30 bg-blue-500/10' },
+  database: { label: 'Postgres',  className: 'text-cyan-400 border-cyan-500/30 bg-cyan-500/10' },
+  file:     { label: 'File',      className: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
+  hybrid:   { label: 'File + DB', className: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
+  bigquery: { label: 'BigQuery',  className: 'text-purple-400 border-purple-500/30 bg-purple-500/10' },
+}
+
+const SOURCE_GROUP_ORDER = ['api', 'file', 'hybrid', 'database', 'bigquery'] as const
+const SOURCE_GROUP_LABELS: Record<string, string> = {
+  api:      'Third-party APIs',
+  file:     'Local Files (data_sources/)',
+  hybrid:   'Local Files + PostgreSQL',
+  database: 'PostgreSQL Only',
+  bigquery: 'Google BigQuery',
 }
 
 interface AdminPanelProps {
@@ -760,7 +778,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   useEffect(() => {
     const hasActive = jobs.some(j => j.analysis_status === 'processing' || j.analysis_status === 'pending')
     if (hasActive) {
-      jobsRefreshRef.current = setInterval(() => { fetchJobs(); fetchJobsSummary() }, 5000)
+      jobsRefreshRef.current = setInterval(() => { fetchJobs(); fetchJobsSummary() }, 15000)
     }
     return () => { if (jobsRefreshRef.current) clearInterval(jobsRefreshRef.current) }
   }, [jobs, fetchJobs, fetchJobsSummary])
@@ -835,7 +853,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     const job = jobs.find(j => j.id === viewingLogs)
     const isActive = job?.analysis_status === 'processing' || job?.analysis_status === 'pending'
     if (isActive) {
-      logsRefreshRef.current = setInterval(() => fetchJobLogs(viewingLogs), 3000)
+      logsRefreshRef.current = setInterval(() => fetchJobLogs(viewingLogs), 8000)
     }
     return () => { if (logsRefreshRef.current) { clearInterval(logsRefreshRef.current); logsRefreshRef.current = null } }
   }, [viewingLogs, jobs, fetchJobLogs])
@@ -1964,104 +1982,117 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                   {sourcesLoading ? 'Loading sources...' : 'No annotation sources configured'}
                 </p>
               ) : (
-                <div className="space-y-4">
-                  {annotationSources.map(src => {
-                    const total = src.annotated_count + src.missing_count
-                    const pct = total > 0 ? Math.round((src.annotated_count / total) * 100) : 0
-                    const customLimit = backfillLimits[src.source_name]
-                    const effectiveLimit = customLimit ? Math.min(parseInt(customLimit) || src.missing_count, src.missing_count) : src.missing_count
+                <div className="space-y-8">
+                  {SOURCE_GROUP_ORDER.map(groupType => {
+                    const groupSources = annotationSources.filter(s => (s.source_type || 'api') === groupType)
+                    if (groupSources.length === 0) return null
+                    const typeConfig = SOURCE_TYPE_CONFIG[groupType]
                     return (
-                      <div
-                        key={src.source_name}
-                        className={`rounded-lg border p-4 transition-colors ${
-                          src.is_enabled
-                            ? isDarkMode ? 'border-white/10 bg-white/5' : 'border-gray-200 bg-gray-50'
-                            : isDarkMode ? 'border-white/5 bg-white/[0.02]' : 'border-gray-100 bg-gray-25'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-4 flex-1">
-                            <Switch
-                              checked={src.is_enabled}
-                              onCheckedChange={(checked) => toggleSource(src.source_name, checked)}
-                              disabled={sourceToggling === src.source_name}
-                            />
-                            <div className={`flex-1 ${!src.is_enabled ? 'opacity-50' : ''}`}>
-                              <div className="flex items-center gap-2">
-                                <span className={`font-medium ${theme.text.primary}`}>{src.display_name}</span>
-                                {src.rate_limit ? (
-                                  <Badge variant="outline" className="text-xs">
-                                    {src.rate_limit} req/s
-                                  </Badge>
-                                ) : (
-                                  <Badge variant="outline" className="text-xs text-emerald-600 border-emerald-500/30">
-                                    Local
-                                  </Badge>
-                                )}
-                                <Badge variant={src.is_enabled ? 'default' : 'secondary'} className="text-xs">
-                                  {src.is_enabled ? 'Enabled' : 'Disabled'}
-                                </Badge>
-                              </div>
-                              {src.description && (
-                                <p className={`text-sm mt-1 ${theme.text.muted}`}>{src.description}</p>
-                              )}
-                            </div>
-                          </div>
-                          <div className={`flex items-center gap-3 ml-4 ${!src.is_enabled ? 'opacity-50' : ''}`}>
-                            <div className="text-right min-w-[140px]">
-                              <div className="flex items-center gap-2 justify-end">
-                                <span className={`text-sm font-mono ${theme.text.secondary}`}>
-                                  {src.annotated_count.toLocaleString()} / {total.toLocaleString()}
-                                </span>
-                                <span className={`text-xs ${theme.text.muted}`}>({pct}%)</span>
-                              </div>
-                              <div className="w-32 h-1.5 rounded-full bg-gray-700/30 mt-1 overflow-hidden">
-                                <div
-                                  className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-500"
-                                  style={{ width: `${pct}%` }}
-                                />
-                              </div>
-                            </div>
-                            {src.missing_count > 0 && src.is_enabled && (
-                              <div className="flex items-center gap-2">
-                                <Input
-                                  type="number"
-                                  min={1}
-                                  max={src.missing_count}
-                                  placeholder={String(src.missing_count)}
-                                  value={backfillLimits[src.source_name] ?? ''}
-                                  onChange={(e) => setBackfillLimits(prev => ({ ...prev, [src.source_name]: e.target.value }))}
-                                  className="w-20 h-8 text-xs text-center"
-                                  disabled={backfillingSource === src.source_name}
-                                />
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  disabled={backfillingSource === src.source_name}
-                                  onClick={() => backfillSource(src.source_name, effectiveLimit)}
-                                  title={`Backfill ${effectiveLimit.toLocaleString()} variants from ${src.display_name}`}
-                                >
-                                  {backfillingSource === src.source_name
-                                    ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Backfilling...</>
-                                    : <><Download className="h-3 w-3 mr-1" /> Backfill ({effectiveLimit > 999 ? `${Math.round(effectiveLimit / 1000)}k` : effectiveLimit})</>}
-                                </Button>
-                              </div>
-                            )}
-                            {['clinvar_local', 'gnomad', 'alpha_missense', 'ensembl', 'thousand_genomes', 'ensembl_vep'].includes(src.source_name) && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="ml-2 text-xs text-amber-400 border-amber-500/30 hover:bg-amber-500/10"
-                                disabled={resettingSentinels === src.source_name}
-                                onClick={() => resetSentinels(src.source_name)}
-                                title="Reset 'not found' sentinels so backfill re-checks this source"
+                      <div key={groupType}>
+                        <div className="flex items-center gap-3 mb-3">
+                          <span className={`text-xs font-semibold uppercase tracking-widest px-2 py-0.5 rounded border ${typeConfig.className}`}>
+                            {typeConfig.label}
+                          </span>
+                          <span className={`text-sm font-medium ${theme.text.secondary}`}>{SOURCE_GROUP_LABELS[groupType]}</span>
+                        </div>
+                        <div className="space-y-3">
+                          {groupSources.map(src => {
+                            const total = src.annotated_count + src.missing_count
+                            const pct = total > 0 ? Math.round((src.annotated_count / total) * 100) : 0
+                            const customLimit = backfillLimits[src.source_name]
+                            const effectiveLimit = customLimit ? Math.min(parseInt(customLimit) || src.missing_count, src.missing_count) : src.missing_count
+                            return (
+                              <div
+                                key={src.source_name}
+                                className={`rounded-lg border p-4 transition-colors ${
+                                  src.is_enabled
+                                    ? isDarkMode ? 'border-white/10 bg-white/5' : 'border-gray-200 bg-gray-50'
+                                    : isDarkMode ? 'border-white/5 bg-white/[0.02]' : 'border-gray-100 bg-gray-25'
+                                }`}
                               >
-                                {resettingSentinels === src.source_name
-                                  ? <><RotateCcw className="h-3 w-3 mr-1 animate-spin" /> Resetting...</>
-                                  : <><RotateCcw className="h-3 w-3 mr-1" /> Reset Sentinels</>}
-                              </Button>
-                            )}
-                          </div>
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-4 flex-1">
+                                    <Switch
+                                      checked={src.is_enabled}
+                                      onCheckedChange={(checked) => toggleSource(src.source_name, checked)}
+                                      disabled={sourceToggling === src.source_name}
+                                    />
+                                    <div className={`flex-1 ${!src.is_enabled ? 'opacity-50' : ''}`}>
+                                      <div className="flex items-center gap-2">
+                                        <span className={`font-medium ${theme.text.primary}`}>{src.display_name}</span>
+                                        {src.rate_limit && (
+                                          <Badge variant="outline" className="text-xs">
+                                            {src.rate_limit} req/s
+                                          </Badge>
+                                        )}
+                                        <Badge variant={src.is_enabled ? 'default' : 'secondary'} className="text-xs">
+                                          {src.is_enabled ? 'Enabled' : 'Disabled'}
+                                        </Badge>
+                                      </div>
+                                      {src.description && (
+                                        <p className={`text-sm mt-1 ${theme.text.muted}`}>{src.description}</p>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className={`flex items-center gap-3 ml-4 ${!src.is_enabled ? 'opacity-50' : ''}`}>
+                                    <div className="text-right min-w-[140px]">
+                                      <div className="flex items-center gap-2 justify-end">
+                                        <span className={`text-sm font-mono ${theme.text.secondary}`}>
+                                          {src.annotated_count.toLocaleString()} / {total.toLocaleString()}
+                                        </span>
+                                        <span className={`text-xs ${theme.text.muted}`}>({pct}%)</span>
+                                      </div>
+                                      <div className="w-32 h-1.5 rounded-full bg-gray-700/30 mt-1 overflow-hidden">
+                                        <div
+                                          className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-500"
+                                          style={{ width: `${pct}%` }}
+                                        />
+                                      </div>
+                                    </div>
+                                    {src.missing_count > 0 && src.is_enabled && (
+                                      <div className="flex items-center gap-2">
+                                        <Input
+                                          type="number"
+                                          min={1}
+                                          max={src.missing_count}
+                                          placeholder={String(src.missing_count)}
+                                          value={backfillLimits[src.source_name] ?? ''}
+                                          onChange={(e) => setBackfillLimits(prev => ({ ...prev, [src.source_name]: e.target.value }))}
+                                          className="w-20 h-8 text-xs text-center"
+                                          disabled={backfillingSource === src.source_name}
+                                        />
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          disabled={backfillingSource === src.source_name}
+                                          onClick={() => backfillSource(src.source_name, effectiveLimit)}
+                                          title={`Backfill ${effectiveLimit.toLocaleString()} variants from ${src.display_name}`}
+                                        >
+                                          {backfillingSource === src.source_name
+                                            ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Backfilling...</>
+                                            : <><Download className="h-3 w-3 mr-1" /> Backfill ({effectiveLimit > 999 ? `${Math.round(effectiveLimit / 1000)}k` : effectiveLimit})</>}
+                                        </Button>
+                                      </div>
+                                    )}
+                                    {['clinvar_local', 'gnomad', 'alpha_missense', 'ensembl', 'thousand_genomes', 'ensembl_vep'].includes(src.source_name) && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="ml-2 text-xs text-amber-400 border-amber-500/30 hover:bg-amber-500/10"
+                                        disabled={resettingSentinels === src.source_name}
+                                        onClick={() => resetSentinels(src.source_name)}
+                                        title="Reset 'not found' sentinels so backfill re-checks this source"
+                                      >
+                                        {resettingSentinels === src.source_name
+                                          ? <><RotateCcw className="h-3 w-3 mr-1 animate-spin" /> Resetting...</>
+                                          : <><RotateCcw className="h-3 w-3 mr-1" /> Reset Sentinels</>}
+                                      </Button>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          })}
                         </div>
                       </div>
                     )

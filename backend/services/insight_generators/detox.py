@@ -15,10 +15,13 @@ async def generate_detox_profiles(ctx: GeneratorContext) -> int:
         )
 
     def from_gene(aid, rsid, gene, consequence, info):
+        genotype = info.get('_genotype', '')
+        ref_allele = info.get('_ref_allele')
         return DetoxificationProfile(
             analysis_id=aid, detox_phase=info['phase'],
-            gene=info['gene'], detox_capacity=info['capacity'],
-            toxin_sensitivity=info['sensitivity'],
+            gene=info['gene'],
+            detox_capacity=zygosity_adjust(info['capacity'], genotype, ref_allele=ref_allele) if genotype else info['capacity'],
+            toxin_sensitivity=zygosity_adjust(info['sensitivity'], genotype, ref_allele=ref_allele) if genotype else info['sensitivity'],
             support_recommendations=info['recommendations'],
             associated_variants=[rsid]
         )

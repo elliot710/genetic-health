@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Dna, LogOut, Upload } from 'lucide-react'
+import { Dna, LogOut } from 'lucide-react'
 import Dashboard from '@/components/Dashboard'
 import FileUpload from '@/components/FileUpload'
 import AuthForm from '@/components/AuthForm'
@@ -25,6 +25,7 @@ export default function Home() {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const [isHydrated, setIsHydrated] = useState(false)
+  const [showUpload, setShowUpload] = useState(false)
   
   // Initialize theme from localStorage or default to false
   const [isDarkMode, setIsDarkMode] = useState(false)
@@ -138,7 +139,7 @@ export default function Home() {
 
   const handleAnalysisComplete = useCallback(async (data: DashboardData, newAnalysisId?: number) => {
     console.log('Analysis complete with data:', data, 'analysisId:', newAnalysisId)
-    
+    setShowUpload(false)
     if (newAnalysisId) {
       setAnalysisId(newAnalysisId)
       // Upload done — analysis runs in background. Load dashboard (will show as processing).
@@ -184,7 +185,7 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-white">
-      {!analysisData ? (
+      {(!analysisData || showUpload) && (!user?.is_admin || showUpload) ? (
         <div className={`min-h-screen ${theme.background}`}>
           {/* Background Elements */}
           <div className="absolute inset-0 overflow-hidden">
@@ -223,6 +224,14 @@ export default function Home() {
                 <span className={`text-sm ${theme.text.secondary}`}>
                   Welcome, {user?.full_name || user?.username}
                 </span>
+                {showUpload && (
+                  <button
+                    onClick={() => setShowUpload(false)}
+                    className={`px-4 py-2 backdrop-blur-sm border rounded-xl font-medium transition-all duration-200 flex items-center space-x-2 ${theme.glass} ${theme.glassBorder} ${theme.text.primary}`}
+                  >
+                    <span>← Back</span>
+                  </button>
+                )}
                 <button
                   onClick={handleLogout}
                   className={`px-4 py-2 backdrop-blur-sm border rounded-xl font-medium transition-all duration-200 flex items-center space-x-2 ${theme.glass} ${theme.glassBorder} ${theme.text.primary}`}
@@ -246,6 +255,7 @@ export default function Home() {
           analysisData={analysisData}
           analysisId={analysisId}
           onRefresh={loadExistingData}
+          onNavigateToUpload={() => { setAnalysisData(null); setAnalysisId(null); setShowUpload(true) }}
           isAdmin={user?.is_admin || false}
           userName={user?.full_name || user?.username}
           userAvatarUrl={user?.avatar_url}

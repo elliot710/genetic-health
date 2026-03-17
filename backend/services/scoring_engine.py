@@ -92,10 +92,14 @@ class ScoringEngine:
     # ACMG-like classification thresholds on the 0–1 scale
     PATHOGENIC_THRESHOLD = 0.80
     LIKELY_PATHOGENIC_THRESHOLD = 0.60
-    UNCERTAIN_UPPER = 0.60
     UNCERTAIN_LOWER = 0.30
-    LIKELY_BENIGN_THRESHOLD = 0.30
     BENIGN_THRESHOLD = 0.15
+
+    # Minimum total weight for the composite score to be meaningful.
+    # When only one source is available (e.g. ClinVar alone = 0.30),
+    # dividing by a small denominator inflates the composite.
+    # We clamp the denominator to at least this value.
+    MIN_WEIGHT_FLOOR = 0.40
 
     def score_variant(self, annotations: Dict[str, Any]) -> Dict[str, Any]:
         """Score a variant using all available annotation sources.
@@ -327,13 +331,16 @@ class ScoringEngine:
             # Prefer API ClinVar (more structured), drop local
             evidences = [e for e in evidences if e.source != "clinvar_local"]
 
-        # Weighted average
+        # Weighted average with minimum weight floor to prevent
+        # single-source inflation (e.g. ClinVar-only = 0.30 weight
+        # would otherwise make the composite equal to the raw score).
         total_weight = sum(e.weight for e in evidences)
         if total_weight == 0:
             return result
 
         weighted_sum = sum(e.score * e.weight for e in evidences)
-        composite = weighted_sum / total_weight
+        effective_weight = max(total_weight, self.MIN_WEIGHT_FLOOR)
+        composite = weighted_sum / effective_weight
 
         # Detect conflicts
         conflicts = self._detect_conflicts(evidences)
@@ -522,12 +529,13 @@ class ScoringEngine:
     def _af_to_score(af: float) -> float:
         """Convert allele frequency to pathogenicity score.
         Rare variants are more likely to be pathogenic.
-        AF=0 → 0.9 (rare, more likely pathogenic)
+        AF=0 is ambiguous (could be data-missing, not ultra-rare),
+        so scored moderately rather than near-pathogenic.
         AF>5% → 0.1 (common, less likely pathogenic)
         """
         if af <= 0.0:
-            return 0.9
-        elif af < 0.0001:  # < 0.01%
+            return 0.50  # Not observed — ambiguous, don't inflate
+        elif af < 0.0001:  # < 0.01%  (ultra-rare, confirmed present)
             return 0.85
         elif af < 0.001:   # < 0.1%
             return 0.70

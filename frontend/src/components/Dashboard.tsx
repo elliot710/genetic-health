@@ -53,6 +53,7 @@ interface DashboardProps {
   analysisData?: DashboardData | null
   analysisId?: number | null
   onRefresh?: (token: string) => Promise<void>
+  onNavigateToUpload?: () => void
   isAdmin?: boolean
   userName?: string
   userAvatarUrl?: string | null
@@ -85,6 +86,7 @@ export default function Dashboard({
   analysisData,
   analysisId,
   onRefresh,
+  onNavigateToUpload,
   isAdmin,
   userName,
   userAvatarUrl,
@@ -211,7 +213,11 @@ export default function Dashboard({
   // ── Handlers ──────────────────────────────────────────────
   const onReset = () => {
     clearData()
-    setActiveCategory('overview')
+    if (onNavigateToUpload) {
+      onNavigateToUpload()
+    } else {
+      setActiveCategory('overview')
+    }
   }
 
   const handleAnalysisComplete = (results: DashboardData) => {
@@ -343,7 +349,7 @@ export default function Dashboard({
   }
 
   // ── Empty state ───────────────────────────────────────────
-  if (!data && !loading) {
+  if (!data && !loading && !isAdmin) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">

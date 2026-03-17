@@ -170,8 +170,40 @@ The FastAPI app initializes in this order:
 | `SharedVariantAnnotationService` | `analysis_service.py` | ~200 | Manages shared annotation cache (dedup across users) |
 | `AnalysisQueue` | `analysis_queue.py` | ~180 | Singleton background job queue with concurrency limits |
 | `VariantUploader` | `variant_uploader.py` | ~150 | VCF/CSV parsing → GeneticMarker dedup + AnalysisVariant creation |
-| `ScoringEngine` | `scoring_engine.py` | ~200 | Composite pathogenicity scoring from multiple data sources |
-| `AutoCategorizer` | `auto_categorizer.py` | ~150 | Rule-based variant-to-category assignment |
+| `ScoringEngine` | `scoring_engine.py` | ~400 | Composite pathogenicity scoring from 9 evidence sources |
+| `AutoCategorizer` | `auto_categorizer.py` | ~400 | Rule-based variant-to-category assignment (ClinVar significance, keywords, gene lists, gnomAD) |
+
+#### Scoring Engine Architecture
+
+The `ScoringEngine` aggregates evidence from 9 annotation sources into a composite pathogenicity score (0–1):
+
+| Source | Weight | Data From |
+|--------|--------|-----------|
+| ClinVar (API) | 0.30 | Clinical significance string |
+| ClinVar (Local) | 0.30 | Same (deduplicated — API preferred when both present) |
+| CADD PHRED | 0.15 | gnomAD local (higher = more deleterious) |
+| AlphaMissense | 0.15 | Local tabix (deep learning missense prediction) |
+| gnomAD AF | 0.10 | Population frequency (rarity → higher score) |
+| SIFT | 0.05 | Functional prediction (inverted: low = deleterious) |
+| PolyPhen | 0.05 | Functional prediction (high = damaging) |
+| PhyloP Conservation | 0.05 | Evolutionary conservation (≥7 → 1.0) |
+| SpliceAI | 0.05 | Splice site impact (>0.5 = high impact) |
+
+**Normalization:** Uses a minimum weight floor (0.40) so single-source variants don't get inflated scores.
+
+**Classification thresholds:** ≥0.80 = pathogenic, ≥0.60 = likely_pathogenic, ≥0.30 = uncertain, ≥0.15 = likely_benign, <0.15 = benign.
+
+#### AutoCategorizer Rules Engine
+
+Generates `VariantMapping` rows by running `CategoryRule` entries against ClinVar/gnomAD. Rule types:
+- `clinvar_significance` — match by clinical significance (Pathogenic, Likely_pathogenic)
+- `clinvar_condition_keyword` — match conditions containing keywords (excludes benign/likely_benign variants)
+- `gene_list` — match specific pharmacogenes or trait genes
+- `molecular_consequence` — match VEP consequences (missense, frameshift, etc.)
+- `gnomad_rare_variant` — match by allele frequency threshold
+- `gnomad_constrained_gene` — match by pLI/LOEUF constraint metrics
+
+Condition-keyword matches dynamically adjust `risk_multiplier` based on clinical significance (pathogenic → 2.5x, VUS → 1.3x).
 
 #### Insight Generators (`services/insight_generators/`, 14 files)
 
@@ -223,7 +255,6 @@ Each follows the pattern: `async def generate(session, analysis_id, annotations,
 | `DrugResponseAnalyzer` | `drug_response.py` | Legacy pharmacogenomics (being phased out) |
 | `JobLogCollector` | `job_logs.py` | Per-analysis in-memory log collection (contextvars-tracked) |
 | `VCFParser` | `utils/vcf_parser.py` | Parse VCF/CSV files from multiple providers (23andMe, AncestryDNA, etc.) |
-| `VariantRegistry` | `variant_registry.py` | Static rsid→condition maps (being replaced by VariantMapping table) |
 
 ### 3.4 Dependency Injection (`core/container.py`, ~180 LOC)
 
@@ -603,6 +634,12 @@ ComprehensiveAnalysisService.process_analysis(analysis_id)
      │   ├── UPSERT into SharedVariantAnnotation (ON CONFLICT → backfill NULLs)
      │   └── CREATE VariantAnnotation references for this analysis
      │
+     ├── Phase 2.5: ref_allele Correction
+     │   ├── Consumer CSV uploads naively use genotype[0] as ref_allele
+     │   ├── Cross-reference gnomAD/Ensembl VEP/ClinVar/1000G for true reference
+     │   ├── UPDATE genetic_markers.ref_allele where authoritative source disagrees
+     │   └── Critical for correct zygosity classification in Phase 4
+     │
      ├── Phase 3: BigQuery Enrichment (30-90%)
      │   ├── gnomAD BigQuery (population frequencies)
      │   ├── ChEMBL (drug mechanisms)
@@ -611,8 +648,19 @@ ComprehensiveAnalysisService.process_analysis(analysis_id)
      │
      └── Phase 4: Insight Generation (90-100%)
          ├── Compute pathogenicity scores (ScoringEngine)
+         │   ├── Weighted composite from 9 sources (min weight floor = 0.40)
+         │   ├── ClinVar API/Local deduplication (prefer API when both present)
+         │   ├── AF=0 scored conservatively (0.50, not 0.90)
+         │   └── Conflict detection (ClinVar vs computational disagreement)
          ├── Apply category rules (CategoryRule table + AutoCategorizer)
-         ├── Populate all 13 insight tables:
+         │   └── Condition-keyword matches exclude benign/likely_benign variants
+         ├── Zygosity-aware risk adjustment:
+         │   ├── Requires correct ref_allele (from Phase 2.5)
+         │   ├── Homozygous-reference → de-escalate risk
+         │   ├── Heterozygous → baseline risk
+         │   ├── Homozygous-alternate → escalate risk
+         │   └── Unknown ref_allele → preserve baseline (no silent de-escalation)
+         ├── Populate all 14 insight tables:
          │   ├── health_risks (from ClinVar pathogenic + gene-disease associations)
          │   ├── drug_responses (from ClinPGx + CYP gene data)
          │   ├── ancestry_results (from 1000G population frequencies)

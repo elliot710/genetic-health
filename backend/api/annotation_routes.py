@@ -672,6 +672,27 @@ async def get_variant_details(
             gnomad_resp["splice_ai"] = gnomad_raw["splice_ai"]
         response["gnomad"] = gnomad_resp
 
+    # Process gnomAD tx_annotated data (gene/consequence/LoF/GTEx tissue expression)
+    gtx_raw = annotation.gnomad_tx_data
+    if gtx_raw and isinstance(gtx_raw, dict) and gtx_raw.get("found"):
+        gtx_resp: Dict[str, Any] = {
+            "found": True,
+            "source": "gnomad_tx",
+            "gene": gtx_raw.get("gene"),
+            "consequence": gtx_raw.get("consequence"),
+            "lof": gtx_raw.get("lof"),
+            "mean_expression": gtx_raw.get("mean_expression"),
+            "transcript_count": gtx_raw.get("transcript_count", 0),
+        }
+        transcripts = gtx_raw.get("transcripts", [])
+        if transcripts:
+            # Include top tissues from the primary transcript
+            primary = transcripts[0]
+            if primary.get("top_tissues"):
+                gtx_resp["top_tissues"] = primary["top_tissues"]
+            gtx_resp["transcripts"] = transcripts
+        response["gnomad_tx"] = gtx_resp
+
     # Process 1000 Genomes Phase 3 data (super-population allele frequencies)
     tkg_raw = annotation.thousand_genomes_data
     if tkg_raw and isinstance(tkg_raw, dict) and tkg_raw.get("found"):

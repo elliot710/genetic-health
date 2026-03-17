@@ -67,8 +67,12 @@ class SharedVariantAnnotationService:
                 )
                 existing_annotations = result.scalars().all()
 
-            # Process results outside of session (pure CPU, no DB connection held)
-            for annotation in existing_annotations:
+            # Process results outside of session (pure CPU, no DB connection held).
+            # Yield every 20 rows — score_variant is heavy enough that 20 calls
+            # per yield keeps latency below ~5ms for other requests.
+            for row_idx, annotation in enumerate(existing_annotations):
+                if row_idx > 0 and row_idx % 20 == 0:
+                    await asyncio.sleep(0)
                 merged_data: Dict[str, Any] = {
                     'rsid': annotation.rsid,
                     'annotations': {},
@@ -121,12 +125,14 @@ class SharedVariantAnnotationService:
                     annotation_map[annotation.rsid] = merged_data
 
         if annotation_map:
-            # Chunk usage_count updates to stay under PostgreSQL's 32767 parameter limit
+            # Chunk usage_count updates to stay under PostgreSQL's 32767 parameter limit.
+            # Use one short-lived session per chunk so connections are released between
+            # batches rather than held for the entire update (can be 10s+ for large analyses).
             found_rsids = list(annotation_map.keys())
             UPDATE_BATCH = 30000
-            async with async_session_factory() as update_session:
-                for j in range(0, len(found_rsids), UPDATE_BATCH):
-                    batch = found_rsids[j:j + UPDATE_BATCH]
+            for j in range(0, len(found_rsids), UPDATE_BATCH):
+                batch = found_rsids[j:j + UPDATE_BATCH]
+                async with async_session_factory() as update_session:
                     await update_session.execute(
                         update(SharedVariantAnnotation)
                         .where(SharedVariantAnnotation.rsid.in_(batch))
@@ -135,7 +141,8 @@ class SharedVariantAnnotationService:
                             last_updated_at=func.now()
                         )
                     )
-                await update_session.commit()
+                    await update_session.commit()
+                await asyncio.sleep(0)
         elapsed = time.time() - lookup_start
         logger.info(f"Found {len(annotation_map)} existing shared annotations for {len(rsids)} requested RSIDs ({elapsed:.1f}s)")
         return annotation_map
@@ -214,6 +221,24 @@ class SharedVariantAnnotationService:
                     if thousand_genomes_data_val and not thousand_genomes_data_val.get('found'):
                         thousand_genomes_data_val = None
 
+            # Look up gnomAD tx_annotated data (gene/csq/LoF/tissue expression)
+            gnomad_tx_data_val = None
+            if enabled_sources is None or 'gnomad_tx' in enabled_sources:
+                ensembl_for_tx = annotations.get('ensembl', {})
+                if ensembl_for_tx and ensembl_for_tx.get('found') and ensembl_for_tx.get('data'):
+                    e_tx = ensembl_for_tx['data'][0] if isinstance(ensembl_for_tx['data'], list) else ensembl_for_tx['data']
+                    tx_chrom = e_tx.get('seq_region_name')
+                    tx_pos = e_tx.get('start')
+                    tx_allele_str = e_tx.get('allele_string', '')
+                    tx_parts = tx_allele_str.split('/') if tx_allele_str else []
+                    if tx_chrom and tx_pos and len(tx_parts) == 2:
+                        tx_ref, tx_alt = tx_parts[0], tx_parts[1]
+                        if len(tx_ref) == 1 and len(tx_alt) == 1:
+                            from .gnomad_tx import get_gnomad_tx_service
+                            gtx_svc = get_gnomad_tx_service()
+                            if gtx_svc.available:
+                                gnomad_tx_data_val = await gtx_svc.lookup(str(tx_chrom), int(tx_pos), tx_ref, tx_alt)
+
             # BigQuery enrichment (ChEMBL, FDA Drug, AlphaFold) is deferred to
             # backfill / on-demand variant-detail to avoid blocking bulk analysis.
             chembl_data_val = None
@@ -245,6 +270,8 @@ class SharedVariantAnnotationService:
                 values['gnomad_data'] = gnomad_data_val
             if thousand_genomes_data_val is not None:
                 values['thousand_genomes_data'] = thousand_genomes_data_val
+            if gnomad_tx_data_val is not None:
+                values['gnomad_tx_data'] = gnomad_tx_data_val
             if chembl_data_val is not None:
                 values['chembl_data'] = chembl_data_val
             if fda_drug_data_val is not None:
@@ -295,6 +322,11 @@ class SharedVariantAnnotationService:
                 conflict_set['thousand_genomes_data'] = func.coalesce(
                     SharedVariantAnnotation.thousand_genomes_data,
                     stmt.excluded.thousand_genomes_data,
+                )
+            if gnomad_tx_data_val:
+                conflict_set['gnomad_tx_data'] = func.coalesce(
+                    SharedVariantAnnotation.gnomad_tx_data,
+                    stmt.excluded.gnomad_tx_data,
                 )
             if chembl_data_val:
                 conflict_set['chembl_data'] = func.coalesce(

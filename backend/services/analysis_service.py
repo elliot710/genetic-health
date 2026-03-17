@@ -8,7 +8,6 @@ from datetime import datetime
 from typing import ClassVar, Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 from sqlalchemy import select, update, func
 
 from ..db.models import (
@@ -75,6 +74,51 @@ class AnnotationResult:
     was_reused: bool
     annotation_data: Optional[Dict[str, Any]]
     source: str  # 'existing', 'api', 'failed'
+
+
+@dataclass
+class _MarkerLite:
+    """Lightweight marker proxy — avoids SQLAlchemy ORM overhead for 600k+ variants."""
+    id: int
+    rsid: Optional[str]
+    chromosome: Optional[str]
+    position: Optional[int]
+    ref_allele: Optional[str]
+    alt_alleles: Optional[str]
+
+
+@dataclass
+class VariantLite:
+    """Lightweight variant with the same public interface as AnalysisVariant.
+
+    Using Core SQL rows + dataclasses instead of ORM objects avoids the
+    60-90 second event-loop stall caused by SQLAlchemy materialising
+    600k+ ORM instances after selectinload returns.
+    """
+    id: int
+    analysis_id: int
+    marker_id: int
+    genotype: Optional[str]
+    quality: Optional[str]
+    filter_status: Optional[str]
+    info: Optional[dict]
+    marker: '_MarkerLite'
+
+    # Proxy properties to match AnalysisVariant interface
+    @property
+    def rsid(self): return self.marker.rsid
+
+    @property
+    def chromosome(self): return self.marker.chromosome
+
+    @property
+    def position(self): return self.marker.position
+
+    @property
+    def ref_allele(self): return self.marker.ref_allele
+
+    @property
+    def alt_allele(self): return self.marker.alt_alleles
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +417,12 @@ class ComprehensiveAnalysisService:
             if phase_elapsed > 0:
                 logger.info(f"  Throughput: {total_annotated / phase_elapsed:.0f} variants/sec")
 
+            # ── Phase 2.5: Correct ref_allele from authoritative sources ──
+            # Consumer CSV uploads naively use genotype[0] as ref_allele.
+            # Now that we have ClinVar/gnomAD/Ensembl data, correct the
+            # genetic_markers.ref_allele column with the true reference.
+            await self._correct_ref_alleles(variants, annotation_results)
+
             # ── Phase 3: BigQuery enrichment (own session, periodic commits) ──
             progress.phase = 3
             progress.phase_progress = 0.0
@@ -521,27 +571,196 @@ class ComprehensiveAnalysisService:
             except Exception:
                 pass
 
-    async def _load_analysis_data(self, analysis_id: int) -> tuple[GeneticAnalysis, List[AnalysisVariant]]:
-        """Load analysis and analysis variants from database."""
+    async def _load_analysis_data(self, analysis_id: int) -> tuple:
+        """Load analysis header + variants efficiently using Core SQL rows.
+
+        Avoids ORM selectinload which blocks the event loop for 60-90 seconds
+        while SQLAlchemy materialises 600k+ objects.  Instead we stream rows
+        from a JOIN query in chunks of 5 000, yielding between chunks so HTTP
+        handlers can run during the load.
+
+        Returns (GeneticAnalysis, List[VariantLite]).
+        """
         from ..db.database import async_session_factory
+        from ..db.models import GeneticMarker
+
+        # --- Load GeneticAnalysis header only (no selectinload) ---
+        query = select(GeneticAnalysis).where(GeneticAnalysis.id == analysis_id)
+        if self.user_id is not None:
+            query = query.where(GeneticAnalysis.user_id == self.user_id)
 
         async with async_session_factory() as session:
-            query = select(GeneticAnalysis).options(
-                selectinload(GeneticAnalysis.analysis_variants)
-            ).where(GeneticAnalysis.id == analysis_id)
-
-            if self.user_id is not None:
-                query = query.where(GeneticAnalysis.user_id == self.user_id)
-
             result = await session.execute(query)
             analysis = result.scalar_one_or_none()
 
-            if not analysis:
-                raise AnalysisNotFoundException(
-                    f"Analysis {analysis_id} not found for user {self.user_id}"
-                )
+        if not analysis:
+            raise AnalysisNotFoundException(
+                f"Analysis {analysis_id} not found for user {self.user_id}"
+            )
 
-            return analysis, analysis.analysis_variants
+        # --- Stream variants as Core rows to avoid ORM overhead ---
+        # Core rows are plain Row namedtuples — ~10x less overhead than
+        # full SQLAlchemy ORM instances with _sa_instance_state tracking.
+        CHUNK = 5_000
+        variants: list = []
+
+        stmt = (
+            select(
+                AnalysisVariant.id,
+                AnalysisVariant.analysis_id,
+                AnalysisVariant.marker_id,
+                AnalysisVariant.genotype,
+                AnalysisVariant.quality,
+                AnalysisVariant.filter_status,
+                AnalysisVariant.info,
+                GeneticMarker.rsid,
+                GeneticMarker.chromosome,
+                GeneticMarker.position,
+                GeneticMarker.ref_allele,
+                GeneticMarker.alt_alleles,
+            )
+            .join(GeneticMarker, AnalysisVariant.marker_id == GeneticMarker.id)
+            .where(AnalysisVariant.analysis_id == analysis_id)
+            .execution_options(stream_results=True, yield_per=CHUNK)
+        )
+
+        async with async_session_factory() as session:
+            stream = await session.stream(stmt)
+            chunk_num = 0
+            async for partition in stream.partitions(CHUNK):
+                if chunk_num > 0:
+                    await asyncio.sleep(0)
+                chunk_num += 1
+                for row in partition:
+                    marker = _MarkerLite(
+                        id=row.marker_id,
+                        rsid=row.rsid,
+                        chromosome=row.chromosome,
+                        position=row.position,
+                        ref_allele=row.ref_allele,
+                        alt_alleles=row.alt_alleles,
+                    )
+                    variants.append(VariantLite(
+                        id=row.id,
+                        analysis_id=row.analysis_id,
+                        marker_id=row.marker_id,
+                        genotype=row.genotype,
+                        quality=row.quality,
+                        filter_status=row.filter_status,
+                        info=row.info,
+                        marker=marker,
+                    ))
+
+        return analysis, variants
+
+    async def _correct_ref_alleles(
+        self,
+        variants: List[AnalysisVariant],
+        annotation_results: Dict[str, 'AnnotationResult'],
+    ):
+        """Correct genetic_markers.ref_allele from authoritative annotation sources.
+
+        Consumer CSV uploads naively treat genotype[0] as the ref allele,
+        but this is often wrong.  Now that we have annotations from ClinVar,
+        gnomAD, and Ensembl VEP, we can identify the true reference genome
+        allele and update the global marker catalog.
+
+        This is critical for correct zygosity classification downstream
+        (is_homozygous_reference, zygosity_adjust, carrier status, etc.).
+        """
+        from ..db.database import async_session_factory
+
+        corrections: Dict[int, str] = {}  # marker_id -> true_ref_allele
+
+        for _idx, variant in enumerate(variants):
+            if _idx > 0 and _idx % 1000 == 0:
+                await asyncio.sleep(0)
+            rsid = getattr(variant, 'rsid', None)
+            if not rsid:
+                continue
+
+            marker = getattr(variant, 'marker', None)
+            if not marker:
+                continue
+
+            ar = annotation_results.get(rsid)
+            if not ar or not ar.annotation_data:
+                continue
+
+            annotations = ar.annotation_data.get('annotations', {})
+            true_ref = None
+
+            # 1. gnomAD ref_allele (highest confidence — from VCF)
+            gnomad = annotations.get('gnomad', {})
+            if gnomad and gnomad.get('found'):
+                ref = gnomad.get('ref_allele') or gnomad.get('ref')
+                if ref and ref not in ('N', '-', '.', ''):
+                    true_ref = ref.strip().upper()
+
+            # 2. Ensembl VEP allele_string (format: "REF/ALT")
+            if not true_ref:
+                ensembl = annotations.get('ensembl', {})
+                if ensembl and ensembl.get('found') and ensembl.get('data'):
+                    data_list = ensembl['data']
+                    if isinstance(data_list, list) and data_list:
+                        allele_str = data_list[0].get('allele_string', '')
+                        if '/' in allele_str:
+                            ref = allele_str.split('/')[0].strip().upper()
+                            if ref and ref not in ('N', '-', '.', ''):
+                                true_ref = ref
+
+            # 3. ClinVar local ref_allele
+            if not true_ref:
+                cv = annotations.get('clinvar_local', {})
+                if cv and cv.get('found'):
+                    ref = cv.get('ref_allele')
+                    if ref and ref not in ('N', '-', '.', ''):
+                        true_ref = ref.strip().upper()
+
+            # 4. 1000 Genomes ref_allele
+            if not true_ref:
+                tkg = annotations.get('thousand_genomes', {})
+                if tkg and tkg.get('found'):
+                    ref = tkg.get('ref_allele')
+                    if ref and ref not in ('N', '-', '.', ''):
+                        true_ref = ref.strip().upper()
+
+            if not true_ref:
+                continue
+
+            current_ref = getattr(marker, 'ref_allele', '') or ''
+            if current_ref.strip().upper() != true_ref:
+                corrections[marker.id] = true_ref
+
+        if not corrections:
+            logger.info("ref_allele correction: all markers already correct")
+            return
+
+        # Batch update genetic_markers
+        from ..db.models import GeneticMarker
+        from sqlalchemy import bindparam
+
+        update_params = [{'b_id': mid, 'b_ref': ref} for mid, ref in corrections.items()]
+        CHUNK = 5000
+        total_updated = 0
+
+        for i in range(0, len(update_params), CHUNK):
+            chunk = update_params[i:i + CHUNK]
+            async with async_session_factory() as session:
+                conn = await session.connection()
+                await conn.execute(
+                    GeneticMarker.__table__.update()
+                    .where(GeneticMarker.__table__.c.id == bindparam('b_id'))
+                    .values(ref_allele=bindparam('b_ref')),
+                    chunk
+                )
+                await session.commit()
+            total_updated += len(chunk)
+
+        logger.info(
+            f"ref_allele correction: updated {total_updated} markers "
+            f"from authoritative sources (gnomAD/Ensembl/ClinVar/1000G)"
+        )
 
     async def _annotate_variants_efficiently(
         self,
@@ -580,7 +799,9 @@ class ComprehensiveAnalysisService:
 
         annotation_results: Dict[str, AnnotationResult] = {}
 
-        for rsid, annotation_data in existing_annotations.items():
+        for _idx, (rsid, annotation_data) in enumerate(existing_annotations.items()):
+            if _idx > 0 and _idx % 1000 == 0:
+                await asyncio.sleep(0)
             annotation_results[rsid] = AnnotationResult(
                 rsid=rsid, was_reused=True,
                 annotation_data=annotation_data, source='existing'
@@ -725,18 +946,32 @@ class ComprehensiveAnalysisService:
             am_svc = get_alpha_missense_service()
             do_am = am_svc.available
 
-        # Build missing lists by querying the DB directly for columns that are
-        # SQL NULL or JSON null (save_annotation historically stored Python None
-        # as JSON null instead of SQL NULL).  A column with real data (found=true
-        # or found=false) means the source was already checked.
+        do_gtx = enabled_sources is None or 'gnomad_tx' in enabled_sources
+        gtx_svc = None
+        if do_gtx:
+            from .gnomad_tx import get_gnomad_tx_service
+            gtx_svc = get_gnomad_tx_service()
+            do_gtx = gtx_svc.available
+
+        # Build missing lists by querying the DB directly for columns that need
+        # (re-)annotation.  For local/file/hybrid sources we treat three states
+        # as "needs lookup":
+        #   1. SQL NULL           — never annotated
+        #   2. JSON literal null  — old save_annotation None bug
+        #   3. {"found": false}   — previously returned not-found: re-check because
+        #                           the local service may not have been loaded at the
+        #                           time, or the underlying data file has been updated.
+        # For remote API sources only (1) and (2) are re-checked to avoid
+        # hammering rate-limited endpoints.
         all_rsids_for_backfill = list(existing_annotations.keys())
         missing_cv: list = []
         missing_gnomad: list = []
         missing_ensembl: list = []
         missing_1kg: list = []
         missing_am: list = []
+        missing_gtx: list = []
 
-        if do_clinvar or do_gnomad or do_ensembl or do_1kg or do_am:
+        if do_clinvar or do_gnomad or do_ensembl or do_1kg or do_am or do_gtx:
             from ..db.database import async_session_factory as _asf
             from ..db.models import SharedVariantAnnotation as SVA
             from sqlalchemy import or_, cast, String
@@ -745,6 +980,15 @@ class ComprehensiveAnalysisService:
                 """True when column is SQL NULL or contains JSON literal null."""
                 return or_(col.is_(None), cast(col, String) == 'null')
 
+            def _col_stale_local(col):
+                """True when column needs a local-source lookup: NULL, JSON null,
+                or previously returned {found: false} (stale for fast local lookups)."""
+                return or_(
+                    col.is_(None),
+                    cast(col, String) == 'null',
+                    col.op('->>')('found') == 'false',
+                )
+
             BACKFILL_BATCH = 5000
             for bi in range(0, len(all_rsids_for_backfill), BACKFILL_BATCH):
                 chunk = all_rsids_for_backfill[bi:bi + BACKFILL_BATCH]
@@ -752,14 +996,17 @@ class ComprehensiveAnalysisService:
                     rows = (await _sess.execute(
                         select(
                             SVA.rsid,
-                            _col_empty(SVA.clinvar_local_data).label('cv_empty'),
-                            _col_empty(SVA.gnomad_data).label('gn_empty'),
-                            _col_empty(SVA.ensembl_data).label('ens_empty'),
-                            _col_empty(SVA.thousand_genomes_data).label('tkg_empty'),
-                            _col_empty(SVA.alpha_missense_data).label('am_empty'),
+                            _col_stale_local(SVA.clinvar_local_data).label('cv_empty'),
+                            _col_stale_local(SVA.gnomad_data).label('gn_empty'),
+                            _col_stale_local(SVA.ensembl_data).label('ens_empty'),
+                            _col_stale_local(SVA.thousand_genomes_data).label('tkg_empty'),
+                            _col_stale_local(SVA.alpha_missense_data).label('am_empty'),
+                            _col_stale_local(SVA.gnomad_tx_data).label('gtx_empty'),
                         ).where(SVA.rsid.in_(chunk))
                     )).all()
-                for row in rows:
+                for row_idx, row in enumerate(rows):
+                    if row_idx > 0 and row_idx % 500 == 0:
+                        await asyncio.sleep(0)
                     if do_clinvar and row.cv_empty:
                         missing_cv.append(row.rsid)
                     if do_gnomad and row.gn_empty:
@@ -770,9 +1017,15 @@ class ComprehensiveAnalysisService:
                         missing_1kg.append(row.rsid)
                     if do_am and row.am_empty:
                         missing_am.append(row.rsid)
+                    if do_gtx and row.gtx_empty:
+                        missing_gtx.append(row.rsid)
 
-        if not missing_cv and not missing_gnomad and not missing_ensembl and not missing_1kg and not missing_am:
-            # Skip to BQ backfill check below
+        if not missing_cv and not missing_gnomad and not missing_ensembl and not missing_1kg and not missing_am and not missing_gtx:
+            # Nothing to backfill — all local source columns already have found=true data
+            logger.info(
+                f"Local source backfill: all {len(all_rsids_for_backfill)} cached annotations "
+                f"already have up-to-date local data (no backfill needed)"
+            )
             pass
         else:
             import time as _time
@@ -781,7 +1034,7 @@ class ComprehensiveAnalysisService:
                 f"Local source backfill starting — "
                 f"ClinVar: {len(missing_cv)}, gnomAD: {len(missing_gnomad)}, "
                 f"Ensembl: {len(missing_ensembl)}, 1000G: {len(missing_1kg)}, "
-                f"AlphaMissense: {len(missing_am)}"
+                f"AlphaMissense: {len(missing_am)}, gnomAD-tx: {len(missing_gtx)}"
             )
             # --- Batch lookups (parallel-friendly: each uses its own read session) ---
             cv_results: Dict[str, Optional[Dict]] = {}
@@ -873,9 +1126,33 @@ class ComprehensiveAnalysisService:
                                     })
                                     break
                 if am_batch:
-                    am_results = am_svc.lookup_variants_batch(am_batch)
+                    am_results = await asyncio.get_event_loop().run_in_executor(
+                        None, am_svc.lookup_variants_batch, am_batch
+                    )
                 am_found = sum(1 for v in am_results.values() if v and v.get('found'))
                 logger.info(f"  AlphaMissense lookup done: {am_found}/{len(missing_am)} found ({_time.monotonic() - _src_t0:.1f}s)")
+
+            gtx_results: Dict[str, Optional[Dict]] = {}
+            if missing_gtx:
+                logger.info(f"Backfilling gnomAD tx_annotated for {len(missing_gtx)} annotations...")
+                _src_t0 = _time.monotonic()
+                gtx_tuples = []
+                for rsid in missing_gtx:
+                    v = rsid_to_variant.get(rsid)
+                    if v:
+                        marker = getattr(v, 'marker', None)
+                        if marker and marker.chromosome and marker.position and marker.ref_allele and marker.alt_alleles:
+                            gtx_tuples.append((
+                                rsid,
+                                str(marker.chromosome),
+                                int(marker.position),
+                                str(marker.ref_allele),
+                                str(marker.alt_alleles),
+                            ))
+                if gtx_tuples:
+                    gtx_results = await gtx_svc.lookup_batch(gtx_tuples)
+                gtx_found = sum(1 for v in gtx_results.values() if v and v.get('found'))
+                logger.info(f"  gnomAD tx_annotated lookup done: {gtx_found}/{len(missing_gtx)} found ({_time.monotonic() - _src_t0:.1f}s)")
 
             backfill_lookup_elapsed = _time.monotonic() - backfill_t0
             logger.info(f"All source lookups complete in {backfill_lookup_elapsed:.1f}s, writing results to DB...")
@@ -890,6 +1167,7 @@ class ComprehensiveAnalysisService:
             _NOT_FOUND_ENS = {"found": False, "source": "ensembl_vep_local"}
             _NOT_FOUND_TKG = {"found": False, "source": "1000genomes_local"}
             _NOT_FOUND_AM = {"found": False, "source": "alpha_missense"}
+            _NOT_FOUND_GTX = {"found": False, "source": "gnomad_tx"}
 
             cv_params = []
             for rsid, cv_data in cv_results.items():
@@ -931,6 +1209,14 @@ class ComprehensiveAnalysisService:
                 else:
                     am_params.append({'b_rsid': rsid, 'b_data': _NOT_FOUND_AM})
 
+            gtx_params = []
+            for rsid, gtx_data in gtx_results.items():
+                if gtx_data and gtx_data.get('found'):
+                    gtx_params.append({'b_rsid': rsid, 'b_data': gtx_data})
+                    existing_annotations[rsid]['annotations']['gnomad_tx'] = gtx_data
+                else:
+                    gtx_params.append({'b_rsid': rsid, 'b_data': _NOT_FOUND_GTX})
+
             # --- Chunked DB writes to avoid long-held locks ---
             WRITE_CHUNK = 5000
 
@@ -971,14 +1257,15 @@ class ComprehensiveAnalysisService:
                 ('ensembl_data', ens_params, 'Ensembl VEP'),
                 ('thousand_genomes_data', tkg_params, '1000G'),
                 ('alpha_missense_data', am_params, 'AlphaMissense'),
+                ('gnomad_tx_data', gtx_params, 'gnomAD-tx'),
             ]
-            cv_updated = gn_updated = ens_updated = tkg_updated = am_updated = 0
+            cv_updated = gn_updated = ens_updated = tkg_updated = am_updated = gtx_updated = 0
             write_results = [0] * len(sources_to_write)
             for si, (col, params, label) in enumerate(sources_to_write):
                 if params:
                     logger.info(f"  Writing {label}: {len(params)} rows to DB...")
                     write_results[si] = await _chunked_update(col, params)
-            cv_updated, gn_updated, ens_updated, tkg_updated, am_updated = write_results
+            cv_updated, gn_updated, ens_updated, tkg_updated, am_updated, gtx_updated = write_results
 
             if cv_updated:
                 logger.info(f"Backfilled ClinVar Local data for {cv_updated}/{len(missing_cv)} annotations")
@@ -990,12 +1277,14 @@ class ComprehensiveAnalysisService:
                 logger.info(f"Backfilled 1000G data for {tkg_updated}/{len(missing_1kg)} annotations")
             if am_updated:
                 logger.info(f"Backfilled AlphaMissense data for {am_updated}/{len(missing_am)} annotations")
+            if gtx_updated:
+                logger.info(f"Backfilled gnomAD tx data for {gtx_updated}/{len(missing_gtx)} annotations")
 
             backfill_elapsed = _time.monotonic() - backfill_t0
             logger.info(
                 f"Local source backfill complete in {backfill_elapsed:.1f}s — "
                 f"DB writes: CV={cv_updated}, gnomAD={gn_updated}, VEP={ens_updated}, "
-                f"1KG={tkg_updated}, AM={am_updated}"
+                f"1KG={tkg_updated}, AM={am_updated}, GTX={gtx_updated}"
             )
 
         # --- BigQuery backfill (ChEMBL, FDA Drug, AlphaFold) ---
@@ -1202,9 +1491,35 @@ class ComprehensiveAnalysisService:
                                 })
                                 break  # one alt per rsid is enough
                 if am_variants:
-                    am_map = am_svc.lookup_variants_batch(am_variants)
+                    am_map = await asyncio.get_event_loop().run_in_executor(
+                        None, am_svc.lookup_variants_batch, am_variants
+                    )
                 am_found = sum(1 for v in am_map.values() if v and v.get('found'))
                 logger.info(f"  AlphaMissense local batch: {am_found}/{total} found ({time.time() - t0:.1f}s)")
+
+        # --- Step 2.8: Batch gnomAD tx_annotated lookups (gene/csq/LoF/GTEx) ---
+        gtx_map: Dict[str, Optional[Dict]] = {}
+        if enabled_sources is None or 'gnomad_tx' in enabled_sources:
+            from .gnomad_tx import get_gnomad_tx_service
+            gtx_svc = get_gnomad_tx_service()
+            if gtx_svc.available:
+                t0 = time.time()
+                gtx_tuples = []
+                for rsid in unique_rsids:
+                    v = rsid_to_variants[rsid][0]
+                    marker = getattr(v, 'marker', None)
+                    if marker and marker.chromosome and marker.position and marker.ref_allele and marker.alt_alleles:
+                        gtx_tuples.append((
+                            rsid,
+                            str(marker.chromosome),
+                            int(marker.position),
+                            str(marker.ref_allele),
+                            str(marker.alt_alleles),
+                        ))
+                if gtx_tuples:
+                    gtx_map = await gtx_svc.lookup_batch(gtx_tuples)
+                gtx_found = sum(1 for v in gtx_map.values() if v and v.get('found'))
+                logger.info(f"  gnomAD tx_annotated batch: {gtx_found}/{total} found ({time.time() - t0:.1f}s)")
 
         await asyncio.sleep(0)
 
@@ -1234,6 +1549,7 @@ class ComprehensiveAnalysisService:
                 ens_val = _val(ens_map.get(rsid))
                 tkg_val = _val(tkg_map.get(rsid))
                 am_val = _val(am_map.get(rsid))
+                gtx_val = _val(gtx_map.get(rsid))
                 first_variant = rsid_to_variants[rsid][0]
                 marker_id = getattr(first_variant, 'marker_id', None)
 
@@ -1241,6 +1557,7 @@ class ComprehensiveAnalysisService:
                     rsid=rsid,
                     clinvar_local_data=cv_val,
                     gnomad_data=gn_val,
+                    gnomad_tx_data=gtx_val,
                     ensembl_data=ens_val,
                     thousand_genomes_data=tkg_val,
                     alpha_missense_data=am_val,
@@ -1280,6 +1597,10 @@ class ComprehensiveAnalysisService:
                             SharedVariantAnnotation.alpha_missense_data,
                             stmt.excluded.alpha_missense_data,
                         ),
+                        gnomad_tx_data=func.coalesce(
+                            SharedVariantAnnotation.gnomad_tx_data,
+                            stmt.excluded.gnomad_tx_data,
+                        ),
                     ),
                 ).returning(SharedVariantAnnotation.id, SharedVariantAnnotation.rsid)
 
@@ -1309,12 +1630,17 @@ class ComprehensiveAnalysisService:
                 await session.commit()
 
             # ── Build in-memory annotation results (no DB, pure CPU) ──
-            for rsid in chunk_rsids:
+            # Yield at the midpoint of each 500-item chunk so HTTP handlers
+            # can get into the event loop during heavy bulk annotation.
+            for idx_in_chunk, rsid in enumerate(chunk_rsids):
+                if idx_in_chunk > 0 and idx_in_chunk % 50 == 0:
+                    await asyncio.sleep(0)
                 cv_val = _val(cv_map.get(rsid))
                 gn_val = _val(gn_map.get(rsid))
                 ens_val = _val(ens_map.get(rsid))
                 tkg_val = _val(tkg_map.get(rsid))
                 am_val = _val(am_map.get(rsid))
+                gtx_val = _val(gtx_map.get(rsid))
 
                 ann_data: Dict[str, Any] = {
                     'rsid': rsid,
@@ -1336,6 +1662,9 @@ class ComprehensiveAnalysisService:
                     ann_data['success_count'] += 1
                 if am_val:
                     ann_data['annotations']['alpha_missense'] = am_val
+                    ann_data['success_count'] += 1
+                if gtx_val:
+                    ann_data['annotations']['gnomad_tx'] = gtx_val
                     ann_data['success_count'] += 1
 
                 ann_data['pathogenicity_score'] = scorer.score_variant(
@@ -1463,21 +1792,25 @@ class ComprehensiveAnalysisService:
             if already_enriched:
                 logger.info(f"BigQuery enrichment: skipping {len(already_enriched)} already-enriched genes")
 
-                # Load existing BQ data into in-memory annotation_results
-                async with async_session_factory() as session:
-                    for gene in already_enriched:
-                        rsids_for_gene = gene_to_rsids[gene]
+                # Load existing BQ data into in-memory annotation_results.
+                # Use per-gene short sessions — holding one session across hundreds of
+                # gene-level SELECT queries pins a connection for the entire loop.
+                for gene in already_enriched:
+                    rsids_for_gene = gene_to_rsids[gene]
+                    async with async_session_factory() as session:
                         result = await session.execute(
                             select(SharedVariantAnnotation)
                             .where(SharedVariantAnnotation.rsid.in_(rsids_for_gene))
                         )
-                        for sa in result.scalars().all():
-                            ar = annotation_results.get(sa.rsid)
-                            if ar and ar.annotation_data:
-                                for src, col in bq_col_map.items():
-                                    data = getattr(sa, col, None)
-                                    if data:
-                                        ar.annotation_data.setdefault('annotations', {})[src] = data
+                        rows = result.scalars().all()
+                    for sa in rows:
+                        ar = annotation_results.get(sa.rsid)
+                        if ar and ar.annotation_data:
+                            for src, col in bq_col_map.items():
+                                data = getattr(sa, col, None)
+                                if data:
+                                    ar.annotation_data.setdefault('annotations', {})[src] = data
+                    await asyncio.sleep(0)
         except Exception as e:
             logger.warning(f"BQ enrichment skip-check failed (will re-enrich all): {e}")
 

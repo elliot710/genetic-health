@@ -2,6 +2,7 @@
 Shared context, helpers, and generic map-driven generator used by all
 insight generator modules.
 """
+import asyncio
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Any
 
@@ -86,24 +87,54 @@ def extract_gene_and_consequence(
 
 
 def extract_frequency(annotation_result) -> float:
-    """Extract population frequency from annotation data."""
+    """Extract population frequency from annotation data.
+
+    Tries multiple sources in order:
+    1. Ensembl VEP colocated_variants gnomAD frequencies
+    2. gnomAD local allele frequency (af)
+    3. 1000 Genomes global allele frequency
+    """
     if not annotation_result or not annotation_result.annotation_data:
         return 0.0
 
-    try:
-        ensembl_data = annotation_result.annotation_data.get('annotations', {}).get('ensembl', {})
-        data_list = ensembl_data.get('data', [])
-        if not data_list:
-            return 0.0
+    annotations = annotation_result.annotation_data.get('annotations', {})
 
-        entry = data_list[0]
-        freqs = entry.get('colocated_variants', [{}])[0].get('frequencies', {})
-        if freqs:
-            first_allele = next(iter(freqs.values()), {})
-            return first_allele.get('gnomade', first_allele.get('gnomad', 0.0))
-        return 0.0
+    try:
+        # 1. Ensembl VEP
+        ensembl_data = annotations.get('ensembl', {})
+        data_list = ensembl_data.get('data', [])
+        if data_list:
+            entry = data_list[0]
+            freqs = entry.get('colocated_variants', [{}])[0].get('frequencies', {})
+            if freqs:
+                first_allele = next(iter(freqs.values()), {})
+                val = first_allele.get('gnomade', first_allele.get('gnomad', 0.0))
+                if val:
+                    return val
     except (KeyError, IndexError, TypeError, StopIteration):
-        return 0.0
+        pass
+
+    try:
+        # 2. gnomAD local
+        gnomad = annotations.get('gnomad', {})
+        if gnomad and gnomad.get('found'):
+            af = gnomad.get('af')
+            if af is not None and af > 0:
+                return af
+    except (KeyError, TypeError):
+        pass
+
+    try:
+        # 3. 1000 Genomes — use the global allele frequency
+        tkg = annotations.get('thousand_genomes', {})
+        if tkg and tkg.get('found'):
+            af_global = tkg.get('af_global') or tkg.get('af')
+            if af_global is not None and af_global > 0:
+                return af_global
+    except (KeyError, TypeError):
+        pass
+
+    return 0.0
 
 
 def get_ref_allele(variant) -> Optional[str]:
@@ -114,6 +145,80 @@ def get_ref_allele(variant) -> Optional[str]:
         if ref and ref not in ('N', '-', '.', ''):
             return ref
     return None
+
+
+def get_annotation_ref_allele(annotation_result) -> Optional[str]:
+    """Extract the reference allele from annotation data (ClinVar local, Ensembl, gnomAD).
+
+    More reliable than the marker's ref_allele for consumer CSV data where
+    ref_allele == alt_alleles ~83% of the time.
+    """
+    if not annotation_result or not annotation_result.annotation_data:
+        return None
+
+    annotations = annotation_result.annotation_data.get('annotations', {})
+
+    # ClinVar local — has explicit ref/alt alleles
+    cv = annotations.get('clinvar_local', {})
+    if cv and cv.get('found'):
+        ref = cv.get('ref_allele') or cv.get('reference_allele')
+        if ref and ref not in ('N', '-', '.', ''):
+            return ref.strip().upper()
+
+    # Ensembl VEP — allele_string format: "REF/ALT"
+    ensembl = annotations.get('ensembl', {})
+    data_list = ensembl.get('data', [])
+    if data_list:
+        allele_str = data_list[0].get('allele_string', '')
+        if '/' in allele_str:
+            ref = allele_str.split('/')[0].strip()
+            if ref and ref not in ('N', '-', '.', ''):
+                return ref.upper()
+
+    # gnomAD — has ref column
+    gnomad = annotations.get('gnomad', {})
+    if gnomad and gnomad.get('found'):
+        ref = gnomad.get('ref')
+        if ref and ref not in ('N', '-', '.', ''):
+            return ref.strip().upper()
+
+    return None
+
+
+def _get_effective_ref_allele(variant, annotation_result) -> Optional[str]:
+    """Get the best available reference allele for a variant.
+
+    Prefers annotation-derived ref (authoritative) over marker-derived ref.
+    Discards marker ref when it equals marker alt (ambiguous consumer CSV data).
+    """
+    ann_ref = get_annotation_ref_allele(annotation_result)
+    if ann_ref:
+        return ann_ref
+
+    marker = getattr(variant, 'marker', None)
+    if not marker:
+        return None
+    marker_ref = getattr(marker, 'ref_allele', None)
+    if not marker_ref or marker_ref in ('N', '-', '.', ''):
+        return None
+    # Don't trust marker ref if it equals alt (ambiguous consumer CSV)
+    marker_alt = getattr(marker, 'alt_alleles', None) or ''
+    if marker_ref.strip().upper() == marker_alt.strip().upper():
+        return None
+    return marker_ref.strip().upper()
+
+
+def risk_level_to_score(risk_level: str) -> float:
+    """Convert a risk level string to a numeric 0–1 score for storage and comparison."""
+    _SCORES = {
+        'low': 0.2,
+        'average': 0.4,
+        'moderate': 0.6,
+        'high': 0.8,
+        'very_high': 0.95,
+        'unknown': 0.0,
+    }
+    return _SCORES.get(risk_level.strip().lower().replace(' ', '_'), 0.5)
 
 
 def get_user_genotype(variant) -> Optional[str]:
@@ -168,11 +273,11 @@ def is_homozygous_reference(genotype: Optional[str], ref_allele: Optional[str] =
     if ref_allele:
         ref = ref_allele.strip().upper()
         return all(a == ref for a in alleles)
-    # Fallback: treat any homozygous as "reference" (inaccurate for homo-alt)
-    # For hemizygous, we can't tell without ref_allele so return False
-    if len(alleles) == 1:
-        return False
-    return alleles[0] == alleles[1]
+    # Without ref_allele we cannot distinguish homozygous-reference from
+    # homozygous-alternate.  Return False to avoid silently skipping
+    # variants that might be homozygous for the risk allele (Bug fix:
+    # previously any homozygous was treated as reference, hiding real risk).
+    return False
 
 
 def is_heterozygous(genotype: Optional[str]) -> bool:
@@ -188,6 +293,17 @@ def is_heterozygous(genotype: Optional[str]) -> bool:
 _SEVERITY_LADDER = ['low', 'average', 'moderate', 'high', 'very_high']
 _SEVERITY_IDX = {v: i for i, v in enumerate(_SEVERITY_LADDER)}
 
+# Map common auto-categorizer values to ladder equivalents so zygosity
+# adjustment actually works for auto-generated mappings.
+_LEVEL_ALIASES = {
+    'variable': 'average',
+    'reduced': 'moderate',
+    'elevated': 'high',
+    'elevated risk': 'high',
+    'elevated_risk': 'high',
+    'normal': 'average',
+}
+
 
 def zygosity_adjust(level: str, genotype: Optional[str], *, ref_allele: Optional[str] = None, steps: int = 1) -> str:
     """Shift a severity/level string up or down based on zygosity.
@@ -200,11 +316,15 @@ def zygosity_adjust(level: str, genotype: Optional[str], *, ref_allele: Optional
     Without it the function uses a heuristic (any homozygous → reference).
     """
     normalised = level.strip().lower().replace(' ', '_')
-    idx = _SEVERITY_IDX.get(normalised)
+    # Resolve aliases so auto-generated values participate in the ladder
+    resolved = _LEVEL_ALIASES.get(normalised, normalised)
+    idx = _SEVERITY_IDX.get(resolved)
     if idx is None:
         return level  # not on the ladder — nothing to shift
 
-    if is_homozygous_reference(genotype, ref_allele) or not genotype:
+    if not genotype:
+        new_idx = idx  # Missing genotype → preserve baseline (don't de-escalate)
+    elif is_homozygous_reference(genotype, ref_allele):
         new_idx = max(0, idx - steps)
     elif is_heterozygous(genotype):
         new_idx = idx  # baseline — no change
@@ -223,30 +343,85 @@ def zygosity_adjust(level: str, genotype: Optional[str], *, ref_allele: Optional
 # Scoring / recommendation helpers
 # ---------------------------------------------------------------------------
 
-def assess_risk_level(genotype: str, risk_multiplier: float, ref_allele: Optional[str] = None) -> str:
-    """Assess risk level considering both the risk multiplier and zygosity."""
+def assess_risk_level(genotype: str, risk_multiplier: float, ref_allele: Optional[str] = None,
+                      pathogenicity_score: Optional[Dict] = None) -> str:
+    """Assess risk level considering the risk multiplier, zygosity, and
+    optionally the composite pathogenicity score from the scoring engine."""
     if not genotype:
         return 'unknown'
-    # Base level from multiplier
-    if risk_multiplier >= 2.0:
-        base = 'high'
-    elif risk_multiplier >= 1.2:
-        base = 'moderate'
-    elif risk_multiplier <= 0.8:
-        base = 'low'
+
+    # If we have a scoring engine result, blend it with the static multiplier
+    if pathogenicity_score and isinstance(pathogenicity_score, dict):
+        composite = pathogenicity_score.get('composite_score', 0.0)
+        if composite >= 0.80:
+            base = 'high'
+        elif composite >= 0.60:
+            base = 'high' if risk_multiplier >= 2.0 else 'moderate'
+        elif composite >= 0.30:
+            base = 'moderate' if risk_multiplier >= 2.0 else 'average'
+        else:
+            # Low pathogenicity — use multiplier-based thresholds
+            if risk_multiplier >= 2.0:
+                base = 'moderate'  # Downgrade from 'high' if scoring says benign
+            elif risk_multiplier >= 1.2:
+                base = 'low'
+            else:
+                base = 'low'
     else:
-        base = 'average'
+        # Fallback: multiplier-only (original logic)
+        if risk_multiplier >= 2.0:
+            base = 'high'
+        elif risk_multiplier >= 1.2:
+            base = 'moderate'
+        elif risk_multiplier <= 0.8:
+            base = 'low'
+        else:
+            base = 'average'
     # Adjust for zygosity
     return zygosity_adjust(base, genotype, ref_allele=ref_allele)
 
 
-def assess_drug_response(genotype: str, gene: str) -> str:
+def assess_drug_response(genotype: str, gene: str, ref_allele: Optional[str] = None) -> str:
+    """Assess drug response considering star alleles AND common rsid genotypes.
+
+    Consumer genetic data uses rsid genotypes (A/G, C/T) rather than
+    CYP star alleles.  For well-known pharmacogenes we use genotype-based
+    heuristics:
+    - Homozygous reference → normal metabolizer
+    - Heterozygous at a known pharmacogene → intermediate metabolizer
+    - Homozygous non-reference → poor metabolizer
+    """
     if not genotype:
         return 'normal'
+
+    # If user is homozygous reference, they metabolize normally
+    if ref_allele and is_homozygous_reference(genotype, ref_allele):
+        return 'normal'
+
+    gt_upper = genotype.upper().replace('/', '')
+
+    # Star-allele patterns (from VCF or curated data)
     if gene == 'CYP2C9' and ('*2' in genotype or '*3' in genotype):
         return 'poor'
     elif gene == 'CYP2C19' and '*2' in genotype:
         return 'poor'
+
+    # Consumer rsid genotype heuristic for pharmacogenes:
+    # If user is heterozygous at a pharmacogene variant → intermediate
+    # If user is homozygous non-reference → poor metabolizer
+    pharmacogenes = {
+        'CYP2D6', 'CYP2C19', 'CYP2C9', 'CYP3A4', 'CYP3A5', 'CYP1A2',
+        'CYP2B6', 'DPYD', 'TPMT', 'UGT1A1', 'NUDT15', 'SLCO1B1',
+        'VKORC1', 'NAT2', 'CYP2A6', 'CYP4F2', 'G6PD',
+    }
+    if gene in pharmacogenes and len(gt_upper) == 2:
+        if gt_upper[0] != gt_upper[1]:
+            return 'intermediate'
+        else:
+            # Homozygous non-reference — poor metabolizer.
+            # We reach here only if ref_allele was unavailable or didn't
+            # match the genotype, so this is genuinely non-reference.
+            return 'poor'
     return 'normal'
 
 
@@ -301,9 +476,22 @@ async def generate_from_maps(
     items = []
     seen: set = set()
 
-    for variant in ctx.variants:
+    for _idx, variant in enumerate(ctx.variants):
+        if _idx > 0 and _idx % 100 == 0:
+            await asyncio.sleep(0)
         rsid = getattr(variant, 'rsid', None)
         if not rsid:
+            continue
+
+        # Extract genotype, ref allele, and annotation data early
+        # (used by both rsid and gene matching).
+        genotype = get_user_genotype(variant)
+        annotation_result = ctx.annotation_results.get(rsid)
+        effective_ref = _get_effective_ref_allele(variant, annotation_result)
+
+        # Skip homozygous reference — user doesn't carry any risk allele
+        # at this position. Other variants in the same gene can still match.
+        if effective_ref and is_homozygous_reference(genotype, effective_ref):
             continue
 
         # rsid-based matching
@@ -312,24 +500,54 @@ async def generate_from_maps(
             key = info[dedup_field]
             if key not in seen:
                 seen.add(key)
-                genotype = getattr(variant, 'genotype', '') or ''
-                ref_allele = getattr(getattr(variant, 'marker', None), 'ref_allele', None)
-                info_with_ref = {**info, '_ref_allele': ref_allele}
-                item = build_from_rsid(ctx.analysis_id, rsid, genotype, info_with_ref)
+                info_with_ref = {**info, '_ref_allele': effective_ref}
+                item = build_from_rsid(ctx.analysis_id, rsid, genotype or '', info_with_ref)
                 if item:
                     items.append(item)
 
-        # Gene-based matching from annotations
-        annotation_result = ctx.annotation_results.get(rsid)
+        # Gene-based matching from annotations — require a non-benign
+        # consequence to avoid generating insights for synonymous or
+        # intergenic variants that happen to sit in a known gene.
         gene, consequence, impact = extract_gene_and_consequence(
             annotation_result, ctx.rsid_gene_map
         )
         if gene and gene in gene_map:
+            # Filter: only moderate/high impact consequences qualify.
+            # When consequence data is unavailable (gene came from ClinVar
+            # rsid→gene map only), check ClinVar significance as a proxy
+            # — a known pathogenic variant in a mapped gene should not be
+            # silently dropped just because VEP data is missing.
+            if impact and impact.lower() in ('high', 'moderate'):
+                pass  # Qualifies
+            elif consequence and consequence in (
+                'missense_variant', 'stop_gained', 'frameshift_variant',
+                'splice_acceptor_variant', 'splice_donor_variant',
+                'stop_lost', 'start_lost', 'inframe_insertion',
+                'inframe_deletion', 'protein_altering_variant',
+            ):
+                pass  # Qualifies by consequence type
+            elif consequence is None and impact is None:
+                # No VEP data — check ClinVar significance as fallback
+                _cv_qualifies = False
+                if annotation_result and annotation_result.annotation_data:
+                    cv_local = annotation_result.annotation_data.get('annotations', {}).get('clinvar_local', {})
+                    if cv_local and cv_local.get('found'):
+                        sigs = cv_local.get('clinical_significances', [])
+                        sig_str = ' '.join(s.lower() for s in sigs)
+                        if any(kw in sig_str for kw in ('pathogenic', 'risk_factor', 'drug_response')):
+                            _cv_qualifies = True
+                if not _cv_qualifies:
+                    continue
+            else:
+                continue  # Skip benign/low-impact variants
+
             info = gene_map[gene]
             key = info[dedup_field]
             if key not in seen:
                 seen.add(key)
-                item = build_from_gene(ctx.analysis_id, rsid, gene, consequence, info)
+                # Pass genotype and ref allele so from_gene can apply zygosity
+                info_with_gt = {**info, '_ref_allele': effective_ref, '_genotype': genotype or ''}
+                item = build_from_gene(ctx.analysis_id, rsid, gene, consequence, info_with_gt)
                 if item:
                     items.append(item)
 

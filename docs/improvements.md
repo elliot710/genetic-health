@@ -1,8 +1,8 @@
 # Improvements & Refactoring Opportunities
 
-> **Analysis date:** March 16, 2026 (updated)
+> **Analysis date:** March 17, 2026 (updated)
 > **Original analysis:** March 15, 2026
-> **Scope:** Full-stack review of backend, frontend, database, infrastructure, and security
+> **Scope:** Full-stack review of backend, frontend, database, infrastructure, and security (incl. March 17 audit of scoring engine, variant matching, and insight generators)
 
 This document identifies concrete improvements organized by priority and effort. Each item explains the current state, the problem, and the recommended approach.
 
@@ -43,15 +43,6 @@ This document identifies concrete improvements organized by priority and effort.
 **Effort:** Medium (1-2 days)
 **Impact:** Critical — genetic data is highly sensitive PII
 
----
-
-### 1.3 ~~Secret Key Has Development Default~~ ✅ DONE
-
-> **Resolved:** March 16, 2026
-
-`core/auth.py` now raises `RuntimeError` if `SECRET_KEY` is not set. No more hardcoded default. Token expiry reduced to 120 minutes (access) with 7-day refresh tokens.
-
----
 
 ### 1.4 Missing Input Sanitization on File Upload
 
@@ -80,20 +71,6 @@ def _validate_variant(self, variant: dict) -> bool:
 
 ## 2. High-Priority Improvements
 
-### 2.1 ~~Extract `Dashboard.tsx` — God Component~~ ✅ DONE
-
-> **Resolved:** March 16, 2026
-
-`Dashboard.tsx` decomposed from ~1,900 LOC to ~1,050 LOC. Extracted 5 sub-components:
-- `dashboard/DashboardHeader.tsx` — user menu, theme toggle
-- `dashboard/DashboardSidebar.tsx` — navigation sidebar
-- `dashboard/DashboardOverview.tsx` — overview tab content
-- `dashboard/DeleteDataDialog.tsx` — confirmation dialog + deletion
-- `dashboard/NotificationToast.tsx` — toast notifications
-
-All 13+ category panels are now lazy-loaded via `React.lazy()` (see §4.4).
-
----
 
 ### 2.2 Duplicate Data Fetching Across Panels
 
@@ -122,20 +99,6 @@ Each panel fetches only its own data. Combined with TanStack Query, this gives o
 
 **Effort:** Medium (Option A: 1 day, Option B: 2-3 days, Option C: 3-5 days)
 **Impact:** High — reduces server load, improves perceived performance
-
----
-
-### 2.3 ~~Analysis Service is 2,700 LOC — Extract Insight Generators~~ ✅ DONE
-
-> **Resolved:** March 16, 2026
-
-`analysis_service.py` reduced from ~2,700 LOC to ~1,000 LOC. All 14 insight generators extracted to `services/insight_generators/`:
-- `health.py`, `drug_response.py`, `ancestry.py`, `carrier.py`
-- `rare_mutations.py`, `uncommon_mutations.py`, `methylation.py`, `detox.py`
-- `wellness.py`, `physical_traits.py`, `sports.py`, `nutrition.py`
-- `cognitive.py`, `personality.py`
-
-Each generator follows `async def generate(session, analysis_id, annotations, ...) -> List[Model]`.
 
 ---
 
@@ -175,14 +138,6 @@ eventSource.onmessage = (event) => {
 
 ---
 
-### 2.5 ~~Error Handling: Silent Failures in Frontend~~ ✅ DONE
-
-> **Resolved:** March 16, 2026
-
-`ErrorState` component added to `categories/shared.tsx` with icon, message, and optional retry button. Used across panels for fetch failure states.
-
----
-
 ### 2.6 Add Backend Integration Tests
 
 **Current state:** No test files found in the backend. The only test file is `_test_graph.py` at the project root (appears to be a one-off script).
@@ -209,14 +164,6 @@ Use `pytest-asyncio` + `httpx.AsyncClient` + test database fixture.
 ---
 
 ## 3. Medium-Priority Refactoring
-
-### 3.1 ~~Create a Shared API Client in Frontend~~ ✅ DONE
-
-> **Resolved:** March 16, 2026
-
-`frontend/src/lib/api.ts` provides `apiUrl()` and `apiFetch()` with centralized auth headers, error handling, and JSON parsing. Used across panels.
-
----
 
 ### 3.2 Consolidate Duplicate/Legacy Components (Partially Done)
 
@@ -255,14 +202,6 @@ Use these in the service layer for serialization/deserialization. The DB column 
 
 **Effort:** Medium (2-3 days)
 **Impact:** Medium — prevents silent data corruption, improves IDE autocomplete
-
----
-
-### 3.4 ~~Database: Add Soft Delete for Analyses~~ ✅ DONE
-
-> **Resolved:** March 16, 2026
-
-`deleted_at` timestamp column added to `genetic_analyses` (indexed). All delete endpoints now set `deleted_at` + `analysis_status='deleted'` instead of hard-deleting. All 20+ user-facing queries filter `deleted_at IS NULL`. Admin `POST /api/admin/purge-deleted?older_than_days=30` endpoint for manual hard-delete. Nightly background task auto-purges analyses soft-deleted > 30 days.
 
 ---
 
@@ -341,15 +280,15 @@ This gives visibility into bottlenecks without digging through logs.
 **Effort:** Medium (2-3 days)
 **Impact:** Medium — operational visibility
 
+Get started with Service Performance Monitoring
+A high-level monitoring dashboard that helps you cut down the time to identify and resolve anomalies and issues.
+Service Performance Monitoring aggregates tracing data into RED metrics and visualizes them in service and operation level dashboards.
+Service Performance Monitoring requires a Prometheus-compatible time series database
+
+https://www.jaegertracing.io/docs/2.16/architecture/spm/
+
 ---
 
-### 4.2 ~~Use Alembic's Multi-Head Strategy or Squash Migrations~~ ✅ DONE
-
-> **Resolved:** March 16, 2026
-
-Migrations squashed from 38 files to 4: `001_baseline` (full schema), `002_insight_indexes`, `003_drop_unused_indexes`, `004_dashboard_cache`. `init-db.sql` handles fresh installs.
-
----
 
 ### 4.3 Consider Materialized Views for Dashboard Data
 
@@ -367,14 +306,6 @@ Refresh after analysis completion. The dashboard-data endpoint reads from the vi
 
 **Effort:** Medium (2-3 days)
 **Impact:** Medium — faster dashboard loads for large datasets
-
----
-
-### 4.4 ~~Frontend: Code Splitting for Category Panels~~ ✅ DONE
-
-> **Resolved:** March 16, 2026
-
-17 panels lazy-loaded via `React.lazy()` + `Suspense` in `Dashboard.tsx`. Includes all 13 category panels plus `GenomicCharts`, `VariantSearch`, `SmartInsights`, and `KnowledgeGraph`.
 
 ---
 
@@ -457,9 +388,9 @@ app = FastAPI(lifespan=lifespan)
 |----------|-------|-------|
 | **Critical** | 2 | JWT in localStorage, File input validation |
 | **High** | 3 | Duplicate fetching, no tests, polling → SSE |
-| **Medium** | 6 | JSON type safety, soft delete, pharmgkb rename, N+1 queries, ClinPGx rate limit, legacy components (2 remain) |
+| **Medium** | 5 | JSON type safety, pharmgkb rename, N+1 queries, ClinPGx rate limit, legacy components (2 remain) |
 | **Low** | 6 | Tracing, materialized views, backups, lifespan API, health check, skeletons |
-| **✅ Resolved** | 8 | Hardcoded API URL, Secret Key default, Dashboard decomp, analysis_service extraction, ErrorState, API client, migration squash, code splitting |
+| **✅ Resolved** | 16 | Hardcoded API URL, Secret Key default, Dashboard decomp, analysis_service extraction, ErrorState, API client, migration squash, code splitting, ref_allele correction, zygosity fallback, scoring engine (AF=0 + weight floor + thresholds), drug response zygosity, carrier genotype check, auto-categorizer benign filter, assess_risk_level dead code, gene-match VEP fallback |
 
 ### Technical Debt Hotspots (by file)
 
@@ -495,9 +426,15 @@ The architecture has several strong design decisions that should be preserved:
 
 9. **Carrier deduplication** — rsid-based dedup in `CarrierStatusPanel` merges duplicate variants into single cards with combined condition names.
 
-10. **Consistent pathogenicity scoring** — `ScoringEngine` and standardized `pathogenicityScore` display across all 12+ panels.
+10. **Consistent pathogenicity scoring** — `ScoringEngine` with minimum weight floor, conflict detection, and ACMG-like classification. Composite scores displayed across all 12+ panels.
 
 11. **Dashboard cache** — Fingerprint-based invalidation with `dashboard_cache` table avoids redundant recomputation.
+
+12. **ref_allele correction pipeline** — Phase 2.5 back-fills `genetic_markers.ref_allele` from authoritative sources (gnomAD, Ensembl VEP, ClinVar, 1000G) after annotation. Critical for correct zygosity classification in all 14 insight generators.
+
+13. **Zygosity-aware insight generation** — All map-driven generators use `zygosity_adjust()` with true ref allele to escalate/de-escalate risk based on whether the user is homozygous reference, heterozygous, or homozygous alternate.
+
+14. **Significance-aware auto-categorization** — Condition-keyword rules exclude benign/likely_benign ClinVar variants and dynamically adjust risk multipliers based on actual clinical significance.
 
 12. **Database optimization** — Squashed migrations (4 files), targeted indexes, dropped 21GB unused indexes, PostgreSQL tuning.
 

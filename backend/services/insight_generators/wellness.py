@@ -14,9 +14,11 @@ async def generate_wellness_metrics(ctx: GeneratorContext) -> int:
         )
 
     def from_gene(aid, rsid, gene, consequence, info):
+        genotype = info.get('_genotype', '')
+        ref_allele = info.get('_ref_allele')
         return WellnessMetric(
             analysis_id=aid, metric_name=info['metric'],
-            genetic_predisposition=info['predisposition'],
+            genetic_predisposition=zygosity_adjust(info['predisposition'], genotype, ref_allele=ref_allele) if genotype else info['predisposition'],
             optimization_score=info['score'],
             lifestyle_recommendations=info['recommendations'],
             associated_variants=[rsid]

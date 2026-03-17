@@ -1,0 +1,64 @@
+# OpenTelemetry Collector configuration for DNA Toolkit
+#
+# Pipeline:
+#   Backend → OTLP (4318) → Collector → [Jaeger, spanmetrics connector]
+#                                         spanmetrics → Prometheus (8889)
+#
+# Jaeger reads RED metrics (Rate/Error/Duration) from Prometheus to power
+# the Service Performance Monitoring (SPM) dashboard.
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+connectors:
+  # Produces RED metrics from trace spans (rate, error rate, duration histograms)
+  spanmetrics:
+    histogram:
+      explicit:
+        buckets: [10ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s, 5s, 10s]
+    dimensions:
+      - name: http.method
+      - name: http.status_code
+      - name: http.route
+      - name: db.system
+      - name: db.name
+      - name: rpc.service
+    exemplars:
+      enabled: true
+    # Namespace prefix for Prometheus metrics
+    namespace: traces
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+exporters:
+  # Forward traces to Jaeger via OTLP gRPC
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+  # Expose RED metrics for Prometheus to scrape.
+  # No namespace here — spanmetrics already applies the "traces" namespace prefix.
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    enable_open_metrics: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/jaeger, spanmetrics]
+
+    metrics:
+      receivers: [spanmetrics]
+      processors: [batch]
+      exporters: [prometheus]

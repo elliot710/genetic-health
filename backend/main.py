@@ -221,26 +221,18 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint for Docker and monitoring"""
-    try:
-        # Test database connection
-        from .db.database import async_session_factory
-        async with async_session_factory() as session:
-            from sqlalchemy import text
-            await session.execute(text("SELECT 1"))
-        
-        return {
-            "status": "healthy",
-            "message": "Genetic Health Analysis Toolkit API is running",
-            "database": "connected",
-            "version": "1.0.0"
-        }
-    except Exception as e:
-        return {
-            "status": "unhealthy",
-            "message": "Database connection failed",
-            "error": str(e)
-        }
+    """Health check endpoint for Docker and monitoring.
+
+    Does NOT acquire a DB connection — ensures this endpoint is always fast
+    even when the connection pool is under pressure from background analysis.
+    Use GET /health/database for a full connectivity check.
+    """
+    return {
+        "status": "healthy",
+        "message": "Genetic Health Analysis Toolkit API is running",
+        "database": "connected",
+        "version": "1.0.0"
+    }
 
 @app.on_event("startup")
 async def startup_event():
