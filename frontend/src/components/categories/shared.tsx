@@ -440,13 +440,14 @@ interface VariantLinksProps {
   isDarkMode?: boolean
   alphaMissense?: { score?: number; classification?: string } | null
   clinvarCount?: number
+  genotype?: string
 }
 
 /**
  * Compact research database links with optional "View Details" dialog.
  * When token is provided, shows a button to open the annotation dialog.
  */
-export function VariantLinks({ rsid, gene, token, isDarkMode = false, alphaMissense, clinvarCount }: VariantLinksProps) {
+export function VariantLinks({ rsid, gene, token, isDarkMode = false, alphaMissense, clinvarCount, genotype }: VariantLinksProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const validRsid = rsid && rsid !== 'Unknown' && rsid !== 'Multiple' && rsid.startsWith('rs')
   const validGene =
@@ -525,6 +526,7 @@ export function VariantLinks({ rsid, gene, token, isDarkMode = false, alphaMisse
         <VariantDetailDialog
           rsid={rsid!}
           gene={validGene ? gene : undefined}
+          genotype={genotype}
           token={token}
           isDarkMode={isDarkMode}
           open={dialogOpen}
@@ -591,6 +593,7 @@ export function ClickableRsidBadge({ rsid, gene, genotype, token, isDarkMode = f
         <VariantDetailDialog
           rsid={rsid}
           gene={gene}
+          genotype={genotype}
           token={token}
           isDarkMode={isDarkMode}
           open={dialogOpen}

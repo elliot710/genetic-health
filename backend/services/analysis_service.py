@@ -191,7 +191,10 @@ class ComprehensiveAnalysisService:
                         ClinVarVariant.gene != '',
                         ClinVarVariant.gene != '-',
                     )
+                    # BUG-10: ORDER BY is required with DISTINCT ON to make
+                    # gene selection deterministic when a rsid has multiple rows.
                     .distinct(ClinVarVariant.rsid)
+                    .order_by(ClinVarVariant.rsid, ClinVarVariant.gene)
                 )
                 for row in result:
                     gene_map[row.rsid] = row.gene
@@ -340,7 +343,7 @@ class ComprehensiveAnalysisService:
             _completed_phases = {
                 'initializing': 0,
                 'annotating_variants': 0,   # Phase 2 was in progress (not done)
-                'enriching_bigquery': 1,     # Phase 2 done, Phase 3 in progress
+                'enriching_data': 1,         # Phase 2 done, Phase 3 in progress
                 'generating_insights': 2,    # Phases 2+3 done, Phase 4 in progress
                 'completed': 4,
             }

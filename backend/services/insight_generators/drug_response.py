@@ -64,6 +64,12 @@ async def generate_drug_responses(ctx: GeneratorContext) -> int:
                     ))
 
         if gene and gene in drug_gene_map:
+            # BUG-08: skip benign variants in the broad gene-map path.
+            # The rsid-map path is curated so benign there is less likely,
+            # but the gene-map is broad enough that benign variants would
+            # generate spurious drug warnings without this guard.
+            if profile and profile.is_benign:
+                continue
             info = drug_gene_map[gene]
             for drug_name, _template_response, rec in info['drugs']:
                 if drug_name in _PLACEHOLDER_DRUGS:

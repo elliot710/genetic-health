@@ -110,10 +110,12 @@ export default function Home() {
         const userData = await response.json()
         setToken('authenticated')
         setUser(userData)
-        
-        await loadExistingData()
+        setLoading(false)
+        // Load dashboard data in the background — don't block the spinner on it
+        loadExistingData()
       } else {
         setToken(null)
+        setLoading(false)
       }
     } catch (error) {
       if (retries > 0) {
@@ -122,7 +124,6 @@ export default function Home() {
       }
       console.error('Session check failed:', error)
       setToken(null)
-    } finally {
       setLoading(false)
     }
   }, [loadExistingData])

@@ -40,6 +40,7 @@ class ThousandGenomesLocalService:
     def __init__(self):
         self._variant_count: Optional[int] = None
         self._available: Optional[bool] = None
+        self._direct = None  # ThousandGenomesDirectService fallback when PG is empty
 
     @property
     def is_loaded(self) -> bool:
@@ -50,7 +51,9 @@ class ThousandGenomesLocalService:
         return self._variant_count or 0
 
     async def ensure_loaded(self) -> bool:
-        """Check that the thousand_genomes_variants table has data."""
+        """Check that the thousand_genomes_variants table has data.
+        Falls back to direct file cache when PG is empty.
+        """
         try:
             async with async_session_factory() as session:
                 result = await session.execute(
@@ -62,7 +65,20 @@ class ThousandGenomesLocalService:
             if self._available:
                 logger.info("1000G PG: %d variants available", self._variant_count)
             else:
-                logger.warning("1000G PG: table empty — run ETL import")
+                logger.warning(
+                    "1000G PG: table empty — trying direct file cache"
+                )
+                from .thousand_genomes_direct import get_thousand_genomes_direct_service
+                direct = get_thousand_genomes_direct_service()
+                ok = await direct.ensure_loaded()
+                if ok:
+                    self._direct = direct
+                    self._variant_count = direct.variant_count
+                    self._available = True
+                    logger.info(
+                        "1000G direct cache: %d variants available",
+                        direct.variant_count,
+                    )
             return self._available
         except Exception as e:
             logger.warning("1000G PG check failed: %s", e)
@@ -74,7 +90,13 @@ class ThousandGenomesLocalService:
     # ------------------------------------------------------------------
 
     async def lookup(self, rsid: str) -> Optional[Dict[str, Any]]:
-        """Look up a variant by rsID."""
+        """Look up a variant by rsID. Tries PG first, then direct cache."""
+        direct = self._direct
+        # If we only have the direct cache (PG empty), skip PG
+        if direct and not (self._variant_count and self._variant_count > direct.variant_count):
+            result = await direct.lookup(rsid)
+            if result and result.get("found"):
+                return result
         async with async_session_factory() as session:
             result = await session.execute(
                 select(ThousandGenomesVariant).where(ThousandGenomesVariant.rsid == rsid)
@@ -170,6 +192,19 @@ class ThousandGenomesLocalService:
 
         elapsed = _time.monotonic() - t0
         logger.info(f"  1000G complete: {found_count}/{total} found in {elapsed:.1f}s")
+
+        # If PG returned nothing, fill from direct-file cache
+        direct = self._direct
+        if direct and found_count == 0:
+            missed = [r for r, v in results.items() if v is None]
+            if missed:
+                direct_results = await direct.lookup_batch(missed)
+                for rsid_key, val in direct_results.items():
+                    if val and val.get("found"):
+                        results[rsid_key] = val
+                        found_count += 1
+                logger.info("  1000G direct fallback: %d/%d found", found_count, len(missed))
+
         return results
 
     # ------------------------------------------------------------------
@@ -183,6 +218,10 @@ class ThousandGenomesLocalService:
             val = getattr(row, f'af_{code}', None)
             if val is not None:
                 pop_freqs[code] = {"name": name, "af": val}
+
+        # Compute global AF as simple mean of available population AFs
+        pop_af_vals = [v["af"] for v in pop_freqs.values() if v.get("af") is not None]
+        global_af = sum(pop_af_vals) / len(pop_af_vals) if pop_af_vals else row.maf
 
         return {
             "found": True,
@@ -198,6 +237,7 @@ class ThousandGenomesLocalService:
             "mac": row.mac,
             "ancestral_allele": row.ancestral_allele,
             "population_frequencies": pop_freqs,
+            "global_af": global_af,
         }
 
 

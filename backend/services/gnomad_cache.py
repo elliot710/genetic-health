@@ -189,6 +189,28 @@ class GnomadCacheService:
                     files.append(p)
         return files
 
+    def _detect_genome_build(self, tsv_path: Path) -> Optional[str]:
+        """Read gzip header lines to detect the genome build annotation.
+
+        Returns 'GRCh38-v1.7' / 'GRCh37-v1.6' style token, or None.
+        """
+        try:
+            with gzip.open(str(tsv_path), 'rt', encoding='utf-8', errors='replace') as fh:
+                for i, line in enumerate(fh):
+                    if i > 60:
+                        break
+                    if not line.startswith('#'):
+                        break  # past header section
+                    for build_tag in ('GRCh38', 'GRCh37', 'hg38', 'hg19'):
+                        if build_tag in line:
+                            for token in line.split():
+                                if build_tag in token:
+                                    return token.strip().strip(',')
+                            return build_tag
+        except Exception as e:
+            logger.debug("gnomAD build detection failed for %s: %s", tsv_path.name, e)
+        return None
+
     async def _load_known_positions(self) -> Dict[Tuple[str, int], List[Tuple[str, str, str]]]:
         """Load all (chrom, pos) → [(rsid, ref, alt), ...] from genetic_markers.
 
@@ -223,6 +245,22 @@ class GnomadCacheService:
         tsv_files = self._discover_tsv_files()
         if not tsv_files:
             logger.warning("No tabix-indexed gnomAD TSV files found in %s", _GNOMAD_DATA_DIR)
+            return
+
+        # BUG-16: Detect genome build from the file header before scanning.
+        # User variant positions are on GRCh37 (23andMe/AncestryDNA chips).
+        # gnomAD CADD v4.x files are GRCh38 — position matching would yield 0 hits.
+        build = self._detect_genome_build(tsv_files[0])
+        if build and 'GRCh38' in build:
+            logger.error(
+                "gnomAD CADD file '%s' is annotated on %s but user variant "
+                "positions are GRCh37/hg19.  Cache would always build empty.\n"
+                "  \u2192 Download the GRCh37 version from:\n"
+                "    https://krishna.gs.washington.edu/download/CADD/v1.6/GRCh37/"
+                "gnomad.genomes.r2.1.1.snv_inclAnno.tsv.gz\n"
+                "  Then delete the existing cache to force a rebuild.",
+                tsv_files[0].name, build,
+            )
             return
 
         marker_fp = await self._get_marker_fingerprint()

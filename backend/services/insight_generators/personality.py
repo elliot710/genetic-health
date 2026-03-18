@@ -1,13 +1,14 @@
 """Personality trait insight generator."""
 from ...db.models import PersonalityTrait
-from .base import GeneratorContext, generate_from_maps, zygosity_adjust
+from .base import GeneratorContext, generate_from_maps, zygosity_adjust, boost_if_pathogenic
 
 
 async def generate_personality_traits(ctx: GeneratorContext) -> int:
     def from_rsid(aid, rsid, genotype, info):
+        base = boost_if_pathogenic(info['tendency'], info.get('_pathogenicity_score'))
         return PersonalityTrait(
             analysis_id=aid, trait_name=info['trait'],
-            genetic_tendency=zygosity_adjust(info['tendency'], genotype, ref_allele=info.get('_ref_allele')),
+            genetic_tendency=zygosity_adjust(base, genotype, ref_allele=info.get('_ref_allele')),
             confidence_level=info['confidence'],
             associated_variants=[rsid],
             behavioral_insights=info['insights']
@@ -16,9 +17,10 @@ async def generate_personality_traits(ctx: GeneratorContext) -> int:
     def from_gene(aid, rsid, gene, consequence, info):
         genotype = info.get('_genotype', '')
         ref_allele = info.get('_ref_allele')
+        base = boost_if_pathogenic(info['tendency'], info.get('_pathogenicity_score'))
         return PersonalityTrait(
             analysis_id=aid, trait_name=info['trait'],
-            genetic_tendency=zygosity_adjust(info['tendency'], genotype, ref_allele=ref_allele) if genotype else info['tendency'],
+            genetic_tendency=zygosity_adjust(base, genotype, ref_allele=ref_allele) if genotype else base,
             confidence_level=info['confidence'],
             associated_variants=[rsid],
             behavioral_insights=info['insights']

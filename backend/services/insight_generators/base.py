@@ -95,9 +95,14 @@ def extract_gene_and_consequence(
                 if transcript_consequences:
                     tc = transcript_consequences[0]
                     gene = tc.get('gene_symbol')
-                    if gene:
-                        consequence = tc.get('consequence_terms', [None])[0] if tc.get('consequence_terms') else None
-                        impact = tc.get('impact')
+                    consequence = (tc.get('consequence_terms') or [None])[0]
+                    impact = tc.get('impact')
+                    # Always extract consequence even when gene_symbol is absent.
+                    # Local VEP VCF files use a simplified CSQ format that omits SYMBOL,
+                    # so we fall back to rsid_gene_map for the gene name.
+                    if consequence or gene:
+                        if not gene and annotation_result.rsid:
+                            gene = rsid_gene_map.get(annotation_result.rsid)
                         return gene, consequence, impact
 
         # 2. Try ClinVar local annotation data
@@ -164,7 +169,7 @@ def extract_frequency(annotation_result) -> float:
         # 3. 1000 Genomes — use the global allele frequency
         tkg = annotations.get('thousand_genomes', {})
         if tkg and tkg.get('found'):
-            af_global = tkg.get('af_global') or tkg.get('af')
+            af_global = tkg.get('global_af') or tkg.get('af_global') or tkg.get('maf')
             if af_global is not None and af_global > 0:
                 return af_global
     except (KeyError, TypeError):
@@ -471,6 +476,12 @@ _LEVEL_ALIASES = {
     'elevated risk': 'high',
     'elevated_risk': 'high',
     'normal': 'average',
+    # Auto-categorizer values missing from previous version (BUG-06)
+    'mildly_reduced': 'average',
+    'b12_dependent': 'moderate',
+    'slow_processing': 'moderate',
+    'variant_detected': 'moderate',
+    'sensitive': 'moderate',
 }
 
 
@@ -489,6 +500,10 @@ def zygosity_adjust(level: str, genotype: Optional[str], *, ref_allele: Optional
     resolved = _LEVEL_ALIASES.get(normalised, normalised)
     idx = _SEVERITY_IDX.get(resolved)
     if idx is None:
+        logger.debug(
+            "zygosity_adjust: unrecognised level %r (resolved %r) — returning unchanged",
+            level, resolved,
+        )
         return level  # not on the ladder — nothing to shift
 
     if not genotype or is_no_call_genotype(genotype):
@@ -498,8 +513,12 @@ def zygosity_adjust(level: str, genotype: Optional[str], *, ref_allele: Optional
     elif is_heterozygous(genotype):
         new_idx = idx  # baseline — no change
     else:
-        # Homozygous non-reference
-        new_idx = min(len(_SEVERITY_LADDER) - 1, idx + steps)
+        # Homozygous non-reference — only escalate when the ref allele is known
+        # (BUG-07: without ref we cannot distinguish hom-alt from hom-ref)
+        if ref_allele is None:
+            new_idx = idx  # preserve baseline; cannot determine true zygosity
+        else:
+            new_idx = min(len(_SEVERITY_LADDER) - 1, idx + steps)
 
     result = _SEVERITY_LADDER[new_idx]
     # Preserve original casing style (Title Case if original was)
@@ -511,6 +530,35 @@ def zygosity_adjust(level: str, genotype: Optional[str], *, ref_allele: Optional
 # ---------------------------------------------------------------------------
 # Scoring / recommendation helpers
 # ---------------------------------------------------------------------------
+
+def boost_if_pathogenic(level: str, pathogenicity_score: Optional[Dict]) -> str:
+    """Escalate a trait/risk level by one step when composite score >= 0.80.
+
+    Used by non-health generators (sports, nutrition, wellness, …) so that a
+    ClinVar-confirmed pathogenic variant at a mapped locus generates a higher
+    trait level than the registry default — without invoking the full
+    assess_risk_level() logic (which requires a risk_multiplier).
+
+    BUG-13 fix: this bridges the gap between zygosity_adjust() (which only
+    considers genotype) and pathogenicity-aware scoring.
+    """
+    if not pathogenicity_score or not isinstance(pathogenicity_score, dict):
+        return level
+    composite = pathogenicity_score.get('composite_score', 0.0)
+    if composite < 0.80:
+        return level
+    normalised = level.strip().lower().replace(' ', '_')
+    resolved = _LEVEL_ALIASES.get(normalised, normalised)
+    idx = _SEVERITY_IDX.get(resolved)
+    if idx is None:
+        return level  # not on ladder — cannot escalate
+    new_idx = min(len(_SEVERITY_LADDER) - 1, idx + 1)
+    result = _SEVERITY_LADDER[new_idx]
+    # Preserve casing style
+    if level and level[0].isupper():
+        result = result.replace('_', ' ').title()
+    return result
+
 
 def assess_risk_level(genotype: str, risk_multiplier: float, ref_allele: Optional[str] = None,
                       pathogenicity_score: Optional[Dict] = None) -> str:
@@ -679,7 +727,17 @@ async def generate_from_maps(
             key = info[dedup_field]
             if key not in seen:
                 seen.add(key)
-                info_with_ref = {**info, '_ref_allele': effective_ref}
+                # BUG-13: pass path_score so non-health generators can call
+                # boost_if_pathogenic() before zygosity_adjust().
+                _prof = ctx.variant_profiles.get(rsid)
+                _path_score = (
+                    _prof.pathogenicity_score if _prof
+                    else (
+                        annotation_result.annotation_data.get('pathogenicity_score')
+                        if annotation_result and annotation_result.annotation_data else None
+                    )
+                )
+                info_with_ref = {**info, '_ref_allele': effective_ref, '_pathogenicity_score': _path_score}
                 item = build_from_rsid(ctx.analysis_id, rsid, genotype or '', info_with_ref)
                 if item:
                     items.append(item)
@@ -724,8 +782,16 @@ async def generate_from_maps(
             key = info[dedup_field]
             if key not in seen:
                 seen.add(key)
-                # Pass genotype and ref allele so from_gene can apply zygosity
-                info_with_gt = {**info, '_ref_allele': effective_ref, '_genotype': genotype or ''}
+                # Pass genotype, ref allele, and pathogenicity score (BUG-13)
+                _prof = ctx.variant_profiles.get(rsid)
+                _path_score = (
+                    _prof.pathogenicity_score if _prof
+                    else (
+                        annotation_result.annotation_data.get('pathogenicity_score')
+                        if annotation_result and annotation_result.annotation_data else None
+                    )
+                )
+                info_with_gt = {**info, '_ref_allele': effective_ref, '_genotype': genotype or '', '_pathogenicity_score': _path_score}
                 item = build_from_gene(ctx.analysis_id, rsid, gene, consequence, info_with_gt)
                 if item:
                     items.append(item)

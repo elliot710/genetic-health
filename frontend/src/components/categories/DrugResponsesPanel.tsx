@@ -221,7 +221,7 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
                     )}
 
                     {drug.variants?.[0] && <PathogenicityBar rsid={drug.variants[0]} pathogenicityMap={data?.pathogenicity_map} theme={theme} />}
-                    <VariantLinks rsid={drug.variants?.[0]} gene={drug.gene} token={token} isDarkMode={isDarkMode} alphaMissense={drug.variants?.[0] ? data?.alpha_missense_map?.[drug.variants[0]] : undefined} clinvarCount={drug.variants?.[0] ? data?.clinvar_count_map?.[drug.variants[0]] : undefined} />
+                    <VariantLinks rsid={drug.variants?.[0]} gene={drug.gene} token={token} isDarkMode={isDarkMode} alphaMissense={drug.variants?.[0] ? data?.alpha_missense_map?.[drug.variants[0]] : undefined} clinvarCount={drug.variants?.[0] ? data?.clinvar_count_map?.[drug.variants[0]] : undefined} genotype={drug.variants?.[0] ? data?.genotype_map?.[drug.variants[0]] : undefined} />
                   </div>
                 )}
               </div>

@@ -5,7 +5,7 @@ from ...db.models import RareMutation
 from .base import (
     GeneratorContext, extract_gene_and_consequence, extract_frequency,
     get_user_genotype, _get_effective_ref_allele, is_homozygous_reference,
-    is_no_call_genotype,
+    is_no_call_genotype, is_indel_genotype,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,6 +62,14 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
         # but will mark it as unknown in the output
         if freq is not None and freq > 0.01:
             continue
+
+        # Allele verification: confirm the user's genotype contains the ClinVar-
+        # recorded pathogenic allele. Consumer CSV data can have ref=alt entries
+        # that survive the hom-ref check when the reference allele is unresolved.
+        if cv_local and cv_local.get('found') and user_gt and not is_indel_genotype(user_gt):
+            _cv_alt = (cv_local.get('alt_allele') or cv_local.get('alternate_allele') or '').strip().upper()
+            if _cv_alt and _cv_alt not in user_gt.upper():
+                continue  # User doesn't carry this ClinVar-reported pathogenic allele
 
         # Extract gene and consequence (prefer profile's pre-computed values)
         if profile and profile.gene:
@@ -124,6 +132,12 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
 
         # Skip benign/likely_benign — not clinically relevant as rare findings
         if clinical_significance in ('benign', 'likely_benign'):
+            continue
+
+        # For ambiguous classifications, require known population frequency to
+        # avoid flooding results with variants of entirely unknown rarity.
+        # Pathogenic/likely_pathogenic are retained even without frequency data.
+        if freq is None and clinical_significance not in ('pathogenic', 'likely_pathogenic'):
             continue
 
         if not gene:

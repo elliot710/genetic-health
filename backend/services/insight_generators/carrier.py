@@ -68,6 +68,7 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
     carrier_rsid_map, _ = ctx.get_maps('carrier')
     carrier_results = []
     seen_conditions: set = set()
+    seen_gene_variants: set = set()  # (rsid, gene) pairs — one entry per gene per variant
 
     for variant in ctx.variants:
         variant_rsid = getattr(variant, 'rsid', None)
@@ -79,7 +80,13 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
         user_gt = get_user_genotype(variant)
         if is_no_call_genotype(user_gt):
             continue
-        ref_allele = get_ref_allele(variant)
+        # BUG-09: prefer profile.effective_ref (annotation-resolved) over
+        # get_ref_allele which reads raw marker.ref_allele and may be None/N
+        profile = ctx.variant_profiles.get(variant_rsid)
+        if profile:
+            ref_allele = profile.effective_ref
+        else:
+            ref_allele = get_ref_allele(variant)
         if is_homozygous_reference(user_gt, ref_allele):
             continue
 
@@ -137,27 +144,42 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
         if status == 'unaffected':
             continue
 
-        for gc in gene_conditions:
-            disease = gc.get('disease', '')
-            if not disease or disease in seen_conditions or disease.lower() == 'not provided':
-                continue
-            seen_conditions.add(disease)
+        # Deduplicate at gene+variant level: one carrier entry per (rsid, gene) pair.
+        # This prevents disease-subtype explosion where a single rsid maps to many
+        # ClinVar disease names (e.g. APOE rs405509 → multiple Alzheimer subtypes).
+        # _classify_carrier_status() already verified the user carries the alt allele.
+        gene_name = (cv_local.get('genes') or [''])[0]
+        gv_key = (variant_rsid, gene_name or variant_rsid)
+        if gv_key in seen_gene_variants:
+            continue
+        seen_gene_variants.add(gv_key)
 
-            inheritance = 'autosomal_recessive'
-            if 'dominant' in disease.lower():
-                inheritance = 'autosomal_dominant'
-            elif 'x-linked' in disease.lower():
-                inheritance = 'x_linked'
+        # Take the first meaningful disease name for this gene+variant combination
+        diseases = [
+            gc.get('disease', '') for gc in gene_conditions
+            if gc.get('disease') and
+            gc.get('disease', '').lower() not in ('not provided', 'not specified')
+        ]
+        disease = diseases[0] if diseases else gene_name
+        if not disease or disease in seen_conditions:
+            continue
+        seen_conditions.add(disease)
 
-            needs_counseling = 'pathogenic' in sig_lower and not ('benign' in sig_lower)
-            carrier_results.append(CarrierStatus(
-                analysis_id=ctx.analysis_id,
-                condition=disease,
-                carrier_status=status,
-                inheritance_pattern=inheritance,
-                associated_variants=[variant_rsid],
-                genetic_counseling_recommended=needs_counseling
-            ))
+        inheritance = 'autosomal_recessive'
+        if 'dominant' in disease.lower():
+            inheritance = 'autosomal_dominant'
+        elif 'x-linked' in disease.lower():
+            inheritance = 'x_linked'
+
+        needs_counseling = 'pathogenic' in sig_lower and not ('benign' in sig_lower)
+        carrier_results.append(CarrierStatus(
+            analysis_id=ctx.analysis_id,
+            condition=disease,
+            carrier_status=status,
+            inheritance_pattern=inheritance,
+            associated_variants=[variant_rsid],
+            genetic_counseling_recommended=needs_counseling
+        ))
 
     # Prioritize counseling-recommended conditions
     carrier_results.sort(key=lambda c: (0 if c.genetic_counseling_recommended else 1, c.condition))

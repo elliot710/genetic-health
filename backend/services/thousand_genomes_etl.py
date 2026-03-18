@@ -37,8 +37,7 @@ CHUNK_SIZE = 50_000
 
 _DATA_DIR = Path(os.environ.get(
     "TKG_DATA_DIR",
-    os.path.join(os.path.dirname(__file__), "..", "..", "data_sources", "ensembl",
-                 "homo_sapiens", "variation", "vcf_vep"),
+    os.path.join(os.path.dirname(__file__), "..", "..", "data_sources", "1000G"),
 ))
 
 _DB_DSN = os.getenv(

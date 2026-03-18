@@ -31,6 +31,7 @@ class ClinVarLocalService:
     def __init__(self):
         self._variant_count: Optional[int] = None
         self._available: Optional[bool] = None
+        self._direct = None  # ClinVarDirectService fallback when PG is empty
 
     # ------------------------------------------------------------------
     # Compat properties (match old interface)
@@ -63,7 +64,9 @@ class ClinVarLocalService:
     # ------------------------------------------------------------------
 
     async def ensure_loaded(self) -> bool:
-        """Check that the clinvar_variants table has data."""
+        """Check that the clinvar_variants table has data.
+        Falls back to the direct-file SQLite cache when PG is empty.
+        """
         try:
             async with async_session_factory() as session:
                 result = await session.execute(
@@ -74,7 +77,20 @@ class ClinVarLocalService:
             if self._available:
                 logger.info("ClinVar PG: %d rows available", self._variant_count)
             else:
-                logger.warning("ClinVar PG: table empty — run ETL import first")
+                logger.warning(
+                    "ClinVar PG: table empty — trying direct file cache"
+                )
+                from .clinvar_direct import get_clinvar_direct_service
+                direct = get_clinvar_direct_service()
+                ok = await direct.ensure_loaded()
+                if ok:
+                    self._direct = direct
+                    self._variant_count = direct.variant_count
+                    self._available = True
+                    logger.info(
+                        "ClinVar direct cache: %d variants available",
+                        direct.variant_count,
+                    )
             return self._available
         except Exception as e:
             logger.warning("ClinVar PG check failed: %s", e)
@@ -82,16 +98,26 @@ class ClinVarLocalService:
             return False
 
     # ------------------------------------------------------------------
-    # Core lookup
+    # Core lookup (PG primary, direct-file fallback)
     # ------------------------------------------------------------------
 
     async def lookup(self, rsid: str) -> Optional[Dict[str, Any]]:
-        """Look up a single rsid. Returns same format as old in-memory version."""
+        """Look up a single rsid. Tries PG first, then direct cache."""
+        # Try PG
+        direct = getattr(self, "_direct", None)
+        if self._variant_count and (not direct or self._variant_count > (direct.variant_count or 0)):
+            async with async_session_factory() as session:
+                result = await self._lookup_impl(session, rsid)
+                if result and result.get("found"):
+                    return result
+        # Fallback to direct-file cache
+        if direct:
+            return await direct.lookup(rsid)
         async with async_session_factory() as session:
             return await self._lookup_impl(session, rsid)
 
     async def lookup_batch(self, rsids: List[str]) -> Dict[str, Optional[Dict[str, Any]]]:
-        """Batch lookup using IN-clause. Returns {rsid: result_or_none}."""
+        """Batch lookup using IN-clause. Falls back to direct cache for misses."""
         if not rsids:
             return {}
         results: Dict[str, Optional[Dict[str, Any]]] = {}
@@ -176,6 +202,21 @@ class ClinVarLocalService:
 
         elapsed = _time.monotonic() - t0
         logger.info(f"  ClinVar Local complete: {found_count}/{total} found in {elapsed:.1f}s")
+
+        # If PG returned nothing and we have a direct-file cache, fill in misses
+        direct = getattr(self, "_direct", None)
+        if direct and found_count == 0:
+            missed = [r for r, v in results.items() if not v or not v.get("found")]
+            if missed:
+                direct_results = await direct.lookup_batch(missed)
+                for rsid_key, val in direct_results.items():
+                    if val and val.get("found"):
+                        results[rsid_key] = val
+                        found_count += 1
+                logger.info(
+                    "  ClinVar direct fallback: %d/%d found", found_count, len(missed)
+                )
+
         return results
 
     def _aggregate_rows(

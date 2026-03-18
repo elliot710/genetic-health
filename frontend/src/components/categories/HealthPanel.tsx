@@ -418,7 +418,7 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                                   </div>
                                 )}
 
-                                <VariantLinks rsid={variant} gene={risk.gene} token={token} isDarkMode={isDarkMode} alphaMissense={variant ? data?.alpha_missense_map?.[variant] : undefined} clinvarCount={variant ? data?.clinvar_count_map?.[variant] : undefined} />
+                                <VariantLinks rsid={variant} gene={risk.gene} token={token} isDarkMode={isDarkMode} alphaMissense={variant ? data?.alpha_missense_map?.[variant] : undefined} clinvarCount={variant ? data?.clinvar_count_map?.[variant] : undefined} genotype={variant ? data?.genotype_map?.[variant] : undefined} />
                               </div>
                             )
                           })}

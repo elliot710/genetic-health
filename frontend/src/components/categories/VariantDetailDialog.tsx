@@ -198,6 +198,7 @@ interface VariantDetails {
 interface VariantDetailDialogProps {
   rsid: string
   gene?: string
+  genotype?: string
   token?: string
   isDarkMode?: boolean
   open: boolean
@@ -299,6 +300,7 @@ function confidenceBadge(conf: string): string {
 export default function VariantDetailDialog({
   rsid,
   gene,
+  genotype,
   token,
   isDarkMode = false,
   open,
@@ -428,7 +430,7 @@ export default function VariantDetailDialog({
             {/* ── Location & Alleles ── */}
             {(details.chromosome || details.allele_string) && (
               <div className={`${cardBg} rounded-xl p-4 border ${border}`}>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm">
                   {details.chromosome && (
                     <div>
                       <span className={`text-xs font-medium ${textSecondary} block`}>Chromosome</span>
@@ -443,7 +445,7 @@ export default function VariantDetailDialog({
                   )}
                   {details.allele_string && (
                     <div>
-                      <span className={`text-xs font-medium ${textSecondary} block`}>Alleles</span>
+                      <span className={`text-xs font-medium ${textSecondary} block`}>Alleles (Ref/Alt)</span>
                       <span className={`font-mono ${textPrimary}`}>{details.allele_string}</span>
                     </div>
                   )}
@@ -453,7 +455,76 @@ export default function VariantDetailDialog({
                       <span className={textPrimary}>{details.most_severe_consequence}</span>
                     </div>
                   )}
+                  {genotype && (() => {
+                    const parts = details.allele_string?.split('/') ?? []
+                    const ref = parts[0]?.toUpperCase()
+                    const alt = parts[1]?.toUpperCase()
+                    const alleles = genotype.toUpperCase().split('')
+                    return (
+                      <div>
+                        <span className={`text-xs font-medium ${textSecondary} block`}>Your Genotype</span>
+                        <div className="flex items-center gap-1 font-mono mt-0.5">
+                          {alleles.map((a, i) => {
+                            const isRef = ref && a === ref
+                            const isAlt = alt && a === alt
+                            return (
+                              <span
+                                key={i}
+                                title={isRef ? 'Reference allele' : isAlt ? 'Alternate allele' : 'Unknown allele'}
+                                className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs font-bold border ${
+                                  isAlt
+                                    ? 'bg-orange-500/20 text-orange-300 border-orange-500/40'
+                                    : isRef
+                                      ? 'bg-green-500/15 text-green-400 border-green-500/30'
+                                      : 'bg-gray-500/15 text-gray-400 border-gray-500/30'
+                                }`}
+                              >
+                                {a}
+                              </span>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )
+                  })()}
                 </div>
+                {/* Genotype interpretation row */}
+                {genotype && details.allele_string && (() => {
+                  const parts = details.allele_string.split('/')
+                  const ref = parts[0]?.toUpperCase()
+                  const alt = parts[1]?.toUpperCase()
+                  const alleles = genotype.toUpperCase().split('')
+                  const altCount = alleles.filter(a => a === alt).length
+                  const refCount = alleles.filter(a => a === ref).length
+                  const hasAlt = altCount > 0
+                  const zygosity =
+                    refCount === alleles.length ? 'homozygous reference' :
+                    altCount === alleles.length ? 'homozygous alternate' :
+                    refCount > 0 && hasAlt ? 'heterozygous' : null
+                  const implication =
+                    zygosity === 'homozygous reference'
+                      ? `Your genotype (${genotype}) matches the reference allele (${ref}) on both chromosomes — this is the common variant with no change from the reference genome.`
+                      : zygosity === 'homozygous alternate'
+                        ? `Your genotype (${genotype}) carries the alternate allele (${alt}) on both chromosomes — you have two copies of the variant. The reference allele (${ref}) is absent. This is the highest-dosage form of this variant.`
+                        : zygosity === 'heterozygous'
+                          ? `Your genotype (${genotype}) is one copy of the reference (${ref}) and one copy of the alternate (${alt}) — you carry one variant allele. This is the heterozygous state.`
+                          : null
+                  if (!implication) return null
+                  return (
+                    <div className={`mt-3 pt-3 border-t ${border} flex items-start gap-2`}>
+                      <span className={`text-xs leading-relaxed ${textSecondary}`}>
+                        <span className={`font-semibold ${
+                          zygosity === 'homozygous alternate' ? 'text-orange-400' :
+                          zygosity === 'heterozygous' ? 'text-yellow-400' : 'text-green-400'
+                        }`}>
+                          {zygosity?.replace(/\b\w/g, c => c.toUpperCase())}
+                        </span>
+                        {' — '}
+                        {implication}
+                      </span>
+                    </div>
+                  )
+                })()}
               </div>
             )}
 

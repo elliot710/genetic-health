@@ -246,7 +246,7 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
                     )}
 
                     {trait.gene?.startsWith('rs') && <PathogenicityBar rsid={trait.gene} pathogenicityMap={data?.pathogenicity_map} theme={theme} />}
-                    <VariantLinks rsid={trait.gene?.startsWith('rs') ? trait.gene : undefined} gene={!trait.gene?.startsWith('rs') ? trait.gene : undefined} token={token} isDarkMode={isDarkMode} alphaMissense={trait.gene?.startsWith('rs') ? data?.alpha_missense_map?.[trait.gene] : undefined} clinvarCount={trait.gene?.startsWith('rs') ? data?.clinvar_count_map?.[trait.gene] : undefined} />
+                    <VariantLinks rsid={trait.gene?.startsWith('rs') ? trait.gene : undefined} gene={!trait.gene?.startsWith('rs') ? trait.gene : undefined} token={token} isDarkMode={isDarkMode} alphaMissense={trait.gene?.startsWith('rs') ? data?.alpha_missense_map?.[trait.gene] : undefined} clinvarCount={trait.gene?.startsWith('rs') ? data?.clinvar_count_map?.[trait.gene] : undefined} genotype={trait.gene?.startsWith('rs') ? data?.genotype_map?.[trait.gene] : undefined} />
                   </div>
                 )}
               </div>

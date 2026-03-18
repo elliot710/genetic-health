@@ -263,7 +263,7 @@ class ScoringEngine:
         if not data:
             return None
 
-        am_score = data.get("score") or data.get("pathogenicity_score")
+        am_score = data.get("am_pathogenicity") or data.get("score") or data.get("pathogenicity_score")
         if am_score is None:
             return None
 
@@ -273,7 +273,7 @@ class ScoringEngine:
             return None
 
         # AlphaMissense score is already 0–1 (higher = more pathogenic)
-        classification = data.get("classification", "")
+        classification = data.get("am_class") or data.get("classification", "")
         return SourceEvidence(
             source="alpha_missense", score=am_score,
             weight=_SOURCE_WEIGHTS["alpha_missense"],
@@ -330,6 +330,41 @@ class ScoringEngine:
         if has_clinvar_api and has_clinvar_local:
             # Prefer API ClinVar (more structured), drop local
             evidences = [e for e in evidences if e.source != "clinvar_local"]
+
+        # BUG-12: ClinVar authoritative override.
+        # When ClinVar asserts Pathogenic (score >= 0.80) and no other source
+        # calls the variant clearly Benign, preserve the ClinVar classification
+        # rather than diluting it through MIN_WEIGHT_FLOOR.
+        # (ACMG 2015: a ClinVar Pathogenic assertion is PVS1-level evidence.)
+        clinvar_evs = [e for e in evidences if e.source in ("clinvar", "clinvar_local")]
+        if clinvar_evs:
+            best_cv = max(clinvar_evs, key=lambda e: e.score)
+            has_benign_conflict = any(
+                e.score < 0.30
+                for e in evidences
+                if e.source not in ("clinvar", "clinvar_local")
+            )
+            if best_cv.score > 0.80 and not has_benign_conflict:
+                conflicts = self._detect_conflicts(evidences)
+                total_w = sum(e.weight for e in evidences)
+                result.composite_score = best_cv.score
+                result.classification = self._classify(best_cv.score)
+                result.evidence_count = len(evidences)
+                result.total_weight = total_w
+                result.sources = {
+                    e.source: {
+                        "score": round(e.score, 4),
+                        "weight": e.weight,
+                        "label": e.label,
+                        "raw_value": e.raw_value,
+                    }
+                    for e in evidences
+                }
+                result.conflicts = conflicts
+                result.confidence = self._compute_confidence(
+                    len(evidences), total_w, len(conflicts) * 0.15
+                )
+                return result
 
         # Weighted average with minimum weight floor to prevent
         # single-source inflation (e.g. ClinVar-only = 0.30 weight
