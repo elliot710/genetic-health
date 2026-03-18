@@ -428,7 +428,7 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
                       <React.Fragment key={rsid}>
                         <PathogenicityBar rsid={rsid} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                         <div className="mb-2 flex items-center gap-2">
-                          <VariantLinks rsid={rsid} gene={carrier.gene} token={token} isDarkMode={isDarkMode} />
+                          <VariantLinks rsid={rsid} gene={carrier.gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} />
                         </div>
                       </React.Fragment>
                     ))}
@@ -438,6 +438,7 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
                       <VariantDetailDialog
                         rsid={openDialogRsid}
                         gene={carrier.gene}
+                        genotype={data?.genotype_map?.[openDialogRsid]}
                         token={token}
                         isDarkMode={isDarkMode}
                         open={true}

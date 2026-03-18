@@ -931,6 +931,15 @@ class ComprehensiveAnalysisService:
 
         sources = await load_local_sources(enabled_sources)
         active = sources.active_names
+        all_configured = set(enabled_sources or []) & {
+            'clinvar_local', 'gnomad', 'ensembl', 'thousand_genomes',
+            'alpha_missense', 'gnomad_tx',
+        }
+        not_loaded = all_configured - set(active)
+        logger.info(
+            f"Local data sources: {', '.join(sorted(active)) or 'none'} loaded"
+            + (f" | not available: {', '.join(sorted(not_loaded))}" if not_loaded else "")
+        )
         if not active:
             logger.info("Local source backfill: no local sources loaded")
             return

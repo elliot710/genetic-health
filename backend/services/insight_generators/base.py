@@ -226,6 +226,65 @@ def get_annotation_ref_allele(annotation_result) -> Optional[str]:
     return None
 
 
+def get_annotation_allele_parts(annotation_result) -> tuple:
+    """Return (ref, alt) alleles from annotations, including '-' for indels.
+
+    Unlike get_annotation_ref_allele(), this does NOT filter out '-' chars,
+    so callers can distinguish insertion vs deletion variants for correct
+    consumer D/I code interpretation.
+    """
+    if not annotation_result or not annotation_result.annotation_data:
+        return (None, None)
+
+    annotations = annotation_result.annotation_data.get('annotations', {})
+
+    # Ensembl VEP — allele_string format: "REF/ALT" or "REF/ALT1,ALT2"
+    ensembl = annotations.get('ensembl', {})
+    data_list = ensembl.get('data', [])
+    if data_list:
+        allele_str = data_list[0].get('allele_string', '')
+        if '/' in allele_str:
+            parts = allele_str.split('/', 1)
+            ref = parts[0].strip()
+            alt = parts[1].split(',')[0].strip()  # Take first alt for multi-allelic
+            if ref and alt:
+                return (ref.upper(), alt.upper())
+
+    # gnomAD — has ref and alt columns
+    gnomad = annotations.get('gnomad', {})
+    if gnomad and gnomad.get('found'):
+        ref = gnomad.get('ref', '')
+        alt = gnomad.get('alt', '')
+        if ref and alt:
+            return (ref.strip().upper(), alt.strip().upper())
+
+    # ClinVar local — has explicit ref/alt alleles
+    cv = annotations.get('clinvar_local', {})
+    if cv and cv.get('found'):
+        ref = cv.get('ref_allele') or cv.get('reference_allele') or ''
+        alt = cv.get('alt_allele') or cv.get('alternate_allele') or ''
+        if ref and alt:
+            return (ref.strip().upper(), alt.strip().upper())
+
+    return (None, None)
+
+
+def indel_d_is_ref(ref_allele: str | None, alt_allele: str | None) -> bool | None:
+    """For consumer D/I indel codes, determine if D maps to the reference allele.
+
+    D = shorter/deletion allele, I = longer/insertion allele.
+    Returns True if D=ref (insertion variant), False if D=alt (deletion variant),
+    None if we can't determine.
+    """
+    if not ref_allele or not alt_allele:
+        return None
+    ref_len = 0 if ref_allele in ('-', '.') else len(ref_allele)
+    alt_len = 0 if alt_allele in ('-', '.') else len(alt_allele)
+    if ref_len == alt_len:
+        return None  # Not an indel or ambiguous
+    return ref_len <= alt_len  # D = shorter allele; if ref is shorter, D=ref
+
+
 def _get_effective_ref_allele(variant, annotation_result) -> Optional[str]:
     """Get the best available reference allele for a variant.
 
@@ -410,18 +469,19 @@ def _parse_alleles(genotype: Optional[str]):
     return alleles if len(alleles) >= 1 else None
 
 
-def is_homozygous_reference(genotype: Optional[str], ref_allele: Optional[str] = None) -> bool:
+def is_homozygous_reference(genotype: Optional[str], ref_allele: Optional[str] = None,
+                            alt_allele: Optional[str] = None) -> bool:
     """Return True when the user carries only the reference allele.
 
     Handles diploid (2 alleles) and hemizygous (1 allele, e.g. X chromosome in males).
 
-    Consumer array indel codes:
-      II = homozygous reference (user has the insertion/reference)
-      DD = homozygous alternate (user has the deletion)
-      DI/ID = heterozygous
+    Consumer array indel codes (D=shorter, I=longer):
+      For insertion variants (ref shorter than alt): DD=hom-ref, II=hom-alt
+      For deletion variants (ref longer than alt):   II=hom-ref, DD=hom-alt
+      DI/ID always = heterozygous
 
-    When *ref_allele* is provided we check explicitly.  Without it we
-    fall back to heuristics.
+    When *alt_allele* is provided alongside *ref_allele*, the function uses
+    allele length comparison to correctly interpret D/I codes.
     """
     if not genotype:
         return False
@@ -429,11 +489,18 @@ def is_homozygous_reference(genotype: Optional[str], ref_allele: Optional[str] =
     # No-call → not reference
     if gt in _NO_CALL_CODES:
         return False
-    # Consumer array indel codes
-    if gt == 'II':
-        return True   # insertion/insertion = homozygous reference
-    if gt in ('DD', 'DI', 'ID'):
-        return False  # carries at least one deletion allele
+    # Consumer array indel codes — use allele lengths when available
+    if gt in _INDEL_CODES:
+        d_ref = indel_d_is_ref(ref_allele, alt_allele)
+        if d_ref is True:
+            # Insertion variant: D=ref, I=alt
+            return gt == 'DD'
+        elif d_ref is False:
+            # Deletion variant: I=ref, D=alt
+            return gt == 'II'
+        else:
+            # Unknown allele lengths — can't determine, return False (conservative)
+            return False
     alleles = _parse_alleles(genotype)
     if alleles is None:
         return False
@@ -841,8 +908,10 @@ async def build_variant_profiles(
 
         # Pre-compute zygosity
         no_call = is_no_call_genotype(genotype)
+        # Get full allele parts for indel D/I interpretation
+        _, ann_alt = get_annotation_allele_parts(annotation_result)
         hom_ref = (not no_call and effective_ref is not None
-                   and is_homozygous_reference(genotype, effective_ref))
+                   and is_homozygous_reference(genotype, effective_ref, alt_allele=ann_alt))
         het = not no_call and not hom_ref and is_heterozygous(genotype)
 
         benign = is_clinvar_benign(annotation_result)

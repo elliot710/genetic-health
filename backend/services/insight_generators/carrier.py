@@ -4,7 +4,8 @@ from ...db.models import CarrierStatus
 from .base import (
     GeneratorContext, get_user_genotype, get_ref_allele,
     is_homozygous_reference, is_heterozygous, is_no_call_genotype,
-    is_indel_genotype, _parse_alleles,
+    is_indel_genotype, _parse_alleles, indel_d_is_ref,
+    get_annotation_allele_parts,
 )
 
 logger = logging.getLogger(__name__)
@@ -18,14 +19,21 @@ def _classify_carrier_status(user_gt: str, ref_allele: str, alt_allele: str) -> 
     """
     if is_no_call_genotype(user_gt):
         return 'unaffected'
-    # Consumer array indel codes: II=hom-ref, DD=hom-alt, DI/ID=het
+    # Consumer array indel codes: D=shorter allele, I=longer allele.
+    # Whether D maps to ref or alt depends on the variant type.
     if is_indel_genotype(user_gt):
         gt = user_gt.strip().upper()
-        if gt == 'II':
-            return 'unaffected'
-        elif gt == 'DD':
-            return 'affected'
-        else:  # DI, ID
+        if gt in ('DI', 'ID'):
+            return 'carrier'  # heterozygous regardless of mapping
+        d_ref = indel_d_is_ref(ref_allele, alt_allele)
+        if d_ref is True:
+            # Insertion variant (ref shorter): D=ref, I=alt
+            return 'unaffected' if gt == 'DD' else 'affected'  # II=affected
+        elif d_ref is False:
+            # Deletion variant (ref longer): I=ref, D=alt
+            return 'affected' if gt == 'DD' else 'unaffected'  # II=unaffected
+        else:
+            # Can't determine allele mapping — be conservative
             return 'carrier'
 
     alleles = _parse_alleles(user_gt)
@@ -83,11 +91,15 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
         # BUG-09: prefer profile.effective_ref (annotation-resolved) over
         # get_ref_allele which reads raw marker.ref_allele and may be None/N
         profile = ctx.variant_profiles.get(variant_rsid)
+        annotation_result = ctx.annotation_results.get(variant_rsid)
         if profile:
             ref_allele = profile.effective_ref
         else:
             ref_allele = get_ref_allele(variant)
-        if is_homozygous_reference(user_gt, ref_allele):
+
+        # Get full ref/alt alleles (including "-" for indels) for D/I interpretation
+        ann_ref, ann_alt = get_annotation_allele_parts(annotation_result)
+        if is_homozygous_reference(user_gt, ref_allele, alt_allele=ann_alt):
             continue
 
         # Registry-based matching
@@ -100,8 +112,10 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
                 # blindly using the registry template (which always says 'carrier').
                 marker = getattr(variant, 'marker', None)
                 marker_alt = getattr(marker, 'alt_alleles', '') or ''
+                # For indels, prefer annotation-derived alt over marker
+                effective_alt = ann_alt or marker_alt
                 actual_status = _classify_carrier_status(
-                    user_gt or '', ref_allele or '', marker_alt
+                    user_gt or '', ann_ref or ref_allele or '', effective_alt
                 )
                 if actual_status == 'unaffected':
                     seen_conditions.discard(cond)
@@ -116,7 +130,6 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
                 ))
 
         # ClinVar-local annotation-based discovery
-        annotation_result = ctx.annotation_results.get(variant_rsid)
         if not annotation_result or not annotation_result.annotation_data:
             continue
 
@@ -135,11 +148,13 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
         if not gene_conditions:
             continue
 
-        # Determine carrier status using ref/alt alleles from ClinVar or marker
+        # Determine carrier status using ref/alt alleles from annotations or ClinVar/marker
         cv_alt = cv_local.get('alt_allele') or cv_local.get('alternate_allele') or ''
         marker_alt = getattr(getattr(variant, 'marker', None), 'alt_alleles', '') or ''
-        alt_allele = cv_alt or marker_alt
-        status = _classify_carrier_status(user_gt or '', ref_allele or '', alt_allele)
+        effective_alt = ann_alt or cv_alt or marker_alt
+        status = _classify_carrier_status(
+            user_gt or '', ann_ref or ref_allele or '', effective_alt
+        )
 
         if status == 'unaffected':
             continue

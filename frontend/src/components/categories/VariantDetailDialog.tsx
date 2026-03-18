@@ -463,14 +463,30 @@ export default function VariantDetailDialog({
                     const ref = parts[0]?.toUpperCase()
                     // Handle multi-alt: A/G,T → alts = ['G', 'T']
                     const alts = parts.slice(1).flatMap(p => p.split(',').map(a => a.trim().toUpperCase())).filter(Boolean)
-                    const alleles = genotype.toUpperCase().split('')
+                    const gt = genotype.toUpperCase()
+                    // Detect consumer indel codes (DD, DI, ID, II)
+                    const isIndel = /^[DI]{2}$/.test(gt)
+                    const alleles = gt.split('')
+                    // For indels: D=shorter allele, I=longer allele
+                    // If ref is "-" or shorter → D=ref, I=alt (insertion variant)
+                    // If alt is "-" or shorter → I=ref, D=alt (deletion variant)
+                    const refLen = ref === '-' || ref === '.' ? 0 : (ref?.length ?? 0)
+                    const altLen = alts[0] === '-' || alts[0] === '.' ? 0 : (alts[0]?.length ?? 0)
+                    const dIsRef = isIndel ? refLen <= altLen : false
                     return (
                       <div>
                         <span className={`text-xs font-medium ${textSecondary} block`}>Your Genotype</span>
                         <div className="flex items-center gap-1 font-mono mt-0.5">
                           {alleles.map((a, i) => {
-                            const isRef = ref && a === ref
-                            const isAlt = alts.length > 0 && alts.includes(a)
+                            let isRef: boolean
+                            let isAlt: boolean
+                            if (isIndel) {
+                              isRef = dIsRef ? a === 'D' : a === 'I'
+                              isAlt = dIsRef ? a === 'I' : a === 'D'
+                            } else {
+                              isRef = !!(ref && a === ref)
+                              isAlt = alts.length > 0 && alts.includes(a)
+                            }
                             return (
                               <span
                                 key={i}
@@ -497,23 +513,43 @@ export default function VariantDetailDialog({
                   const parts = details.allele_string.split('/')
                   const ref = parts[0]?.toUpperCase()
                   const alts = parts.slice(1).flatMap(p => p.split(',').map(a => a.trim().toUpperCase())).filter(Boolean)
-                  const alleles = genotype.toUpperCase().split('')
-                  const altCount = alleles.filter(a => alts.includes(a)).length
-                  const refCount = alleles.filter(a => a === ref).length
+                  const gt = genotype.toUpperCase()
+                  const isIndel = /^[DI]{2}$/.test(gt)
+                  const alleles = gt.split('')
+
+                  let altCount: number
+                  let refCount: number
+                  let altLabel: string
+
+                  if (isIndel) {
+                    // D=shorter, I=longer; determine mapping from ref/alt lengths
+                    const refLen = ref === '-' || ref === '.' ? 0 : (ref?.length ?? 0)
+                    const altLen = alts[0] === '-' || alts[0] === '.' ? 0 : (alts[0]?.length ?? 0)
+                    const dIsRef = refLen <= altLen
+                    refCount = alleles.filter(a => dIsRef ? a === 'D' : a === 'I').length
+                    altCount = alleles.filter(a => dIsRef ? a === 'I' : a === 'D').length
+                    altLabel = alts[0] || (dIsRef ? 'I' : 'D')
+                  } else {
+                    altCount = alleles.filter(a => alts.includes(a)).length
+                    refCount = alleles.filter(a => a === ref).length
+                    const carriedAlts = [...new Set(alleles.filter(a => alts.includes(a)))]
+                    altLabel = carriedAlts.join('/') || alts[0] || ''
+                  }
+
                   const hasAlt = altCount > 0
-                  const carriedAlts = [...new Set(alleles.filter(a => alts.includes(a)))]
-                  const altLabel = carriedAlts.join('/') || alts[0] || ''
                   const zygosity =
                     refCount === alleles.length ? 'homozygous reference' :
                     altCount === alleles.length ? 'homozygous alternate' :
                     refCount > 0 && hasAlt ? 'heterozygous' : null
+                  const refDisplay = isIndel ? `${ref} (reference)` : ref
+                  const altDisplay = isIndel ? `${alts[0] || 'alternate'} (alternate)` : altLabel
                   const implication =
                     zygosity === 'homozygous reference'
-                      ? `Your genotype (${genotype}) matches the reference allele (${ref}) on both chromosomes — this is the common variant with no change from the reference genome.`
+                      ? `Your genotype (${genotype}) matches the reference allele (${refDisplay}) on both chromosomes — this is the common variant with no change from the reference genome.`
                       : zygosity === 'homozygous alternate'
-                        ? `Your genotype (${genotype}) carries the alternate allele (${altLabel}) on both chromosomes — you have two copies of the variant. The reference allele (${ref}) is absent. This is the highest-dosage form of this variant.`
+                        ? `Your genotype (${genotype}) carries the alternate allele (${altDisplay}) on both chromosomes — you have two copies of the variant. The reference allele (${refDisplay}) is absent. This is the highest-dosage form of this variant.`
                         : zygosity === 'heterozygous'
-                          ? `Your genotype (${genotype}) is one copy of the reference (${ref}) and one copy of the alternate (${altLabel}) — you carry one variant allele. This is the heterozygous state.`
+                          ? `Your genotype (${genotype}) is one copy of the reference (${refDisplay}) and one copy of the alternate (${altDisplay}) — you carry one variant allele. This is the heterozygous state.`
                           : null
                   if (!implication) return null
                   return (

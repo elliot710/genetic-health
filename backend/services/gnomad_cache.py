@@ -95,12 +95,21 @@ class GnomadCacheService:
     # ------------------------------------------------------------------
 
     async def _get_marker_fingerprint(self) -> str:
+        from sqlalchemy import text as sa_text
         async with async_session_factory() as session:
             result = await session.execute(
                 select(func.count(GeneticMarker.id))
             )
-            count = result.scalar() or 0
-        return str(count)
+            marker_count = result.scalar() or 0
+            # Also count Ensembl annotations (used for GRCh38 bridge)
+            r2 = await session.execute(sa_text(
+                "SELECT COUNT(*) FROM shared_variant_annotations "
+                "WHERE ensembl_data IS NOT NULL "
+                "AND ensembl_data::text != 'null' "
+                "AND (ensembl_data::jsonb)->>'found' = 'true'"
+            ))
+            ensembl_count = r2.scalar() or 0
+        return f"{marker_count}:{ensembl_count}"
 
     def _get_file_fingerprint(self, tsv_files: List[Path]) -> str:
         parts = []
@@ -211,12 +220,22 @@ class GnomadCacheService:
             logger.debug("gnomAD build detection failed for %s: %s", tsv_path.name, e)
         return None
 
-    async def _load_known_positions(self) -> Dict[Tuple[str, int], List[Tuple[str, str, str]]]:
-        """Load all (chrom, pos) → [(rsid, ref, alt), ...] from genetic_markers.
+    async def _load_known_positions(
+        self,
+        genome_build: Optional[str] = None,
+    ) -> Dict[Tuple[str, int], List[Tuple[str, str, str]]]:
+        """Load (chrom, pos) → [(rsid, ref, alt), ...] for tabix scanning.
 
-        Returns a dict mapping (chromosome, position) to a list of known
-        variants at that position (for matching ref/alt alleles).
+        When *genome_build* indicates GRCh38 but user markers are GRCh37,
+        uses Ensembl VEP annotations (which report GRCh38 positions) as a
+        liftover bridge — no chain file download needed.
         """
+        need_liftover = genome_build is not None and 'GRCh38' in genome_build
+
+        if need_liftover:
+            return await self._load_grch38_positions_from_ensembl()
+
+        # Default: use marker positions directly (GRCh37 TSV + GRCh37 markers)
         async with async_session_factory() as session:
             result = await session.execute(
                 select(
@@ -240,6 +259,95 @@ class GnomadCacheService:
                         len(pos_map), sum(len(v) for v in pos_map.values()))
             return pos_map
 
+    async def _load_grch38_positions_from_ensembl(
+        self,
+    ) -> Dict[Tuple[str, int], List[Tuple[str, str, str]]]:
+        """Build GRCh38 position map by extracting coordinates from Ensembl VEP
+        annotations already stored in shared_variant_annotations.
+
+        Ensembl VEP always reports on GRCh38, so ensembl_data->data[0]->start
+        gives us the GRCh38 position, and allele_string gives ref/alt alleles.
+        """
+        from sqlalchemy import text as sa_text
+
+        pos_map: Dict[Tuple[str, int], List[Tuple[str, str, str]]] = {}
+        BATCH = 50000
+
+        async with async_session_factory() as session:
+            # Count total
+            r = await session.execute(sa_text(
+                "SELECT COUNT(*) FROM shared_variant_annotations "
+                "WHERE ensembl_data IS NOT NULL "
+                "AND ensembl_data::text != 'null' "
+                "AND (ensembl_data::jsonb)->>'found' = 'true'"
+            ))
+            total = r.scalar() or 0
+            logger.info(
+                "gnomAD GRCh38 bridge: extracting positions from %d Ensembl annotations",
+                total,
+            )
+
+            offset = 0
+            extracted = 0
+            while offset < total:
+                rows = await session.execute(sa_text(
+                    "SELECT rsid, "
+                    "  (ensembl_data::jsonb)->'data'->0->>'seq_region_name' AS chrom, "
+                    "  ((ensembl_data::jsonb)->'data'->0->>'start')::int AS pos, "
+                    "  (ensembl_data::jsonb)->'data'->0->>'allele_string' AS allele_str "
+                    "FROM shared_variant_annotations "
+                    "WHERE ensembl_data IS NOT NULL "
+                    "AND ensembl_data::text != 'null' "
+                    "AND (ensembl_data::jsonb)->>'found' = 'true' "
+                    "ORDER BY rsid "
+                    "LIMIT :limit OFFSET :offset"
+                ).bindparams(limit=BATCH, offset=offset))
+
+                batch_rows = rows.all()
+                if not batch_rows:
+                    break
+
+                for rsid, chrom, pos, allele_str in batch_rows:
+                    if not chrom or not pos or not allele_str:
+                        continue
+                    chrom_clean = str(chrom).replace('chr', '').strip()
+                    # allele_string format: "REF/ALT" or "REF/ALT1,ALT2"
+                    parts = allele_str.split('/')
+                    if len(parts) < 2:
+                        continue
+                    ref = parts[0].strip()
+                    is_indel = ref == '-' or any(
+                        a.strip() == '-' for p in parts[1:] for a in p.split(',')
+                    )
+                    # VEP uses different position convention for indels:
+                    #   Insertion: VEP start = pos after insertion; VCF pos = start - 1
+                    #   Deletion:  VEP start = first deleted base; VCF pos = start - 1
+                    vcf_pos = int(pos) - 1 if is_indel else int(pos)
+                    # Take all alts
+                    for alt_part in parts[1:]:
+                        for alt in alt_part.split(','):
+                            alt = alt.strip()
+                            if alt:
+                                key = (chrom_clean, vcf_pos)
+                                pos_map.setdefault(key, []).append(
+                                    (rsid, ref, alt)
+                                )
+                                extracted += 1
+
+                offset += BATCH
+                if offset % 200000 == 0:
+                    logger.info(
+                        "  GRCh38 bridge: %d/%d processed, %d positions extracted",
+                        offset, total, len(pos_map),
+                    )
+                await asyncio.sleep(0)
+
+        logger.info(
+            "gnomAD GRCh38 bridge: %d unique positions from %d variant-allele pairs",
+            len(pos_map), extracted,
+        )
+        return pos_map
+
     async def _load_cache(self):
         """Open existing SQLite cache or build from tabix TSV files."""
         tsv_files = self._discover_tsv_files()
@@ -247,21 +355,19 @@ class GnomadCacheService:
             logger.warning("No tabix-indexed gnomAD TSV files found in %s", _GNOMAD_DATA_DIR)
             return
 
-        # BUG-16: Detect genome build from the file header before scanning.
+        # Detect genome build from the file header.
         # User variant positions are on GRCh37 (23andMe/AncestryDNA chips).
-        # gnomAD CADD v4.x files are GRCh38 — position matching would yield 0 hits.
+        # gnomAD CADD v4.x files are GRCh38 — direct position matching fails.
+        # When GRCh38 is detected, we bridge via Ensembl VEP annotations which
+        # already store GRCh38 positions for every annotated variant.
         build = self._detect_genome_build(tsv_files[0])
-        if build and 'GRCh38' in build:
-            logger.error(
-                "gnomAD CADD file '%s' is annotated on %s but user variant "
-                "positions are GRCh37/hg19.  Cache would always build empty.\n"
-                "  \u2192 Download the GRCh37 version from:\n"
-                "    https://krishna.gs.washington.edu/download/CADD/v1.6/GRCh37/"
-                "gnomad.genomes.r2.1.1.snv_inclAnno.tsv.gz\n"
-                "  Then delete the existing cache to force a rebuild.",
+        is_grch38 = build is not None and 'GRCh38' in build
+        if is_grch38:
+            logger.info(
+                "gnomAD CADD file '%s' is %s — will bridge via Ensembl VEP "
+                "GRCh38 positions (no liftover chain needed)",
                 tsv_files[0].name, build,
             )
-            return
 
         marker_fp = await self._get_marker_fingerprint()
         file_fp = self._get_file_fingerprint(tsv_files)
@@ -282,7 +388,7 @@ class GnomadCacheService:
         # Cold scan using tabix
         logger.info("gnomAD cache miss — scanning %d TSV files at known positions...",
                      len(tsv_files))
-        pos_map = await self._load_known_positions()
+        pos_map = await self._load_known_positions(genome_build=build)
         if not pos_map:
             logger.info("No known variant positions — skipping gnomAD cache build")
             return
@@ -438,7 +544,16 @@ class GnomadCacheService:
         logger.info(msg)
 
         self._finalize_db(conn, _SQLITE_FILE.with_suffix('.tmp'), _SQLITE_FILE)
-        return total
+
+        # Return unique rsid count (INSERT OR REPLACE deduplicates multi-allelic hits)
+        try:
+            db = self._open_db(_SQLITE_FILE)
+            row = db.execute("SELECT COUNT(*) FROM gnomad_data").fetchone()
+            unique_count = row[0] if row else total
+            db.close()
+        except Exception:
+            unique_count = total
+        return unique_count
 
     # ------------------------------------------------------------------
     # CADD TSV parsing helpers
@@ -538,13 +653,47 @@ class GnomadCacheService:
     def _alleles_match(row_ref: str, row_alt: str, marker_ref: str, marker_alt: str) -> bool:
         """Check if CADD row alleles match the user's marker alleles.
 
-        Handles cases where the marker alt_alleles may be comma-separated.
+        Handles:
+        - Direct match (same notation)
+        - VEP→VCF indel notation (marker uses '-' for ref or alt,
+          CADD row uses anchor-base VCF style)
         """
-        if row_ref.upper() != marker_ref.upper():
+        rr = row_ref.upper()
+        ra = row_alt.upper()
+        mr = marker_ref.upper()
+
+        # --- VEP indel: insertion (marker ref is '-') ---
+        # VEP:  ref='-', alt='TTAC'
+        # CADD: ref='T',  alt='TTTAC'  (anchor + inserted)
+        if mr == '-':
+            for alt in marker_alt.split(','):
+                alt = alt.strip().upper()
+                if not alt or alt == '-':
+                    continue
+                # CADD alt should be anchor (= CADD ref) + inserted bases
+                if ra == rr + alt:
+                    return True
             return False
-        # marker_alt may be comma-separated (e.g. "A,G")
-        for alt in marker_alt.split(','):
-            if row_alt.upper() == alt.strip().upper():
+
+        # --- VEP indel: deletion (one of marker alts is '-') ---
+        # VEP:  ref='ACG', alt='-'
+        # CADD: ref='TACG', alt='T'  (anchor + deleted for ref; just anchor for alt)
+        alts = [a.strip().upper() for a in marker_alt.split(',')]
+        if '-' in alts:
+            # CADD ref should be anchor (= CADD alt) + deleted bases
+            if rr == ra + mr:
+                return True
+            # Also try non-'-' alts for multi-allelic
+            for alt in alts:
+                if alt != '-' and ra == alt:
+                    return True
+            return False
+
+        # --- Standard SNV / same-notation match ---
+        if rr != mr:
+            return False
+        for alt in alts:
+            if ra == alt:
                 return True
         return False
 

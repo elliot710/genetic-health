@@ -66,6 +66,7 @@ async def lifespan(app: FastAPI):
         print("⚠️ gnomAD PG: table empty — run ETL import via admin panel")
 
     # Preload gnomAD SQLite cache in background (targeted tabix reads)
+    # Supports GRCh38 TSV files by bridging via Ensembl VEP GRCh38 positions
     from .services.gnomad_cache import get_gnomad_cache_service
     gnomad_cache = get_gnomad_cache_service()
     async def _preload_gnomad_cache():

@@ -111,6 +111,20 @@ class GnomadPredictions(TypedDict, total=False):
     polyphen: Dict[str, Any]  # {"category": "probably_damaging", "score": 0.99}
 
 
+class GnomadConservation(TypedDict, total=False):
+    primate: Optional[float]
+    mammal: Optional[float]
+    vertebrate: Optional[float]
+
+
+class GnomadSpliceAI(TypedDict, total=False):
+    acceptor_gain: Optional[float]
+    acceptor_loss: Optional[float]
+    donor_gain: Optional[float]
+    donor_loss: Optional[float]
+    max_score: Optional[float]
+
+
 class GnomadAnnotation(TypedDict, total=False):
     """Shape of shared_variant_annotations.gnomad_data when found=True."""
     found: bool
@@ -135,6 +149,8 @@ class GnomadAnnotation(TypedDict, total=False):
     hgvsp: Optional[str]
     cadd: GnomadCaddScore
     predictions: GnomadPredictions
+    conservation: GnomadConservation
+    splice_ai: GnomadSpliceAI
     other_alleles: List[Dict[str, Any]]  # Only present for multi-allelic sites
 
 
@@ -160,6 +176,7 @@ class ThousandGenomesAnnotation(TypedDict, total=False):
     mac: Optional[int]
     ancestral_allele: Optional[str]
     population_frequencies: Dict[str, ThousandGenomesPopFreq]  # Keys: afr, amr, eas, eur, sas
+    global_af: Optional[float]  # Approximate global AF (mean of population AFs)
     other_alleles: List[Dict[str, Any]]  # Only present for multi-allelic sites
 
 
