@@ -1,14 +1,18 @@
 """Uncommon mutations insight generator."""
 import asyncio
 import logging
+from typing import Optional
 from ...db.models import UncommonMutation
 from .base import (
     GeneratorContext, extract_gene_and_consequence, extract_frequency,
-    get_user_genotype, get_ref_allele, is_homozygous_reference,
-    is_no_call_genotype,
+    get_user_genotype, _get_effective_ref_allele, is_homozygous_reference,
+    is_no_call_genotype, is_indel_genotype,
 )
 
 logger = logging.getLogger(__name__)
+
+# Strand complement for allele verification (handles arrays reporting on minus strand)
+_COMPLEMENT = str.maketrans('ACGT', 'TGCA')
 
 # Only include variants with functional consequences — skip intergenic,
 # intronic, upstream/downstream which are rarely clinically actionable.
@@ -21,6 +25,31 @@ _FUNCTIONAL_CONSEQUENCES = {
 
 # Cap output to avoid drowning real insights in low-value uncommon variants
 _MAX_UNCOMMON = 500
+
+
+def _get_alt_allele(annotations: dict) -> Optional[str]:
+    """Extract the alternate (risk) allele from annotation sources."""
+    cv = annotations.get('clinvar_local', {})
+    if cv and cv.get('found'):
+        alt = cv.get('alt_allele') or cv.get('alternate_allele')
+        if alt and alt not in ('N', '-', '.', ''):
+            return alt.strip().upper()
+    ensembl = annotations.get('ensembl', {})
+    data_list = ensembl.get('data', [])
+    if data_list:
+        allele_str = data_list[0].get('allele_string', '')
+        if '/' in allele_str:
+            parts = allele_str.split('/')
+            if len(parts) >= 2:
+                alt = parts[1].strip()
+                if alt and alt not in ('N', '-', '.', ''):
+                    return alt.upper()
+    gnomad = annotations.get('gnomad', {})
+    if gnomad and gnomad.get('found'):
+        alt = gnomad.get('alt')
+        if alt and alt not in ('N', '-', '.', ''):
+            return alt.strip().upper()
+    return None
 
 
 async def generate_uncommon_mutations(ctx: GeneratorContext) -> int:
@@ -42,13 +71,41 @@ async def generate_uncommon_mutations(ctx: GeneratorContext) -> int:
             annotation_result, ctx.rsid_gene_map
         )
 
-        # Skip no-call and homozygous-reference genotypes
+        # Skip no-call and indel-coded genotypes (II/DD/DI/ID)
         user_gt = get_user_genotype(variant)
-        if is_no_call_genotype(user_gt):
+        if is_no_call_genotype(user_gt) or is_indel_genotype(user_gt):
             continue
-        ref_allele = get_ref_allele(variant)
-        if is_homozygous_reference(user_gt, ref_allele):
-            continue
+
+        # Use annotation-derived ref allele (more reliable than marker for consumer CSV).
+        # Also perform a strand-flip-aware hom-ref check: some microarray chips report
+        # alleles on the minus strand, so CC can mean GG on the plus strand (hom-ref
+        # for a G/A variant). Complement the user's alleles and re-check if needed.
+        effective_ref = _get_effective_ref_allele(variant, annotation_result)
+        if effective_ref:
+            gt = user_gt.upper()
+            if is_homozygous_reference(gt, effective_ref):
+                continue
+            # Strand-flip fallback: if none of the alleles match the reference on the
+            # forward strand, try the reverse complement — if that is all-ref, the user
+            # is homozygous reference on the reported (minus) strand.
+            if not any(a == effective_ref for a in gt):
+                flipped = gt.translate(_COMPLEMENT)
+                if is_homozygous_reference(flipped, effective_ref):
+                    continue
+
+        annotations = annotation_result.annotation_data.get('annotations', {})
+
+        # Allele verification: confirm the user actually carries the alternate allele.
+        # Applies strand-flip correction for arrays reporting on the minus strand.
+        alt_allele = _get_alt_allele(annotations)
+        if alt_allele and len(alt_allele) == 1:
+            gt = user_gt.upper()
+            carries = alt_allele in set(gt)
+            if not carries:
+                # Try reverse complement
+                carries = alt_allele in set(gt.translate(_COMPLEMENT))
+            if not carries:
+                continue  # User does not carry the alternate allele
 
         # Require functional consequence
         if consequence not in _FUNCTIONAL_CONSEQUENCES:

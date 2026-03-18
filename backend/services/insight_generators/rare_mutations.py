@@ -10,6 +10,9 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
+# Strand complement for strand-flip-aware allele verification
+_COMPLEMENT = str.maketrans('ACGT', 'TGCA')
+
 
 async def generate_rare_mutations(ctx: GeneratorContext) -> int:
     rare_mutations = []
@@ -47,8 +50,16 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
             if is_no_call_genotype(user_gt):
                 continue
             effective_ref = _get_effective_ref_allele(variant, annotation_result)
-            if effective_ref and is_homozygous_reference(user_gt, effective_ref):
-                continue
+            if effective_ref:
+                gt = user_gt.upper()
+                if is_homozygous_reference(gt, effective_ref):
+                    continue
+                # Strand-flip: if none of the alleles match ref on forward strand,
+                # try reverse complement — hom-ref on minus strand means no variant.
+                if not any(a == effective_ref for a in gt):
+                    flipped = gt.translate(_COMPLEMENT)
+                    if is_homozygous_reference(flipped, effective_ref):
+                        continue
             raw_freq = extract_frequency(annotation_result)
             # Also try gnomAD direct AF if ensembl frequency missing
             if raw_freq == 0.0:
@@ -66,10 +77,16 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
         # Allele verification: confirm the user's genotype contains the ClinVar-
         # recorded pathogenic allele. Consumer CSV data can have ref=alt entries
         # that survive the hom-ref check when the reference allele is unresolved.
+        # Apply strand-flip fallback for arrays reporting on the minus strand.
         if cv_local and cv_local.get('found') and user_gt and not is_indel_genotype(user_gt):
             _cv_alt = (cv_local.get('alt_allele') or cv_local.get('alternate_allele') or '').strip().upper()
-            if _cv_alt and _cv_alt not in user_gt.upper():
-                continue  # User doesn't carry this ClinVar-reported pathogenic allele
+            if _cv_alt and len(_cv_alt) == 1:
+                gt = user_gt.upper()
+                carries = _cv_alt in set(gt)
+                if not carries:
+                    carries = _cv_alt in set(gt.translate(_COMPLEMENT))
+                if not carries:
+                    continue  # User doesn't carry this ClinVar-reported pathogenic allele
 
         # Extract gene and consequence (prefer profile's pre-computed values)
         if profile and profile.gene:

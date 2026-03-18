@@ -432,33 +432,37 @@ export default function VariantDetailDialog({
               <div className={`${cardBg} rounded-xl p-4 border ${border}`}>
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm">
                   {details.chromosome && (
-                    <div>
+                    <div className="min-w-0">
                       <span className={`text-xs font-medium ${textSecondary} block`}>Chromosome</span>
                       <span className={`font-mono ${textPrimary}`}>{details.chromosome}</span>
                     </div>
                   )}
                   {details.position && (
-                    <div>
+                    <div className="min-w-0">
                       <span className={`text-xs font-medium ${textSecondary} block`}>Position</span>
                       <span className={`font-mono ${textPrimary}`}>{details.position.toLocaleString()}</span>
                     </div>
                   )}
                   {details.allele_string && (
-                    <div>
+                    <div className="min-w-0">
                       <span className={`text-xs font-medium ${textSecondary} block`}>Alleles (Ref/Alt)</span>
-                      <span className={`font-mono ${textPrimary}`}>{details.allele_string}</span>
+                      <span
+                        className={`font-mono ${textPrimary} block truncate`}
+                        title={details.allele_string}
+                      >{details.allele_string}</span>
                     </div>
                   )}
                   {details.most_severe_consequence && (
-                    <div>
+                    <div className="min-w-0">
                       <span className={`text-xs font-medium ${textSecondary} block`}>Most Severe</span>
-                      <span className={textPrimary}>{details.most_severe_consequence}</span>
+                      <span className={`${textPrimary} block truncate`} title={details.most_severe_consequence}>{details.most_severe_consequence}</span>
                     </div>
                   )}
                   {genotype && (() => {
                     const parts = details.allele_string?.split('/') ?? []
                     const ref = parts[0]?.toUpperCase()
-                    const alt = parts[1]?.toUpperCase()
+                    // Handle multi-alt: A/G,T → alts = ['G', 'T']
+                    const alts = parts.slice(1).flatMap(p => p.split(',').map(a => a.trim().toUpperCase())).filter(Boolean)
                     const alleles = genotype.toUpperCase().split('')
                     return (
                       <div>
@@ -466,7 +470,7 @@ export default function VariantDetailDialog({
                         <div className="flex items-center gap-1 font-mono mt-0.5">
                           {alleles.map((a, i) => {
                             const isRef = ref && a === ref
-                            const isAlt = alt && a === alt
+                            const isAlt = alts.length > 0 && alts.includes(a)
                             return (
                               <span
                                 key={i}
@@ -492,11 +496,13 @@ export default function VariantDetailDialog({
                 {genotype && details.allele_string && (() => {
                   const parts = details.allele_string.split('/')
                   const ref = parts[0]?.toUpperCase()
-                  const alt = parts[1]?.toUpperCase()
+                  const alts = parts.slice(1).flatMap(p => p.split(',').map(a => a.trim().toUpperCase())).filter(Boolean)
                   const alleles = genotype.toUpperCase().split('')
-                  const altCount = alleles.filter(a => a === alt).length
+                  const altCount = alleles.filter(a => alts.includes(a)).length
                   const refCount = alleles.filter(a => a === ref).length
                   const hasAlt = altCount > 0
+                  const carriedAlts = [...new Set(alleles.filter(a => alts.includes(a)))]
+                  const altLabel = carriedAlts.join('/') || alts[0] || ''
                   const zygosity =
                     refCount === alleles.length ? 'homozygous reference' :
                     altCount === alleles.length ? 'homozygous alternate' :
@@ -505,9 +511,9 @@ export default function VariantDetailDialog({
                     zygosity === 'homozygous reference'
                       ? `Your genotype (${genotype}) matches the reference allele (${ref}) on both chromosomes — this is the common variant with no change from the reference genome.`
                       : zygosity === 'homozygous alternate'
-                        ? `Your genotype (${genotype}) carries the alternate allele (${alt}) on both chromosomes — you have two copies of the variant. The reference allele (${ref}) is absent. This is the highest-dosage form of this variant.`
+                        ? `Your genotype (${genotype}) carries the alternate allele (${altLabel}) on both chromosomes — you have two copies of the variant. The reference allele (${ref}) is absent. This is the highest-dosage form of this variant.`
                         : zygosity === 'heterozygous'
-                          ? `Your genotype (${genotype}) is one copy of the reference (${ref}) and one copy of the alternate (${alt}) — you carry one variant allele. This is the heterozygous state.`
+                          ? `Your genotype (${genotype}) is one copy of the reference (${ref}) and one copy of the alternate (${altLabel}) — you carry one variant allele. This is the heterozygous state.`
                           : null
                   if (!implication) return null
                   return (
