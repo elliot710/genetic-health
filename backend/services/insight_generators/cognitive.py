@@ -1,6 +1,6 @@
 """Cognitive profile insight generator."""
 from ...db.models import CognitiveProfile
-from .base import GeneratorContext, generate_from_maps, is_heterozygous, is_homozygous_reference
+from .base import GeneratorContext, generate_from_maps, is_heterozygous, is_homozygous_reference, is_no_call_genotype
 
 
 async def generate_cognitive_profiles(ctx: GeneratorContext) -> int:

@@ -3,7 +3,8 @@ import logging
 from ...db.models import CarrierStatus
 from .base import (
     GeneratorContext, get_user_genotype, get_ref_allele,
-    is_homozygous_reference, is_heterozygous, _parse_alleles,
+    is_homozygous_reference, is_heterozygous, is_no_call_genotype,
+    is_indel_genotype, _parse_alleles,
 )
 
 logger = logging.getLogger(__name__)
@@ -15,6 +16,18 @@ def _classify_carrier_status(user_gt: str, ref_allele: str, alt_allele: str) -> 
     Returns 'affected' (homozygous alt), 'carrier' (heterozygous), or
     'unaffected' (homozygous ref / no alt match).
     """
+    if is_no_call_genotype(user_gt):
+        return 'unaffected'
+    # Consumer array indel codes: II=hom-ref, DD=hom-alt, DI/ID=het
+    if is_indel_genotype(user_gt):
+        gt = user_gt.strip().upper()
+        if gt == 'II':
+            return 'unaffected'
+        elif gt == 'DD':
+            return 'affected'
+        else:  # DI, ID
+            return 'carrier'
+
     alleles = _parse_alleles(user_gt)
     if not alleles:
         return 'unaffected'
@@ -61,9 +74,11 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
         if not variant_rsid:
             continue
 
-        # Skip homozygous-reference genotypes — user doesn't carry
+        # Skip no-call and homozygous-reference genotypes — user doesn't carry
         # the alternate allele at this position.
         user_gt = get_user_genotype(variant)
+        if is_no_call_genotype(user_gt):
+            continue
         ref_allele = get_ref_allele(variant)
         if is_homozygous_reference(user_gt, ref_allele):
             continue

@@ -1852,7 +1852,9 @@ async def get_jobs_summary(
         select(
             GeneticAnalysis.analysis_status,
             func.count(GeneticAnalysis.id)
-        ).group_by(GeneticAnalysis.analysis_status)
+        )
+        .where(GeneticAnalysis.deleted_at.is_(None))
+        .group_by(GeneticAnalysis.analysis_status)
     )
     counts = {row[0]: row[1] for row in result.all()}
     total = sum(counts.values())
@@ -1975,23 +1977,10 @@ async def resume_job(
     await db.execute(
         update(GeneticAnalysis)
         .where(GeneticAnalysis.id == job_id)
-        .values(analysis_status="processing")
+        .values(analysis_status="pending", current_step="queued (resume)", job_logs=None)
     )
     await db.commit()
-
-    user_id = analysis.user_id
-
-    async def run_analysis():
-        try:
-            from ..core.container import ServiceManager
-            async with ServiceManager() as service_manager:
-                analysis_service = service_manager.get_analysis_service(user_id)
-                await analysis_service.process_analysis(job_id)
-        except Exception as e:
-            logger.error(f"Admin-resumed analysis {job_id} failed: {e}")
-
-    asyncio.create_task(run_analysis())
-    return {"detail": f"Job {job_id} resumed"}
+    return {"detail": f"Job {job_id} queued for resume"}
 
 
 @router.post("/jobs/{job_id}/restart")
@@ -2000,7 +1989,7 @@ async def restart_job(
     db: AsyncSession = Depends(get_session),
     admin: User = Depends(require_admin),
 ):
-    """Restart a failed or completed analysis job."""
+    """Restart a failed or completed analysis job (full re-analysis)."""
     from sqlalchemy import update
 
     result = await db.execute(
@@ -2009,35 +1998,55 @@ async def restart_job(
     analysis = result.scalar_one_or_none()
     if not analysis:
         raise HTTPException(status_code=404, detail="Job not found")
-    if analysis.analysis_status == 'processing':
-        raise HTTPException(status_code=400, detail="Job is already processing")
+    if analysis.analysis_status in ('processing', 'pending', 'queued'):
+        raise HTTPException(status_code=400, detail="Job is already processing or queued")
 
     await db.execute(
         update(GeneticAnalysis)
         .where(GeneticAnalysis.id == job_id)
         .values(
-            analysis_status="processing",
+            analysis_status="pending",
             progress_percentage=0,
             processed_variants=0,
-            current_step="initializing",
+            current_step="queued (restart)",
             estimated_completion=None,
+            job_logs=None,
         )
     )
     await db.commit()
+    return {"detail": f"Job {job_id} queued for restart"}
 
-    user_id = analysis.user_id
 
-    async def run_analysis():
-        try:
-            from ..core.container import ServiceManager
-            async with ServiceManager() as service_manager:
-                analysis_service = service_manager.get_analysis_service(user_id)
-                await analysis_service.process_analysis(job_id)
-        except Exception as e:
-            logger.error(f"Admin-restarted analysis {job_id} failed: {e}")
+@router.post("/jobs/{job_id}/regenerate-insights")
+async def regenerate_insights_admin(
+    job_id: int,
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """Queue insight regeneration for a job (worker picks it up)."""
+    from sqlalchemy import update
 
-    asyncio.create_task(run_analysis())
-    return {"detail": f"Job {job_id} restarted"}
+    result = await db.execute(
+        select(GeneticAnalysis).where(GeneticAnalysis.id == job_id)
+    )
+    analysis = result.scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if analysis.analysis_status in ('processing', 'pending', 'queued'):
+        raise HTTPException(status_code=400, detail="Job is already processing or queued")
+
+    await db.execute(
+        update(GeneticAnalysis)
+        .where(GeneticAnalysis.id == job_id)
+        .values(
+            analysis_status="pending",
+            progress_percentage=90,
+            current_step="regenerating_insights",
+            job_logs=None,
+        )
+    )
+    await db.commit()
+    return {"detail": f"Insight regeneration queued for job {job_id}"}
 
 
 @router.delete("/jobs/{job_id}")

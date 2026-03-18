@@ -75,8 +75,8 @@ export default function SmartInsights({ isDarkMode, token, section, title }: Sma
   const isConfigured = status?.openai_configured || status?.anthropic_configured || status?.gemini_configured
   const isEnabled = status?.enabled !== false
 
-  // Completely hide when disabled by admin
-  if (status && !isEnabled) return null
+  // Hide when: admin-disabled, no API keys configured, or status not yet loaded
+  if (!status || !isEnabled || !isConfigured) return null
 
   return (
     <SectionCard

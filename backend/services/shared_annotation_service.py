@@ -27,11 +27,17 @@ class SharedVariantAnnotationService:
         self.session = session  # Legacy: only used by remote API path (save_annotation)
         self._annotation_cache: Dict[str, Dict[str, Any]] = {}
 
-    async def get_existing_annotations(self, rsids: List[str]) -> Dict[str, Dict[str, Any]]:
+    async def get_existing_annotations(
+        self,
+        rsids: List[str],
+        on_progress=None,
+    ) -> Dict[str, Dict[str, Any]]:
         """Get existing annotations for a list of RSIDs from shared annotations table.
-        
+
         Uses short-lived sessions per batch to release connections back to the
         pool between iterations, preventing pool exhaustion during long analyses.
+
+        on_progress: optional async callable(checked: int, total: int) called every 50 batches.
         """
         if not rsids:
             return {}
@@ -51,9 +57,17 @@ class SharedVariantAnnotationService:
         for i in range(0, len(rsids), batch_size):
             batch_rsids = rsids[i:i + batch_size]
             batch_num = i // batch_size + 1
-            if batch_num % 200 == 0 or batch_num == total_batches:
+            checked = i + len(batch_rsids)
+            if batch_num % 50 == 0 or batch_num == total_batches:
                 elapsed = time.time() - lookup_start
-                logger.info(f"📊 Annotation lookup batch {batch_num}/{total_batches} ({elapsed:.1f}s elapsed, {len(annotation_map)} found so far)")
+                rate = checked / elapsed if elapsed > 0 else 0
+                logger.info(
+                    f"📊 Annotation lookup batch {batch_num}/{total_batches}: "
+                    f"{checked}/{len(rsids)} checked, {len(annotation_map)} found "
+                    f"({rate:.0f} rsids/s, {elapsed:.1f}s elapsed)"
+                )
+                if on_progress is not None:
+                    await on_progress(checked, len(rsids))
 
             await asyncio.sleep(0.01)
 
@@ -145,6 +159,83 @@ class SharedVariantAnnotationService:
                 await asyncio.sleep(0)
         elapsed = time.time() - lookup_start
         logger.info(f"Found {len(annotation_map)} existing shared annotations for {len(rsids)} requested RSIDs ({elapsed:.1f}s)")
+        return annotation_map
+
+    async def get_existing_annotations_fast(self, rsids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Fast bulk loader for insight regeneration — Core SQL, no ORM, no usage_count update.
+
+        ~10x faster than get_existing_annotations() because:
+        - Uses raw SQL with streaming instead of ORM object materialization
+        - Skips scorer.score_variant() — pathogenicity_score is re-computed
+          from profiles during insight generation anyway
+        - Uses batch size 5000 instead of 500 (fewer round-trips)
+        - Skips usage_count UPDATE (regen shouldn't count as a new "use")
+        """
+        if not rsids:
+            return {}
+
+        from ..db.database import async_session_factory
+        from sqlalchemy import text
+
+        annotation_map: Dict[str, Dict[str, Any]] = {}
+        batch_size = 5000
+        total_batches = (len(rsids) + batch_size - 1) // batch_size
+        t0 = time.time()
+
+        _COL_MAP = [
+            ('ensembl_data', 'ensembl'),
+            ('clinvar_data', 'clinvar'),
+            ('pharmgkb_data', 'clinpgx'),
+            ('snpedia_data', 'snpedia'),
+            ('litvar_data', 'litvar'),
+            ('alpha_missense_data', 'alpha_missense'),
+            ('clinvar_local_data', 'clinvar_local'),
+            ('gnomad_data', 'gnomad'),
+            ('thousand_genomes_data', 'thousand_genomes'),
+            ('chembl_data', 'chembl'),
+            ('fda_drug_data', 'fda_drug'),
+            ('alphafold_data', 'alphafold'),
+            ('gnomad_tx_data', 'gnomad_tx'),
+        ]
+        col_names = ', '.join(col for col, _ in _COL_MAP)
+        sql = (f"SELECT rsid, {col_names} FROM shared_variant_annotations "
+               f"WHERE rsid = ANY(:rsids) "
+               f"AND annotation_status IN ('completed', 'partial')")
+
+        for i in range(0, len(rsids), batch_size):
+            batch = rsids[i:i + batch_size]
+            batch_num = i // batch_size + 1
+
+            if batch_num % 20 == 0 or batch_num == total_batches:
+                logger.info(f"Fast annotation load: batch {batch_num}/{total_batches} "
+                            f"({len(annotation_map)} found, {time.time()-t0:.1f}s)")
+
+            async with async_session_factory() as session:
+                result = await session.execute(text(sql), {'rsids': batch})
+                rows = result.fetchall()
+
+            for row in rows:
+                rsid_val = row[0]
+                merged: Dict[str, Any] = {
+                    'rsid': rsid_val,
+                    'annotations': {},
+                    'sources_queried': [],
+                    'success_count': 0,
+                }
+                for col_idx, (_, key) in enumerate(_COL_MAP, start=1):
+                    data = row[col_idx]
+                    if data is not None:
+                        merged['annotations'][key] = data
+                        merged['success_count'] += 1
+
+                if merged['success_count'] > 0:
+                    annotation_map[rsid_val] = merged
+
+            await asyncio.sleep(0)
+
+        elapsed = time.time() - t0
+        logger.info(f"Fast annotation load complete: {len(annotation_map)}/{len(rsids)} "
+                     f"in {elapsed:.1f}s ({total_batches} batches)")
         return annotation_map
 
     async def save_annotation(

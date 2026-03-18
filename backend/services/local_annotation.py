@@ -244,6 +244,7 @@ async def run_all_lookups(
     cv_rsids = _rsids_for('clinvar_local')
     if sources.clinvar and cv_rsids:
         t0 = time.monotonic()
+        logger.info(f"  ClinVar: starting lookup for {len(cv_rsids)} RSIDs...")
         results.clinvar = await sources.clinvar.lookup_batch(cv_rsids)
         found = sum(1 for v in results.clinvar.values() if v and v.get('found'))
         logger.info(f"  ClinVar: {found}/{len(cv_rsids)} found ({time.monotonic() - t0:.1f}s)")
@@ -252,6 +253,7 @@ async def run_all_lookups(
     gn_rsids = _rsids_for('gnomad')
     if sources.gnomad and gn_rsids:
         t0 = time.monotonic()
+        logger.info(f"  gnomAD: starting lookup for {len(gn_rsids)} RSIDs...")
         results.gnomad = await sources.gnomad.lookup_batch(gn_rsids)
         gn_found = sum(1 for v in results.gnomad.values() if v and v.get('found'))
         # Position fallback for rsid misses
@@ -275,6 +277,7 @@ async def run_all_lookups(
     ens_rsids = _rsids_for('ensembl')
     if sources.ensembl_vep and ens_rsids:
         t0 = time.monotonic()
+        logger.info(f"  Ensembl VEP: starting lookup for {len(ens_rsids)} RSIDs...")
         results.ensembl = await sources.ensembl_vep.lookup_batch(ens_rsids)
         found = sum(1 for v in results.ensembl.values() if v and v.get('found'))
         logger.info(f"  Ensembl VEP: {found}/{len(ens_rsids)} found ({time.monotonic() - t0:.1f}s)")
@@ -283,6 +286,7 @@ async def run_all_lookups(
     tkg_rsids = _rsids_for('thousand_genomes')
     if sources.thousand_genomes and tkg_rsids:
         t0 = time.monotonic()
+        logger.info(f"  1000G: starting lookup for {len(tkg_rsids)} RSIDs...")
         results.thousand_genomes = await sources.thousand_genomes.lookup_batch(tkg_rsids)
         found = sum(1 for v in results.thousand_genomes.values() if v and v.get('found'))
         logger.info(f"  1000G: {found}/{len(tkg_rsids)} found ({time.monotonic() - t0:.1f}s)")
@@ -291,6 +295,7 @@ async def run_all_lookups(
     am_rsids = _rsids_for('alpha_missense')
     if sources.alpha_missense and am_rsids:
         t0 = time.monotonic()
+        logger.info(f"  AlphaMissense: starting lookup for {len(am_rsids)} RSIDs...")
         am_batch = build_am_batch(am_rsids, rsid_to_variant)
         if am_batch:
             results.alpha_missense = await asyncio.get_event_loop().run_in_executor(
@@ -303,6 +308,7 @@ async def run_all_lookups(
     gtx_rsids = _rsids_for('gnomad_tx')
     if sources.gnomad_tx and gtx_rsids:
         t0 = time.monotonic()
+        logger.info(f"  gnomAD-tx: starting lookup for {len(gtx_rsids)} RSIDs...")
         gtx_tuples = build_gtx_tuples(gtx_rsids, rsid_to_variant)
         if gtx_tuples:
             results.gnomad_tx = await sources.gnomad_tx.lookup_batch(gtx_tuples)

@@ -173,7 +173,13 @@ class AutoCategorizer:
     async def _match_significance(
         self, session: AsyncSession, category: str, sig_pattern: str, template: dict
     ) -> Dict[str, dict]:
-        """Match ClinVar variants by clinical_significance (case-insensitive ILIKE)."""
+        """Match ClinVar variants by clinical_significance (case-insensitive ILIKE).
+
+        Excludes variants that are benign, likely benign, conflicting, or
+        drug-response-only to avoid generating false health risk mappings.
+        "Conflicting classifications of pathogenicity" contains the substring
+        "pathogenic" but is NOT a genuine pathogenic classification.
+        """
         result = await session.execute(
             select(
                 ClinVarVariant.rsid,
@@ -183,6 +189,11 @@ class AutoCategorizer:
             )
             .where(ClinVarVariant.clinical_significance.ilike(f"%{sig_pattern}%"))
             .where(ClinVarVariant.rsid.isnot(None))
+            .where(~ClinVarVariant.clinical_significance.ilike('benign%'))
+            .where(~ClinVarVariant.clinical_significance.ilike('likely_benign%'))
+            .where(~ClinVarVariant.clinical_significance.ilike('likely benign%'))
+            .where(~ClinVarVariant.clinical_significance.ilike('conflicting%'))
+            .where(~ClinVarVariant.clinical_significance.ilike('drug%response%'))
             .distinct(ClinVarVariant.rsid)
             .limit(MAX_MAPPINGS_PER_CATEGORY)
         )

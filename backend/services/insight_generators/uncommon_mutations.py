@@ -5,6 +5,7 @@ from ...db.models import UncommonMutation
 from .base import (
     GeneratorContext, extract_gene_and_consequence, extract_frequency,
     get_user_genotype, get_ref_allele, is_homozygous_reference,
+    is_no_call_genotype,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,8 +42,10 @@ async def generate_uncommon_mutations(ctx: GeneratorContext) -> int:
             annotation_result, ctx.rsid_gene_map
         )
 
-        # Skip homozygous-reference genotypes
+        # Skip no-call and homozygous-reference genotypes
         user_gt = get_user_genotype(variant)
+        if is_no_call_genotype(user_gt):
+            continue
         ref_allele = get_ref_allele(variant)
         if is_homozygous_reference(user_gt, ref_allele):
             continue

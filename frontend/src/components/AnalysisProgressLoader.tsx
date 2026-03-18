@@ -146,7 +146,68 @@ export default function AnalysisProgressLoader({
   }
 
   const progressPercentage = Math.max(0, Math.min(100, progress.progress_percentage || 0));
-  const isUploadingVariants = (progress.current_step || '').includes('uploading_variants');
+  const currentStep = (progress.current_step || '').toLowerCase();
+  const isUploadingVariants = currentStep.includes('uploading_variants');
+
+  // Map backend current_step → which checklist label is active.
+  // Everything before the active step is marked completed; everything after is pending.
+  const STEP_MAP: Record<string, string> = {
+    uploading_variants: 'Uploading Variants',
+    initializing: 'Variant Classification',
+    classifying_variants: 'Variant Classification',
+    annotating_variants: 'API Annotation',
+    enriching_data: 'Data Enrichment',
+    enriching_bigquery: 'Data Enrichment',
+    generating_insights: 'Health & Wellness Analysis',
+    generating_health_risks: 'Health & Wellness Analysis',
+    generating_nutrition_traits: 'Food & Nutrition Insights',
+    generating_drug_responses: 'Drug Response Prediction',
+    generating_physical_traits: 'Physical Traits Analysis',
+    generating_sports_performance: 'Sports & Fitness Insights',
+    generating_cognitive_profiles: 'Intelligence Analysis',
+    generating_personality_traits: 'Personality Traits',
+    generating_ancestry_results: 'Ancestry & Origins',
+    generating_carrier_status: 'Carrier Status Assessment',
+    generating_wellness_metrics: 'Wellness Reports',
+    generating_methylation_profiles: 'Methylation Pathways',
+    generating_detox_profiles: 'Detoxification Analysis',
+    generating_rare_mutations: 'Report Generation',
+    generating_uncommon_mutations: 'Report Generation',
+    completed: '',
+  };
+
+  const ORDERED_STEPS = [
+    'Uploading Variants',
+    'Variant Classification',
+    'API Annotation',
+    'Data Enrichment',
+    'Health & Wellness Analysis',
+    'Food & Nutrition Insights',
+    'Drug Response Prediction',
+    'Physical Traits Analysis',
+    'Sports & Fitness Insights',
+    'Intelligence Analysis',
+    'Personality Traits',
+    'Ancestry & Origins',
+    'Carrier Status Assessment',
+    'Wellness Reports',
+    'Methylation Pathways',
+    'Detoxification Analysis',
+    'Report Generation',
+  ];
+
+  const activeStepLabel = currentStep === 'completed'
+    ? ''
+    : (STEP_MAP[currentStep] ?? ORDERED_STEPS[1]);
+  const activeIdx = ORDERED_STEPS.indexOf(activeStepLabel);
+
+  const getStepStatus = (label: string): 'completed' | 'current' | 'pending' => {
+    if (currentStep === 'completed') return 'completed';
+    const idx = ORDERED_STEPS.indexOf(label);
+    if (idx < activeIdx) return 'completed';
+    if (idx === activeIdx) return 'current';
+    return 'pending';
+  };
   const remainingTime = progress.estimated_completion 
     ? Math.max(0, new Date(progress.estimated_completion).getTime() - new Date().getTime())
     : null;
@@ -225,7 +286,7 @@ export default function AnalysisProgressLoader({
           <div className="mb-6">
             <div className={`flex items-center text-sm ${theme.text.tertiary}`}>
               <ChevronRight className="w-4 h-4 mr-2" />
-              {(progress.current_step || '').replace(/_/g, ' ')}
+              {activeStepLabel || (currentStep === 'completed' ? 'Completed' : (progress.current_step || '').replace(/_/g, ' '))}
             </div>
           </div>
 
@@ -266,22 +327,23 @@ export default function AnalysisProgressLoader({
             </div>
             
             {[
-              { step: 'Uploading Variants', status: isUploadingVariants ? 'current' : 'completed' },
-              { step: 'Variant Classification', status: isUploadingVariants ? 'pending' : progressPercentage > 5 ? 'completed' : progressPercentage > 0 ? 'current' : 'pending' },
-              { step: 'API Annotation', status: isUploadingVariants ? 'pending' : progressPercentage > 15 ? 'completed' : progressPercentage > 5 ? 'current' : 'pending' },
-              { step: 'Health & Wellness Analysis', status: isUploadingVariants ? 'pending' : progressPercentage > 25 ? 'completed' : progressPercentage > 15 ? 'current' : 'pending' },
-              { step: 'Food & Nutrition Insights', status: isUploadingVariants ? 'pending' : progressPercentage > 35 ? 'completed' : progressPercentage > 25 ? 'current' : 'pending' },
-              { step: 'Drug Response Prediction', status: isUploadingVariants ? 'pending' : progressPercentage > 45 ? 'completed' : progressPercentage > 35 ? 'current' : 'pending' },
-              { step: 'Physical Traits Analysis', status: isUploadingVariants ? 'pending' : progressPercentage > 55 ? 'completed' : progressPercentage > 45 ? 'current' : 'pending' },
-              { step: 'Sports & Fitness Insights', status: isUploadingVariants ? 'pending' : progressPercentage > 65 ? 'completed' : progressPercentage > 55 ? 'current' : 'pending' },
-              { step: 'Intelligence Analysis', status: isUploadingVariants ? 'pending' : progressPercentage > 70 ? 'completed' : progressPercentage > 65 ? 'current' : 'pending' },
-              { step: 'Personality Traits', status: isUploadingVariants ? 'pending' : progressPercentage > 75 ? 'completed' : progressPercentage > 70 ? 'current' : 'pending' },
-              { step: 'Ancestry & Origins', status: isUploadingVariants ? 'pending' : progressPercentage > 80 ? 'completed' : progressPercentage > 75 ? 'current' : 'pending' },
-              { step: 'Carrier Status Assessment', status: isUploadingVariants ? 'pending' : progressPercentage > 85 ? 'completed' : progressPercentage > 80 ? 'current' : 'pending' },
-              { step: 'Wellness Reports', status: isUploadingVariants ? 'pending' : progressPercentage > 90 ? 'completed' : progressPercentage > 85 ? 'current' : 'pending' },
-              { step: 'Methylation Pathways', status: isUploadingVariants ? 'pending' : progressPercentage > 95 ? 'completed' : progressPercentage > 90 ? 'current' : 'pending' },
-              { step: 'Detoxification Analysis', status: isUploadingVariants ? 'pending' : progressPercentage > 98 ? 'completed' : progressPercentage > 95 ? 'current' : 'pending' },
-              { step: 'Report Generation', status: isUploadingVariants ? 'pending' : progressPercentage >= 100 ? 'completed' : progressPercentage > 98 ? 'current' : 'pending' },
+              { step: 'Uploading Variants', status: getStepStatus('Uploading Variants') },
+              { step: 'Variant Classification', status: getStepStatus('Variant Classification') },
+              { step: 'API Annotation', status: getStepStatus('API Annotation') },
+              { step: 'Data Enrichment', status: getStepStatus('Data Enrichment') },
+              { step: 'Health & Wellness Analysis', status: getStepStatus('Health & Wellness Analysis') },
+              { step: 'Food & Nutrition Insights', status: getStepStatus('Food & Nutrition Insights') },
+              { step: 'Drug Response Prediction', status: getStepStatus('Drug Response Prediction') },
+              { step: 'Physical Traits Analysis', status: getStepStatus('Physical Traits Analysis') },
+              { step: 'Sports & Fitness Insights', status: getStepStatus('Sports & Fitness Insights') },
+              { step: 'Intelligence Analysis', status: getStepStatus('Intelligence Analysis') },
+              { step: 'Personality Traits', status: getStepStatus('Personality Traits') },
+              { step: 'Ancestry & Origins', status: getStepStatus('Ancestry & Origins') },
+              { step: 'Carrier Status Assessment', status: getStepStatus('Carrier Status Assessment') },
+              { step: 'Wellness Reports', status: getStepStatus('Wellness Reports') },
+              { step: 'Methylation Pathways', status: getStepStatus('Methylation Pathways') },
+              { step: 'Detoxification Analysis', status: getStepStatus('Detoxification Analysis') },
+              { step: 'Report Generation', status: getStepStatus('Report Generation') },
             ].map((item, index) => (
               <div key={index} className="flex items-center">
                 <div className={`w-4 h-4 rounded-full mr-3 flex items-center justify-center ${

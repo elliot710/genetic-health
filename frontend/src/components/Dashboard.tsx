@@ -249,13 +249,10 @@ export default function Dashboard({
         credentials: 'include',
       })
       if (response.ok) {
-        clearData()
-        analysis.resetAnalysisState()
-        setActiveCategory('overview')
         setShowDeleteDialog(false)
-        showNotification('All data deleted successfully', 'success')
-        if (onRefresh && token) {
-          await onRefresh(token)
+        // Navigate away immediately — no intermediate empty-dashboard flash
+        if (onNavigateToUpload) {
+          onNavigateToUpload()
         }
       } else {
         showNotification('Failed to delete data', 'error')

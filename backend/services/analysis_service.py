@@ -22,7 +22,7 @@ from ..core.config import settings
 from ..core.telemetry import get_tracer
 from .job_logs import JobLogCollector
 from .shared_annotation_service import SharedVariantAnnotationService
-from .insight_generators import ALL_GENERATORS, GeneratorContext
+from .insight_generators import ALL_GENERATORS, GeneratorContext, build_variant_profiles
 
 logger = logging.getLogger(__name__)
 tracer = get_tracer(__name__)
@@ -361,7 +361,7 @@ class ComprehensiveAnalysisService:
                 annotated_variants=0,
                 new_annotations=0,
                 reused_annotations=0,
-                current_step="initializing",
+                current_step="classifying_variants",
                 status="processing",
                 phase=1,
                 phase_progress=0.0,
@@ -403,7 +403,8 @@ class ComprehensiveAnalysisService:
                 span.set_attribute("variant.count", len(variants))
                 annotation_service = SharedVariantAnnotationService()
                 annotation_results = await self._annotate_variants_efficiently(
-                    variants, analysis_id, annotation_service, progress
+                    variants, analysis_id, annotation_service, progress,
+                    update_progress_fn=self._update_progress,
                 )
                 span.set_attribute("annotation.reused", progress.reused_annotations)
                 span.set_attribute("annotation.new", progress.new_annotations)
@@ -426,7 +427,7 @@ class ComprehensiveAnalysisService:
             # ── Phase 3: BigQuery enrichment (own session, periodic commits) ──
             progress.phase = 3
             progress.phase_progress = 0.0
-            progress.current_step = "enriching_bigquery"
+            progress.current_step = "enriching_data"
             await self._update_progress(analysis_id, progress)
             logger.info("═══ Phase 3/4: BigQuery enrichment ═══")
             enabled_sources = await self._load_enabled_sources()
@@ -767,7 +768,8 @@ class ComprehensiveAnalysisService:
         variants: List[AnalysisVariant],
         analysis_id: int,
         annotation_service: SharedVariantAnnotationService,
-        progress: AnalysisProgress
+        progress: AnalysisProgress,
+        update_progress_fn=None,
     ) -> Dict[str, AnnotationResult]:
         """Efficiently annotate variants with maximum reuse."""
         variants_with_rsid = [
@@ -780,7 +782,15 @@ class ComprehensiveAnalysisService:
         if len(variants) > len(variants_with_rsid):
             logger.info(f"  Skipped {len(variants) - len(variants_with_rsid)} variants without valid RS ID")
 
-        existing_annotations = await annotation_service.get_existing_annotations(rsids)
+        async def _on_lookup_progress(checked: int, total: int):
+            progress.processed_variants = checked
+            progress.phase_progress = checked / max(1, total)
+            if update_progress_fn:
+                await update_progress_fn(analysis_id, progress)
+
+        existing_annotations = await annotation_service.get_existing_annotations(
+            rsids, on_progress=_on_lookup_progress,
+        )
         progress.reused_annotations = len(existing_annotations)
         logger.info(f"  Existing annotations in cache: {len(existing_annotations)}/{len(rsids)} "
                     f"({100 * len(existing_annotations) / max(1, len(rsids)):.1f}%)")
@@ -1124,8 +1134,15 @@ class ComprehensiveAnalysisService:
         bulk_start = time.time()
 
         # --- Load services and run lookups via shared module ---
+        logger.info("  Loading local annotation sources (ClinVar, gnomAD, Ensembl VEP, ...)")
+        _src_t0 = time.time()
         sources = await load_local_sources(enabled_sources)
+        logger.info(
+            f"  Local sources loaded in {time.time() - _src_t0:.1f}s: "
+            f"{', '.join(sources.active_names) if sources.active_names else 'none'}"
+        )
         rsid_to_variant = {rsid: vlist[0] for rsid, vlist in rsid_to_variants.items()}
+        logger.info(f"  Running all source lookups for {total} RSIDs...")
         results = await run_all_lookups(sources, unique_rsids, rsid_to_variant)
 
         # Unpack into per-source maps for the upsert
@@ -1576,6 +1593,13 @@ class ComprehensiveAnalysisService:
             await cleanup_session.commit()
         logger.info(f"  Cleared {len(insight_tables)} insight tables for fresh generation")
 
+        # Build variant profiles ONCE — all generators share these
+        profile_start = time.time()
+        variant_profiles = await build_variant_profiles(
+            variants, annotation_results, self._rsid_gene_map
+        )
+        logger.info(f"  Built variant profiles in {time.time() - profile_start:.1f}s")
+
         insights_generated = 0
         total_generators = len(ALL_GENERATORS)
         failed_generators: list[str] = []
@@ -1596,6 +1620,7 @@ class ComprehensiveAnalysisService:
                         session=gen_session,
                         rsid_gene_map=self._rsid_gene_map,
                         registry=self._registry,
+                        variant_profiles=variant_profiles,
                     )
                     count = await gen_func(ctx)
                     await gen_session.commit()
@@ -1612,6 +1637,111 @@ class ComprehensiveAnalysisService:
             logger.warning(f"  {len(failed_generators)} generator(s) failed: {', '.join(failed_generators)}")
 
         return insights_generated
+
+    # ------------------------------------------------------------------
+    # Standalone insight regeneration (no annotation / API calls)
+    # ------------------------------------------------------------------
+
+    async def regenerate_insights(self, analysis_id: int) -> Dict[str, Any]:
+        """Re-generate all insight tables using existing annotations.
+
+        This skips Phases 1-3 (gene map, annotation, BigQuery) entirely.
+        It loads variants and their cached annotations from the DB, builds
+        variant profiles, and runs all 14 generators from scratch.
+
+        Use this after fixing generator logic, updating variant_mappings,
+        or cleaning up data — without waiting for the full 20-minute
+        annotation pipeline.
+        """
+        start_time = time.time()
+        log_collector = JobLogCollector.get_instance()
+        log_collector.set_active_job(analysis_id)
+
+        try:
+            # Load registry (variant_mappings from DB)
+            await self._load_registry()
+
+            # Load variants (same efficient streaming as full analysis)
+            analysis, variants = await self._load_analysis_data(analysis_id)
+            if not variants:
+                return {
+                    "success": True, "analysis_id": analysis_id,
+                    "insights_generated": 0,
+                    "message": "No variants found",
+                }
+
+            logger.info(f"═══ Insight regeneration for analysis {analysis_id} ═══")
+            logger.info(f"  Variants: {len(variants)}")
+
+            # Build gene map (cheap, in-memory only)
+            await self._build_rsid_gene_map(variants)
+
+            # Load existing annotations from shared cache (fast path — no ORM, no scoring)
+            annotation_service = SharedVariantAnnotationService()
+            rsids = [str(v.rsid) for v in variants if v.rsid]
+            existing = await annotation_service.get_existing_annotations_fast(rsids)
+            annotation_results: Dict[str, AnnotationResult] = {}
+            for rsid, data in existing.items():
+                annotation_results[rsid] = AnnotationResult(
+                    rsid=rsid, was_reused=True,
+                    annotation_data=data, source='existing',
+                )
+            logger.info(f"  Loaded {len(annotation_results)} cached annotations")
+
+            # Track progress
+            progress = AnalysisProgress(
+                total_variants=len(variants),
+                processed_variants=0,
+                annotated_variants=len(annotation_results),
+                new_annotations=0,
+                reused_annotations=len(annotation_results),
+                current_step="generating_insights",
+                status="processing",
+                phase=4,
+                phase_progress=0.0,
+            )
+            await self._update_progress(analysis_id, progress)
+
+            # Run Phase 4 only
+            insights_generated = await self._generate_comprehensive_insights(
+                variants, annotation_results, analysis_id, None, progress
+            )
+
+            progress.current_step = "completed"
+            progress.status = "completed"
+            progress.processed_variants = len(variants)
+            progress.phase_progress = 1.0
+            await self._update_progress(analysis_id, progress, force_percentage=100)
+
+            # Invalidate dashboard cache
+            try:
+                from ..db.database import async_session_factory
+                from ..db.models import DashboardCache
+                async with async_session_factory() as inv_session:
+                    await inv_session.execute(
+                        DashboardCache.__table__.delete().where(
+                            DashboardCache.user_id == analysis.user_id
+                        )
+                    )
+                    await inv_session.commit()
+            except Exception:
+                pass
+
+            elapsed = time.time() - start_time
+            logger.info(f"═══ Insight regeneration complete: {insights_generated} insights in {elapsed:.1f}s ═══")
+
+            return {
+                "success": True,
+                "analysis_id": analysis_id,
+                "insights_generated": insights_generated,
+                "variants_loaded": len(variants),
+                "annotations_loaded": len(annotation_results),
+                "processing_time": elapsed,
+            }
+        except Exception as e:
+            logger.error(f"Insight regeneration failed for analysis {analysis_id}: {e}")
+            await self._update_analysis_status(analysis_id, "completed", "completed")
+            raise
 
     # ------------------------------------------------------------------
     # Category generators (delegated to insight_generators package)

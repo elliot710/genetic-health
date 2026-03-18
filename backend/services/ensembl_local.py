@@ -140,18 +140,26 @@ class EnsemblLocalService:
 
         gene_map: Dict[str, str] = {}
 
-        # Process in batches to avoid overly large queries
+        # Process in batches to avoid overly large queries.
+        # Open a fresh session per batch so connections are returned to the pool
+        # between batches and no long-lived transaction holds a slot.
+        import asyncio as _asyncio
         batch_size = 500
-        async with async_session_factory() as session:
-            for i in range(0, len(positions), batch_size):
-                batch = positions[i:i + batch_size]
+        for i in range(0, len(positions), batch_size):
+            batch = positions[i:i + batch_size]
 
-                # Group by chromosome for efficient querying
-                by_chrom: Dict[str, List[Tuple[int, str]]] = {}
-                for chrom, pos, rsid in batch:
-                    c = str(chrom).replace('chr', '')
-                    by_chrom.setdefault(c, []).append((pos, rsid))
+            # Yield between batches — the CPU-only matching loop below would
+            # otherwise hold the event loop for tens of milliseconds per batch.
+            if i > 0:
+                await _asyncio.sleep(0)
 
+            # Group by chromosome for efficient querying
+            by_chrom: Dict[str, List[Tuple[int, str]]] = {}
+            for chrom, pos, rsid in batch:
+                c = str(chrom).replace('chr', '')
+                by_chrom.setdefault(c, []).append((pos, rsid))
+
+            async with async_session_factory() as session:
                 for chrom, pos_rsids in by_chrom.items():
                     pos_list = [p for p, _ in pos_rsids]
                     rsid_by_pos: Dict[int, List[str]] = {}

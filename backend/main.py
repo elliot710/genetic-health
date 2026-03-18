@@ -13,7 +13,6 @@ from .api.admin_routes import router as admin_router
 from .api.insights_routes import router as insights_router
 from .core.telemetry import configure_telemetry
 from .db.database import init_db
-from .services.analysis_queue import get_analysis_queue
 
 # Configure logging — show INFO from our services
 logging.basicConfig(
@@ -43,44 +42,10 @@ async def lifespan(app: FastAPI):
     ]:
         logging.getLogger(name).addHandler(job_handler)
 
-    # Start the analysis queue processor
-    analysis_queue = get_analysis_queue()
-    await analysis_queue.start()
-    print("🚀 Analysis queue processor started")
-
-    # Detect and re-queue analyses left in 'processing' or 'pending' state
-    # (e.g. from a server restart or container hot-reload)
-    try:
-        from .db.database import async_session_factory
-        from sqlalchemy import select, update as sa_update
-        from .db.models import GeneticAnalysis
-        async with async_session_factory() as session:
-            result = await session.execute(
-                select(
-                    GeneticAnalysis.id,
-                    GeneticAnalysis.user_id,
-                    GeneticAnalysis.current_step,
-                    GeneticAnalysis.analysis_status,
-                )
-                .where(
-                    GeneticAnalysis.analysis_status.in_(['processing', 'pending']),
-                    GeneticAnalysis.deleted_at.is_(None),
-                )
-                .order_by(GeneticAnalysis.id)
-            )
-            stale = result.all()
-            if stale:
-                for analysis_id, user_id, step, status in stale:
-                    print(f"🔄 Re-queuing {status} analysis {analysis_id} "
-                          f"(user {user_id}, step: {step or 'none'})")
-                    await analysis_queue.enqueue_analysis(
-                        analysis_id, user_id, _bypass_limit=True,
-                    )
-                print(f"🔄 Re-queued {len(stale)} stale analyses for resume")
-            else:
-                print("✅ No stale analyses found")
-    except Exception as e:
-        print(f"⚠️ Stale analysis check failed: {e}")
+    # NOTE: Analysis jobs are NO LONGER run inside this process.
+    # The 'worker' Docker service polls the DB and runs them in a completely
+    # separate process so the FastAPI event loop is never touched by analysis code.
+    print("🚀 API server started (analysis handled by worker service)")
 
     # Check ClinVar PG availability (instant — just counts rows)
     from .services.clinvar_local import get_clinvar_local_service
@@ -176,8 +141,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # ── Shutdown ─────────────────────────────────────────────────
-    await analysis_queue.stop()
-    print("🛑 Analysis queue processor stopped")
+    print("🛑 API server stopping")
 
 
 # Create FastAPI app

@@ -1,12 +1,10 @@
 """
 Upload routes for genetic data files with optimized variant storage.
 """
-import asyncio
 import logging
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status, BackgroundTasks
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 from sqlalchemy import select, func, delete, update
 
 from .auth_routes import get_current_user
@@ -14,9 +12,6 @@ from ..db.database import get_session, async_session_factory
 from ..db.models import GeneticAnalysis, AnalysisVariant, DashboardCache
 from ..utils.vcf_parser import VCFParser
 from ..services.variant_uploader import VariantUploader
-from ..services.analysis_service import ComprehensiveAnalysisService
-from ..services.analysis_queue import queue_analysis
-from ..core.container import ServiceManager
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +44,7 @@ async def _process_upload_background(
                 analysis_id, variants_data, on_progress=report_progress,
             )
 
-            # Mark variant upload complete
+            # Variant upload complete — queue for the worker process
             await session.execute(
                 update(GeneticAnalysis)
                 .where(GeneticAnalysis.id == analysis_id)
@@ -57,28 +52,13 @@ async def _process_upload_background(
                     total_variants=processed_count,
                     processed_variants=0,
                     progress_percentage=0,
-                    current_step='starting_analysis',
+                    current_step='queued',
+                    analysis_status='pending',
+                    job_logs=None,
                 )
             )
             await session.commit()
-
-        # Auto-start the comprehensive analysis
-        try:
-            async with ServiceManager() as service_manager:
-                analysis_service = service_manager.get_analysis_service(user_id)
-                await analysis_service.process_analysis(analysis_id)
-        except Exception as e:
-            logger.error(f"Background analysis failed for {analysis_id}: {e}")
-            async with async_session_factory() as session:
-                await session.execute(
-                    update(GeneticAnalysis)
-                    .where(GeneticAnalysis.id == analysis_id)
-                    .values(
-                        analysis_status='failed',
-                        current_step=f'Analysis error: {str(e)[:200]}',
-                    )
-                )
-                await session.commit()
+            logger.info(f"Upload complete for analysis {analysis_id} ({processed_count} variants). Queued for worker.")
 
     except Exception as e:
         logger.error(f"Background upload failed for analysis {analysis_id}: {e}")

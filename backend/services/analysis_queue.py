@@ -163,10 +163,37 @@ class AnalysisQueue:
         analysis_service = ComprehensiveAnalysisService(user_id=user_id)
         
         async def run_job():
+            """Async wrapper that runs on the main event loop for lifecycle management,
+            but delegates the heavy analysis work to a thread so the main loop stays free."""
             try:
-                result = await analysis_service.process_analysis(analysis_id)
+                # Run the CPU/DB-heavy analysis in its own OS thread with its own
+                # asyncio event loop.  asyncio.to_thread() awaits a Future on the
+                # main loop — the main loop is free to serve HTTP requests the whole time.
+                def _analyse_in_thread():
+                    _loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(_loop)
+                    try:
+                        async def _do():
+                            # Create a fresh engine + session factory bound to this
+                            # thread's event loop.  The proxy in database.py will
+                            # automatically use it for all async_session_factory() calls.
+                            from ..db.database import (
+                                make_thread_engine_and_factory,
+                                _session_factory_ctx,
+                            )
+                            _engine, _factory = make_thread_engine_and_factory()
+                            _token = _session_factory_ctx.set(_factory)
+                            try:
+                                await analysis_service.process_analysis(analysis_id)
+                            finally:
+                                _session_factory_ctx.reset(_token)
+                                await _engine.dispose()
+                        _loop.run_until_complete(_do())
+                    finally:
+                        _loop.close()
+
+                await asyncio.to_thread(_analyse_in_thread)
                 logger.info(f"Completed analysis {analysis_id} for user {user_id}")
-                return result
             except asyncio.CancelledError:
                 # Server is reloading (hot-reload) or shutting down — mark interrupted.
                 logger.warning(f"Analysis {analysis_id} cancelled (server reload/shutdown)")

@@ -5,7 +5,7 @@ Fixed version with correct SQLAlchemy ORM usage patterns.
 import asyncio
 import json
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Request, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, func
 from starlette.responses import StreamingResponse
@@ -14,7 +14,6 @@ from pydantic import BaseModel
 
 from ..db.database import get_session, async_session_factory
 from ..db.models import GeneticAnalysis, HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait, SportsPerformance, CognitiveProfile, PersonalityTrait, AncestryResult, CarrierStatus, WellnessMetric, MethylationProfile, DetoxificationProfile, RareMutation, UncommonMutation, DashboardCache
-from ..core.container import ServiceManager
 from .auth_routes import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -62,15 +61,13 @@ router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 async def start_analysis(
     analysis_id: int,
     request: Optional[AnalysisRequest] = None,
-    background_tasks: BackgroundTasks = BackgroundTasks(),
     db: AsyncSession = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
     """
-    Start genetic analysis for a specific analysis ID.
+    Queue a genetic analysis.  The worker process picks it up within ~2 s.
     """
     try:
-        # Get analysis record
         result = await db.execute(
             select(GeneticAnalysis).where(
                 GeneticAnalysis.id == analysis_id,
@@ -79,63 +76,107 @@ async def start_analysis(
             )
         )
         analysis = result.scalar_one_or_none()
-        
+
         if not analysis:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Analysis not found"
             )
-        
-        # Update analysis status to processing using SQLAlchemy update
-        # Guard: if already processing (e.g. auto-started by upload), don't reset
+
         current_status = getattr(analysis, 'analysis_status', None)
-        if current_status == 'processing':
+        if current_status in ('processing', 'queued', 'pending'):
             return AnalysisResponse(
                 analysis_id=analysis_id,
-                status="processing",
-                message="Analysis is already in progress",
+                status=current_status,
+                message="Analysis is already queued or in progress",
                 total_variants=getattr(analysis, 'total_variants', 0) or 0
             )
 
+        # Write 'pending' — the worker detects this and starts working
         await db.execute(
             update(GeneticAnalysis)
             .where(GeneticAnalysis.id == analysis_id)
             .values(
-                analysis_status="processing",
+                analysis_status="pending",
                 progress_percentage=0,
-                current_step="initializing"
+                current_step="queued",
+                job_logs=None,
             )
         )
         await db.commit()
-        
-        # Refresh to get updated values
-        await db.refresh(analysis)
-        
-        # Start background processing
-        async def run_analysis():
-            try:
-                async with ServiceManager() as service_manager:
-                    analysis_service = service_manager.get_analysis_service(current_user.id)
-                    await analysis_service.process_analysis(analysis_id)
-            except Exception as e:
-                logger.error(f"Background analysis failed: {e}")
-        
-        background_tasks.add_task(run_analysis)
-        
+
         return AnalysisResponse(
             analysis_id=analysis_id,
-            status="processing",
-            message="Analysis started successfully",
+            status="pending",
+            message="Analysis queued — worker will start shortly",
             total_variants=getattr(analysis, 'total_variants', 0) or 0
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error starting analysis {analysis_id}: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to start analysis"
+            detail="Failed to queue analysis"
+        )
+
+
+@router.post("/regenerate-insights/{analysis_id}")
+async def regenerate_insights(
+    analysis_id: int,
+    db: AsyncSession = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """Queue insight regeneration.  Worker picks it up within ~2 s."""
+    try:
+        result = await db.execute(
+            select(GeneticAnalysis).where(
+                GeneticAnalysis.id == analysis_id,
+                GeneticAnalysis.user_id == current_user.id,
+                GeneticAnalysis.deleted_at.is_(None),
+            )
+        )
+        analysis = result.scalar_one_or_none()
+
+        if not analysis:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Analysis not found",
+            )
+
+        current_status = getattr(analysis, 'analysis_status', None)
+        if current_status in ('processing', 'queued', 'pending'):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Analysis is currently processing",
+            )
+
+        await db.execute(
+            update(GeneticAnalysis)
+            .where(GeneticAnalysis.id == analysis_id)
+            .values(
+                analysis_status="pending",
+                progress_percentage=90,
+                current_step="regenerating_insights",
+                job_logs=None,
+            )
+        )
+        await db.commit()
+
+        return {
+            "analysis_id": analysis_id,
+            "status": "pending",
+            "message": "Insight regeneration queued",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting insight regeneration for {analysis_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to start insight regeneration",
         )
 
 
@@ -419,7 +460,6 @@ async def pause_analysis(
 @router.post("/resume/{analysis_id}")
 async def resume_analysis(
     analysis_id: int,
-    background_tasks: BackgroundTasks = BackgroundTasks(),
     db: AsyncSession = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
@@ -449,29 +489,19 @@ async def resume_analysis(
                 detail=f"Cannot resume analysis with status '{current_status}'. Only paused/stopped/failed/processing analyses can be resumed."
             )
         
-        # Update status to processing
+        # Queue the analysis — the worker picks it up within ~2 s
         await db.execute(
             update(GeneticAnalysis)
             .where(GeneticAnalysis.id == analysis_id)
             .values(
-                analysis_status="processing",
-                current_step=f"resuming from {analysis.processed_variants or 0} variants"
+                analysis_status="pending",
+                current_step=f"queued (resume from {analysis.processed_variants or 0} variants)",
+                job_logs=None,
             )
         )
         await db.commit()
-        
-        # Restart the background processing job
-        async def run_analysis():
-            try:
-                async with ServiceManager() as service_manager:
-                    analysis_service = service_manager.get_analysis_service(current_user.id)
-                    await analysis_service.process_analysis(analysis_id)
-            except Exception as e:
-                logger.error(f"Resumed analysis failed: {e}")
-        
-        background_tasks.add_task(run_analysis)
-        
-        return {"message": "Analysis resumed successfully", "analysis_id": analysis_id}
+
+        return {"message": "Analysis queued for resume", "analysis_id": analysis_id}
     
     except HTTPException:
         raise
@@ -1077,31 +1107,7 @@ async def list_user_analyses(
         )
 
 
-# Background task handler with proper error handling
+
+# Legacy stub kept for import compatibility — analysis is now handled by the worker process
 async def background_analysis_task(analysis_id: int, user_id: int, strategy: str):
-    """
-    Background task to run genetic analysis with proper error handling.
-    """
-    try:
-        async with ServiceManager() as service_manager:
-            analysis_service = service_manager.get_analysis_service(user_id)
-            await analysis_service.process_analysis(analysis_id, strategy)
-            
-    except Exception as e:
-        logger.error(f"Background analysis task failed for analysis {analysis_id}: {str(e)}")
-        
-        # Update analysis status to failed
-        try:
-            from ..db.database import async_session_factory
-            async with async_session_factory() as db:
-                await db.execute(
-                    update(GeneticAnalysis)
-                    .where(GeneticAnalysis.id == analysis_id)
-                    .values(
-                        analysis_status="failed",
-                        current_step=f"Failed: {str(e)}"
-                    )
-                )
-                await db.commit()
-        except Exception as db_error:
-            logger.error(f"Failed to update analysis status after error: {str(db_error)}")
+    pass

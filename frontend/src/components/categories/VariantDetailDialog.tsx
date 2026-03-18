@@ -217,10 +217,14 @@ function impactColor(impact?: string): string {
 
 function clinSigColor(sig: string): string {
   const s = sig.toLowerCase()
+  if (s.includes('conflicting')) return 'bg-amber-500/15 text-amber-400 border-amber-500/30'
   if (s.includes('pathogenic') && !s.includes('benign')) return 'bg-red-500/15 text-red-400 border-red-500/30'
   if (s.includes('likely_pathogenic')) return 'bg-orange-500/15 text-orange-400 border-orange-500/30'
   if (s.includes('uncertain')) return 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30'
   if (s.includes('benign')) return 'bg-green-500/15 text-green-400 border-green-500/30'
+  if (s.includes('drug') && s.includes('response')) return 'bg-purple-500/15 text-purple-400 border-purple-500/30'
+  if (s.includes('risk factor')) return 'bg-orange-500/15 text-orange-400 border-orange-500/30'
+  if (s.includes('protective')) return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
   return 'bg-gray-500/15 text-gray-400 border-gray-500/30'
 }
 
@@ -529,8 +533,42 @@ export default function VariantDetailDialog({
                       ))}
                     </div>
                   )}
+
+                  {/* Interpretation guidance when conflicting */}
+                  {ps.conflicts.length > 0 && (
+                    <div className={`mt-2 text-[10px] ${textSecondary} leading-relaxed border-t ${border} pt-2`}>
+                      <Shield className="h-3 w-3 inline mr-1 text-amber-400" />
+                      Conflicting evidence means different sources disagree on this variant&apos;s clinical impact.
+                      The composite score may not accurately reflect actual risk. Consult a genetic counselor for clinical interpretation.
+                    </div>
+                  )}
                 </div>
               )
+            })()}
+
+            {/* ── Data Source Availability ── */}
+            {(() => {
+              const sources = [
+                { key: 'clinvar', label: 'ClinVar', available: !!(details.clinvar?.found || (details.clinical_significance && details.clinical_significance.length > 0)) },
+                { key: 'ensembl', label: 'Ensembl VEP', available: !!(details.transcripts && details.transcripts.length > 0) },
+                { key: 'gnomad', label: 'gnomAD', available: !!details.gnomad?.found },
+                { key: 'alpha_missense', label: 'AlphaMissense', available: !!details.alpha_missense?.found },
+                { key: 'snpedia', label: 'SNPedia', available: !!details.snpedia?.found },
+                { key: 'publications', label: 'Literature', available: !!(details.publications && details.publications.count > 0) },
+              ]
+              const available = sources.filter(s => s.available)
+              const unavailable = sources.filter(s => !s.available)
+              return unavailable.length > 0 ? (
+                <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] ${textSecondary}`}>
+                  <span className="font-medium">Sources:</span>
+                  {available.map(s => (
+                    <span key={s.key} className="text-green-400/70">✓ {s.label}</span>
+                  ))}
+                  {unavailable.map(s => (
+                    <span key={s.key} className="text-gray-500">✗ {s.label}</span>
+                  ))}
+                </div>
+              ) : null
             })()}
 
             {/* ── Clinical Significance ── */}
@@ -580,6 +618,26 @@ export default function VariantDetailDialog({
                         </a>
                       </div>
                     ))}
+
+                    {/* Mixed-evidence warning when ClinVar entries contain BOTH pathogenic and benign reports */}
+                    {(() => {
+                      const allSigs = details.clinvar!.entries!.flatMap(e => e.clinical_significance.map(s => s.toLowerCase()))
+                      const hasPathogenic = allSigs.some(s => s.includes('pathogenic') && !s.includes('conflicting') && !s.includes('benign'))
+                      const hasBenign = allSigs.some(s => s.includes('benign'))
+                      if (hasPathogenic && hasBenign) {
+                        return (
+                          <div className={`flex items-start gap-1.5 text-[10px] ${textSecondary} leading-relaxed mt-2 pt-2 border-t ${border}`}>
+                            <AlertTriangle className="h-3 w-3 text-amber-400 mt-0.5 flex-shrink-0" />
+                            <span>
+                              This variant has <span className="text-red-400 font-medium">pathogenic</span> and <span className="text-green-400 font-medium">benign</span> reports
+                              from different submitters. The clinical significance depends on the specific condition and the submitting laboratory&apos;s evidence.
+                              Verify with your healthcare provider.
+                            </span>
+                          </div>
+                        )
+                      }
+                      return null
+                    })()}
                   </div>
                 )}
 

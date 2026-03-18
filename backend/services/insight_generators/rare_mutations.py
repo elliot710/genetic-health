@@ -4,7 +4,8 @@ import logging
 from ...db.models import RareMutation
 from .base import (
     GeneratorContext, extract_gene_and_consequence, extract_frequency,
-    get_user_genotype, get_ref_allele, is_homozygous_reference,
+    get_user_genotype, _get_effective_ref_allele, is_homozygous_reference,
+    is_no_call_genotype,
 )
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,11 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
         if not variant_rsid:
             continue
 
-        annotation_result = ctx.annotation_results.get(variant_rsid)
+        # Use pre-computed profile when available
+        profile = ctx.variant_profiles.get(variant_rsid)
+
+        annotation_result = (profile.annotation_result if profile
+                             else ctx.annotation_results.get(variant_rsid))
         if not annotation_result or not annotation_result.annotation_data:
             continue
 
@@ -30,28 +35,41 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
         if not ((cv_local and cv_local.get('found')) or (clinvar_api and clinvar_api.get('found'))):
             continue
 
-        # Skip homozygous-reference genotypes — if both alleles are
-        # identical at a rare ClinVar position, the user almost certainly
-        # carries the reference allele, not the pathogenic alternate.
-        user_gt = get_user_genotype(variant)
-        ref_allele = get_ref_allele(variant)
-        if is_homozygous_reference(user_gt, ref_allele):
+        # Genotype and zygosity from profile (consistent ref allele)
+        if profile:
+            user_gt = profile.genotype
+            if profile.is_no_call or profile.is_hom_ref:
+                continue
+            effective_ref = profile.effective_ref
+            freq = profile.population_frequency  # None = unknown, float = known
+        else:
+            user_gt = get_user_genotype(variant)
+            if is_no_call_genotype(user_gt):
+                continue
+            effective_ref = _get_effective_ref_allele(variant, annotation_result)
+            if effective_ref and is_homozygous_reference(user_gt, effective_ref):
+                continue
+            raw_freq = extract_frequency(annotation_result)
+            # Also try gnomAD direct AF if ensembl frequency missing
+            if raw_freq == 0.0:
+                gnomad = annotation_result.annotation_data.get('annotations', {}).get('gnomad', {})
+                if gnomad and gnomad.get('found'):
+                    raw_freq = gnomad.get('af', 0.0) or 0.0
+            freq = raw_freq if raw_freq > 0 else None
+
+        # Must be truly rare (< 1% population frequency)
+        # When frequency is unknown (None), we allow it through
+        # but will mark it as unknown in the output
+        if freq is not None and freq > 0.01:
             continue
 
-        # Extract frequency — must be truly rare (< 1%)
-        freq = extract_frequency(annotation_result)
-        # Also try gnomAD direct AF if ensembl frequency missing
-        if freq == 0.0:
-            gnomad = annotation_result.annotation_data.get('annotations', {}).get('gnomad', {})
-            if gnomad and gnomad.get('found'):
-                freq = gnomad.get('af', 0.0) or 0.0
-        if freq > 0.01:
-            continue
-
-        # Extract gene and consequence
-        gene, consequence, impact = extract_gene_and_consequence(
-            annotation_result, ctx.rsid_gene_map
-        )
+        # Extract gene and consequence (prefer profile's pre-computed values)
+        if profile and profile.gene:
+            gene, consequence, impact = profile.gene, profile.consequence, profile.impact
+        else:
+            gene, consequence, impact = extract_gene_and_consequence(
+                annotation_result, ctx.rsid_gene_map
+            )
 
         # Extract clinical significance from ClinVar local
         clinical_significance = 'uncertain'
@@ -161,7 +179,7 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
             disease_association=disease_association or 'No known disease association',
             penetrance=penetrance,
             inheritance_pattern=inheritance_pattern,
-            population_frequency=freq if freq > 0 else 0.001,
+            population_frequency=freq if freq is not None else None,
             clinical_actions=clinical_actions,
             specialist_referral=clinical_significance in ('pathogenic', 'likely_pathogenic'),
             genetic_counseling_urgent=clinical_significance == 'pathogenic',
@@ -170,12 +188,15 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
             associated_variants=[variant_rsid]
         ))
 
-    # Sort by clinical priority
+    # Sort by clinical priority, then by frequency (unknown last)
     sig_priority = {
         'pathogenic': 0, 'likely_pathogenic': 1, 'risk_factor': 2,
         'conflicting': 3, 'uncertain': 4
     }
-    rare_mutations.sort(key=lambda m: (sig_priority.get(m.clinical_significance, 5), m.population_frequency))
+    rare_mutations.sort(key=lambda m: (
+        sig_priority.get(m.clinical_significance, 5),
+        m.population_frequency if m.population_frequency is not None else 1.0,
+    ))
 
     for m in rare_mutations:
         ctx.session.add(m)

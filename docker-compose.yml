@@ -30,6 +30,10 @@ services:
       - "max_parallel_workers_per_gather=2"
       - "-c"
       - "idle_in_transaction_session_timeout=300000"
+      - "-c"
+      - "max_wal_size=2GB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -130,6 +134,38 @@ services:
     ports:
       - "9090:9090"     # Prometheus UI (http://localhost:9090)
     restart: unless-stopped
+
+  # Analysis Worker — completely separate process from the API server.
+  # Polls the DB for queued analyses and runs them in isolation so the
+  # FastAPI event loop is NEVER touched by analysis code.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/genetic_health_db
+      - NCBI_API_KEY=${NCBI_API_KEY}
+      - ALPHA_MISSENSE_DATA_DIR=/app/data_sources/alpha_missense
+      - CLINVAR_DATA_DIR=/app/data_sources/clinvar
+      - GNOMAD_DATA_DIR=/app/data_sources/gnomad
+      - ENSEMBL_DATA_DIR=/app/data_sources/ensembl/homo_sapiens
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/genetic-health-490017-b854a959d61b.json
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+      - OTEL_SERVICE_NAME=dna-toolkit-worker
+      - OTEL_CONSOLE_EXPORT=${OTEL_CONSOLE_EXPORT:-false}
+      - WORKER_POLL_INTERVAL=2
+      - WORKER_MAX_CONCURRENT=2
+    volumes:
+      - .:/app
+      - /app/.venv
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    command: ["uv", "run", "python", "-m", "backend.worker"]
 
   # Next.js Frontend
   frontend:

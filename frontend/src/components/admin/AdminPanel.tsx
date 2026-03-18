@@ -801,6 +801,15 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     setJobActionLoading(null)
   }
 
+  const regenInsights = async (id: number) => {
+    setJobActionLoading(id)
+    try {
+      const res = await authFetch(`${API}/jobs/${id}/regenerate-insights`, { method: 'POST', headers })
+      if (res.ok) { fetchJobs(); fetchJobsSummary() }
+    } catch { /* ignore */ }
+    setJobActionLoading(null)
+  }
+
   const pauseJob = async (id: number) => {
     setJobActionLoading(id)
     try {
@@ -1308,9 +1317,9 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
           <TabsTrigger value="jobs" className="gap-2 relative">
             <Activity className="h-4 w-4" />
             Jobs
-            {jobsSummary && (jobsSummary.processing + jobsSummary.pending) > 0 && (
+            {jobs.filter(j => j.analysis_status === 'processing' || j.analysis_status === 'pending').length > 0 && (
               <Badge className="ml-1 h-5 min-w-[20px] px-1 text-xs bg-blue-500 text-white">
-                {jobsSummary.processing + jobsSummary.pending}
+                {jobs.filter(j => j.analysis_status === 'processing' || j.analysis_status === 'pending').length}
               </Badge>
             )}
           </TabsTrigger>
@@ -2863,42 +2872,46 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                             <Button
                               size="sm"
                               variant="outline"
-                              className="h-7 px-2 text-xs text-violet-400 border-violet-500/30 hover:bg-violet-500/10"
+                              className="h-7 w-7 p-0 text-violet-400 border-violet-500/30 hover:bg-violet-500/10"
                               onClick={() => openLogs(job.id)}
+                              title="View logs"
                             >
-                              <FileText className="h-3 w-3 mr-1" /> Logs
+                              <FileText className="h-3 w-3" />
                             </Button>
                             {(job.analysis_status === 'processing' || job.analysis_status === 'pending') && (
                               <Button
                                 size="sm"
                                 variant="outline"
-                                className="h-7 px-2 text-xs text-yellow-400 border-yellow-500/30 hover:bg-yellow-500/10"
+                                className="h-7 w-7 p-0 text-yellow-400 border-yellow-500/30 hover:bg-yellow-500/10"
                                 disabled={jobActionLoading === job.id}
                                 onClick={() => pauseJob(job.id)}
+                                title="Pause"
                               >
-                                <Pause className="h-3 w-3 mr-1" /> Pause
+                                <Pause className="h-3 w-3" />
                               </Button>
                             )}
                             {job.analysis_status === 'paused' && (
                               <Button
                                 size="sm"
                                 variant="outline"
-                                className="h-7 px-2 text-xs text-green-400 border-green-500/30 hover:bg-green-500/10"
+                                className="h-7 w-7 p-0 text-green-400 border-green-500/30 hover:bg-green-500/10"
                                 disabled={jobActionLoading === job.id}
                                 onClick={() => resumeJob(job.id)}
+                                title="Resume"
                               >
-                                <Play className="h-3 w-3 mr-1" /> Resume
+                                <Play className="h-3 w-3" />
                               </Button>
                             )}
                             {(job.analysis_status === 'processing' || job.analysis_status === 'pending' || job.analysis_status === 'paused') && (
                               <Button
                                 size="sm"
                                 variant="outline"
-                                className="h-7 px-2 text-xs text-amber-400 border-amber-500/30 hover:bg-amber-500/10"
+                                className="h-7 w-7 p-0 text-amber-400 border-amber-500/30 hover:bg-amber-500/10"
                                 disabled={jobActionLoading === job.id}
                                 onClick={() => cancelJob(job.id)}
+                                title="Cancel"
                               >
-                                <Square className="h-3 w-3 mr-1" /> Cancel
+                                <Square className="h-3 w-3" />
                               </Button>
                             )}
                             {(job.analysis_status === 'failed' || job.analysis_status === 'completed') && (
@@ -2908,17 +2921,31 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                                 className="h-7 px-2 text-xs text-blue-400 border-blue-500/30 hover:bg-blue-500/10"
                                 disabled={jobActionLoading === job.id}
                                 onClick={() => restartJob(job.id)}
+                                title="Full re-analysis"
                               >
                                 <Play className="h-3 w-3 mr-1" /> Restart
+                              </Button>
+                            )}
+                            {(job.analysis_status === 'failed' || job.analysis_status === 'completed') && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-xs text-purple-400 border-purple-500/30 hover:bg-purple-500/10"
+                                disabled={jobActionLoading === job.id}
+                                onClick={() => regenInsights(job.id)}
+                                title="Regenerate insights only (skip annotation pipeline)"
+                              >
+                                <Sparkles className="h-3 w-3 mr-1" /> Regen
                               </Button>
                             )}
                             {job.analysis_status !== 'processing' && job.analysis_status !== 'paused' && (
                               <Button
                                 size="sm"
                                 variant="outline"
-                                className="h-7 px-2 text-xs text-red-400 border-red-500/30 hover:bg-red-500/10"
+                                className="h-7 w-7 p-0 text-red-400 border-red-500/30 hover:bg-red-500/10"
                                 disabled={jobActionLoading === job.id}
                                 onClick={() => setDeleteConfirmJobId(job.id)}
+                                title="Delete job"
                               >
                                 <Trash2 className="h-3 w-3" />
                               </Button>
