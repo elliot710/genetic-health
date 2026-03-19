@@ -1,628 +1,450 @@
-# Genetic Health Analysis Toolkit — Known Issues & Improvements
+# Bugs, Shortcomings & Improvement Plan
 
-> **Scope:** All backend and frontend modules as of March 2026  
-> **Issues found:** 20 bugs, 3 data quality problems, 5 architectural gaps  
-> Status ratings: 🔴 CRITICAL | 🟠 HIGH | 🟡 MEDIUM | 🟢 LOW  
+> Full audit completed 2026-03-18. Covers all backend services, DB schema, insight generators, annotation pipeline, variant mapping system, and frontend integration.
 
 ---
 
 ## Table of Contents
 
-1. [Data Source Issues](#1-data-source-issues)
-2. [Insight Generator Bugs](#2-insight-generator-bugs)
-3. [Scoring Engine Issues](#3-scoring-engine-issues)
-4. [Analysis Pipeline Bugs](#4-analysis-pipeline-bugs)
-5. [Data Quality Issues](#5-data-quality-issues)
-6. [Architectural Gaps](#6-architectural-gaps)
-7. [Frontend Issues](#7-frontend-issues)
-8. [Fix Priority Order](#8-fix-priority-order)
+1. [Critical Bugs (False Positive Insights)](#1-critical-bugs)
+2. [Variant Mapping & Auto-Categorizer Flaws](#2-variant-mapping-flaws)
+3. [Scoring Engine & Risk Assessment Issues](#3-scoring-engine-issues)
+4. [Data Quality Issues](#4-data-quality-issues)
+5. [Architecture Problems](#5-architecture-problems)
+6. [Dead Code & Cleanup](#6-dead-code)
+7. [Performance Issues](#7-performance-issues)
+8. [Frontend Issues](#8-frontend-issues)
+9. [Recommended Improvements](#9-recommended-improvements)
 
 ---
 
-## 1. Data Source Issues
+## 1. Critical Bugs (False Positive Insights)
 
----
+### BUG-01: No Risk Allele in Variant Mappings — Root Cause of False Positives
 
-### BUG-01 — gnomAD data virtually absent 🔴 CRITICAL
+**Severity: CRITICAL**
 
-**File:** `services/gnomad_local.py`, ETL pipeline  
-**Tables affected:** `gnomad_variants`, `shared_variant_annotations.gnomad_data`
+The variant_mappings table stores rsid → condition associations but **never stores which allele is the risk allele**. The mapping data looks like:
 
-**Problem:**  
-Only **305 of 714,586** shared annotations have gnomAD data populated (0.04%). This renders 40% of the scoring engine's weight unavailable:
-
-| Dead source | Weight lost |
-|-------------|-------------|
-| CADD PHRED | 0.15 |
-| gnomAD AF | 0.10 |
-| SIFT | 0.05 |
-| PolyPhen | 0.05 |
-| PhyloP conservation | 0.05 |
-| SpliceAI | 0.05 |
-| **Total** | **0.45** |
-
-All variant pathogenicity scores are computed on at most 55% of their intended evidence base.
-
-**Impact:**  
-- `uncommon_mutations` generator always produces 0 results (requires gnomAD AF in range 0.001–0.05)
-- Common benign variants with no ClinVar data cannot be downgraded via high population frequency
-- CADD/SIFT/PolyPhen scores (excellent computational predictors) are unused
-
-**Fix:**  
-1. Verify `gnomad_variants` table is populated: `SELECT COUNT(*) FROM gnomad_variants;`
-2. Re-run gnomAD ETL import script against the local gnomAD TSV files in `data_sources/gnomad/`
-3. Re-run `annotation_source_configs` to enable the gnomAD local source
-4. After ETL: run `SELECT COUNT(*) FROM shared_variant_annotations WHERE gnomad_data->>'found' = 'true';` to confirm
-
----
-
-### BUG-02 — AlphaMissense hit rate near zero 🟠 HIGH
-
-**File:** `services/alpha_missense_local.py` (tabix lookup)  
-**Table:** `shared_variant_annotations.alpha_missense_data`
-
-**Problem:**  
-Only 2,504 of 714,586 annotations have AlphaMissense data (`found:true`) = **0.35%**. AlphaMissense covers ~70M human missense variants and should match substantially more user variants.
-
-**Observed in job logs:**
-```
-AlphaMissense: 181 found (0.17%) of 105,204 RSIDs queried in last run
+```json
+{"condition": "Type 2 Diabetes", "risk_multiplier": 1.4}
 ```
 
-**Likely root causes (in order of probability):**
-1. **Chromosome naming mismatch**: tabix files use `chr1` but queries use `1` or vice versa
-2. **Position off-by-1**: 0-based vs 1-based coordinate mismatch between tabix and the position stored in `genetic_markers`
-3. **Wrong build**: Tabix indexed on GRCh38 but user variants are GRCh37
-4. **Incomplete tabix coverage**: data_sources/alpha_missense/ may contain only one chromosome file
+This means the system knows *which variant position* is associated with a disease, but not *which allele at that position* causes the risk. The only defense is `is_homozygous_reference()` — but this requires a known reference allele, which is unavailable for 80% of markers (see BUG-04).
 
-**Fix:**
-```bash
-# Check the tabix header to see chromosome notation
-docker exec dna_toolkit-backend-1 uv run python -c "
-import pysam
-tb = pysam.TabixFile('data_sources/alpha_missense/AlphaMissense_hg38.tsv.gz')
-print(tb.contigs[:5])
-"
-# Compare to genetic_markers.chromosome values
-docker exec -it dna_toolkit-postgres-1 psql -U postgres genetic_health_db \
-  -c "SELECT chromosome, COUNT(*) FROM genetic_markers GROUP BY chromosome ORDER BY 2 DESC LIMIT 10;"
-```
+**Impact**: A user with rs7903146 CC (homozygous reference = no risk) could be flagged for Type 2 Diabetes if the ref allele can't be resolved from annotations.
+
+**Fix**: Add `risk_allele` and `protective_allele` fields to variant_mappings. The `generate_from_maps()` function should verify the user's genotype contains the risk allele before generating an insight.
 
 ---
 
-### BUG-03 — Ensembl VEP data lacks gene_symbol for 99.8% of records 🟠 HIGH
+### BUG-02: Auto-Categorizer Generates Mass Low-Quality Mappings
 
-**File:** `services/shared_annotation_service.py`, `services/insight_generators/base.py`  
-**Function:** `extract_gene_and_consequence()`
+**Severity: CRITICAL**
 
-**Problem:**  
-714,586 annotations have `ensembl_data` populated. But only 1,532 have `gene_symbol` in `transcript_consequences`. The `extract_gene_and_consequence()` function falls back correctly to `rsid_gene_map` for gene resolution, but gene-based variant matching in all insight generators depends on this gene assignment being correct and complete.
+The auto-categorizer (`auto_categorizer.py`) generates ~20,000 variant mappings from ClinVar with severe quality problems:
 
-**Why it matters:**
-- `rsid_gene_map` has 60.5% coverage (built from ClinVar DB + Ensembl position lookup in Phase 1)
-- The remaining 39.5% of variants cannot be gene-matched to the registry
-- Gene-type mappings in `variant_mappings` (e.g. CYP2D6 drug metabolizer entries) can only be hit if the gene was resolved
+1. **Uniform risk_multiplier=3.0** for ALL "Pathogenic" variants regardless of disease penetrance, effect size, or population frequency. A rare Mendelian disease variant gets the same weight as a common risk factor.
 
-**Fix:**  
-Investigate why Ensembl VEP responses don't include transcript_consequences:
-1. Check if VEP API is returning `intergenic_consequences` instead of `transcript_consequences` (happens for intergenic variants)
-2. Check VEP response cache — if many responses are cached from a version that didn't include `gene_symbol`
-3. Run alembic revision 009 cleared broken annotations — verify those were re-annotated after clearing
+2. **Same condition string populates ALL fields**: `trait`, `domain`, `metric`, `nutrient`, `category` are all set to the disease name (e.g., "Galactosylceramide beta-galactosidase deficiency" as a nutrient name).
 
----
+3. **Garbage condition names leak through**: "See cases", "not provided", "not specified" appear as health conditions.
 
-## 2. Insight Generator Bugs
+4. **Variants spread across ALL categories**: A ClinVar pathogenic variant for "Cardiomyopathy" creates mappings in health, nutrition, sports, wellness, methylation, personality, cognitive, detox, physical — because the auto-categorizer doesn't filter by category relevance.
 
----
+5. **Conflicting classifications treated as pathogenic**: ClinVar "Conflicting classifications of pathogenicity" contains the substring "pathogenic" and was previously matched by the `clinvar_significance = 'Pathogenic'` rule. Although there's now a `~ILIKE 'conflicting%'` filter, variants with *multiple* ClinVar entries (some pathogenic, some conflicting) can still slip through via `DISTINCT ON (rsid)`.
 
-### BUG-04 — panel_marker_configs completely disconnected from insight generation 🔴 CRITICAL
+**Evidence from DB** (analysis 83):
+- rs1042522 (TP53): ClinVar says "Benign" + "Conflicting" → flagged as **Li-Fraumeni syndrome, HIGH risk**
+- rs1008642 (CAV3): ClinVar says "Pathogenic" + "Benign/Likely benign" → flagged as **Distal myopathy, HIGH risk**
+- rs1024611 (CCL2): ClinVar says "Uncertain significance" → flagged as **Coronary Artery Disease** (via gene map)
 
-**File:** ALL insight generators in `services/insight_generators/`  
-**Table:** `panel_marker_configs`
-
-**Problem:**  
-`panel_marker_configs` contains 20,221 carefully curated markers across 14 panels, including:
-- BRCA1 (rs80357906), BRCA2 (rs80358981), TP53 (rs28934578) in `rare_mutations`
-- APOE-ε4 in `health`
-- CYP2D6/CYP2C19/VKORC1 in `drug_responses`
-
-**None of these ever feed into insight generation.** No generator reads `panel_marker_configs`. The table is only used by `DiscoveryService._infer_panels()` to avoid re-discovering known markers.
-
-The actual insight generators read exclusively from `variant_mappings`. Many panel_marker_configs entries have NO corresponding `variant_mappings` entry — meaning high-value curated markers like BRCA1 pathogenic variants are silently ignored.
-
-**Evidence:**  
-```sql
--- Curated panel entries with no variant_mapping match:
-SELECT p.rsid, p.panel_id, p.gene FROM panel_marker_configs p
-LEFT JOIN variant_mappings v ON v.key = p.rsid AND v.map_type = 'rsid'
-WHERE v.id IS NULL AND p.is_active = TRUE;
--- Returns thousands of rows including BRCA1/2 rsids
-```
-
-**Fix:**  
-Two options:
-1. **Preferred**: Write a one-time migration script to sync `panel_marker_configs` → `variant_mappings` for any rsid not already present. Use category-appropriate templates.
-2. **Alternative**: Add `panel_marker_configs` as a lookup step within `rare_mutations` generator and `health` generator (high-importance panels only).
+**Fix**: 
+- Validate that the variant's pathogenic classification applies specifically to the allele the user carries
+- Don't assign the same condition across all 12 categories — use disease ontology to determine relevant categories
+- Require ≥2-star ClinVar review status for auto-categorization
+- Filter out conditions like "not provided", "See cases", "not specified"
+- Cap risk_multiplier based on ClinVar evidence strength: 1-star=1.2, 2-star=1.5, 3-star=2.0, 4-star=3.0
 
 ---
 
-### BUG-05 — uncommon_mutations generator always produces 0 results 🔴 CRITICAL
+### BUG-03: Carrier Status False "Affected" from D/I Indel Code Misinterpretation
 
-**File:** `services/insight_generators/uncommon_mutations.py`  
-**Function:** `generate_uncommon_mutations()`
+**Severity: HIGH**
 
-**Problem:**  
-The generator requires `0.001 ≤ population_frequency ≤ 0.05` — the "uncommon" range. `extract_frequency()` tries these sources in order:
-1. Ensembl colocated_variants gnomAD frequencies
-2. gnomAD local AF
-3. 1000G global AF
+Consumer CSV genotypes use D/I codes for indels: DD = deletion/deletion, II = insertion/insertion, DI = heterozygous. The system interprets these by comparing ref and alt allele lengths to determine if D=ref or D=alt.
 
-With gnomAD data at 0.04% coverage (BUG-01), virtually no variants have their frequency populated. Result: `freq = 0.0` for 99.96%+ of variants → condition `freq >= 0.001` never satisfied → **0 insights always**.
+**Problem**: When `alt_alleles = 'N'` (placeholder, 11,610 markers), the function `indel_d_is_ref(ref='TT', alt='N')` compares `len('TT')=2 > len('N')=1` and concludes it's a "deletion variant" — treating DD as homozygous alternate = "affected".
 
-**Fix:**  
-- Fix BUG-01 (gnomAD ETL) as the primary fix
-- Short-term: expand `extract_frequency()` to include 1000G global AF as a frequency source, since `thousand_genomes_data` is present for 100% of annotations (though populated ratio unknown)
-- Verify 1000G data has `global_af` or equivalent: `SELECT thousand_genomes_data->'global_af' FROM shared_variant_annotations WHERE thousand_genomes_data IS NOT NULL LIMIT 5;`
+**Evidence from DB** (analysis 83):
+- rs267608531 (Autism X-linked): genotype=DD, ref=TT, alt=N → classified as **affected**
+- rs398124103 (Duchenne muscular dystrophy): genotype=DD, ref=CC, alt=N → classified as **affected**
+- rs886039136 (Fabry disease): genotype=DD, ref=GG, alt=N → classified as **affected**
+
+All these are false positives caused by `alt='N'` being interpreted as a real single-nucleotide allele.
+
+**Fix**: Treat `alt_alleles = 'N'` as unknown (same as None). `indel_d_is_ref()` should return None when either allele is 'N', causing the system to classify as 'carrier' (conservative) rather than 'affected'.
 
 ---
 
-### BUG-06 — zygosity_adjust alias table incomplete 🟠 HIGH
+### BUG-04: 80% of Markers Have ref_allele == alt_alleles (Ambiguous)
 
-**File:** `services/insight_generators/base.py`  
-**Function:** `zygosity_adjust()`, `_LEVEL_ALIASES`
+**Severity: HIGH**
 
-**Problem:**  
-`_LEVEL_ALIASES` maps non-standard risk levels to the 5-level severity ladder. However, several values used in manually-seeded variant mappings are NOT in the alias table:
+Database query shows **582,301 out of 731,703 markers (79.6%)** have `ref_allele == alt_alleles`. This happens because the consumer CSV uploader (`variant_uploader.py`) sets `ref_allele = genotype[0]` and `alt_alleles` to the other allele — but for homozygous genotypes (AA, CC, etc.), both are the same letter.
 
-| Value | Appears in | Effect |
-|-------|-----------|--------|
-| `mildly_reduced` | methylation mappings | No zygosity adjustment — always shows baseline |
-| `b12_dependent` | methylation mappings | Same |
-| `slow_processing` | methylation/wellness | Same |
-| `variant_detected` | personality/wellness | Same |
-| `sensitive` | nutrition mappings | Same |
+**Impact**: When ref == alt:
+- `_get_effective_ref_allele()` correctly returns None (it filters this case)
+- But then `is_homozygous_reference()` can't determine if user is hom-ref or hom-alt
+- `generate_from_maps()` skips the hom-ref filter and proceeds to insight generation
+- The user may be flagged for a disease where they carry ONLY the reference allele
 
-When `idx = None`, `zygosity_adjust` returns the `level` argument unchanged. Homozygous alternate users get the same insight severity as heterozygous users.
+The `_correct_ref_alleles()` phase is supposed to fix this using authoritative annotation sources, but the log shows "ref_allele correction: all markers already correct" — meaning either annotations lack ref data or the correction logic has bugs.
 
-**Fix:**
+**Fix**:
+- During Phase 2 annotation, when ClinVar/Ensembl/gnomAD provide authoritative ref alleles, update `genetic_markers.ref_allele` to the true reference
+- In insight generation, when ref allele is unavailable, require annotation confirmation before flagging
+
+---
+
+### BUG-05: Scoring Engine Overrides ClinVar "Conflicting" to "Likely Pathogenic"
+
+**Severity: HIGH**
+
+The rare mutation generator uses the scoring engine's `composite_score` to upgrade uncertain/conflicting ClinVar classifications:
+
 ```python
-# In base.py, add to _LEVEL_ALIASES:
-_LEVEL_ALIASES = {
-    ...existing entries...,
-    'mildly_reduced': 'average',   # methylation
-    'b12_dependent': 'moderate',   # methylation
-    'slow_processing': 'moderate', # methylation/wellness
-    'variant_detected': 'moderate', # personality
-    'sensitive': 'moderate',        # nutrition
-}
+if clinical_significance in ('uncertain', 'conflicting') and composite >= 0.60:
+    if score_classification in ('pathogenic', 'likely_pathogenic'):
+        clinical_significance = 'likely_pathogenic'
 ```
 
-Also add a warning log for any unrecognized level in `zygosity_adjust` to catch future issues.
+**Problem**: Computational predictors (CADD, PolyPhen, SIFT) score protein structure impact, NOT clinical pathogenicity. A variant can be computationally "damaging" but clinically benign (common polymorphism in a tolerated region). The scoring engine's composite can reach 0.60 from CADD + AlphaMissense alone without any clinical evidence.
+
+**Evidence from DB**: 6 variants with ClinVar "Conflicting" were upgraded to "likely_pathogenic" in rare_mutations (rs148247227, rs41284962, rs139372534, rs150555106, rs2230892, rs45450893).
+
+**Fix**: The scoring engine should NEVER override ClinVar clinical classifications. Computational scores should supplement, not replace, clinical curation. The rare mutation generator should only report variants as "likely_pathogenic" if ClinVar explicitly says so.
 
 ---
 
-### BUG-07 — Homozygous escalation fires when effective_ref is None 🟠 HIGH
+### BUG-06: Allele Mismatch Not Checked in rsid Map Matching
 
-**File:** `services/insight_generators/base.py`  
-**Functions:** `zygosity_adjust()`, `is_homozygous_reference()`
+**Severity: HIGH**
 
-**Problem:**  
-When `effective_ref is None` (ref allele unknown — Phase 2.5 correction didn't find a match), `is_homozygous_reference(genotype, ref_allele=None)` returns `False`. This causes the `zygosity_adjust` flow to fall through to the `else` branch (interpreted as "homozygous non-reference") and **escalate risk by 1 step**.
+When `generate_from_maps()` finds a variant in the rsid_map, it checks:
+1. Is user homozygous reference? (skip)
+2. Is ClinVar benign? (skip)
 
-Example: Variant `rs12345` with genotype `AA`. If the effective_ref is `A` (unknown at processing time), the user is actually homozygous reference (wild-type). But `zygosity_adjust` sees `effective_ref=None`, can't classify, escalates to `moderate` instead of `low`.
+But it **never checks if the user's alleles match the risk allele for the specific condition**. The Ensembl allele_string might say "G/A" (ref=G, alt=A) and the user has G/C — a completely different variant at the same position — but the system would still flag them.
 
-This generates false-positive elevated risks for thousands of common variants where the user is genuinely wild-type.
+**Example**: rs148247227 (RBP3) — Ensembl says alleles are C/T, but the user has GG. The user's G alleles don't match either C (ref) or T (alt). Yet it's flagged as "likely_pathogenic".
 
-**Fix:**  
-Add an explicit guard in `zygosity_adjust`:
+**Fix**: For rsid matches, verify that the user's genotype contains at least one of the known alternate alleles from annotation data. Strand-flip correction is already implemented in rare_mutations.py but NOT in `generate_from_maps()`.
+
+---
+
+## 2. Variant Mapping & Auto-Categorizer Flaws
+
+### FLAW-01: One-Size-Fits-All Template for All Categories ✅ FIXED
+
+~~The auto-categorizer fills the same fields (`trait`, `domain`, `metric`, `nutrient`, `category`) with the disease name regardless of which dashboard category the mapping targets.~~ Now uses `_populate_category_fields()` which sets only the semantically relevant dedup field (e.g. `nutrient` for nutrition, `domain` for cognitive) to the condition name, and others to the gene label.
+
+### FLAW-02: No ClinVar Review Status Filtering ✅ FIXED
+
+~~The auto-categorizer uses `clinical_significance ILIKE '%Pathogenic%'` without checking `review_status`.~~ Now filters out entries with "no assertion criteria provided", "no classification provided", empty, and "-" review statuses.
+
+### FLAW-03: PanelMarkerConfig vs VariantMapping Redundancy
+
+Two tables serve overlapping purposes:
+- `panel_marker_configs`: Panel-specific marker associations (admin UI)
+- `variant_mappings`: Category-level rsid/gene → insight data
+
+The carrier generator uses `variant_mappings` for its rsid_map. The relationship between these two tables is unclear — `panel_marker_configs` appears to be a UI layer that doesn't feed into insight generation.
+
+### FLAW-04: Gene Map Matching Too Broad
+
+When a variant maps to a gene via Ensembl/ClinVar, and that gene appears in the gene_map, the system generates an insight. But the gene_map only knows "CYP2D6 → drug response" — it doesn't know which variants in CYP2D6 are gain-of-function vs loss-of-function vs neutral. A synonymous variant in CYP2D6 should not trigger a drug response warning.
+
+The code partially addresses this by filtering `impact in ('HIGH', 'MODERATE')`, but many missense variants in well-known genes are benign (e.g., rs1135840 in CYP2D6 is benign).
+
+---
+
+## 3. Scoring Engine & Risk Assessment Issues
+
+### SCORE-01: ClinVar Local and ClinVar API Double-Counted
+
+Both `clinvar` and `clinvar_local` sources have weight 0.30 each (total 0.60). When both sources are available for a variant, ClinVar's opinion counts for 60% of the score — which is intentional as ClinVar is the gold standard. However, they're measuring the SAME underlying data (ClinVar's database). When they agree, the variant gets an inflated score. When they disagree (e.g., local has newer data), the composite becomes unpredictable.
+
+**Fix**: Use `max(clinvar_score, clinvar_local_score)` rather than summing both, or deduplicate ClinVar evidence.
+
+### SCORE-02: risk_multiplier Has No Evidence Basis
+
+Manual health mappings use risk_multiplier values like 1.2, 1.3, 1.4, 1.5. These appear to be arbitrary guesses rather than odds ratios from GWAS literature. The mapping for rs7903146 (TCF7L2) uses 1.4, but the actual per-allele odds ratio from GWAS is ~1.4 for heterozygous and ~2.0 for homozygous — suggesting the value is coincidentally close but not derived from evidence.
+
+Auto-categorized mappings uniformly use 3.0 for "Pathogenic" — treating all pathogenic variants equally regardless of penetrance, which ranges from <1% to >90% across different diseases.
+
+### SCORE-03: assess_risk_level Thresholds Are Coarse
+
 ```python
-if ref_allele is None:
-    # Cannot determine zygosity without reference — return baseline unchanged
-    return level
+if risk_multiplier >= 2.0: base = 'high'
+elif risk_multiplier >= 1.2: base = 'moderate'
+elif risk_multiplier <= 0.8: base = 'low'
+else: base = 'average'
 ```
 
----
+The gap between "moderate" (1.2x) and "high" (2.0x) is too wide. A 1.9x risk multiplier is classified as "moderate", while 2.0x jumps to "high". Also, the range 0.8–1.2 maps to "average" which is appropriate for neutral variants but the boundaries are arbitrary.
 
-### BUG-08 — Drug gene-map matching has no benign filter 🟠 HIGH
+### SCORE-04: zygosity_adjust Without ref_allele Falls Through Silently
 
-**File:** `services/insight_generators/drug_response.py`  
-**Function:** `generate_drug_responses()`
-
-**Problem:**  
-The rsid-map path calls `is_clinvar_benign()` correctly. But the gene-map path (matching to pharmacogenes like CYP2D6, CYP2C19, VKORC1) does **not** filter benign variants. Any variant in a pharmacogene — including purely intronic or synonymous variants with `likely_benign` classification — generates a drug response insight.
-
-**Consequence:** Users with common benign CYP2D6 haplotype markers may see "Poor Metabolizer" warnings for drugs when their functional status is actually normal.
-
-**Fix:**  
-In the gene-map matching loop in `generate_drug_responses`:
-```python
-# Add before generating drug insight from gene match:
-profile = profiles.get(variant.rsid)
-if profile and profile.is_benign:
-    continue
-```
+When `ref_allele=None` (80% of cases), `zygosity_adjust()` correctly avoids escalating, but it also doesn't de-escalate homozygous reference variants. Since the code can't distinguish hom-ref from hom-alt without a ref allele, it preserves the baseline — meaning the user gets the "heterozygous" level regardless of their actual genotype.
 
 ---
 
-### BUG-09 — Carrier status uses marker ref_allele instead of annotation-corrected ref 🟡 MEDIUM
+## 4. Data Quality Issues
 
-**File:** `services/insight_generators/carrier.py`  
-**Function:** `generate_carrier_status()`, `_classify_carrier_status()`
+### DATA-01: ✅ FIXED — gnomAD PG Table Is Empty (Tabix Fallback Added)
 
-**Problem:**  
-`generate_carrier_status` calls `get_ref_allele(variant)` which reads `variant.ref_allele` from the in-memory `VariantLite` object. For consumer CSV uploads, the initial `ref_allele` is set to `genotype[0]` — often just the first base of the genotype, not the true reference allele.
+All three gnomAD lookup paths now fall back to tabix files when PG is empty:
+- Single lookup (`lookup()`): PG → SQLite cache → tabix (added in prior session)
+- Position batch (`lookup_batch()` with coords): PG → tabix (added in prior session)  
+- rsid batch (`lookup_batch()` with rsids): PG → resolve coords from genetic_markers → tabix (added this session)
 
-Phase 2.5 corrects these in the DB, but the in-memory `VariantLite` objects are not refreshed after correction. Other generators use `_get_effective_ref_allele()` which checks the annotation-derived ref first — carrier generator does not.
+The job logs show `gnomAD PG: empty — run ETL`. The gnomAD ETL has not been run, meaning:
+- gnomAD data comes only from the SQLite cache (419 variants) and the CADD TSV tabix file
+- Backfill runs for ALL 609K variants but finds only 2 matches (0.0003%)
+- 143 seconds wasted querying an empty table
+- Population frequencies from gnomAD are essentially unavailable
 
-**Impact:** Carrier classification errors (e.g., classifying a genuine carrier as "affected" or vice versa) for variants where the stored ref_allele is wrong.
+### DATA-02: Ensembl VEP Cache Is Small
 
-**Fix:**  
-Replace `get_ref_allele(variant)` with `profile.effective_ref` in `_classify_carrier_status` calls, where `profile = profiles.get(variant.rsid)`.
+Only 712,732 variants cached vs 609,346 user variants. The cache hit rate depends on rsid overlap. For variants not in the cache, gene/consequence data comes only from ClinVar rsid→gene map (30,340 matches) and Ensembl local gene lookup (333,894 matches). ~40% of variants have no gene assigned.
 
----
+### DATA-03: Genome Build Inconsistencies
 
-### BUG-10 — Non-deterministic gene assignment for multi-gene rsids 🟡 MEDIUM
+Different data sources use different genome builds:
+- User data: Typically GRCh37 (consumer arrays)
+- ClinVar: Both GRCh37 and GRCh38 entries
+- gnomAD CADD TSV: GRCh38
+- gnomAD-tx: GRCh37
+- Ensembl VEP VCFs: GRCh38
+- 1000 Genomes: GRCh37
 
-**File:** `services/analysis_service.py`  
-**Function:** `_build_rsid_gene_map()`
+Position-based lookups can silently fail when builds don't match. The system has some liftover logic but no systematic build-aware matching.
 
-**Problem:**  
-The ClinVar-based gene lookup uses:
-```python
-SELECT DISTINCT ON (rsid) rsid, gene FROM clinvar_variants
-```
-`DISTINCT ON` without `ORDER BY` is **non-deterministic** in PostgreSQL. For RSIDs appearing in multiple ClinVar records with different gene assignments (overlapping genes, alternative transcripts), the selected gene is arbitrary and varies across runs.
+### DATA-04: ✅ FIXED — Analysis Pipeline Required ETL for Full Data
 
-**Fix:**
-```python
-# Add ORDER BY to make it deterministic — prefer most common gene
-SELECT DISTINCT ON (rsid) rsid, gene FROM clinvar_variants
-ORDER BY rsid, gene  -- or ORDER BY rsid, clinical_significance DESC for clinical priority
-```
+**Problem**: Several analysis code paths silently returned empty data when PG was unpopulated (ETL not run):
+1. `load_local_sources()` only checked `is_loaded` but didn't call `ensure_loaded()` for ClinVar, gnomAD, and 1000G — services skipped if not pre-loaded
+2. `build_rsid_gene_map()` had no file fallback — gene map was empty when both `clinvar_variants` and `ensembl_genes` PG tables were empty
+3. Gene-condition mappings (`gene_condition_source_id.txt`) and gene-level stats (`gene_specific_summary.txt`) were only consumed by ETL, never during direct-file analysis
+4. When ClinVar fell back to `clinvar_direct`, results had empty `gene_conditions` and `gene_stats` fields
 
----
-
-### BUG-11 — Personality and Sports get meaningless category values from auto-categorizer 🟡 MEDIUM
-
-**Files:** `services/auto_categorizer.py`, `services/insight_generators/personality.py`, `services/insight_generators/sports.py`
-
-**Problem:**  
-`_match_condition_keyword()` sets `data.setdefault("category", keyword.capitalize())` and `data.setdefault("trait", f"{gene} variant")` for gene-type mappings via `_match_gene_list()`.
-
-Results in the dashboard:
-- Sports category = "Muscle", "Endurance", "Myopathy" — not performance categories
-- Personality trait = "SLC6A4 variant", "DRD2 variant" — not trait names
-- Physical trait = same generic pattern
-
-**Fix:**  
-1. Add a `trait_name_override` field to the CategoryRule `mapping_data_template` JSON (per-rule custom name)
-2. Or, add gene→trait-name lookup tables (especially for known PGx/behavior genes)
-3. Short-term: add a cleanup post-processor that maps "gene variant" to "Gene Variant" at display time
+**Fixes applied** (4 files, 3 fixes):
+- **Fix 1** (`local_annotation.py`): Added `ensure_loaded()` calls for ClinVar, gnomAD, and 1000G services when `is_loaded` is False
+- **Fix 2** (`variant_loader.py`): Added Step 1b (ClinVar direct SQLite fallback for gene extraction) and Step 2b (Ensembl VEP cache fallback for gene symbols) to `build_rsid_gene_map()`
+- **Fix 3** (`clinvar_direct.py` + `clinvar_local.py`): Added `_parse_gene_conditions()` and `_parse_gene_stats()` methods to `ClinVarDirectService` that parse local TSV files (5,123 gene→condition and 92,618 gene→stats entries). Wired into `clinvar_local.py` batch and single lookup fallback paths via `_enrich_direct_result()`
 
 ---
 
-## 3. Scoring Engine Issues
+## 5. Architecture Problems
+
+### ARCH-01: ✅ FIXED — analysis_service.py Was a God Object (1800+ LOC)
+
+Split into 4 focused modules (567 + 290 + 530 + 250 ≈ 1637 total LOC):
+- `analysis_service.py` (567 LOC) — orchestrator, dataclasses, progress/status
+- `variant_loader.py` (290 LOC) — data loading, gene map, ref allele correction
+- `annotation_coordinator.py` (530 LOC) — annotation reuse, local/remote, BQ enrichment
+- `insight_dispatcher.py` (250 LOC) — insight generation, regeneration
+
+The `ComprehensiveAnalysisService` class handles:
+- Analysis orchestration
+- Variant loading (Core SQL)
+- Registry loading
+- Gene map building
+- Annotation coordination
+- BigQuery enrichment
+- Ref allele correction
+- Insight generation dispatch
+- Progress tracking
+- Status persistence
+
+This should be split into:
+- `AnalysisOrchestrator` (pipeline coordination)
+- `VariantLoader` (data access)
+- `AnnotationCoordinator` (source management)
+- `InsightDispatcher` (generator execution)
+
+### ARCH-02: Service Proliferation for gnomAD ✅ FIXED
+
+**Status**: Consolidated via `datasource_utils.py` shared module (210 LOC).
+
+Full strategy-pattern rewrite was rejected — files have genuinely different responsibilities (lookup vs ETL vs cache). Instead, extracted duplicated code into `backend/services/datasource_utils.py`:
+
+**Shared utilities created:**
+- `safe_float()`, `safe_int()`, `clean_str()` — type coercion (was duplicated 7+ times)
+- `parse_vcf_info()` — VCF INFO parser (was duplicated 6 times)
+- `interpret_cadd()` — CADD PHRED interpretation (was duplicated 3 times)
+- `load_known_rsids()`, `get_marker_fingerprint()` — DB queries (was duplicated 4 times each)
+- `get_file_fingerprint()`, `get_multi_file_fingerprint()` — file fingerprinting
+- `is_cache_valid()`, `save_cache_meta()`, `open_cache_db()`, `create_cache_db()`, `finalize_cache_db()` — SQLite cache lifecycle (was duplicated across 4 files, ~80 LOC each)
+
+**Files updated (10 files, ~500 LOC removed):**
+- `gnomad_local.py` — `interpret_cadd`
+- `gnomad_cache.py` — `interpret_cadd` + all cache boilerplate (6 methods removed)
+- `gnomad_bigquery.py` — `safe_float`/`safe_int` + absorbed `gnomad_backfill.py` (BackfillService merged)
+- `clinvar_etl.py` — `parse_vcf_info` + `safe_float`
+- `clinvar_direct.py` — all cache boilerplate (6 methods removed)
+- `ensembl_vep_local.py` — all cache boilerplate (~130 LOC removed)
+- `ensembl_vep_etl.py` — `parse_vcf_info`
+- `thousand_genomes_etl.py` — `parse_vcf_info` + `safe_float`/`safe_int`
+- `thousand_genomes_direct.py` — all cache boilerplate + `parse_vcf_info` + type helpers (6 class methods + 3 module functions removed)
+- `admin_routes.py` — backfill import updated
+
+**Files deleted:**
+- `gnomad_backfill.py` — merged into `gnomad_bigquery.py`
+
+### ARCH-03: No Dependency Injection for Services
+
+Services create their own database connections via `async_session_factory()` scattered throughout the codebase. The `container.py` DI container exists but is largely unused — most services instantiate directly.
+
+### ARCH-04: Auto-Categorizer Runs Separately from Analysis
+
+The auto-categorizer is triggered via `POST /api/admin/auto-categorize` and writes to `variant_mappings`. The analysis service reads from `variant_mappings` at runtime. There's no version control or audit trail — if the auto-categorizer runs with bad rules, it silently corrupts the mapping table.
+
+### ARCH-05: Annotation Data Shape Inconsistency
+
+Different code paths produce different annotation data shapes:
+- Fresh annotations: `annotation_data = {'rsid': ..., 'annotations': {...}, 'pathogenicity_score': {...}}`
+- Cached annotations reconstructed from DB: `annotation_data = {'annotations': {'clinvar_local': <json>, 'ensembl': <json>, ...}}`
+
+Generators must handle both shapes, leading to defensive `.get()` chains throughout.
+
+### ARCH-06: Scoring Engine Runs During Annotation, Not During Insight Generation
+
+Pathogenicity scores are computed during Phase 2 (annotation) and stored in `annotation_data['pathogenicity_score']`. If the scoring logic changes, all cached annotations must be re-scored. This should be a lazy computation during Phase 4 (insight generation) so it always uses the latest scoring logic.
 
 ---
 
-### BUG-12 — MIN_WEIGHT_FLOOR prevents ClinVar Pathogenic from scoring as Pathogenic 🟠 HIGH
+## 6. Dead Code & Cleanup
 
-**File:** `services/scoring_engine.py`  
-**Function:** `_calculate_composite()`
+### Dead Files (safe to remove)
 
-**Problem:**  
-`MIN_WEIGHT_FLOOR = 0.40`. When a variant has only ClinVar local data (weight=0.30) with pathogenic classification (raw score=0.95):
+| File | Reason |
+|------|--------|
+| `backend/services/health_insights.py` | Legacy mock with hardcoded data. Superseded by `insight_generators/health.py`. Registered in container.py but never retrieved. |
+| `backend/services/drug_response.py` | Legacy mock. Superseded by `insight_generators/drug_response.py`. Registered in container.py but never retrieved. |
+| `backend/api/test_routes.py` | Not imported or mounted in main.py. |
+| `backend/utils/check_nulls.py` | Not imported anywhere. |
+| `backend/utils/create_source_configs.py` | Not imported anywhere. |
+| `backend/utils/test_incomplete.py` | Not imported anywhere. |
 
-```
-composite = 0.95 × 0.30 / max(0.30, 0.40) = 0.95 × 0.30 / 0.40 = 0.7125
-→ classified as likely_pathogenic, not pathogenic
-```
+### Dead Registration in container.py
 
-A ClinVar 5-star Pathogenic assertion is clinical gold standard. Downgrading it to `likely_pathogenic` due to missing computational tools contradicts clinical interpretation guidelines (ACMG 2015: ClinVar Pathogenic = PVS1 level evidence).
+After removing the legacy files, also remove:
+- `HealthInsights` and `DrugResponseAnalyzer` class registrations
+- `HealthInsightsServiceInterface` and `DrugResponseServiceInterface` interfaces
 
-**Fix options:**
-1. Add a "ClinVar override" rule: if ClinVar pathogenic with ≥2 star review and no conflicting benign evidence → classify as `pathogenic` regardless of composite score
-2. Lower `MIN_WEIGHT_FLOOR` to 0.25 for ClinVar-only variants
-3. Add `authoritative_classification` field to scoring result that prioritizes ClinVar LP/P assertions
+### Root-Level Audit Files
 
----
-
-### BUG-13 — Only health generator passes pathogenicity_score to assess_risk_level 🟡 MEDIUM
-
-**File:** `services/insight_generators/` — all non-health generators  
-**Function:** `assess_risk_level()`
-
-**Problem:**  
-`assess_risk_level(genotype, risk_multiplier, ref_allele, pathogenicity_score=None)` has composite-score-based logic only used when `pathogenicity_score` is passed. All generators except `health.py` call it with `pathogenicity_score=None`, meaning they fall back to multiplier-only risk assessment.
-
-This means the scoring engine's work (AlphaMissense, ClinVar local evidence) is computed but not used for risk level assignment in nutrition, sports, cognitive, personality, wellness, methylation, detox panels.
-
-**Fix:**  
-Pass `profiles[rsid].composite_score` as `pathogenicity_score` in the `generate_from_maps` call for all generators, or let `generate_from_maps` pass it automatically from the VariantProfile.
+The project root contains ~15 SQL/Python audit/test files (`audit.sql`, `audit2.sql`, ... `audit5.sql`, `audit_health.sql`, `check_ds.py`, `check_vep.py`, `test_fixes.py`, etc.). These are ad-hoc debugging scripts that should be moved to a `scripts/` directory or removed.
 
 ---
 
-### BUG-14 — Scoring engine ClinVar dedup checks on 'found' before dedup 🟢 LOW
+## 7. Performance Issues
 
-**File:** `services/scoring_engine.py`  
-**Function:** `_aggregate()`
+### PERF-01: gnomAD Backfill Wastes 143 Seconds
 
-**Clarification of a potential bug:**  
-The dedup logic `if 'clinvar' in evidences and 'clinvar_local' in evidences: drop clinvar_local` only fires when both sources return non-None evidence. Since `_score_clinvar()` returns `None` for `found: false`, the remote API's `found: false` response does NOT trigger the dedup.
+The backfill scans all 609K variants against an empty gnomAD PG table, finding 0 results. Even with the SQLite cache (419 variants), only 2 matches are found. The system should check if gnomAD PG is empty and skip the entire PG lookup path.
 
-So this is not actively harmful in the current setup. However, if the remote ClinVar API is re-enabled in the future and returns `found: true` for a variant, the local ClinVar data (which may have more expanded star-review data) would be silently dropped. The dedup should instead compare star review ratings and keep the higher-quality source.
+### PERF-02: Annotation Lookup Takes 178 Seconds
 
----
+Checking 609K variants against `shared_variant_annotations` takes 178 seconds (1,219 batches of 500). This is O(n) queries. A single `WHERE rsid = ANY(array)` batch query or a temporary table JOIN would be faster.
 
-## 4. Analysis Pipeline Bugs
+### PERF-03: 609K Variants Iterated 14 Times
 
----
+Each of the 14 insight generators iterates ALL 609K variants. Most variants don't match any mapping. Building a pre-filtered set of "potentially interesting" variants (those with rsid in any mapping OR gene in any gene_map) would reduce iteration by ~97%.
 
-### BUG-15 — 1000G ETL pointed at wrong directory 🔴 CRITICAL
+### PERF-04: Phase 1 Gene Map Building Takes 57 Seconds
 
-**File:** `services/thousand_genomes_etl.py` line 38  
-**Status:** FIXED in this session
-
-**Problem:**  
-The default `_DATA_DIR` was `data_sources/ensembl/homo_sapiens/variation/vcf_vep/` but the actual file is at `data_sources/1000G/1000GENOMES-phase_3.vcf.gz`. ETL would find no VCF file → `thousand_genomes_variants` table empty → no population frequency data available.
-
-Note: The file uses a **CSI index** (`.csi`) not a TBI index. It cannot be queried via `pysam.TabixFile`. The ETL correctly reads it as a plain gzip stream — CSI is only needed for bcftools random-access, not for the sequential ETL scan.
-
-**Fix applied:** Changed `_DATA_DIR` default to `data_sources/1000G`.
+Building the rsid→gene map queries ClinVar PG and Ensembl local for all 609K rsids. This is rebuild on every analysis run. Caching this at the marker level (storing gene in `genetic_markers`) would make subsequent analyses instant.
 
 ---
 
-### BUG-16 — gnomAD CADD file is GRCh38 but user data is GRCh37 🔴 CRITICAL
+## 8. Frontend Issues
 
-**File:** `services/gnomad_cache.py`  
-**Manifest:** `gnomad_cache_meta.json` shows `variant_count: 0`
+### FE-01: No Allele Display in Dashboard
 
-**Problem:**  
-The gnomAD CADD file (`gnomad.genomes.r4.0.indel_inclAnno.tsv.gz`) header states `##CADD GRCh38-v1.7`. Consumer DNA chip files (23andMe, AncestryDNA) provide positions on **GRCh37/hg19**. The cache builder compares positions from `genetic_markers` (GRCh37) against the CADD file positions (GRCh38) — they never match, so cache is always empty.
+The dashboard shows condition + risk level + associated rsid, but NOT the user's genotype or the risk allele. Users cannot verify whether the system correctly matched their alleles.
 
-**Fix:**  
-Download the GRCh37 version:  
-```
-https://krishna.gs.washington.edu/download/CADD/v1.6/GRCh37/gnomad.genomes.r2.1.1.snv_inclAnno.tsv.gz
-```
-Replace `gnomad.genomes.r4.0.indel_inclAnno.tsv.gz` with this file (and regenerate the `.tbi` index), then delete the SQLite cache to force rebuild.
+### FE-02: No Confidence Indicator
 
----
+Insights generated from auto-categorized mappings (source: "clinvar_auto") are displayed identically to manually curated mappings. There's no visual distinction between high-confidence evidence-based insights and auto-generated ones.
 
-### BUG-17 — Resume phase detection broken for Phase 3 🟡 MEDIUM
+### FE-03: No Filtering by Clinical Evidence Level
 
-**File:** `services/analysis_service.py`  
-**Function:** `_completed_phases`, `process_analysis()`
-
-**Problem:**  
-The `_completed_phases` dict maps phase detection keys to progress percentages:
-```python
-_completed_phases = {
-    'gene_mapping': 5,
-    'annotating': 30,
-    'enriching_bigquery': 90,  # ← WRONG KEY
-    'generating_insights': 100
-}
-```
-
-But the actual `current_step` value written to the DB when Phase 3 starts is `'enriching_data'`, not `'enriching_bigquery'`.
-
-**Result:** On resume from a paused analysis that completed Phase 3, the check `if _completed_phases.get('enriching_data', 0)` returns 0 → Phase 3 always re-runs unnecessarily (but doesn't corrupt data since Phase 3 is currently a no-op with BigQuery disabled).
-
-**Fix:**
-```python
-_completed_phases = {
-    ...
-    'enriching_data': 90,  # matches what's actually written
-    ...
-}
-```
+Users cannot filter insights by ClinVar review status (stars), evidence strength, or population frequency.
 
 ---
 
-### BUG-18 — annotation_status never promoted to 'completed' 🟢 LOW
+## 9. Recommended Improvements (Priority Order)
 
-**File:** `services/shared_annotation_service.py`
+### P0 — Must Fix (User-facing false positives)
 
-**Problem:**  
-711,792 / 714,586 annotations (99.6%) remain at status `partial` indefinitely. The service never updates status to `completed` even when all enabled sources have been populated.
+1. **Add risk_allele to variant_mappings** and verify user genotype contains it before generating insights. For auto-discovered mappings, populate from ClinVar VCF alt allele. *(Partially addressed: BUG-06 allele verification in `generate_from_maps()` now checks annotation alt alleles at runtime, reducing the need for stored risk_allele. Full schema change still recommended for manual mappings.)*
 
-**Impact:** Informational only; `get_existing_annotations()` correctly includes partial annotations. But the status field cannot be used for data quality monitoring.
+2. ~~**Fix alt_alleles='N' interpretation** in `indel_d_is_ref()` — treat 'N' as unknown.~~ **✅ FIXED** — `indel_d_is_ref()` now treats 'N' as unknown alongside '-' and '.'.
 
-**Fix:**  
-After backfill: add a status update that marks annotation as `completed` when all `is_enabled=True` sources in `annotation_source_configs` have been populated. Check after each backfill run.
+3. ~~**Stop scoring engine from overriding ClinVar** — computational scores should inform confidence, not classification.~~ **✅ FIXED** — Removed the scoring engine override in `rare_mutations.py` that upgraded "conflicting"→"likely_pathogenic".
 
----
+4. ~~**Clean up auto-categorizer garbage** — filter "not provided"/"See cases", require ≥1-star review status, don't spread disease names across irrelevant categories.~~ **✅ FIXED** — `_clean_condition()` rejects garbage values, `_match_significance()` and `_match_condition_keyword()` require minimum ClinVar review quality (filters out "no assertion criteria provided").
 
-## 5. Data Quality Issues
+5. ~~**Add allele verification to generate_from_maps()** — before matching rsid_map, check that user's alleles intersect with known risk/alt alleles from annotation data.~~ **✅ FIXED** — Allele verification with strand-flip fallback added for non-indel genotypes.
 
----
+### P1 — Should Fix (Accuracy improvements)
 
-### DQ-01 — Auto-categorizer creates mappings with garbage condition names 🟠 HIGH
+6. ~~**Deduplicate ClinVar scoring** — use max(clinvar, clinvar_local) not sum.~~ **✅ ALREADY FIXED** — `_aggregate()` in `scoring_engine.py` already drops clinvar_local when both sources present.
 
-**File:** `services/auto_categorizer.py`  
-**Function:** `_clean_condition()`
+7. **Evidence-based risk_multiplier** — replace arbitrary multipliers with GWAS odds ratios where available, or use a standard 1.5x default. *(Data task — requires GWAS literature review per variant.)*
 
-**Problem:**  
-AutoCategorizer filters `not provided` and `not specified` as primary condition values but still creates mappings when these appear alongside other ClinVar pipe-delimited fields. Result in live DB:
+8. ~~**Gene map matching precision** — for gene-based matching, require the specific variant to have a functional consequence AND ClinVar pathogenic/likely_pathogenic significance for that gene-condition pair.~~ **✅ FIXED** — Gene-based matching now also checks `is_clinvar_benign()` before generating insights.
 
-```sql
-SELECT data->>'condition', COUNT(*) FROM variant_mappings
-WHERE category = 'health' AND data->>'condition' IN ('not provided', 'not specified')
-GROUP BY 1;
--- Result: 'not provided': 248, 'not specified': 18
-```
+9. **Populate gnomAD PG** — run the ETL to fill the gnomAD table and get population frequency data for allele frequency filtering. *(ETL/data task.)*
 
-Users see "not provided" as a health risk condition name. Additional generic conditions also present:
-```
-'Inborn genetic diseases': 95 rows
-'Hereditary cancer-predisposing syndrome': many rows
-'Cardiovascular phenotype': many rows
-```
+10. **Build-aware position matching** — implement GRCh37↔GRCh38 liftover for position-based lookups. *(Complex — requires liftover chain files.)*
 
-**Fix:**
-1. Add to `_clean_condition()` skip-list: `'inborn genetic diseases'`, `'cardiovascular phenotype'`, `'hereditary cancer-predisposing syndrome'`, `'hereditary disease'`, `'see cases'`, `'not applicable'`, `'complex'`
-2. Run cleanup SQL to remove existing garbage entries:
-```sql
-DELETE FROM variant_mappings
-WHERE category IN ('health', 'carrier', 'rare_mutations')
-  AND (
-    (map_type = 'rsid' AND data->>'condition' ILIKE ANY 
-      ARRAY['not provided', 'not specified', 'not applicable', 'inborn genetic%', 'see cases', 'complex'])
-    OR data->>'condition' IS NULL
-  );
-```
-3. Re-run AutoCategorizer for affected categories
+### P2 — Architecture Improvements
+
+11. **Split analysis_service.py** into focused modules (orchestrator, loader, coordinator, dispatcher).
+
+12. **Consolidate gnomAD services** (6 files → 1 with strategy backends).
+
+13. **Move scoring to insight generation time** — compute pathogenicity scores during Phase 4, not Phase 2, so updated scoring logic applies without re-annotating.
+
+14. ~~**Remove dead code** — 6 dead files, dead container registrations, root-level audit scripts.~~ **✅ FIXED** — 6 dead files removed, container registrations cleaned up.
+
+15. ~~**Pre-filter variant iteration** — build a set of "interesting" rsids/genes before iterating 609K variants × 14 generators.~~ **✅ FIXED** — Pre-filtering in `_generate_comprehensive_insights()` reduces iteration to only variants matching any mapping or having ClinVar data.
+
+### P3 — Nice to Have
+
+16. **Show user genotype + risk allele in dashboard** — let users verify the match.
+
+17. **Distinguish evidence quality in UI** — badge auto-discovered vs curated mappings, show ClinVar star rating.
+
+18. **Version control variant_mappings** — audit trail for auto-categorizer runs.
+
+19. **Cache rsid→gene at marker level** — store gene symbol in `genetic_markers` for instant lookup.
+
+20. **Add ancestry sub-population granularity** — the 5-population model (AFR/AMR/EAS/EUR/SAS) is coarse; consider using 26-population gnomAD model.
 
 ---
 
-### DQ-02 — 1,114 health rsid mappings have conflicting-classification significance 🟡 MEDIUM
+## Additional Fixes Applied (2026-03-19)
 
-**File:** `services/auto_categorizer.py`  
-**Function:** `_match_condition_keyword()`
+### BUG-04: ref_allele correction now also fixes alt_alleles
+**✅ FIXED** — `_correct_ref_alleles()` in `analysis_service.py` now also extracts and corrects `alt_alleles` from annotation sources (gnomAD, Ensembl, ClinVar) when the marker has `alt_alleles == ref_allele` (ambiguous consumer CSV data from homozygous genotypes).
 
-**Problem:**  
-Condition-keyword rules don't filter `conflicting classifications of pathogenicity` significance — only `benign` is excluded. So 1,114 health rsid mappings were created from ClinVar entries with conflicting evidence, assigned `risk_multiplier=1.3`.
+### PERF-01: gnomAD PG skip when empty
+**✅ FIXED** — `gnomad_local.py` now skips PG lookup (both individual and batch) when `_variant_count == 0`, saving ~143 seconds per analysis run.
 
-These represent variants where some submitters claim pathogenic and others claim benign. Presenting these as health risks (even low-level) may be misleading.
-
-**Fix:**  
-Either:
-1. Add `conflicting%` to the exclusion list in `_match_condition_keyword()` for the health category
-2. Or set `risk_multiplier=1.0` for conflicting significance entries and only show them in an "Uncertain" section
-3. Ensure the frontend shows clinical_significance on health risk cards so users can see "Conflicting evidence"
-
----
-
-### DQ-03 — carrier_status dedup allows multiple conditions per gene 🟢 LOW
-
-**File:** `services/insight_generators/carrier.py`
-
-**Problem:**  
-Carrier status deduplicates by `condition` (disease name). This means a user can have 50+ carrier entries for variants in the same gene (e.g., 20 CFTR variants → 20 cystic fibrosis entries from different ClinVar records).
-
-**Fix:**  
-Add secondary dedup by gene: keep only the highest-priority entry per (gene, condition) pair. Or dedup strictly by gene for known single-disease genes.
-
----
-
-## 6. Architectural Gaps
-
----
-
-### ARCH-01 — panel_marker_configs → variant_mappings bridge missing 🔴 CRITICAL
-
-See BUG-04. This is one of the most impactful architectural issues. The curated panel represents expert curation effort that's completely bypassed by the analysis engine.
-
-**Recommended Fix:**
-Create a management command to bridge the two tables:
-```python
-# scripts/sync_panel_to_registry.py
-# For each panel_marker_config not in variant_mappings:
-#   - If category is health/rare_mutations: create rsid-type mapping with panel-appropriate template
-#   - If category is drug: create drug-appropriate mapping with gene or rsid key
-#   - Set is_auto_discovered=False (manually curated)
-```
-
----
-
-### ARCH-02 — BigQuery enrichment disabled but code adds latency 🟡 MEDIUM
-
-**File:** `services/analysis_service.py`, Phase 3
-
-BigQuery has been disabled. The Phase 3 code still runs, opens service connections, checks feature flags, and logs progress — all for 0 results. 
-
-**Fix:**  
-Add a config check at the top of Phase 3: `if not settings.BIGQUERY_ENABLED: skip`. Or gate all Phase 3 code behind a single `HAS_BIGQUERY_SOURCES` computed config value.
-
----
-
-### ARCH-03 — No population frequency for zygosity baseline adjustment 🟡 MEDIUM
-
-**File:** `services/insight_generators/base.py`  
-**Function:** `generate_from_maps`
-
-When generating insights, variants with the **risk allele** as the **common allele** (e.g., the "risk" variant has global AF=0.60) should probably not be flagged as high risk for homozygous carriers (since being homozygous is actually the population norm). Currently only the registry `risk_multiplier` and pathogenicity score factor in.
-
-**Fix:**  
-Use `profile.population_frequency` in `assess_risk_level`: if `freq > 0.50`, treat the variant as the common allele and adjust baseline risk downward regardless of ClinVar significance.
-
----
-
-### ARCH-04 — dashboard_cache invalidation not triggered on insight regeneration 🟡 MEDIUM
-
-**File:** `backend/api/analysis_routes.py`
-
-After `POST /api/analysis/regenerate-insights` completes, the old dashboard cache entry may still be returned to the user until the fingerprint changes (based on `updated_at` of the analysis). If `updated_at` isn't explicitly bumped after Phase 4 completes, the user sees stale data even after regeneration.
-
-**Fix:**  
-After Phase 4 insight generation completes, explicitly update `analysis.updated_at = func.now()` and/or DELETE the `dashboard_cache` entry for that analysis ID.
-
----
-
-### ARCH-05 — Job logs column has no size limit 🟢 LOW
-
-**File:** `db/models.py` — `GeneticAnalysis.job_logs` (JSONB array)
-
-For long analyses, the `job_logs` array accumulates thousands of timestamped entries and can reach hundreds of MB per job. This slows down all queries that touch the `genetic_analyses` table.
-
-**Fix:**  
-Either:
-1. Store logs in a separate `analysis_logs` table with one row per entry
-2. Or rotate logs in the JSONB array to keep only the last N entries: `job_logs[-1000:]`
-
----
-
-## 7. Frontend Issues
-
----
-
-### FE-01 — Hardcoded variant descriptions are incomplete 🟢 LOW
-
-**File:** `frontend/src/components/categories/HealthPanel.tsx`  
-**Function:** `getVariantDescription()`
-
-**Problem:**  
-Only 3 variants (APOE-ε4, rs7903146, rs1801133) have hardcoded human-readable descriptions. All other 2000+ health rsids show generic "variant of interest in [condition]" messages.
-
-**Fix:**  
-Move variant descriptions to `variant_mappings.data` JSON (add a `description` field) or pull from ClinVar annotation (already available in `shared_variant_annotations`). Remove hardcoded switch/case.
-
----
-
-### FE-02 — No loading state for dashboard-data fetch 🟢 LOW
-
-**File:** `frontend/src/components/Dashboard.tsx`
-
-If `dashboard-data` is slow (first load or cache miss), some panels show blank content with no skeleton/loading indicator.
-
----
-
-## 8. Fix Priority Order
-
-Recommended fix sequence by clinical impact and effort:
-
-| Priority | Bug ID | Title | Effort | Impact |
-|----------|--------|-------|--------|--------|
-| 1 | BUG-16 | gnomAD CADD is GRCh38, data is GRCh37 | Medium (download GRCh37 file) | CRITICAL — CADD/SIFT/PolyPhen never annotate |
-| 2 | BUG-01 | gnomAD scoring weight dead (blocked on fix above) | Low (run ETL after #1) | CRITICAL — 40% dead scoring weight |
-| 3 | BUG-15 | 1000G ETL wrong path | ✅ FIXED | CRITICAL — 1000G table was always empty |
-| 4 | BUG-04/ARCH-01 | panel_marker_configs disconnected | Medium | CRITICAL — curated BRCA/TP53 ignored |
-| 5 | BUG-05 | uncommon_mutations always 0 | Low (blocked on #1–2) | CRITICAL |
-| 6 | BUG-07 | Homozygous escalation with no ref | Low (add guard) | HIGH — false positive risks |
-| 7 | BUG-06 | zygosity_adjust alias gaps | Very low (5 lines) | HIGH — no adjustment for these variants |
-| 8 | DQ-01 | Garbage condition names | Low (cleanup SQL) | HIGH — UI shows 'not provided' |
-| 9 | BUG-08 | Drug benign filter missing | Low (5 lines) | HIGH — phantom drug responses |
-| 10 | BUG-02 | AlphaMissense coordinate check | Low (investigation) | HIGH — 0.17% hit rate |
-| 11 | BUG-12 | ClinVar pathogenic scoring floor | Medium | HIGH — misclassifies gold standard |
-| 12 | BUG-10 | Non-deterministic gene assignment | Very low (add ORDER BY) | MEDIUM |
-| 13 | BUG-17 | Resume step name mismatch | Very low (rename key) | MEDIUM |
-| 14 | BUG-13 | pathogenicity_score not passed to non-health generators | Low | MEDIUM |
-| 15 | BUG-09 | Carrier ref_allele uses uncorrected value | Low | MEDIUM |
-| 16 | DQ-02 | Conflicting classifications in health | Low | MEDIUM |
-| 17 | BUG-11 | Meaningless sports/personality names | Medium | MEDIUM — UX quality |
-| 18 | ARCH-04 | Cache invalidation after regeneration | Low | MEDIUM |
-| 19 | BUG-03 | Ensembl gene_symbol 0.2% | Investigation needed | LOW — gene matching works via fallback |
-| 20 | DQ-03 | Carrier CFTR overcount | Low | LOW |
-| 21 | ARCH-02 | BigQuery dead code | Very low | LOW |
-| 22 | ARCH-05 | Job logs unbounded size | Medium | LOW |
+### FE: X-linked hemizygous interpretation
+**✅ FIXED** — `VariantDetailDialog.tsx` now detects X-chromosome variants and single-allele genotypes, displaying "Hemizygous" instead of "Homozygous Alternate" with appropriate messaging.

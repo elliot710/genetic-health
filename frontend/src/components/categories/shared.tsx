@@ -561,6 +561,56 @@ export function ZygosityBadge({ genotype }: { genotype?: string }) {
   )
 }
 
+// ─── Evidence Badge (ClinVar review status) ───────────────────
+
+/**
+ * Shows a confidence indicator for auto-discovered vs curated mappings.
+ * review_status comes from ClinVar's review_status field on auto-categorized
+ * variants. Manual curated mappings won't have it and show a green "Curated" badge.
+ */
+export function EvidenceBadge({ reviewStatus }: { reviewStatus?: string | null }) {
+  if (!reviewStatus) {
+    // Manually curated mapping — highest confidence
+    return (
+      <Badge variant="outline" className="text-xs bg-emerald-500/10 text-emerald-600 border-emerald-500/20 dark:text-emerald-400">
+        ✓ Curated
+      </Badge>
+    )
+  }
+
+  const rs = reviewStatus.toLowerCase()
+  let stars = 0
+  let label = ''
+  if (rs.includes('practice guideline')) { stars = 4; label = '4★ Guidelines' }
+  else if (rs.includes('expert panel')) { stars = 3; label = '3★ Expert Panel' }
+  else if (rs.includes('multiple submitters') || rs.includes('no conflicts')) { stars = 2; label = '2★ Multi-Submitters' }
+  else if (rs.includes('single submitter') || rs.includes('criteria provided')) { stars = 1; label = '1★ Single Submitter' }
+  else { label = 'Auto-discovered' }
+
+  const colorClass = stars >= 3
+    ? 'bg-blue-500/10 text-blue-600 border-blue-500/20 dark:text-blue-400'
+    : stars === 2
+      ? 'bg-yellow-500/10 text-yellow-600 border-yellow-500/20 dark:text-yellow-400'
+      : 'bg-gray-500/10 text-gray-500 border-gray-500/20'
+
+  return (
+    <Badge variant="outline" className={`text-xs ${colorClass}`}>
+      {label}
+    </Badge>
+  )
+}
+
+/** Returns the star count (0–4) from a ClinVar review_status string. */
+export function reviewStatusStars(reviewStatus?: string | null): number {
+  if (!reviewStatus) return 5  // curated = best
+  const rs = reviewStatus.toLowerCase()
+  if (rs.includes('practice guideline')) return 4
+  if (rs.includes('expert panel')) return 3
+  if (rs.includes('multiple submitters') || rs.includes('no conflicts')) return 2
+  if (rs.includes('single submitter') || rs.includes('criteria provided')) return 1
+  return 0
+}
+
 // ─── Clickable Rsid Badge (with zygosity) ──────────────────────
 
 interface ClickableRsidBadgeProps {

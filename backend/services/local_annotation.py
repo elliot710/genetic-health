@@ -75,14 +75,18 @@ async def load_local_sources(enabled_sources: Optional[List[str]]) -> LoadedSour
     sources = LoadedSources()
 
     if enabled_sources is None or 'clinvar_local' in enabled_sources:
-        from .clinvar_local import get_clinvar_local_service
-        svc = get_clinvar_local_service()
+        from .clinvar_local import get_clinvar_direct_service
+        svc = get_clinvar_direct_service()
+        if not svc.is_loaded:
+            await svc.ensure_loaded()
         if svc.is_loaded:
             sources.clinvar = svc
 
     if enabled_sources is None or 'gnomad' in enabled_sources:
         from .gnomad_local import get_gnomad_service
         svc = get_gnomad_service()
+        if not svc.is_loaded:
+            await svc.ensure_loaded()
         if svc.is_loaded:
             sources.gnomad = svc
 
@@ -96,8 +100,10 @@ async def load_local_sources(enabled_sources: Optional[List[str]]) -> LoadedSour
             sources.ensembl_vep = svc
 
     if enabled_sources is None or 'thousand_genomes' in enabled_sources:
-        from .thousand_genomes_local import get_thousand_genomes_service
-        svc = get_thousand_genomes_service()
+        from .thousand_genomes_local import get_thousand_genomes_direct_service
+        svc = get_thousand_genomes_direct_service()
+        if not svc.is_loaded:
+            await svc.ensure_loaded()
         if svc.is_loaded:
             sources.thousand_genomes = svc
 
@@ -108,7 +114,7 @@ async def load_local_sources(enabled_sources: Optional[List[str]]) -> LoadedSour
             sources.alpha_missense = svc
 
     if enabled_sources is None or 'gnomad_tx' in enabled_sources:
-        from .gnomad_tx import get_gnomad_tx_service
+        from .gnomad_local import get_gnomad_tx_service
         svc = get_gnomad_tx_service()
         if svc.available:
             sources.gnomad_tx = svc
@@ -305,16 +311,12 @@ async def run_all_lookups(
         logger.info(f"  AlphaMissense: {found}/{len(am_rsids)} found ({time.monotonic() - t0:.1f}s)")
         await asyncio.sleep(0)
 
-    gtx_rsids = _rsids_for('gnomad_tx')
-    if sources.gnomad_tx and gtx_rsids:
-        t0 = time.monotonic()
-        logger.info(f"  gnomAD-tx: starting lookup for {len(gtx_rsids)} RSIDs...")
-        gtx_tuples = build_gtx_tuples(gtx_rsids, rsid_to_variant)
-        if gtx_tuples:
-            results.gnomad_tx = await sources.gnomad_tx.lookup_batch(gtx_tuples)
-        found = sum(1 for v in results.gnomad_tx.values() if v and v.get('found'))
-        logger.info(f"  gnomAD-tx: {found}/{len(gtx_rsids)} found ({time.monotonic() - t0:.1f}s)")
-        await asyncio.sleep(0)
+    # gnomAD-tx: skipped during bulk analysis — 6.7 GB tabix file causes
+    # heavy sequential I/O through Docker/macOS filesystem that blocks the
+    # system.  Tissue/transcript data is display-only (no insight generators
+    # consume it); individual variant lookups in annotation_routes.py still
+    # fetch it on demand.
+    logger.info("  gnomAD-tx: skipped in bulk analysis (on-demand via annotation API)")
 
     logger.info(f"  All source lookups: {time.monotonic() - t_total:.1f}s total")
     return results

@@ -38,7 +38,6 @@ async def lifespan(app: FastAPI):
         'backend.services.clinvar_local',
         'backend.services.gnomad_local',
         'backend.services.thousand_genomes_local',
-        'backend.services.ensembl_local',
     ]:
         logging.getLogger(name).addHandler(job_handler)
 
@@ -67,7 +66,7 @@ async def lifespan(app: FastAPI):
 
     # Preload gnomAD SQLite cache in background (targeted tabix reads)
     # Supports GRCh38 TSV files by bridging via Ensembl VEP GRCh38 positions
-    from .services.gnomad_cache import get_gnomad_cache_service
+    from .services.gnomad_local import get_gnomad_cache_service
     gnomad_cache = get_gnomad_cache_service()
     async def _preload_gnomad_cache():
         try:

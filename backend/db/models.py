@@ -67,7 +67,8 @@ class GeneticMarker(Base):
     position = Column(Integer, nullable=False)
     ref_allele = Column(String, nullable=False)
     alt_alleles = Column(String)  # Comma-separated list of all observed alt alleles
-    
+    gene_symbol = Column(String(50))  # Cached gene symbol (PERF-04) — filled after first analysis
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     upload_count = Column(Integer, default=1)  # How many times this marker has been uploaded
     
@@ -137,6 +138,8 @@ class HealthRisk(Base):
     risk_score = Column(String)
     associated_variants = Column(JSON)  # List of variant IDs
     recommendations = Column(JSON)  # List of recommendations
+    gene = Column(String(100))  # Gene symbol (FE-01)
+    review_status = Column(String(200))  # ClinVar review status for evidence level (FE-02/03)
     
 class DrugResponse(Base):
     __tablename__ = "drug_responses"

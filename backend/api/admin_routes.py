@@ -2337,7 +2337,7 @@ async def ensembl_etl_import(admin: User = Depends(require_admin)):
     from ..services.ensembl_etl import EnsemblETL
     etl = EnsemblETL()
     stats = await etl.run_full_import()
-    from ..services.ensembl_local import get_ensembl_local_service
+    from ..services.ensembl_vep_local import get_ensembl_local_service
     svc = get_ensembl_local_service()
     svc._gene_count = None  # Reset cache so next ensure_loaded re-checks
     await svc.ensure_loaded()
@@ -2376,7 +2376,7 @@ async def thousand_genomes_etl_import(admin: User = Depends(require_admin)):
 @router.get("/gnomad-bigquery/status")
 async def gnomad_bigquery_status(admin: User = Depends(require_admin)):
     """Get BigQuery backfill status — enrichment progress, BQ availability."""
-    from ..services.gnomad_backfill import GnomadBackfillService
+    from ..services.gnomad_bigquery import GnomadBackfillService
     svc = GnomadBackfillService()
     return await svc.get_backfill_status()
 
@@ -2390,7 +2390,7 @@ async def gnomad_bigquery_backfill(
 ):
     """Run BigQuery backfill — enrich local CADD variants with population AFs.
     This queries Google BigQuery and may incur costs. Uses 10 GB byte budget per query."""
-    from ..services.gnomad_backfill import GnomadBackfillService
+    from ..services.gnomad_bigquery import GnomadBackfillService
     svc = GnomadBackfillService()
     return await svc.backfill(
         batch_size=batch_size,

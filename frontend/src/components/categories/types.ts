@@ -9,6 +9,8 @@ export interface HealthRisk {
   associated_variants: string[]
   recommendations: string[]
   clinical_significance?: string
+  gene?: string         // Gene symbol (FE-01)
+  review_status?: string // ClinVar review status (FE-02/03)
 }
 
 export interface DrugResponse {

@@ -152,6 +152,8 @@ class ClinVarSummaryRecord(BaseModel):
     assembly: Optional[str] = None      # "GRCh37" or "GRCh38"
     rcv_accession: Optional[str] = None
     phenotype_ids: Optional[str] = None
+    ref_allele: Optional[str] = None    # ReferenceAlleleVCF column
+    alt_allele: Optional[str] = None    # AlternateAlleleVCF column
 
     @classmethod
     def from_row(cls, row: Dict[str, str]) -> "ClinVarSummaryRecord":
@@ -166,6 +168,10 @@ class ClinVarSummaryRecord(BaseModel):
             except ValueError:
                 if raw_rs.startswith("rs"):
                     rsid = raw_rs
+
+        def _allele(val: Optional[str]) -> Optional[str]:
+            v = _clean_str(val)
+            return v if v and v not in ('.', 'na', 'N/A', 'not applicable') else None
 
         return cls(
             rsid=rsid,
@@ -184,6 +190,8 @@ class ClinVarSummaryRecord(BaseModel):
             assembly=_clean_str(row.get("Assembly")),
             rcv_accession=_clean_str(row.get("RCVaccession")),
             phenotype_ids=_clean_str(row.get("PhenotypeIDS")),
+            ref_allele=_allele(row.get("ReferenceAlleleVCF")),
+            alt_allele=_allele(row.get("AlternateAlleleVCF")),
         )
 
     def to_annotation(self) -> Dict[str, Any]:
@@ -206,6 +214,8 @@ class ClinVarSummaryRecord(BaseModel):
             "chromosome": self.chromosome,
             "start": str(self.start_pos) if self.start_pos else None,
             "stop": str(self.stop_pos) if self.stop_pos else None,
+            "ref_allele": self.ref_allele,
+            "alt_allele": self.alt_allele,
         }
 
 

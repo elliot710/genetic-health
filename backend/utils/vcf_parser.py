@@ -198,7 +198,7 @@ class VCFParser:
                 # Remove quotes and whitespace
                 genotype = genotype.strip('"').strip()
                 
-                if genotype and genotype not in ['--', 'NN', 'II', 'DD', '00', './.', '.|.']:
+                if genotype and genotype not in ['--', 'NN', '00', './.', '.|.']:
                     # Handle different genotype formats
                     if '/' in genotype:
                         alleles = genotype.split('/')

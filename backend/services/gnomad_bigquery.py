@@ -21,7 +21,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+
+from sqlalchemy import select, update, func
+
+from ..db.database import async_session_factory
+from ..db.models import GnomadVariant
+from .datasource_utils import safe_float, safe_int
 
 logger = logging.getLogger(__name__)
 
@@ -277,36 +285,24 @@ class GnomadBigQueryService:
 
     def _format_result(self, row: Any, chrom: str) -> Dict[str, Any]:
         """Format a BigQuery row (after UNNEST) into our standard gnomad_data dict."""
-        def _safe_float(val):
-            try:
-                return float(val) if val is not None else None
-            except (ValueError, TypeError):
-                return None
-
-        def _safe_int(val):
-            try:
-                return int(val) if val is not None else None
-            except (ValueError, TypeError):
-                return None
-
         def _get(key):
             if isinstance(row, dict):
                 return row.get(key)
             return getattr(row, key, None)
 
-        pos = _safe_int(_get('start_position'))
+        pos = safe_int(_get('start_position'))
         ref = _get('reference_bases') or ''
         alt = _get('alt') or ''
 
         # Population frequencies
         pop_freqs = {}
         for pop_code, pop_name in _POP_FIELDS.items():
-            af_val = _safe_float(_get(f'AF_{pop_code}'))
+            af_val = safe_float(_get(f'AF_{pop_code}'))
             if af_val is not None:
                 pop_freqs[pop_code] = {
                     "name": pop_name,
                     "af": af_val,
-                    "nhomalt": _safe_int(_get(f'nhomalt_{pop_code}')),
+                    "nhomalt": safe_int(_get(f'nhomalt_{pop_code}')),
                 }
 
         # VEP annotations — nested REPEATED RECORD
@@ -345,10 +341,10 @@ class GnomadBigQueryService:
             "ref": ref,
             "alt": alt,
             "variant_id": f"{chrom}-{pos}-{ref}-{alt}",
-            "af": _safe_float(_get('AF')),
-            "ac": _safe_int(_get('AC')),
-            "an": _safe_int(_get('AN')),
-            "nhomalt": _safe_int(_get('nhomalt')),
+            "af": safe_float(_get('AF')),
+            "ac": safe_int(_get('AC')),
+            "an": safe_int(_get('AN')),
+            "nhomalt": safe_int(_get('nhomalt')),
             "population_frequencies": pop_freqs,
             "gene": gene,
             "consequence": consequence,
@@ -374,3 +370,234 @@ def get_gnomad_bigquery_service() -> GnomadBigQueryService:
     if _instance is None:
         _instance = GnomadBigQueryService()
     return _instance
+
+
+# ===========================================================================
+# BigQuery backfill service (merged from gnomad_backfill.py)
+# ===========================================================================
+
+@dataclass
+class BackfillStats:
+    """Tracks progress and results of a backfill run."""
+    total_candidates: int = 0
+    processed: int = 0
+    enriched: int = 0
+    not_found: int = 0
+    errors: int = 0
+    elapsed_seconds: float = 0.0
+    chromosome: Optional[str] = None
+    status: str = "idle"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "total_candidates": self.total_candidates,
+            "processed": self.processed,
+            "enriched": self.enriched,
+            "not_found": self.not_found,
+            "errors": self.errors,
+            "elapsed_seconds": round(self.elapsed_seconds, 1),
+            "chromosome": self.chromosome,
+            "status": self.status,
+            "enrichment_rate": (
+                f"{self.enriched / self.processed * 100:.1f}%"
+                if self.processed > 0 else "0%"
+            ),
+        }
+
+
+# Module-level backfill status (non-persistent, survives across requests)
+_backfill_stats: Optional[BackfillStats] = None
+_backfill_running = False
+
+
+class GnomadBackfillService:
+    """Enriches local gnomad_variants with BigQuery population frequencies."""
+
+    MAX_BYTES_BILLED = 10 * (1024 ** 3)  # 10 GB per query budget
+    QUERY_DELAY_SECONDS = 0.5
+
+    async def get_backfill_status(self) -> Dict[str, Any]:
+        global _backfill_stats, _backfill_running
+
+        async with async_session_factory() as session:
+            total = await session.execute(
+                select(func.count()).select_from(GnomadVariant)
+            )
+            total_count = total.scalar() or 0
+            missing_af = await session.execute(
+                select(func.count()).select_from(GnomadVariant).where(
+                    GnomadVariant.af.is_(None)
+                )
+            )
+            missing_count = missing_af.scalar() or 0
+            chrom_counts = await session.execute(
+                select(
+                    GnomadVariant.chrom,
+                    func.count().label('count')
+                ).where(
+                    GnomadVariant.af.is_(None)
+                ).group_by(GnomadVariant.chrom).order_by(GnomadVariant.chrom)
+            )
+            by_chrom = {row.chrom: row.count for row in chrom_counts}
+
+        return {
+            "total_variants": total_count,
+            "missing_af": missing_count,
+            "enriched": total_count - missing_count,
+            "enrichment_pct": (
+                f"{(total_count - missing_count) / total_count * 100:.1f}%"
+                if total_count > 0 else "0%"
+            ),
+            "by_chromosome": by_chrom,
+            "is_running": _backfill_running,
+            "current_run": _backfill_stats.to_dict() if _backfill_stats else None,
+            "bigquery_available": await self._check_bq_available(),
+        }
+
+    async def backfill(
+        self,
+        batch_size: int = 200,
+        max_variants: int = 10000,
+        chromosome: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        global _backfill_stats, _backfill_running
+
+        if _backfill_running:
+            return {"error": "Backfill already in progress",
+                    "current": _backfill_stats.to_dict() if _backfill_stats else None}
+
+        if not await self._check_bq_available():
+            return {"error": "BigQuery not available — set GOOGLE_APPLICATION_CREDENTIALS"}
+
+        _backfill_running = True
+        stats = BackfillStats(status="running", chromosome=chromosome)
+        _backfill_stats = stats
+        start = time.time()
+
+        try:
+            bq = get_gnomad_bigquery_service()
+            candidates = await self._get_candidates(max_variants, chromosome)
+            stats.total_candidates = len(candidates)
+
+            if not candidates:
+                stats.status = "completed"
+                stats.elapsed_seconds = time.time() - start
+                return stats.to_dict()
+
+            by_chrom: Dict[str, List] = {}
+            for v in candidates:
+                by_chrom.setdefault(v.chrom, []).append(v)
+
+            for chrom, chrom_variants in by_chrom.items():
+                for i in range(0, len(chrom_variants), batch_size):
+                    batch = chrom_variants[i:i + batch_size]
+                    await self._process_batch(bq, chrom, batch, stats)
+                    await asyncio.sleep(self.QUERY_DELAY_SECONDS)
+                    stats.elapsed_seconds = time.time() - start
+
+            stats.status = "completed"
+            stats.elapsed_seconds = time.time() - start
+            logging.getLogger(__name__).info(
+                "Backfill completed: %d processed, %d enriched, %d not found, %d errors in %.1fs",
+                stats.processed, stats.enriched, stats.not_found, stats.errors, stats.elapsed_seconds,
+            )
+            return stats.to_dict()
+
+        except Exception as e:
+            stats.status = f"error: {e}"
+            stats.elapsed_seconds = time.time() - start
+            logging.getLogger(__name__).error("Backfill failed: %s", e, exc_info=True)
+            return stats.to_dict()
+        finally:
+            _backfill_running = False
+
+    async def _get_candidates(self, limit: int, chromosome: Optional[str] = None) -> List:
+        async with async_session_factory() as session:
+            q = select(GnomadVariant).where(GnomadVariant.af.is_(None))
+            if chromosome:
+                q = q.where(GnomadVariant.chrom == chromosome.replace("chr", ""))
+            q = q.limit(limit)
+            result = await session.execute(q)
+            return list(result.scalars().all())
+
+    async def _process_batch(self, bq, chrom: str, batch: List, stats: BackfillStats):
+        from google.cloud import bigquery as bq_lib
+
+        table = f"bigquery-public-data.gnomAD.v3_genomes__chr{chrom}"
+        positions = [v.pos for v in batch]
+
+        query = f"""
+        SELECT
+            v.start_position AS pos,
+            v.reference_bases AS ref,
+            v.AN AS an,
+            ab.alt,
+            ab.AC AS ac,
+            ab.AF AS af,
+            ab.nhomalt,
+            ab.AF_afr, ab.AF_ami, ab.AF_amr, ab.AF_asj, ab.AF_eas,
+            ab.AF_fin, ab.AF_nfe, ab.AF_oth, ab.AF_sas
+        FROM `{table}` v, UNNEST(v.alternate_bases) ab
+        WHERE v.start_position IN UNNEST(@positions)
+        """
+
+        job_config = bq_lib.QueryJobConfig(
+            query_parameters=[
+                bq_lib.ArrayQueryParameter("positions", "INT64", positions),
+            ],
+            maximum_bytes_billed=self.MAX_BYTES_BILLED,
+        )
+
+        try:
+            result = await asyncio.to_thread(bq._client.query, query, job_config=job_config)
+            rows = await asyncio.to_thread(lambda: list(result))
+
+            bq_map: Dict[str, Any] = {}
+            for row in rows:
+                key = f"{row['pos']}-{row['ref']}-{row['alt']}"
+                bq_map[key] = row
+
+            async with async_session_factory() as session:
+                for v in batch:
+                    stats.processed += 1
+                    key = f"{v.pos}-{v.ref}-{v.alt}"
+                    bq_row = bq_map.get(key)
+
+                    if bq_row:
+                        await session.execute(
+                            update(GnomadVariant)
+                            .where(GnomadVariant.id == v.id)
+                            .values(
+                                af=safe_float(bq_row.get('af')),
+                                ac=safe_int(bq_row.get('ac')),
+                                an=safe_int(bq_row.get('an')),
+                                nhomalt=safe_int(bq_row.get('nhomalt')),
+                                af_afr=safe_float(bq_row.get('AF_afr')),
+                                af_ami=safe_float(bq_row.get('AF_ami')),
+                                af_amr=safe_float(bq_row.get('AF_amr')),
+                                af_asj=safe_float(bq_row.get('AF_asj')),
+                                af_eas=safe_float(bq_row.get('AF_eas')),
+                                af_fin=safe_float(bq_row.get('AF_fin')),
+                                af_nfe=safe_float(bq_row.get('AF_nfe')),
+                                af_sas=safe_float(bq_row.get('AF_sas')),
+                            )
+                        )
+                        stats.enriched += 1
+                    else:
+                        stats.not_found += 1
+
+                await session.commit()
+
+        except Exception as e:
+            logging.getLogger(__name__).warning(
+                "BigQuery batch for chr%s failed: %s", chrom, e)
+            stats.errors += len(batch)
+            stats.processed += len(batch)
+
+    @staticmethod
+    async def _check_bq_available() -> bool:
+        try:
+            bq = get_gnomad_bigquery_service()
+            return await bq.is_available()
+        except Exception:
+            return False

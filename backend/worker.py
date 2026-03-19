@@ -80,7 +80,6 @@ for _name in [
     "backend.services.clinvar_local",
     "backend.services.gnomad_local",
     "backend.services.thousand_genomes_local",
-    "backend.services.ensembl_local",
     "backend.services.local_annotation",
     "backend.services.shared_annotation_service",
 ]:
@@ -261,7 +260,7 @@ async def _preload_local_services() -> None:
     ok = await gn.ensure_loaded()
     logger.info(f"gnomAD PG: {'%d variants' % (gn._variant_count or 0) if ok else 'empty — run ETL'}")
 
-    from backend.services.gnomad_cache import get_gnomad_cache_service
+    from backend.services.gnomad_local import get_gnomad_cache_service
     gc = get_gnomad_cache_service()
     ok = await gc.ensure_loaded()
     logger.info(f"gnomAD cache: {gc.variant_count} variants {'cached' if ok else '(no CADD TSV files found)'}")

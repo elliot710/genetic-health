@@ -29,6 +29,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 from sqlalchemy import text
 
+from .datasource_utils import parse_vcf_info, safe_float
+
 from ..db.database import async_session_factory
 
 logger = logging.getLogger(__name__)
@@ -290,14 +292,14 @@ class ClinVarETL:
                 if len(parts) < 8:
                     continue
 
-                info = self._parse_vcf_info(parts[7])
+                info = parse_vcf_info(parts[7])
                 rs_raw = info.get("RS")
                 if not rs_raw:
                     continue
 
-                af_exac = self._parse_float(info.get("AF_EXAC"))
-                af_tgp = self._parse_float(info.get("AF_TGP"))
-                af_esp = self._parse_float(info.get("AF_ESP"))
+                af_exac = safe_float(info.get("AF_EXAC"))
+                af_tgp = safe_float(info.get("AF_TGP"))
+                af_esp = safe_float(info.get("AF_ESP"))
 
                 mc_raw = info.get("MC", "")
                 mc_text = None
@@ -492,26 +494,6 @@ class ClinVarETL:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _parse_vcf_info(info_str: str) -> Dict[str, str]:
-        info: Dict[str, str] = {}
-        for part in info_str.split(";"):
-            eq = part.find("=")
-            if eq > 0:
-                info[part[:eq]] = part[eq + 1:]
-            elif part.strip():
-                info[part.strip()] = ""
-        return info
-
-    @staticmethod
-    def _parse_float(val: Optional[str]) -> Optional[float]:
-        if not val or val == ".":
-            return None
-        try:
-            return float(val)
-        except (ValueError, TypeError):
-            return None
 
     # ------------------------------------------------------------------
     # Status / counts

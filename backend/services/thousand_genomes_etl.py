@@ -30,6 +30,7 @@ from typing import Any, Callable, Dict, List, Optional
 from sqlalchemy import text
 
 from ..db.database import async_session_factory
+from .datasource_utils import parse_vcf_info, safe_float, safe_int
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +215,7 @@ class ThousandGenomesETL:
                     continue
 
                 # Parse INFO field
-                info = self._parse_info(info_str)
+                info = parse_vcf_info(info_str)
 
                 # Parse population AFs — Number=A means one value per ALT allele
                 afr_vals = self._parse_af_field(info.get("AFR"))
@@ -225,8 +226,8 @@ class ThousandGenomesETL:
 
                 # Metadata
                 minor_allele = info.get("MA")
-                maf = self._safe_float(info.get("MAF"))
-                mac = self._safe_int(info.get("MAC"))
+                maf = safe_float(info.get("MAF"))
+                mac = safe_int(info.get("MAC"))
                 ancestral_allele = info.get("AA")
                 variant_type = info.get("TSA")
                 is_clinvar = "ClinVar_202502" in info or any(
@@ -269,17 +270,7 @@ class ThousandGenomesETL:
         if chunk:
             yield chunk
 
-    @staticmethod
-    def _parse_info(info_str: str) -> Dict[str, str]:
-        """Parse VCF INFO field into a dict. Flags become key→key."""
-        info: Dict[str, str] = {}
-        for field in info_str.split(";"):
-            if "=" in field:
-                k, v = field.split("=", 1)
-                info[k] = v
-            else:
-                info[field] = field  # Flag
-        return info
+
 
     @staticmethod
     def _parse_af_field(val: Optional[str]) -> Optional[List[Optional[float]]]:
@@ -305,23 +296,7 @@ class ThousandGenomesETL:
             return None
         return vals[idx]
 
-    @staticmethod
-    def _safe_float(val: Optional[str]) -> Optional[float]:
-        if not val or val in (".", "NA", ""):
-            return None
-        try:
-            return float(val)
-        except (ValueError, TypeError):
-            return None
 
-    @staticmethod
-    def _safe_int(val: Optional[str]) -> Optional[int]:
-        if not val or val in (".", "NA", ""):
-            return None
-        try:
-            return int(val)
-        except (ValueError, TypeError):
-            return None
 
     # ------------------------------------------------------------------
     # Index management

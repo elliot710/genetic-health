@@ -464,12 +464,14 @@ export default function VariantDetailDialog({
                     // Handle multi-alt: A/G,T → alts = ['G', 'T']
                     const alts = parts.slice(1).flatMap(p => p.split(',').map(a => a.trim().toUpperCase())).filter(Boolean)
                     const gt = genotype.toUpperCase()
-                    // Detect consumer indel codes (DD, DI, ID, II)
-                    const isIndel = /^[DI]{2}$/.test(gt)
-                    const alleles = gt.split('')
-                    // For indels: D=shorter allele, I=longer allele
-                    // If ref is "-" or shorter → D=ref, I=alt (insertion variant)
-                    // If alt is "-" or shorter → I=ref, D=alt (deletion variant)
+                    // Detect consumer indel codes: DD, DI, ID, II (diploid) or D, I (hemizygous X/Y)
+                    const isIndel = /^[DI]{1,2}$/.test(gt)
+                    // Split into individual allele tokens, handling slash-separated formats too
+                    const rawAlleles = gt.includes('/') ? gt.split('/') : gt.split('')
+                    const alleles = rawAlleles.filter(a => a && a !== '/')
+                    const isHemizygous = isIndel && alleles.length === 1
+                    // For indels: D=deletion allele, I=insertion allele
+                    // ref shorter → deletion (D) is ref; alt shorter → insertion (I) is ref
                     const refLen = ref === '-' || ref === '.' ? 0 : (ref?.length ?? 0)
                     const altLen = alts[0] === '-' || alts[0] === '.' ? 0 : (alts[0]?.length ?? 0)
                     const dIsRef = isIndel ? refLen <= altLen : false
@@ -503,6 +505,9 @@ export default function VariantDetailDialog({
                               </span>
                             )
                           })}
+                          {isHemizygous && (
+                            <span className={`text-xs ${textSecondary} ml-1`} title="Hemizygous — only one allele (X/Y chromosome)">hemi</span>
+                          )}
                         </div>
                       </div>
                     )
@@ -514,8 +519,8 @@ export default function VariantDetailDialog({
                   const ref = parts[0]?.toUpperCase()
                   const alts = parts.slice(1).flatMap(p => p.split(',').map(a => a.trim().toUpperCase())).filter(Boolean)
                   const gt = genotype.toUpperCase()
-                  const isIndel = /^[DI]{2}$/.test(gt)
-                  const alleles = gt.split('')
+                  const isIndel = /^[DI]{1,2}$/.test(gt)
+                  const alleles = gt.includes('/') ? gt.split('/').filter(a => a && a !== '/') : gt.split('')
 
                   let altCount: number
                   let refCount: number
@@ -537,26 +542,31 @@ export default function VariantDetailDialog({
                   }
 
                   const hasAlt = altCount > 0
+                  const isXLinked = details.chromosome?.toUpperCase() === 'X'
+                  const isSingleAllele = alleles.length === 1
                   const zygosity =
                     refCount === alleles.length ? 'homozygous reference' :
-                    altCount === alleles.length ? 'homozygous alternate' :
+                    altCount === alleles.length
+                      ? (isXLinked || isSingleAllele ? 'hemizygous' : 'homozygous alternate') :
                     refCount > 0 && hasAlt ? 'heterozygous' : null
                   const refDisplay = isIndel ? `${ref} (reference)` : ref
                   const altDisplay = isIndel ? `${alts[0] || 'alternate'} (alternate)` : altLabel
                   const implication =
                     zygosity === 'homozygous reference'
                       ? `Your genotype (${genotype}) matches the reference allele (${refDisplay}) on both chromosomes — this is the common variant with no change from the reference genome.`
-                      : zygosity === 'homozygous alternate'
-                        ? `Your genotype (${genotype}) carries the alternate allele (${altDisplay}) on both chromosomes — you have two copies of the variant. The reference allele (${refDisplay}) is absent. This is the highest-dosage form of this variant.`
-                        : zygosity === 'heterozygous'
-                          ? `Your genotype (${genotype}) is one copy of the reference (${refDisplay}) and one copy of the alternate (${altDisplay}) — you carry one variant allele. This is the heterozygous state.`
-                          : null
+                      : zygosity === 'hemizygous'
+                        ? `Your genotype (${genotype}) carries the alternate allele (${altDisplay}) on the X chromosome — as a hemizygous variant, you have a single copy with no second allele to compensate.`
+                        : zygosity === 'homozygous alternate'
+                          ? `Your genotype (${genotype}) carries the alternate allele (${altDisplay}) on both chromosomes — you have two copies of the variant. The reference allele (${refDisplay}) is absent. This is the highest-dosage form of this variant.`
+                          : zygosity === 'heterozygous'
+                            ? `Your genotype (${genotype}) is one copy of the reference (${refDisplay}) and one copy of the alternate (${altDisplay}) — you carry one variant allele. This is the heterozygous state.`
+                            : null
                   if (!implication) return null
                   return (
                     <div className={`mt-3 pt-3 border-t ${border} flex items-start gap-2`}>
                       <span className={`text-xs leading-relaxed ${textSecondary}`}>
                         <span className={`font-semibold ${
-                          zygosity === 'homozygous alternate' ? 'text-orange-400' :
+                          zygosity === 'homozygous alternate' || zygosity === 'hemizygous' ? 'text-orange-400' :
                           zygosity === 'heterozygous' ? 'text-yellow-400' : 'text-green-400'
                         }`}>
                           {zygosity?.replace(/\b\w/g, c => c.toUpperCase())}

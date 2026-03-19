@@ -15,7 +15,7 @@ from ..services.discovery_service import process_lookup_discoveries
 from ..utils.alpha_missense import get_alpha_missense_service
 from ..services.clinvar_local import get_clinvar_local_service
 from ..services.gnomad_local import get_gnomad_service
-from ..services.ensembl_local import get_ensembl_local_service
+from ..services.ensembl_vep_local import get_ensembl_local_service
 from ..services.bq_public import BigQueryPublicService
 from ..db.database import get_session
 from ..db.models import (

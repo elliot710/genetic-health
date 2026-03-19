@@ -718,7 +718,8 @@ async def get_dashboard_data(
         health_rows = hr.scalars().all()
         dashboard_data["health_risks"] = _dedup_by([
             {"condition": _clean_trait_name(r.condition), "risk_level": r.risk_level, "risk_score": r.risk_score,
-             "associated_variants": r.associated_variants, "recommendations": r.recommendations}
+             "associated_variants": r.associated_variants, "recommendations": r.recommendations,
+             "gene": r.gene, "review_status": r.review_status}
             for r in health_rows
         ], "condition")
 

@@ -1,9 +1,7 @@
 """
-Local ClinVar service backed by PostgreSQL (clinvar_variants table).
-
-Drop-in replacement for the old in-memory version.  All data is queried from
-the clinvar_variants, clinvar_gene_conditions, and clinvar_gene_stats tables
-populated by the ETL service (clinvar_etl.py).
+ClinVar service — PostgreSQL-backed lookup (clinvar_variants table) with
+direct-file fallback (SQLite cache from variant_summary.txt.gz) when the
+PG table is empty (ETL not run).
 
 Usage:
     svc = get_clinvar_local_service()
@@ -13,16 +11,409 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import csv
+import gzip
+import json
 import logging
+import os
+import sqlite3
+import time
+import zlib
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.database import async_session_factory
-from ..db.models import ClinVarVariant, ClinVarGeneCondition, ClinVarGeneStats
+from ..db.datasource_models import ClinVarSummaryRecord, ClinVarVcfRecord
+from ..db.models import ClinVarVariant, ClinVarGeneCondition, ClinVarGeneStats, GeneticMarker
+from .datasource_utils import (
+    load_known_rsids,
+    get_marker_fingerprint,
+    get_file_fingerprint,
+    is_cache_valid,
+    save_cache_meta,
+    open_cache_db,
+)
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# ClinVar direct-file cache constants
+# ---------------------------------------------------------------------------
+
+_CLINVAR_DATA_DIR = Path(os.environ.get(
+    "CLINVAR_DATA_DIR",
+    "/app/data_sources/clinvar",
+))
+_CACHE_DIR = _CLINVAR_DATA_DIR / ".clinvar_cache"
+_SQLITE_FILE = _CACHE_DIR / "clinvar_direct.db"
+_META_FILE = _CACHE_DIR / "clinvar_direct_meta.json"
+_DIRECT_BATCH_SIZE = 5_000
+# Increment when the SQLite schema or stored data shape changes.
+# Old caches with a different version will be rebuilt automatically.
+_CACHE_SCHEMA_VERSION = 2
+
+
+# ---------------------------------------------------------------------------
+# ClinVarDirectService — SQLite cache built from local variant_summary.txt.gz
+# ---------------------------------------------------------------------------
+
+class ClinVarDirectService:
+    """SQLite-backed ClinVar lookup built from variant_summary.txt.gz.
+
+    Activated automatically when the clinvar_variants PG table is empty.
+    Also provides gene-condition and gene-stats lookups from local TSV files.
+    """
+
+    def __init__(self):
+        self._db: Optional[sqlite3.Connection] = None
+        self._variant_count: int = 0
+        self._loaded = False
+        self._lock = asyncio.Lock()
+        self._gene_conditions: Optional[Dict[str, List[Dict[str, str]]]] = None
+        self._gene_stats: Optional[Dict[str, List[Dict[str, Any]]]] = None
+        self._gene_data_lock = asyncio.Lock()
+
+    @property
+    def is_loaded(self) -> bool:
+        return self._loaded and self._db is not None
+
+    @property
+    def variant_count(self) -> int:
+        return self._variant_count
+
+    async def ensure_loaded(self) -> bool:
+        if self._loaded:
+            return self._db is not None
+        async with self._lock:
+            if self._loaded:
+                return self._db is not None
+            try:
+                await self._load_cache()
+            except Exception as e:
+                logger.error("ClinVar direct cache failed: %s", e, exc_info=True)
+            self._loaded = True
+        return self._db is not None
+
+    async def lookup(self, rsid: str) -> Optional[Dict[str, Any]]:
+        if not await self.ensure_loaded():
+            return None
+        return await asyncio.to_thread(self._lookup_one, rsid)
+
+    async def lookup_batch(self, rsids: List[str]) -> Dict[str, Optional[Dict[str, Any]]]:
+        if not rsids:
+            return {}
+        if not await self.ensure_loaded():
+            return {}
+        return await asyncio.to_thread(self._lookup_batch_sync, rsids)
+
+    async def lookup_by_position(
+        self, chrom: str, pos: int, ref: str, alt: str
+    ) -> Optional[Dict[str, Any]]:
+        vcf_path = self._find_vcf()
+        tbi_path = Path(str(vcf_path) + ".tbi") if vcf_path else None
+        if not vcf_path or not vcf_path.exists() or not (tbi_path and tbi_path.exists()):
+            return None
+        return await asyncio.to_thread(self._tabix_lookup, vcf_path, chrom, pos, ref, alt)
+
+    # Gene enrichment from local TSV files
+
+    async def get_gene_conditions(self, genes: List[str]) -> Dict[str, List[Dict[str, str]]]:
+        await self._ensure_gene_data()
+        if not self._gene_conditions:
+            return {}
+        return {g: self._gene_conditions[g] for g in genes if g in self._gene_conditions}
+
+    async def get_gene_stats(self, genes: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+        await self._ensure_gene_data()
+        if not self._gene_stats:
+            return {}
+        return {g: self._gene_stats[g] for g in genes if g in self._gene_stats}
+
+    async def _ensure_gene_data(self):
+        if self._gene_conditions is not None:
+            return
+        async with self._gene_data_lock:
+            if self._gene_conditions is not None:
+                return
+            self._gene_conditions = await asyncio.to_thread(self._parse_gene_conditions)
+            self._gene_stats = await asyncio.to_thread(self._parse_gene_stats)
+
+    def _parse_gene_conditions(self) -> Dict[str, List[Dict[str, str]]]:
+        fpath = self._find_gene_conditions_file()
+        if not fpath:
+            return {}
+        result: Dict[str, List[Dict[str, str]]] = {}
+        with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
+            reader = csv.reader(
+                (line for line in fh if not line.startswith("##")), delimiter="\t"
+            )
+            header = next(reader)
+            idx = {name: i for i, name in enumerate(header)}
+            I_GENE, I_DIS = idx.get("AssociatedGenes"), idx.get("DiseaseName")
+            I_SRC, I_SID, I_MIM = idx.get("SourceName"), idx.get("SourceID"), idx.get("DiseaseMIM")
+            if I_GENE is None or I_DIS is None:
+                return {}
+            for row in reader:
+                if len(row) <= max(I_GENE, I_DIS):
+                    continue
+                genes_str, disease = row[I_GENE].strip(), row[I_DIS].strip()
+                if not genes_str or not disease:
+                    continue
+                entry = {
+                    "disease": disease,
+                    "source": (row[I_SRC].strip() if I_SRC is not None and I_SRC < len(row) else "") or "",
+                    "source_id": (row[I_SID].strip() if I_SID is not None and I_SID < len(row) else "") or "",
+                    "disease_mim": (row[I_MIM].strip() if I_MIM is not None and I_MIM < len(row) else "") or "",
+                }
+                for gene in genes_str.split(","):
+                    gene = gene.strip()
+                    if gene:
+                        result.setdefault(gene, []).append(entry)
+        logger.info("ClinVar: parsed %d genes from gene_condition_source_id.txt", len(result))
+        return result
+
+    def _parse_gene_stats(self) -> Dict[str, List[Dict[str, Any]]]:
+        fpath = self._find_gene_stats_file()
+        if not fpath:
+            return {}
+
+        def _int(v):
+            v = (v or "").strip()
+            return int(v) if v and v != "-" else 0
+
+        result: Dict[str, List[Dict[str, Any]]] = {}
+        with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
+            reader = csv.reader(
+                (line for line in fh if not line.startswith("#Overview") and not line.startswith("##")),
+                delimiter="\t",
+            )
+            header = next(reader)
+            idx = {name: i for i, name in enumerate(header)}
+            I_SYM = idx.get("#Symbol", idx.get("Symbol"))
+            I_GID, I_TS, I_TA = idx.get("GeneID"), idx.get("Total_submissions"), idx.get("Total_alleles")
+            I_PLP = idx.get("Alleles_reported_Pathogenic_Likely_pathogenic")
+            I_US, I_WC, I_MIM = idx.get("Number_uncertain"), idx.get("Number_with_conflicts"), idx.get("Gene_MIM_number")
+            if I_SYM is None:
+                return {}
+
+            def _safe(i, row):
+                return row[i].strip() if i is not None and i < len(row) else ""
+
+            for row in reader:
+                symbol = _safe(I_SYM, row)
+                if not symbol or symbol in result:
+                    continue
+                result[symbol] = [{"gene": symbol, "gene_id": _safe(I_GID, row) or "",
+                    "total_submissions": _int(_safe(I_TS, row)),
+                    "total_alleles": _int(_safe(I_TA, row)),
+                    "pathogenic_likely_pathogenic": _int(_safe(I_PLP, row)),
+                    "gene_mim": _safe(I_MIM, row) or "",
+                    "uncertain": _int(_safe(I_US, row)),
+                    "with_conflicts": _int(_safe(I_WC, row)),
+                }]
+        logger.info("ClinVar: parsed %d genes from gene_specific_summary.txt", len(result))
+        return result
+
+    # SQLite operations
+
+    def _lookup_one(self, rsid: str) -> Optional[Dict[str, Any]]:
+        if not self._db:
+            return None
+        row = self._db.execute("SELECT data FROM clinvar_data WHERE rsid = ?", (rsid,)).fetchone()
+        return json.loads(zlib.decompress(row[0])) if row else None
+
+    def _lookup_batch_sync(self, rsids: List[str]) -> Dict[str, Optional[Dict[str, Any]]]:
+        if not self._db:
+            return {}
+        results: Dict[str, Optional[Dict[str, Any]]] = {}
+        for start in range(0, len(rsids), 500):
+            chunk = rsids[start:start + 500]
+            placeholders = ",".join("?" * len(chunk))
+            rows = self._db.execute(
+                f"SELECT rsid, data FROM clinvar_data WHERE rsid IN ({placeholders})", chunk
+            ).fetchall()
+            for rsid, blob in rows:
+                results[rsid] = json.loads(zlib.decompress(blob))
+        return results
+
+    # Cache build
+
+    async def _load_cache(self):
+        tsv_path = self._find_tsv()
+        if not tsv_path:
+            logger.warning("ClinVar direct: variant_summary.txt.gz not found in %s", _CLINVAR_DATA_DIR)
+            return
+        marker_fp = await get_marker_fingerprint()
+        file_fp = get_file_fingerprint(tsv_path)
+        schema_ok = False
+        if is_cache_valid(_SQLITE_FILE, _META_FILE, marker_fp, file_fp):
+            try:
+                meta = json.loads(_META_FILE.read_text())
+                schema_ok = meta.get("schema_version") == _CACHE_SCHEMA_VERSION
+            except Exception:
+                schema_ok = False
+
+        if schema_ok:
+            self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE)
+            row = self._db.execute("SELECT COUNT(*) FROM clinvar_data").fetchone()
+            self._variant_count = row[0] if row else 0
+            logger.info("ClinVar direct: opened cache with %d variants", self._variant_count)
+            return
+        logger.info(
+            "ClinVar direct: building cache from %s (schema v%d)...",
+            tsv_path.name, _CACHE_SCHEMA_VERSION,
+        )
+        known_rsids = await load_known_rsids()
+        if not known_rsids:
+            logger.warning("ClinVar direct: no rsids in genetic_markers — skipping build")
+            return
+        count = await asyncio.to_thread(self._scan_tsv_to_sqlite, tsv_path, known_rsids)
+        save_cache_meta(_META_FILE, marker_fp, file_fp, count,
+                        extra={"schema_version": _CACHE_SCHEMA_VERSION})
+        self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE)
+        self._variant_count = count
+        logger.info("ClinVar direct cache built: %d variants", count)
+
+    def _scan_tsv_to_sqlite(self, tsv_path: Path, known_rsids: set) -> int:
+        tmp = _SQLITE_FILE.with_suffix(".tmp")
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        if tmp.exists():
+            tmp.unlink()
+        conn = sqlite3.connect(str(tmp), check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=OFF")
+        conn.execute("CREATE TABLE clinvar_data (rsid TEXT PRIMARY KEY, data BLOB NOT NULL)")
+
+        assembly_pref = "GRCh37"
+        aggregated: Dict[str, Dict] = {}
+        t0 = time.time()
+
+        with gzip.open(str(tsv_path), "rt", encoding="utf-8", errors="replace") as fh:
+            reader = csv.DictReader(fh, delimiter="\t")
+            for row in reader:
+                try:
+                    rec = ClinVarSummaryRecord.from_row(row)
+                except Exception:
+                    continue
+                if not rec.rsid or rec.rsid not in known_rsids:
+                    continue
+                ann = rec.to_annotation()
+                if rec.rsid not in aggregated:
+                    aggregated[rec.rsid] = ann
+                else:
+                    existing = aggregated[rec.rsid]
+                    if rec.assembly == assembly_pref:
+                        aggregated[rec.rsid] = ann
+                    elif rec.clinical_significance:
+                        sigs = existing.get("clinical_significances", [])
+                        if rec.clinical_significance not in sigs:
+                            sigs.append(rec.clinical_significance)
+                        existing["clinical_significances"] = sigs
+                    for cond in ann.get("conditions", []):
+                        if cond not in existing.get("conditions", []):
+                            existing.setdefault("conditions", []).append(cond)
+
+        count = 0
+        batch: list = []
+        for rsid, ann in aggregated.items():
+            batch.append((rsid, zlib.compress(json.dumps(ann).encode("utf-8"), level=1)))
+            count += 1
+            if len(batch) >= _DIRECT_BATCH_SIZE:
+                conn.executemany("INSERT OR REPLACE INTO clinvar_data (rsid, data) VALUES (?, ?)", batch)
+                conn.commit()
+                batch.clear()
+        if batch:
+            conn.executemany("INSERT OR REPLACE INTO clinvar_data (rsid, data) VALUES (?, ?)", batch)
+            conn.commit()
+
+        elapsed = time.time() - t0
+        logger.info("[ClinVar direct] Scanned %s: %d rsids cached in %.1fs", tsv_path.name, count, elapsed)
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.close()
+        for suffix in ["-wal", "-shm"]:
+            f = tmp.with_name(tmp.name + suffix)
+            if f.exists():
+                f.unlink()
+        if _SQLITE_FILE.exists():
+            _SQLITE_FILE.unlink()
+        tmp.rename(_SQLITE_FILE)
+        return count
+
+    def _tabix_lookup(self, vcf_path: Path, chrom: str, pos: int, ref: str, alt: str) -> Optional[Dict[str, Any]]:
+        try:
+            import pysam
+        except ImportError:
+            return None
+        chrom_clean = chrom.replace("chr", "")
+        ref_upper, alt_upper = ref.upper(), alt.upper()
+        try:
+            tabix = pysam.TabixFile(str(vcf_path))
+        except Exception as e:
+            logger.debug("ClinVar tabix open failed: %s", e)
+            return None
+        try:
+            for row_str in tabix.fetch(chrom_clean, pos - 1, pos):
+                parts = row_str.split("\t", 9)
+                if len(parts) < 8:
+                    continue
+                if parts[3].upper() != ref_upper or parts[4].upper() != alt_upper:
+                    continue
+                try:
+                    rec = ClinVarVcfRecord.from_vcf_fields(
+                        parts[0], int(parts[1]), parts[2], parts[3], parts[4], parts[7]
+                    )
+                    return rec.to_annotation()
+                except Exception:
+                    continue
+        except ValueError:
+            pass
+        except Exception as e:
+            logger.debug("ClinVar tabix fetch error: %s", e)
+        finally:
+            tabix.close()
+        return None
+
+    def _find_tsv(self) -> Optional[Path]:
+        for p in [_CLINVAR_DATA_DIR / "tsv" / "variant_summary.txt.gz", _CLINVAR_DATA_DIR / "variant_summary.txt.gz"]:
+            if p.exists():
+                return p
+        return None
+
+    def _find_vcf(self) -> Optional[Path]:
+        for p in [_CLINVAR_DATA_DIR / "vcf" / "clinvar.vcf.gz", _CLINVAR_DATA_DIR / "clinvar.vcf.gz"]:
+            if p.exists() and Path(str(p) + ".tbi").exists():
+                return p
+        return None
+
+    def _find_gene_conditions_file(self) -> Optional[Path]:
+        for p in [_CLINVAR_DATA_DIR / "tsv" / "gene_condition_source_id.txt", _CLINVAR_DATA_DIR / "gene_condition_source_id.txt"]:
+            if p.exists():
+                return p
+        return None
+
+    def _find_gene_stats_file(self) -> Optional[Path]:
+        for p in [_CLINVAR_DATA_DIR / "tsv" / "gene_specific_summary.txt", _CLINVAR_DATA_DIR / "gene_specific_summary.txt"]:
+            if p.exists():
+                return p
+        return None
+
+
+_direct_instance: Optional[ClinVarDirectService] = None
+
+
+def get_clinvar_direct_service() -> ClinVarDirectService:
+    global _direct_instance
+    if _direct_instance is None:
+        _direct_instance = ClinVarDirectService()
+    return _direct_instance
+
+
+# ---------------------------------------------------------------------------
+# ClinVarLocalService — PostgreSQL-backed with direct-file fallback
+# ---------------------------------------------------------------------------
 
 
 class ClinVarLocalService:
@@ -80,7 +471,6 @@ class ClinVarLocalService:
                 logger.warning(
                     "ClinVar PG: table empty — trying direct file cache"
                 )
-                from .clinvar_direct import get_clinvar_direct_service
                 direct = get_clinvar_direct_service()
                 ok = await direct.ensure_loaded()
                 if ok:
@@ -112,7 +502,10 @@ class ClinVarLocalService:
                     return result
         # Fallback to direct-file cache
         if direct:
-            return await direct.lookup(rsid)
+            result = await direct.lookup(rsid)
+            if result and result.get("found"):
+                await self._enrich_direct_result(direct, result)
+            return result
         async with async_session_factory() as session:
             return await self._lookup_impl(session, rsid)
 
@@ -209,10 +602,39 @@ class ClinVarLocalService:
             missed = [r for r, v in results.items() if not v or not v.get("found")]
             if missed:
                 direct_results = await direct.lookup_batch(missed)
+                # Collect all unique genes to enrich with gene conditions/stats
+                all_direct_genes: set = set()
                 for rsid_key, val in direct_results.items():
                     if val and val.get("found"):
                         results[rsid_key] = val
                         found_count += 1
+                        for g in val.get("genes", []):
+                            all_direct_genes.add(g)
+
+                # Enrich with gene conditions + stats from local files
+                if all_direct_genes:
+                    gene_list = list(all_direct_genes)
+                    gc_map = await direct.get_gene_conditions(gene_list)
+                    gs_map = await direct.get_gene_stats(gene_list)
+                    for rsid_key, val in results.items():
+                        if not val or not val.get("found"):
+                            continue
+                        genes = val.get("genes", [])
+                        if not genes:
+                            continue
+                        if not val.get("gene_conditions"):
+                            gc_list: list = []
+                            for g in genes:
+                                gc_list.extend(gc_map.get(g, []))
+                            if gc_list:
+                                val["gene_conditions"] = gc_list[:20]
+                        if not val.get("gene_stats"):
+                            gs_list: list = []
+                            for g in genes:
+                                gs_list.extend(gs_map.get(g, []))
+                            if gs_list:
+                                val["gene_stats"] = gs_list
+
                 logger.info(
                     "  ClinVar direct fallback: %d/%d found", found_count, len(missed)
                 )
@@ -335,6 +757,26 @@ class ClinVarLocalService:
         if vcf_data:
             output["vcf_data"] = vcf_data
         return output
+
+    async def _enrich_direct_result(self, direct, result: Dict[str, Any]):
+        """Enrich a direct-cache result with gene conditions/stats from local files."""
+        genes = result.get("genes", [])
+        if not genes:
+            return
+        if not result.get("gene_conditions"):
+            gc_map = await direct.get_gene_conditions(genes)
+            gc_list: list = []
+            for g in genes:
+                gc_list.extend(gc_map.get(g, []))
+            if gc_list:
+                result["gene_conditions"] = gc_list[:20]
+        if not result.get("gene_stats"):
+            gs_map = await direct.get_gene_stats(genes)
+            gs_list: list = []
+            for g in genes:
+                gs_list.extend(gs_map.get(g, []))
+            if gs_list:
+                result["gene_stats"] = gs_list
 
     async def _lookup_impl(self, session: AsyncSession, rsid: str) -> Optional[Dict[str, Any]]:
         """Single rsid lookup within an existing session."""

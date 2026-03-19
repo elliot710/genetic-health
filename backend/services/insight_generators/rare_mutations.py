@@ -160,30 +160,17 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
         if not gene:
             continue
 
-        # Use scoring engine composite score to refine ambiguous classifications
-        pathogenicity_score = annotation_result.annotation_data.get('pathogenicity_score', {})
-        composite = pathogenicity_score.get('composite_score', 0.0) if isinstance(pathogenicity_score, dict) else 0.0
-        score_classification = pathogenicity_score.get('classification', '') if isinstance(pathogenicity_score, dict) else ''
-
-        # If ClinVar says uncertain/conflicting but scoring engine has strong
-        # evidence, upgrade the classification
-        if clinical_significance in ('uncertain', 'conflicting') and composite >= 0.60:
-            if score_classification in ('pathogenic', 'likely_pathogenic'):
-                clinical_significance = 'likely_pathogenic'
-                penetrance = 'low'
-                mutation_type_override = 'computationally_elevated'
-            else:
-                mutation_type_override = None
-        else:
-            mutation_type_override = None
+        # Use scoring engine composite score for informational purposes only.
+        # BUG-05 fix: Do NOT upgrade conflicting/uncertain classifications based
+        # on composite_score — the score can be inflated by double-counted ClinVar
+        # data and computational predictions that don't constitute clinical evidence.
+        # ClinVar's clinical classification is authoritative.
 
         consequence_label = (consequence or 'variant').replace('_', ' ')
         mutation_name = f'{gene} {consequence_label}'
 
         # Determine mutation type from clinical significance
-        if mutation_type_override:
-            mutation_type = mutation_type_override
-        elif clinical_significance in ('pathogenic', 'likely_pathogenic'):
+        if clinical_significance in ('pathogenic', 'likely_pathogenic'):
             mutation_type = 'clinically_significant'
         elif clinical_significance == 'conflicting':
             mutation_type = 'conflicting_evidence'

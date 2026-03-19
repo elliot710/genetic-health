@@ -12,6 +12,8 @@ from ..db.database import get_session, async_session_factory
 from ..db.models import GeneticAnalysis, AnalysisVariant, DashboardCache
 from ..utils.vcf_parser import VCFParser
 from ..services.variant_uploader import VariantUploader
+from ..services.analysis_queue import queue_analysis
+from ..services.analysis_service import ComprehensiveAnalysisService
 
 logger = logging.getLogger(__name__)
 

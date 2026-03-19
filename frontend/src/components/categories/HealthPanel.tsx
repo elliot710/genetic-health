@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react'
-import { Heart, AlertTriangle, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
+import { Heart, AlertTriangle, ChevronRight, CheckCircle, Search, Filter, Shield } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import {
   useThemeClasses,
@@ -12,6 +12,8 @@ import {
   DisclaimerCard,
   VariantLinks,
   ZygosityBadge,
+  EvidenceBadge,
+  reviewStatusStars,
   riskToSeverity,
   getRiskBarColor,
   MasonryLayout,
@@ -44,11 +46,13 @@ interface MappedHealthRisk {
   risk: string
   riskScore: number
   gene: string
+  geneSymbol: string | null  // distinct gene symbol when available (FE-01)
   description: string
   variantInfo: string[]
   clinicalSignificance: string
   riskLevel: string
   prevention: string[]
+  reviewStatus: string | null   // ClinVar review status (FE-02/03)
 }
 
 export default function HealthPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
@@ -56,6 +60,7 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
   const [selectedItem, setSelectedItem] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [riskFilter, setRiskFilter] = useState<string>('all')
+  const [evidenceFilter, setEvidenceFilter] = useState<number>(0)  // min ClinVar stars (FE-03)
   const [groupBy, setGroupBy] = useState('none')
 
   const [variantAnnotations, setVariantAnnotations] = useState<Record<string, VariantAnnotation>>({})
@@ -146,16 +151,19 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
             .filter((s): s is number => s != null)
           const pathScore = pathScores.length > 0 ? Math.max(...pathScores) : null
 
+          const rsid = risk.associated_variants?.[0] || ''
           return {
           condition: cleanCondition(risk.condition),
           risk: getRiskLevel(risk.risk_level),
           riskScore: pathScore ?? (risk.risk_level === 'high' ? 85 : risk.risk_level === 'moderate' ? 65 : risk.risk_level === 'low' ? 35 : 20),
-          gene: risk.associated_variants?.[0] || 'Unknown',
+          gene: rsid || 'Unknown',
+          geneSymbol: risk.gene || null,
           description: `Genetic analysis shows ${risk.risk_level} risk for this condition`,
           variantInfo: risk.associated_variants || [],
           clinicalSignificance: risk.clinical_significance || 'Under research',
           riskLevel: risk.risk_level,
-          prevention: Array.isArray(risk.recommendations) ? risk.recommendations : [risk.recommendations || 'Consult with healthcare provider']
+          prevention: Array.isArray(risk.recommendations) ? risk.recommendations : [risk.recommendations || 'Consult with healthcare provider'],
+          reviewStatus: risk.review_status ?? null,
           }
         })
         .sort((a: MappedHealthRisk, b: MappedHealthRisk) => {
@@ -173,17 +181,19 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
             .map(v => data?.pathogenicity_map?.[v]?.score)
             .filter((s): s is number => s != null)
           const pathScore = pathScores.length > 0 ? Math.max(...pathScores) : null
-
+          const rsid = risk.associated_variants?.[0] || ''
           return {
           condition: cleanCondition(risk.condition),
           risk: getRiskLevel(risk.risk_level),
           riskScore: pathScore ?? (risk.risk_level === 'high' ? 85 : risk.risk_level === 'moderate' ? 65 : risk.risk_level === 'low' ? 35 : 20),
-          gene: risk.associated_variants?.[0] || 'Unknown',
+          gene: rsid || 'Unknown',
+          geneSymbol: risk.gene || null,
           description: `Genetic variant analysis shows ${risk.risk_level} risk`,
           variantInfo: risk.associated_variants || [],
           clinicalSignificance: risk.clinical_significance || 'Under research',
           riskLevel: risk.risk_level,
-          prevention: risk.recommendations || ['Consult with healthcare provider', 'Monitor regularly', 'Maintain healthy lifestyle']
+          prevention: risk.recommendations || ['Consult with healthcare provider', 'Monitor regularly', 'Maintain healthy lifestyle'],
+          reviewStatus: risk.review_status ?? null,
           }
         })
         .sort((a: MappedHealthRisk, b: MappedHealthRisk) => {
@@ -198,11 +208,13 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
         risk: 'Processing',
         riskScore: 0,
         gene: 'Multiple',
+        geneSymbol: null,
         description: 'Loading your genetic health risk analysis results...',
         variantInfo: [] as string[],
         clinicalSignificance: 'Processing',
         riskLevel: 'unknown',
-        prevention: ['Analysis in progress...']
+        prevention: ['Analysis in progress...'],
+        reviewStatus: null,
       }]
     }
 
@@ -221,13 +233,20 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
     let list = healthRisks
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase()
-      list = list.filter(r => r.condition.toLowerCase().includes(q) || r.gene.toLowerCase().includes(q))
+      list = list.filter(r =>
+        r.condition.toLowerCase().includes(q) ||
+        r.gene.toLowerCase().includes(q) ||
+        (r.geneSymbol?.toLowerCase().includes(q) ?? false)
+      )
     }
     if (riskFilter !== 'all') {
       list = list.filter(r => r.riskLevel === riskFilter)
     }
+    if (evidenceFilter > 0) {
+      list = list.filter(r => reviewStatusStars(r.reviewStatus) >= evidenceFilter)
+    }
     return list
-  }, [healthRisks, searchQuery, riskFilter])
+  }, [healthRisks, searchQuery, riskFilter, evidenceFilter])
 
   const HEALTH_GROUP_OPTIONS: Record<string, string> = { none: 'No Grouping', riskLevel: 'Risk Level', gene: 'Gene' }
   const getGroupKey = useCallback((risk: MappedHealthRisk): string => {
@@ -308,6 +327,21 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
             ))}
           </select>
         </div>
+        <div className="relative min-w-44">
+          <Shield className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+          <select
+            value={evidenceFilter}
+            onChange={e => setEvidenceFilter(Number(e.target.value))}
+            className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} focus:outline-none focus:ring-2 focus:ring-red-500/40 text-sm appearance-none cursor-pointer`}
+          >
+            <option value={0}>All Evidence</option>
+            <option value={1}>1★ or better</option>
+            <option value={2}>2★ or better</option>
+            <option value={3}>3★ or better</option>
+            <option value={4}>4★ Guidelines</option>
+            <option value={5}>Curated only</option>
+          </select>
+        </div>
         <GroupBySelect value={groupBy} onChange={v => { setGroupBy(v); resetCollapsed() }} options={HEALTH_GROUP_OPTIONS} theme={theme} />
       </div>
 
@@ -340,13 +374,22 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                 </div>
 
                 <div className="flex flex-wrap gap-1.5">
-                  {risk.gene && risk.gene !== 'Unknown' && (
-                    <Badge variant={risk.gene.startsWith('rs') ? 'secondary' : 'secondary'} className={`text-xs ${risk.gene.startsWith('rs') ? 'font-mono' : ''}`}>
-                      {risk.gene}{risk.gene.startsWith('rs') && data?.genotype_map?.[risk.gene] ? ` ${data.genotype_map[risk.gene]}` : ''}
+                  {/* Gene symbol (FE-01) */}
+                  {risk.geneSymbol && (
+                    <Badge variant="secondary" className="text-xs font-medium">
+                      {risk.geneSymbol}
+                    </Badge>
+                  )}
+                  {/* rsid + genotype (FE-01) */}
+                  {risk.gene && risk.gene !== 'Unknown' && risk.gene.startsWith('rs') && (
+                    <Badge variant="outline" className="text-xs font-mono">
+                      {risk.gene}{data?.genotype_map?.[risk.gene] ? ` · ${data.genotype_map[risk.gene]}` : ''}
                     </Badge>
                   )}
                   {risk.gene?.startsWith('rs') && <ZygosityBadge genotype={data?.genotype_map?.[risk.gene]} />}
-                  {risk.clinicalSignificance && (
+                  {/* Evidence badge (FE-02) */}
+                  <EvidenceBadge reviewStatus={risk.reviewStatus} />
+                  {risk.clinicalSignificance && risk.clinicalSignificance !== 'Under research' && (
                     <Badge variant="outline" className="text-xs">{risk.clinicalSignificance}</Badge>
                   )}
                 </div>

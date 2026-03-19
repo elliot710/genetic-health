@@ -150,21 +150,96 @@ class AutoCategorizer:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _populate_category_fields(data: dict, category: str, condition: str, gene: str):
+        """Populate dedup-critical fields with category-appropriate values.
+
+        FLAW-01 fix: instead of blindly setting all fields (trait, domain, metric,
+        nutrient, category) to the disease name, set only the semantically
+        relevant field to the condition and the rest to the gene name.
+        Each generator uses a specific dedup_field — only that field needs the
+        condition-level granularity. Others just need a non-empty value.
+        """
+        gene_label = f"{gene} variant" if gene else condition
+
+        # Category → primary dedup field mapping (what the generator uses)
+        _PRIMARY_FIELD = {
+            'health': 'condition',
+            'carrier': 'condition',
+            'drug_response': 'drug',
+            'nutrition': 'nutrient',
+            'sports': 'category',
+            'wellness': 'metric',
+            'cognitive': 'domain',
+            'personality': 'trait',
+            'physical_traits': 'trait',
+            'methylation': 'gene',
+            'detox': 'gene',
+        }
+
+        primary = _PRIMARY_FIELD.get(category, 'condition')
+
+        # Set the primary field to the condition (meaningful dedup key)
+        data.setdefault(primary, condition)
+
+        # Set remaining fields to gene-based label (semantically appropriate
+        # fallback that won't produce "Familial hypercholesterolemia" as a nutrient)
+        for field in ('condition', 'trait', 'domain', 'metric', 'nutrient', 'category'):
+            if field != primary:
+                data.setdefault(field, gene_label)
+
+    @staticmethod
     def _clean_condition(raw: str) -> str:
-        """Extract the first meaningful condition name from a raw ClinVar conditions string."""
+        """Extract the first meaningful condition name from a raw ClinVar conditions string.
+        
+        Returns empty string for garbage entries so callers can skip them.
+        """
         if not raw:
-            return "Unknown"
+            return ""
+        # BUG-02: Reject entire-string garbage values, not just when embedded in pipes
+        _GARBAGE = {
+            'not provided', 'not specified', 'see cases', 'not applicable',
+            'none', 'unknown', '-', '.', '',
+        }
+        if raw.strip().lower() in _GARBAGE:
+            return ""
         if '|' not in raw and ';' not in raw:
-            return raw
+            return raw.strip()
         parts = raw.replace(';', '|').split('|')
-        skip = {'not provided', 'not specified', 'see cases', 'not applicable'}
         for part in parts:
             cleaned = part.strip()
-            if cleaned and cleaned.lower() not in skip:
+            if cleaned and cleaned.lower() not in _GARBAGE:
                 if cleaned.isupper():
                     cleaned = cleaned.title()
                 return cleaned
-        return parts[0].strip().title() if parts else raw
+        return ""
+
+    @staticmethod
+    def _risk_multiplier_from_review_status(review_status: str, sig: str) -> float:
+        """Map ClinVar review star level to risk_multiplier.
+
+        BUG-02 fix: replaces uniform 3.0 for all Pathogenic variants with
+        evidence-strength-calibrated values based on ClinVar star level.
+          0-stars (single submitter, no criteria) → filtered out upstream
+          1-star  (criteria provided, single submitter)       → 1.2
+          2-stars (criteria provided, multiple submitters)    → 1.5
+          3-stars (reviewed by expert panel)                  → 2.0
+          4-stars (practice guideline)                        → 3.0
+        Likely pathogenic gets 80% of the pathogenic value at each tier.
+        """
+        rs = (review_status or '').lower()
+        is_likely = 'likely' in (sig or '').lower().replace('_', ' ')
+
+        if 'practice guideline' in rs:
+            mult = 3.0
+        elif 'expert panel' in rs:
+            mult = 2.0
+        elif 'multiple submitters' in rs or 'no conflicts' in rs:
+            mult = 1.5
+        else:
+            # Single submitter with criteria or other
+            mult = 1.2
+
+        return round(mult * 0.8 if is_likely else mult, 2)
 
     # ------------------------------------------------------------------
     # Rule matchers
@@ -175,10 +250,9 @@ class AutoCategorizer:
     ) -> Dict[str, dict]:
         """Match ClinVar variants by clinical_significance (case-insensitive ILIKE).
 
-        Excludes variants that are benign, likely benign, conflicting, or
-        drug-response-only to avoid generating false health risk mappings.
-        "Conflicting classifications of pathogenicity" contains the substring
-        "pathogenic" but is NOT a genuine pathogenic classification.
+        BUG-02 fix: Also scales risk_multiplier per ClinVar review star level
+        (1-star=1.2, 2-star=1.5, 3-star=2.0, 4-star=3.0) instead of uniform 3.0.
+        Requires minimum review quality and filters garbage condition names.
         """
         result = await session.execute(
             select(
@@ -186,6 +260,7 @@ class AutoCategorizer:
                 ClinVarVariant.gene,
                 ClinVarVariant.clinical_significance,
                 ClinVarVariant.conditions,
+                ClinVarVariant.review_status,
             )
             .where(ClinVarVariant.clinical_significance.ilike(f"%{sig_pattern}%"))
             .where(ClinVarVariant.rsid.isnot(None))
@@ -194,25 +269,32 @@ class AutoCategorizer:
             .where(~ClinVarVariant.clinical_significance.ilike('likely benign%'))
             .where(~ClinVarVariant.clinical_significance.ilike('conflicting%'))
             .where(~ClinVarVariant.clinical_significance.ilike('drug%response%'))
+            .where(ClinVarVariant.review_status.isnot(None))
+            .where(~ClinVarVariant.review_status.ilike('no assertion%'))
+            .where(~ClinVarVariant.review_status.ilike('no_assertion%'))
+            .where(~ClinVarVariant.review_status.ilike('no classification%'))
+            .where(~ClinVarVariant.review_status.ilike('no_classification%'))
+            .where(ClinVarVariant.review_status != '-')
+            .where(ClinVarVariant.review_status != '')
             .distinct(ClinVarVariant.rsid)
             .limit(MAX_MAPPINGS_PER_CATEGORY)
         )
         out: Dict[str, dict] = {}
         for row in result.all():
-            rsid = row[0]
-            data = {**template}
-            cond = row[3] or f"{row[1] or 'Unknown'} variant"
+            rsid, gene, sig, cond, review = row
+            cond = cond or f"{gene or 'Unknown'} variant"
             clean = self._clean_condition(cond)
+            if not clean:
+                continue
+            data = {**template}
             data.setdefault("condition", clean)
-            data.setdefault("clinical_significance", row[2])
-            data.setdefault("gene", row[1] or "")
+            data.setdefault("clinical_significance", sig)
+            data.setdefault("gene", gene or "")
             data.setdefault("source", "clinvar_auto")
-            # Populate dedup-critical fields for category generators
-            data.setdefault("trait", clean)
-            data.setdefault("domain", clean)
-            data.setdefault("metric", clean)
-            data.setdefault("nutrient", clean)
-            data.setdefault("category", clean)
+            data["review_status"] = review or ""
+            # BUG-02: evidence-calibrated risk_multiplier based on star level
+            data["risk_multiplier"] = self._risk_multiplier_from_review_status(review, sig)
+            self._populate_category_fields(data, category, clean, gene or "")
             out[rsid] = {"map_type": "rsid", "data": data}
         return out
 
@@ -220,58 +302,55 @@ class AutoCategorizer:
         self, session: AsyncSession, category: str, keyword: str, template: dict
     ) -> Dict[str, dict]:
         """Match ClinVar variants where conditions contain a keyword.
-        
-        Excludes variants with benign/likely_benign clinical significance
-        to avoid generating elevated-risk mappings for clinically benign variants.
+
+        BUG-02 fix: uses review-status-based risk_multiplier scaling and requires
+        minimum review quality.
         """
-        # Exclude variants that are definitively benign — they should not
-        # receive elevated risk multipliers just because their condition
-        # string contains a keyword like "cancer" or "diabetes".
-        _BENIGN_SIGS = ('benign', 'likely benign', 'likely_benign')
         result = await session.execute(
             select(
                 ClinVarVariant.rsid,
                 ClinVarVariant.gene,
                 ClinVarVariant.clinical_significance,
                 ClinVarVariant.conditions,
+                ClinVarVariant.review_status,
             )
             .where(ClinVarVariant.conditions.ilike(f"%{keyword}%"))
             .where(ClinVarVariant.rsid.isnot(None))
             .where(~ClinVarVariant.clinical_significance.ilike('benign%'))
             .where(~ClinVarVariant.clinical_significance.ilike('likely_benign%'))
             .where(~ClinVarVariant.clinical_significance.ilike('likely benign%'))
+            .where(ClinVarVariant.review_status.isnot(None))
+            .where(~ClinVarVariant.review_status.ilike('no assertion%'))
+            .where(~ClinVarVariant.review_status.ilike('no_assertion%'))
+            .where(~ClinVarVariant.review_status.ilike('no classification%'))
+            .where(~ClinVarVariant.review_status.ilike('no_classification%'))
+            .where(ClinVarVariant.review_status != '-')
+            .where(ClinVarVariant.review_status != '')
             .distinct(ClinVarVariant.rsid)
             .limit(MAX_MAPPINGS_PER_CATEGORY)
         )
         out: Dict[str, dict] = {}
         for row in result.all():
-            rsid = row[0]
-            data = {**template}
-            cond = row[3] or keyword
+            rsid, gene, sig, cond, review = row
+            cond = cond or keyword
             clean = self._clean_condition(cond)
+            if not clean:
+                continue
+            data = {**template}
             data.setdefault("condition", clean)
-            data.setdefault("clinical_significance", row[2] or "")
-            data.setdefault("gene", row[1] or "")
+            data.setdefault("clinical_significance", sig or "")
+            data.setdefault("gene", gene or "")
             data.setdefault("source", "clinvar_auto")
-            # Adjust risk_multiplier based on actual clinical significance
-            # so pathogenic variants in the same keyword group get higher
-            # multipliers than VUS or risk-factor variants.
-            sig_lower = (row[2] or '').lower()
-            if 'pathogenic' in sig_lower and 'benign' not in sig_lower:
-                if 'likely' in sig_lower:
-                    data.setdefault("risk_multiplier", data.get("risk_multiplier", 1.5) * 1.0)
-                else:
-                    data["risk_multiplier"] = max(data.get("risk_multiplier", 1.5), 2.5)
-            elif 'uncertain' in sig_lower or 'conflicting' in sig_lower:
-                data["risk_multiplier"] = min(data.get("risk_multiplier", 1.5), 1.3)
-            elif 'risk' in sig_lower:
-                data.setdefault("risk_multiplier", 1.5)
-            # Populate dedup-critical fields for category generators
-            data.setdefault("trait", clean)
-            data.setdefault("domain", clean)
-            data.setdefault("metric", clean)
-            data.setdefault("nutrient", keyword.capitalize())
-            data.setdefault("category", keyword.capitalize())
+            data["review_status"] = review or ""
+            # BUG-02: evidence-calibrated multiplier; VUS/conflicting capped lower
+            sig_lower = (sig or '').lower()
+            if 'uncertain' in sig_lower or 'conflicting' in sig_lower:
+                data["risk_multiplier"] = min(
+                    self._risk_multiplier_from_review_status(review, sig), 1.3
+                )
+            else:
+                data["risk_multiplier"] = self._risk_multiplier_from_review_status(review, sig)
+            self._populate_category_fields(data, category, clean, gene or "")
             out[rsid] = {"map_type": "rsid", "data": data}
         return out
 
@@ -296,13 +375,9 @@ class AutoCategorizer:
             data = {**template}
             data["gene"] = gene  # Always set from matched gene
             data.setdefault("source", "clinvar_auto")
-            # Derive dedup-critical fields from gene name
+            # FLAW-01: populate category-appropriate dedup fields
             gene_label = f"{gene} variant"
-            data.setdefault("trait", gene_label)
-            data.setdefault("category", gene_label)
-            data.setdefault("domain", gene_label)
-            data.setdefault("metric", gene_label)
-            data.setdefault("nutrient", gene_label)
+            self._populate_category_fields(data, category, gene_label, gene)
             out[gene] = {"map_type": "gene", "data": data}
         return out
 
@@ -330,12 +405,8 @@ class AutoCategorizer:
             data.setdefault("gene", row[1] or "")
             data.setdefault("molecular_consequence", row[2])
             data.setdefault("source", "clinvar_auto")
-            # Populate dedup-critical fields
-            data.setdefault("trait", cond)
-            data.setdefault("domain", cond)
-            data.setdefault("metric", cond)
-            data.setdefault("nutrient", cond)
-            data.setdefault("category", cond)
+            # FLAW-01: populate category-appropriate dedup fields
+            self._populate_category_fields(data, category, cond, row[1] or "")
             out[row[0]] = {"map_type": "rsid", "data": data}
         return out
 
@@ -362,12 +433,8 @@ class AutoCategorizer:
             data.setdefault("condition", cond)
             data.setdefault("gene", row[1] or "")
             data.setdefault("source", "clinvar_auto")
-            # Populate dedup-critical fields
-            data.setdefault("trait", cond)
-            data.setdefault("domain", cond)
-            data.setdefault("metric", cond)
-            data.setdefault("nutrient", cond)
-            data.setdefault("category", cond)
+            # FLAW-01: populate category-appropriate dedup fields
+            self._populate_category_fields(data, category, cond, row[1] or "")
             out[row[0]] = {"map_type": "rsid", "data": data}
         return out
 
@@ -408,11 +475,8 @@ class AutoCategorizer:
             data.setdefault("source", "gnomad_auto")
             label = f"{gene} - {consequence or 'rare variant'} (AF={af:.6f})"
             data.setdefault("condition", label)
-            data.setdefault("trait", label)
-            data.setdefault("domain", label)
-            data.setdefault("metric", label)
-            data.setdefault("nutrient", label)
-            data.setdefault("category", label)
+            # FLAW-01: populate category-appropriate dedup fields
+            self._populate_category_fields(data, category, label, gene or "")
             out[rsid] = {"map_type": "rsid", "data": data}
         return out
 
@@ -466,12 +530,8 @@ class AutoCategorizer:
             _metric_idx = {'pli': 1, 'loeuf': 2, 'mis_z': 3}
             metric_val = row[_metric_idx.get(metric, 1)]
             label = f"{gene} (constrained: {metric}={metric_val:.2f})" if isinstance(metric_val, (int, float)) else f"{gene} (constrained: {metric}={metric_val})"
-            data.setdefault("trait", label)
-            data.setdefault("category", label)
-            data.setdefault("domain", label)
-            data.setdefault("metric", label)
-            data.setdefault("nutrient", label)
-            data.setdefault("condition", label)
+            # FLAW-01: populate category-appropriate dedup fields
+            self._populate_category_fields(data, category, label, gene)
             out[gene] = {"map_type": "gene", "data": data}
         return out
 

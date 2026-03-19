@@ -28,12 +28,22 @@ import sqlite3
 import time
 import zlib
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 
 from ..db.database import async_session_factory
-from ..db.models import GeneticMarker
+from ..db.models import GeneticMarker, EnsemblGene
+from .datasource_utils import (
+    load_known_rsids,
+    get_marker_fingerprint,
+    get_multi_file_fingerprint,
+    is_cache_valid,
+    save_cache_meta,
+    open_cache_db,
+    create_cache_db,
+    finalize_cache_db,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,105 +99,8 @@ class EnsemblVepLocalService:
         return self._db is not None
 
     # ------------------------------------------------------------------
-    # Fingerprinting for cache invalidation
-    # ------------------------------------------------------------------
-
-    async def _get_marker_fingerprint(self) -> str:
-        async with async_session_factory() as session:
-            result = await session.execute(
-                select(func.count(GeneticMarker.id))
-            )
-            count = result.scalar() or 0
-        return str(count)
-
-    def _get_vcf_fingerprint(self, vcf_files: List[Path]) -> str:
-        parts = []
-        for p in sorted(vcf_files):
-            try:
-                parts.append(f"{p.name}:{p.stat().st_size}")
-            except OSError:
-                parts.append(p.name)
-        return hashlib.md5('|'.join(parts).encode()).hexdigest()
-
-    # ------------------------------------------------------------------
-    # SQLite cache management
-    # ------------------------------------------------------------------
-
-    def _open_db(self, path: Path) -> sqlite3.Connection:
-        """Open SQLite in WAL mode for concurrent reads."""
-        conn = sqlite3.connect(str(path), check_same_thread=False)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA cache_size=-65536")  # 64 MB page cache
-        return conn
-
-    def _create_db(self, path: Path) -> sqlite3.Connection:
-        """Create a new SQLite cache DB."""
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix('.tmp')
-        if tmp.exists():
-            tmp.unlink()
-        conn = sqlite3.connect(str(tmp), check_same_thread=False)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=OFF")  # faster during bulk insert
-        conn.execute("""
-            CREATE TABLE vep_data (
-                rsid TEXT PRIMARY KEY,
-                data BLOB NOT NULL
-            )
-        """)
-        return conn
-
-    def _finalize_db(self, conn: sqlite3.Connection, tmp: Path, final: Path):
-        """Finalize the DB: checkpoint WAL, close, rename."""
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        conn.close()
-        if final.exists():
-            final.unlink()
-        # Clean WAL/SHM files from temp before rename
-        for suffix in ['-wal', '-shm']:
-            f = tmp.with_name(tmp.name + suffix)
-            if f.exists():
-                f.unlink()
-        tmp.rename(final)
-
-    def _is_cache_valid(self, marker_fp: str, vcf_fp: str) -> bool:
-        """Check if the existing SQLite cache matches current fingerprints."""
-        if not _SQLITE_FILE.exists() or not _META_FILE.exists():
-            return False
-        try:
-            meta = json.loads(_META_FILE.read_text())
-            if meta.get('marker_fingerprint') != marker_fp:
-                logger.info("VEP SQLite cache stale: genetic_markers changed")
-                return False
-            if meta.get('vcf_fingerprint') != vcf_fp:
-                logger.info("VEP SQLite cache stale: VCF files changed")
-                return False
-            return True
-        except Exception:
-            return False
-
-    def _save_meta(self, marker_fp: str, vcf_fp: str, count: int):
-        meta = {
-            'marker_fingerprint': marker_fp,
-            'vcf_fingerprint': vcf_fp,
-            'variant_count': count,
-            'saved_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
-        }
-        _META_FILE.write_text(json.dumps(meta, indent=2))
-
-    # ------------------------------------------------------------------
     # Loading
     # ------------------------------------------------------------------
-
-    async def _load_known_rsids(self) -> Set[str]:
-        async with async_session_factory() as session:
-            result = await session.execute(
-                select(GeneticMarker.rsid).where(GeneticMarker.rsid.isnot(None))
-            )
-            rsids = {r[0] for r in result.all()}
-        logger.info(f"Ensembl VEP file service: {len(rsids)} known rsids for filtering")
-        return rsids
 
     async def _load_cache(self):
         """Open existing SQLite cache or build from VCF files."""
@@ -200,13 +113,14 @@ class EnsemblVepLocalService:
             logger.warning(f"No VCF files found in {_VCF_VEP_DIR}")
             return
 
-        marker_fp = await self._get_marker_fingerprint()
-        vcf_fp = self._get_vcf_fingerprint(vcf_files)
+        marker_fp = await get_marker_fingerprint()
+        vcf_fp = get_multi_file_fingerprint(vcf_files)
 
         # Try existing cache
-        if self._is_cache_valid(marker_fp, vcf_fp):
+        if is_cache_valid(_SQLITE_FILE, _META_FILE, marker_fp, vcf_fp,
+                          file_key='vcf_fingerprint'):
             t0 = time.time()
-            self._db = await asyncio.to_thread(self._open_db, _SQLITE_FILE)
+            self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE)
             row = self._db.execute("SELECT COUNT(*) FROM vep_data").fetchone()
             self._variant_count = row[0] if row else 0
             elapsed = time.time() - t0
@@ -218,7 +132,7 @@ class EnsemblVepLocalService:
 
         # Cold scan
         logger.info(f"VEP cache miss — scanning {len(vcf_files)} VCF files into SQLite...")
-        known_rsids = await self._load_known_rsids()
+        known_rsids = await load_known_rsids()
         if not known_rsids:
             logger.info("No known rsids — skipping VCF scan")
             return
@@ -226,8 +140,9 @@ class EnsemblVepLocalService:
         count = await asyncio.to_thread(
             self._scan_vcf_to_sqlite, vcf_files, known_rsids
         )
-        self._save_meta(marker_fp, vcf_fp, count)
-        self._db = await asyncio.to_thread(self._open_db, _SQLITE_FILE)
+        save_cache_meta(_META_FILE, marker_fp, vcf_fp, count,
+                        file_key='vcf_fingerprint')
+        self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE)
         self._variant_count = count
 
     def _discover_vcf_files(self) -> List[Path]:
@@ -255,7 +170,12 @@ class EnsemblVepLocalService:
         from .ensembl_vep_etl import parse_vcf_line
 
         tmp_path = _SQLITE_FILE.with_suffix('.tmp')
-        conn = self._create_db(_SQLITE_FILE)
+        conn = create_cache_db(_SQLITE_FILE, """
+            CREATE TABLE vep_data (
+                rsid TEXT PRIMARY KEY,
+                data BLOB NOT NULL
+            )
+        """)
         t0 = time.time()
         total = 0
         batch: list = []
@@ -324,7 +244,7 @@ class EnsemblVepLocalService:
         print(f"[VEP] {msg}", flush=True)
         logger.info(msg)
 
-        self._finalize_db(conn, tmp_path, _SQLITE_FILE)
+        finalize_cache_db(conn, tmp_path, _SQLITE_FILE)
         return total
 
     # ------------------------------------------------------------------
@@ -388,7 +308,132 @@ class EnsemblVepLocalService:
         return results
 
 
-# Singleton
+# ---------------------------------------------------------------------------
+# EnsemblLocalService — PostgreSQL-backed gene coordinate lookup
+# (formerly ensembl_local.py)
+# ---------------------------------------------------------------------------
+
+class EnsemblLocalService:
+    """PostgreSQL-backed Ensembl gene lookup service."""
+
+    def __init__(self):
+        self._gene_count: Optional[int] = None
+
+    @property
+    def is_loaded(self) -> bool:
+        return self._gene_count is not None and self._gene_count > 0
+
+    @property
+    def gene_count(self) -> int:
+        return self._gene_count or 0
+
+    async def ensure_loaded(self) -> bool:
+        if self._gene_count is not None:
+            return self._gene_count > 0
+        try:
+            async with async_session_factory() as session:
+                row = (await session.execute(select(EnsemblGene.id).limit(1))).scalar_one_or_none()
+                if row is not None:
+                    self._gene_count = (await session.execute(text("SELECT COUNT(*) FROM ensembl_genes"))).scalar()
+                    logger.info(f"Ensembl local: {self._gene_count} genes available")
+                else:
+                    self._gene_count = 0
+                    logger.info("Ensembl local: no genes loaded (run ETL first)")
+        except Exception as e:
+            self._gene_count = 0
+            logger.debug(f"Ensembl local: table not available: {e}")
+        return self._gene_count > 0
+
+    async def lookup_gene(self, gene_symbol: str) -> Dict[str, Any]:
+        async with async_session_factory() as session:
+            gene = (await session.execute(
+                select(EnsemblGene).where(EnsemblGene.gene_symbol == gene_symbol)
+            )).scalar_one_or_none()
+            if not gene:
+                return {"found": False, "gene_symbol": gene_symbol}
+            return {
+                "found": True, "source": "ensembl_local",
+                "gene_id": gene.gene_id, "gene_symbol": gene.gene_symbol,
+                "chromosome": gene.chromosome, "start": gene.start_pos, "end": gene.end_pos,
+                "strand": gene.strand, "biotype": gene.biotype,
+                "description": gene.description, "transcript_count": gene.transcript_count,
+            }
+
+    async def lookup_gene_by_position(self, chromosome: str, position: int) -> Dict[str, Any]:
+        chrom = str(chromosome).replace('chr', '')
+        async with async_session_factory() as session:
+            genes = (await session.execute(
+                select(EnsemblGene).where(
+                    EnsemblGene.chromosome == chrom,
+                    EnsemblGene.start_pos <= position,
+                    EnsemblGene.end_pos >= position,
+                ).order_by(
+                    (EnsemblGene.biotype != 'protein_coding').asc(),
+                    (EnsemblGene.end_pos - EnsemblGene.start_pos).asc(),
+                ).limit(5)
+            )).scalars().all()
+            if not genes:
+                return {"found": False, "chromosome": chrom, "position": position}
+            best = genes[0]
+            return {
+                "found": True, "source": "ensembl_local",
+                "gene_symbol": best.gene_symbol, "gene_id": best.gene_id,
+                "biotype": best.biotype, "description": best.description,
+                "overlapping_genes": len(genes),
+            }
+
+    async def batch_position_to_gene(self, positions: List[Tuple[str, int, str]]) -> Dict[str, str]:
+        if not positions or not await self.ensure_loaded():
+            return {}
+        gene_map: Dict[str, str] = {}
+        batch_size = 500
+        for i in range(0, len(positions), batch_size):
+            batch = positions[i:i + batch_size]
+            if i > 0:
+                await asyncio.sleep(0)
+            by_chrom: Dict[str, List[Tuple[int, str]]] = {}
+            for chrom, pos, rsid in batch:
+                by_chrom.setdefault(str(chrom).replace('chr', ''), []).append((pos, rsid))
+            async with async_session_factory() as session:
+                for chrom, pos_rsids in by_chrom.items():
+                    pos_list = [p for p, _ in pos_rsids]
+                    rsid_by_pos: Dict[int, List[str]] = {}
+                    for pos, rsid in pos_rsids:
+                        rsid_by_pos.setdefault(pos, []).append(rsid)
+                    chrom_genes = (await session.execute(
+                        select(EnsemblGene).where(
+                            EnsemblGene.chromosome == chrom,
+                            EnsemblGene.start_pos <= max(pos_list),
+                            EnsemblGene.end_pos >= min(pos_list),
+                        ).order_by(
+                            (EnsemblGene.biotype != 'protein_coding').asc(),
+                            (EnsemblGene.end_pos - EnsemblGene.start_pos).asc(),
+                        )
+                    )).scalars().all()
+                    for pos in set(pos_list):
+                        for gene in chrom_genes:
+                            if gene.start_pos <= pos <= gene.end_pos:
+                                for rsid in rsid_by_pos.get(pos, []):
+                                    if rsid not in gene_map:
+                                        gene_map[rsid] = gene.gene_symbol
+                                break
+        return gene_map
+
+
+_ensembl_local_instance: Optional[EnsemblLocalService] = None
+
+
+def get_ensembl_local_service() -> EnsemblLocalService:
+    global _ensembl_local_instance
+    if _ensembl_local_instance is None:
+        _ensembl_local_instance = EnsemblLocalService()
+    return _ensembl_local_instance
+
+
+# ---------------------------------------------------------------------------
+# EnsemblVepLocalService singleton
+# ---------------------------------------------------------------------------
+
 _instance: Optional[EnsemblVepLocalService] = None
 
 

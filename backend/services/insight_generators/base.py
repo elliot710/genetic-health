@@ -278,8 +278,15 @@ def indel_d_is_ref(ref_allele: str | None, alt_allele: str | None) -> bool | Non
     """
     if not ref_allele or not alt_allele:
         return None
-    ref_len = 0 if ref_allele in ('-', '.') else len(ref_allele)
-    alt_len = 0 if alt_allele in ('-', '.') else len(alt_allele)
+    # BUG-03: treat 'N' (unknown nucleotide placeholder from consumer CSVs)
+    # the same as '-' / '.' — we cannot infer allele lengths from it.
+    _UNKNOWN = ('-', '.', 'N')
+    ref_up = ref_allele.strip().upper()
+    alt_up = alt_allele.strip().upper()
+    if ref_up in _UNKNOWN or alt_up in _UNKNOWN:
+        return None
+    ref_len = len(ref_up)
+    alt_len = len(alt_up)
     if ref_len == alt_len:
         return None  # Not an indel or ambiguous
     return ref_len <= alt_len  # D = shorter allele; if ref is shorter, D=ref
@@ -652,8 +659,9 @@ def assess_risk_level(genotype: str, risk_multiplier: float, ref_allele: Optiona
             else:
                 base = 'low'
     else:
-        # Fallback: multiplier-only (original logic)
-        if risk_multiplier >= 2.0:
+        # Fallback: multiplier-only with finer-grained thresholds (SCORE-03 fix).
+        # Added a 1.7x tier so 1.7–2.0 → "high" instead of forcing a jump at 2.0×.
+        if risk_multiplier >= 1.7:
             base = 'high'
         elif risk_multiplier >= 1.2:
             base = 'moderate'
@@ -790,6 +798,29 @@ async def generate_from_maps(
             if is_clinvar_benign(annotation_result):
                 continue
 
+            # BUG-06: Allele verification — confirm the user's genotype
+            # actually carries the alternate (risk) allele from annotation
+            # data. Without this, variants where user is hom-ref but ref
+            # allele was unavailable (so hom-ref check was skipped) would
+            # generate false insights.  Skip verification for indel D/I
+            # codes since their alleles don't map to nucleotides.
+            if genotype and not is_indel_genotype(genotype):
+                _, ann_alt = get_annotation_allele_parts(annotation_result)
+                # Fallback: use risk_allele stored directly in the mapping when
+                # annotation data doesn't carry allele information (BUG-01).
+                if ann_alt is None:
+                    ann_alt = info.get('risk_allele')
+                if ann_alt and len(ann_alt) == 1:
+                    gt_upper = genotype.upper()
+                    alleles = set(gt_upper.replace('/', '').replace('|', ''))
+                    carries = ann_alt in alleles
+                    if not carries:
+                        # Strand-flip fallback for minus-strand arrays
+                        _COMPLEMENT_MAP = str.maketrans('ACGT', 'TGCA')
+                        carries = ann_alt in {a.translate(_COMPLEMENT_MAP) for a in alleles}
+                    if not carries:
+                        continue
+
             info = rsid_map[rsid]
             key = info[dedup_field]
             if key not in seen:
@@ -816,6 +847,10 @@ async def generate_from_maps(
             annotation_result, ctx.rsid_gene_map
         )
         if gene and gene in gene_map:
+            # P1-8: Skip gene matches where all annotation sources agree benign
+            if is_clinvar_benign(annotation_result):
+                continue
+
             # Filter: only moderate/high impact consequences qualify.
             # When consequence data is unavailable (gene came from ClinVar
             # rsid→gene map only), check ClinVar significance as a proxy
@@ -879,11 +914,13 @@ async def build_variant_profiles(
 ) -> Dict[str, VariantProfile]:
     """Build pre-computed profiles for all variants in one pass.
 
-    This centralises extraction of ref allele, frequency, gene, zygosity,
-    and clinical significance so every generator sees the same values.
-
-    Returns a dict keyed by rsid for O(1) lookup.
+    ARCH-06: Pathogenicity scores are computed HERE (lazily) rather than
+    during Phase 2 annotation.  This means updated scoring logic always
+    applies without re-annotating, and the annotation cache doesn't need
+    to store pre-computed scores.
     """
+    from ..scoring_engine import get_scoring_engine
+    scorer = get_scoring_engine()
     profiles: Dict[str, VariantProfile] = {}
 
     for idx, variant in enumerate(variants):
@@ -916,13 +953,13 @@ async def build_variant_profiles(
 
         benign = is_clinvar_benign(annotation_result)
 
-        # Pathogenicity score
-        pscore: dict = {}
-        composite = 0.0
+        # Pathogenicity score — always compute fresh (ARCH-06).
+        # Lazy scoring ensures updated scoring logic applies without re-annotating.
+        annotations_dict: dict = {}
         if annotation_result and annotation_result.annotation_data:
-            pscore = annotation_result.annotation_data.get('pathogenicity_score', {})
-            if isinstance(pscore, dict):
-                composite = pscore.get('composite_score', 0.0)
+            annotations_dict = annotation_result.annotation_data.get('annotations', {})
+        pscore = scorer.score_variant(annotations_dict)
+        composite = pscore.get('composite_score', 0.0)
 
         # Resolved clinical significance from ClinVar local
         clin_sig = None

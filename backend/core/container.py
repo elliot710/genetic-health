@@ -133,14 +133,10 @@ def setup_services():
     """Set up all service dependencies."""
     # Import here to avoid circular imports
     from ..services.genetic_api_service import OptimizedGeneticAPIService
-    from ..services.health_insights import HealthInsights
-    from ..services.drug_response import DrugResponseAnalyzer
     
     # Register services — API service is transient (new instance per consumer)
     # to avoid shared in-memory cache leaking data between users
     container.register_transient('api_service', OptimizedGeneticAPIService)
-    container.register_class('health_insights', HealthInsights)
-    container.register_class('drug_response', DrugResponseAnalyzer)
     
     logger.info("Services registered in container")
 

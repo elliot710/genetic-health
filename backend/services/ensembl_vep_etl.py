@@ -20,6 +20,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import asyncpg
 
+from .datasource_utils import parse_vcf_info
+
 logger = logging.getLogger(__name__)
 
 _ENSEMBL_DATA_DIR = Path(os.environ.get(
@@ -73,18 +75,6 @@ def _worst_impact(impacts: List[str]) -> str:
 
 
 # ── VCF line parsing ─────────────────────────────────────────────────
-
-def _parse_info(info_str: str) -> Dict[str, str]:
-    """Parse VCF INFO column into a dict.  Flag fields get value ''."""
-    result: Dict[str, str] = {}
-    for part in info_str.split(';'):
-        if '=' in part:
-            k, v = part.split('=', 1)
-            result[k] = v
-        else:
-            result[part] = ''
-    return result
-
 
 def _parse_sift_polyphen(raw: str) -> List[Tuple[int, str, float, str]]:
     """Parse Sift or Polyphen INFO fields.
@@ -160,7 +150,7 @@ def parse_vcf_line(
         return None
 
     pos = int(pos_str)
-    info = _parse_info(info_raw)
+    info = parse_vcf_info(info_raw)
 
     # ── Basic fields ──
     variant_type = info.get('TSA')

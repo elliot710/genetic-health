@@ -27,7 +27,9 @@ async def generate_health_risks(ctx: GeneratorContext) -> int:
             analysis_id=aid, condition=info['condition'],
             risk_level=risk_level, risk_score=str(risk_level_to_score(risk_level)),
             associated_variants=[rsid],
-            recommendations=recommendations
+            recommendations=recommendations,
+            gene=info.get('gene') or None,
+            review_status=info.get('review_status') or None,
         )
 
     def from_gene(aid, rsid, gene, consequence, info):
@@ -37,7 +39,9 @@ async def generate_health_risks(ctx: GeneratorContext) -> int:
         return HealthRisk(
             analysis_id=aid, condition=info['condition'],
             risk_level=risk_level, risk_score=str(risk_level_to_score(risk_level)),
-            associated_variants=[rsid], recommendations=info['recommendations']
+            associated_variants=[rsid], recommendations=info['recommendations'],
+            gene=gene or info.get('gene') or None,
+            review_status=info.get('review_status') or None,
         )
 
     rsid_map, gene_map = ctx.get_maps('health')
