@@ -1,0 +1,588 @@
+"""
+Multi-source variant categorizer
+=================================
+Evaluates annotation data from ALL available sources (ClinVar local,
+Ensembl VEP, gnomAD, AlphaMissense, SNPedia, 1000 Genomes, etc.) to
+produce high-confidence category assignments with source attribution.
+
+Used by:
+  - auto_categorizer.py (batch annotation-based pass)
+  - variant_routes.py   (real-time categorization on lookup)
+  - analysis_service.py (per-user-variant enrichment)
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Set
+
+logger = logging.getLogger(__name__)
+
+# ── Gene → category maps ────────────────────────────────────────────
+GENE_CATEGORY_MAP: Dict[str, List[str]] = {
+    # Pharmacogenomics / drug metabolism
+    "CYP2D6": ["drug"], "CYP2C19": ["drug"], "CYP2C9": ["drug"],
+    "CYP3A4": ["drug"], "CYP3A5": ["drug"], "CYP1A2": ["drug"],
+    "CYP2B6": ["drug"], "CYP2A6": ["drug"], "CYP4F2": ["drug"],
+    "DPYD": ["drug"], "TPMT": ["drug"], "UGT1A1": ["drug"],
+    "NUDT15": ["drug"], "SLCO1B1": ["drug"], "VKORC1": ["drug"],
+    "NAT2": ["drug", "detox"], "ABCB1": ["drug"], "G6PD": ["drug"],
+    "IFNL3": ["drug"], "RYR1": ["drug"],
+    # Health / disease
+    "BRCA1": ["health"], "BRCA2": ["health"], "TP53": ["health"],
+    "APC": ["health"], "MLH1": ["health"], "MSH2": ["health"],
+    "PTEN": ["health"], "VHL": ["health"], "RB1": ["health"],
+    "LDLR": ["health"], "PCSK9": ["health"], "F5": ["health"],
+    "F2": ["health"], "APOE": ["health", "cognitive"],
+    "TCF7L2": ["health"], "PPARG": ["health"],
+    "PARK2": ["health"], "LRRK2": ["health"], "SNCA": ["health"],
+    "APP": ["health"], "PSEN1": ["health"], "PSEN2": ["health"],
+    "GBA": ["health"],
+    # Physical traits
+    "MC1R": ["physical"], "OCA2": ["physical"], "HERC2": ["physical"],
+    "IRF4": ["physical"], "SLC24A5": ["physical", "ancestry"],
+    "SLC45A2": ["physical", "ancestry"], "KITLG": ["physical"],
+    "TYRP1": ["physical"], "TYR": ["physical"], "ASIP": ["physical"],
+    "BNC2": ["physical"], "EDAR": ["physical", "ancestry"],
+    # Sports / fitness
+    "ACTN3": ["sports"], "ACE": ["sports"], "PPARGC1A": ["sports"],
+    "PPARA": ["sports"], "ADRB2": ["sports"], "ADRB3": ["sports"],
+    "NOS3": ["sports"], "VEGFA": ["sports"], "HIF1A": ["sports"],
+    "EPAS1": ["sports"], "AMPD1": ["sports"], "CKM": ["sports"],
+    "COL1A1": ["sports"], "COL5A1": ["sports"], "GDF5": ["sports"],
+    "MMP3": ["sports"],
+    # Nutrition
+    "LCT": ["nutrition"], "MCM6": ["nutrition"], "FADS1": ["nutrition"],
+    "FADS2": ["nutrition"], "BCMO1": ["nutrition"], "SLC23A1": ["nutrition"],
+    "GC": ["nutrition"], "CYP2R1": ["nutrition"], "VDR": ["nutrition"],
+    "TCN1": ["nutrition"], "TCN2": ["nutrition", "methylation"],
+    "HFE": ["nutrition"], "TF": ["nutrition"], "TMPRSS6": ["nutrition"],
+    "SLC30A8": ["nutrition"], "FUT2": ["nutrition"],
+    # Carrier panel
+    "CFTR": ["carrier"], "HBB": ["carrier"], "HEXA": ["carrier"],
+    "SMN1": ["carrier"],
+    # Cognitive
+    "COMT": ["cognitive", "methylation"], "BDNF": ["cognitive", "sports"],
+    "DRD2": ["cognitive", "personality"], "DRD4": ["cognitive", "personality"],
+    "KIBRA": ["cognitive"], "CHRNA4": ["cognitive"],
+    "NRXN1": ["cognitive"], "DISC1": ["cognitive"],
+    # Personality
+    "SLC6A4": ["personality"], "MAOA": ["personality"],
+    "OXTR": ["personality"], "AVPR1A": ["personality"],
+    "HTR2A": ["personality"], "FKBP5": ["personality"],
+    "CRHR1": ["personality"], "TPH2": ["personality"],
+    # Wellness
+    "CLOCK": ["wellness"], "PER2": ["wellness"], "PER3": ["wellness"],
+    "CRY1": ["wellness"], "ADORA2A": ["wellness"], "ADA": ["wellness"],
+    "FTO": ["wellness", "nutrition"], "MC4R": ["wellness"],
+    "LEPR": ["wellness"], "TNF": ["wellness"], "IL6": ["wellness"],
+    "IL10": ["wellness"], "CRP": ["wellness"],
+    # Methylation
+    "MTHFR": ["methylation", "nutrition"], "MTR": ["methylation"],
+    "MTRR": ["methylation"], "CBS": ["methylation"],
+    "BHMT": ["methylation"], "MAT1A": ["methylation"],
+    "AHCY": ["methylation"], "SHMT1": ["methylation"],
+    "SHMT2": ["methylation"], "DHFR": ["methylation"],
+    "TYMS": ["methylation"], "MTHFD1": ["methylation"],
+    # Detox
+    "CYP1A1": ["detox"], "CYP1B1": ["detox"], "CYP2E1": ["detox"],
+    "GSTM1": ["detox"], "GSTT1": ["detox"], "GSTP1": ["detox"],
+    "NAT1": ["detox"], "NQO1": ["detox"], "EPHX1": ["detox"],
+    "SOD2": ["detox"], "CAT": ["detox"], "GPX1": ["detox"],
+    "PON1": ["detox"], "ALDH2": ["detox", "ancestry"],
+    # Ancestry
+    "ABCC11": ["ancestry"],
+    "ADH1B": ["ancestry"],
+}
+
+# ── Severe condition keywords for lifestyle panels ──────────────────
+_SEVERE_EXCLUSION_KW = frozenset([
+    "cardiomyopathy", "dystrophy", "atrophy", "encephalopathy",
+    "cancer", "tumor", "lymphoma", "leukemia", "carcinoma", "neoplasm",
+    "neurodegenerat", "amyotrophic", "huntington", "parkinson",
+    "epilepsy", "seizure", "stroke", "aneurysm",
+    "failure", "fibrosis", "cirrhosis", "nephropathy",
+    "immunodeficiency", "periodic fever", "cryopyrin",
+    "congenital", "lethal", "fatal", "death",
+    "syndrome", "aplastic", "retinitis", "blindness",
+    "deafness", "hearing loss", "spasticity",
+])
+
+_LIFESTYLE_CATEGORIES = frozenset([
+    "sports", "physical", "personality", "nutrition", "wellness",
+    "methylation", "detox", "cognitive", "ancestry",
+])
+
+# ClinVar significances considered clinically meaningful
+_PATHOGENIC_SIGS = {"pathogenic", "likely pathogenic", "likely_pathogenic",
+                    "pathogenic/likely_pathogenic", "pathogenic/likely pathogenic"}
+_RISK_SIGS = {"risk_factor", "risk factor", "association", "protective"}
+_DRUG_SIGS = {"drug_response", "drug response"}
+_BENIGN_SIGS = {"benign", "likely benign", "likely_benign",
+                "benign/likely_benign", "benign/likely benign"}
+
+# ── Category-specific condition keywords ────────────────────────────
+_CONDITION_CATEGORY_KW: Dict[str, List[str]] = {
+    "drug": ["drug response", "pharmacokin", "metabolism", "metabolizer",
+             "statin", "warfarin", "metformin", "codeine", "opioid", "cytochrome"],
+    "carrier": ["cystic fibrosis", "thalassemia", "sickle cell", "tay-sachs",
+                "gaucher", "phenylketonuria", "duchenne", "hemophilia",
+                "wilson disease", "spinal muscular atrophy"],
+    "physical": ["hair color", "eye color", "pigment", "albinism", "freckle",
+                 "baldness", "earlobe"],
+    "nutrition": ["lactose", "celiac", "gluten", "vitamin d", "folate",
+                  "iron overload", "hemochromatosis"],
+    "wellness": ["circadian", "sleep", "obesity", "bmi", "fatigue"],
+    "sports": ["exercise intolerance", "rhabdomyolysis", "malignant hyperthermia",
+               "athletic", "endurance", "sprint"],
+    "methylation": ["methylation", "homocysteine", "folate", "neural tube"],
+    "detox": ["glutathione", "oxidative stress", "acetylation", "chemical sensitivity"],
+    "cognitive": ["memory", "learning disability"],
+}
+
+
+# ── Primary dedup field per category ────────────────────────────────
+_PRIMARY_FIELD = {
+    "health": "condition", "carrier": "condition",
+    "drug": "drug", "nutrition": "nutrient",
+    "sports": "category", "wellness": "metric",
+    "cognitive": "domain", "personality": "trait",
+    "physical": "trait", "methylation": "gene",
+    "detox": "gene", "rare": "condition", "uncommon": "condition",
+}
+
+
+@dataclass
+class SourceEvidence:
+    """Evidence collected from a single annotation source."""
+    source_name: str
+    gene: Optional[str] = None
+    conditions: List[str] = field(default_factory=list)
+    clinical_significances: List[str] = field(default_factory=list)
+    consequence: Optional[str] = None
+    pathogenicity_score: Optional[float] = None  # 0.0-1.0
+    sift_score: Optional[float] = None
+    polyphen_score: Optional[float] = None
+    allele_frequency: Optional[float] = None
+    review_status: Optional[str] = None
+    impact: Optional[str] = None  # HIGH, MODERATE, LOW, MODIFIER
+
+
+@dataclass
+class CategorySuggestion:
+    """A suggested category assignment with confidence and sources."""
+    category: str
+    confidence: float  # 0.0-1.0
+    sources: List[str]
+    condition: str
+    gene: Optional[str]
+    risk_multiplier: float
+    clinical_significance: Optional[str]
+    data: Dict[str, Any]  # Full mapping data dict
+
+
+def extract_evidence(annotations: Dict[str, Any]) -> List[SourceEvidence]:
+    """Extract standardized evidence from all annotation sources.
+
+    `annotations` is the dict stored in shared_variant_annotations columns
+    or the response_data from variant lookup — each key is a source name
+    mapping to its JSON payload.
+    """
+    evidence: List[SourceEvidence] = []
+
+    # ── ClinVar local ───────────────────────────────────────────────
+    cv_local = annotations.get("clinvar_local_data") or annotations.get("clinvar_local") or {}
+    if isinstance(cv_local, dict) and cv_local.get("found"):
+        sigs = cv_local.get("clinical_significances", [])
+        conds = cv_local.get("conditions", [])
+        genes = cv_local.get("genes", [])
+        reviews = cv_local.get("review_statuses", [])
+        # Filter noise conditions
+        clean_conds = [c for c in conds
+                       if c.lower().strip() not in ("not provided", "not specified", "see cases", "")]
+        ev = SourceEvidence(
+            source_name="clinvar_local",
+            gene=genes[0] if genes else None,
+            conditions=clean_conds,
+            clinical_significances=[s.lower() for s in sigs],
+            review_status=reviews[0] if reviews else None,
+        )
+        # Derive pathogenicity score from significance
+        sig_lower = " ".join(s.lower() for s in sigs)
+        if any(k in sig_lower for k in ("pathogenic",)):
+            ev.pathogenicity_score = 0.9 if "likely" not in sig_lower else 0.75
+        elif "risk" in sig_lower or "association" in sig_lower:
+            ev.pathogenicity_score = 0.5
+        elif any(k in sig_lower for k in ("benign",)):
+            ev.pathogenicity_score = 0.1 if "likely" not in sig_lower else 0.15
+        else:
+            ev.pathogenicity_score = 0.4  # VUS
+        evidence.append(ev)
+
+    # ── ClinVar API ─────────────────────────────────────────────────
+    cv_api = annotations.get("clinvar_data") or annotations.get("clinvar") or {}
+    if isinstance(cv_api, dict) and cv_api.get("found"):
+        entries = cv_api.get("entries", [])
+        sigs = []
+        conds = []
+        for entry in entries:
+            sigs.extend(entry.get("clinical_significance", []))
+            conds.extend(entry.get("conditions", []))
+        clean_conds = [c for c in conds
+                       if c.lower().strip() not in ("not provided", "not specified", "see cases", "")]
+        if sigs or clean_conds:
+            ev = SourceEvidence(
+                source_name="clinvar_api",
+                conditions=clean_conds,
+                clinical_significances=[s.lower() for s in sigs],
+            )
+            sig_lower = " ".join(s.lower() for s in sigs)
+            if "pathogenic" in sig_lower:
+                ev.pathogenicity_score = 0.85
+            elif "benign" in sig_lower:
+                ev.pathogenicity_score = 0.1
+            evidence.append(ev)
+
+    # ── Ensembl VEP ─────────────────────────────────────────────────
+    ensembl = annotations.get("ensembl_data") or annotations.get("ensembl") or {}
+    if isinstance(ensembl, dict) and ensembl.get("found"):
+        data_list = ensembl.get("data", [])
+        entry = data_list[0] if isinstance(data_list, list) and data_list else (
+            data_list if isinstance(data_list, dict) else None
+        )
+        if entry:
+            tc = entry.get("transcript_consequences", [])
+            gene = tc[0].get("gene_symbol") if tc else None
+            consequence = entry.get("most_severe_consequence", "")
+            # Get best SIFT/PolyPhen from transcript consequences
+            best_sift = None
+            best_polyphen = None
+            for t in tc:
+                s = t.get("sift_score")
+                p = t.get("polyphen_score")
+                if s is not None and (best_sift is None or s < best_sift):
+                    best_sift = s
+                if p is not None and (best_polyphen is None or p > best_polyphen):
+                    best_polyphen = p
+            # Map consequence to impact
+            _IMPACT = {
+                "transcript_ablation": "HIGH", "splice_acceptor_variant": "HIGH",
+                "splice_donor_variant": "HIGH", "stop_gained": "HIGH",
+                "frameshift_variant": "HIGH", "stop_lost": "HIGH",
+                "start_lost": "HIGH",
+                "missense_variant": "MODERATE", "inframe_insertion": "MODERATE",
+                "inframe_deletion": "MODERATE", "protein_altering_variant": "MODERATE",
+                "splice_region_variant": "MODERATE",
+                "synonymous_variant": "LOW", "stop_retained_variant": "LOW",
+                "intron_variant": "MODIFIER", "upstream_gene_variant": "MODIFIER",
+                "downstream_gene_variant": "MODIFIER",
+            }
+            impact = _IMPACT.get(consequence, "MODIFIER")
+            # Pathogenicity from VEP predictors
+            path_score = None
+            if best_polyphen is not None:
+                path_score = best_polyphen  # PolyPhen: 0=benign, 1=damaging
+            elif best_sift is not None:
+                path_score = 1.0 - best_sift  # SIFT: 0=damaging, 1=tolerated → invert
+            elif impact == "HIGH":
+                path_score = 0.8
+            elif impact == "MODERATE":
+                path_score = 0.5
+
+            ev = SourceEvidence(
+                source_name="ensembl_vep",
+                gene=gene,
+                consequence=consequence,
+                sift_score=best_sift,
+                polyphen_score=best_polyphen,
+                pathogenicity_score=path_score,
+                impact=impact,
+            )
+            evidence.append(ev)
+
+    # ── AlphaMissense ───────────────────────────────────────────────
+    am = annotations.get("alpha_missense_data") or annotations.get("alpha_missense") or {}
+    if isinstance(am, dict) and am.get("found"):
+        am_score = am.get("am_pathogenicity")
+        if am_score is not None:
+            evidence.append(SourceEvidence(
+                source_name="alpha_missense",
+                pathogenicity_score=float(am_score),
+            ))
+
+    # ── gnomAD ──────────────────────────────────────────────────────
+    gnomad = annotations.get("gnomad_data") or annotations.get("gnomad_local") or {}
+    if isinstance(gnomad, dict) and gnomad.get("found"):
+        gene = gnomad.get("gene")
+        af = gnomad.get("af") or gnomad.get("allele_frequency")
+        consequence = gnomad.get("consequence")
+        impact = gnomad.get("impact")
+        cadd = gnomad.get("cadd", {})
+        cadd_phred = cadd.get("phred") if isinstance(cadd, dict) else None
+        # CADD ≥ 20 → top 1% most deleterious, ≥ 30 → top 0.1%
+        path_from_cadd = None
+        if cadd_phred is not None:
+            if cadd_phred >= 30:
+                path_from_cadd = 0.9
+            elif cadd_phred >= 20:
+                path_from_cadd = 0.7
+            elif cadd_phred >= 15:
+                path_from_cadd = 0.5
+        evidence.append(SourceEvidence(
+            source_name="gnomad",
+            gene=gene,
+            consequence=consequence,
+            impact=impact,
+            allele_frequency=float(af) if af else None,
+            pathogenicity_score=path_from_cadd,
+        ))
+
+    # ── SNPedia ─────────────────────────────────────────────────────
+    snpedia = annotations.get("snpedia_data") or annotations.get("snpedia") or {}
+    if isinstance(snpedia, dict) and snpedia.get("found"):
+        evidence.append(SourceEvidence(source_name="snpedia"))
+
+    # ── 1000 Genomes ────────────────────────────────────────────────
+    tg = annotations.get("thousand_genomes_data") or annotations.get("thousand_genomes") or {}
+    if isinstance(tg, dict) and tg.get("found"):
+        af = tg.get("global_af") or tg.get("allele_frequency")
+        evidence.append(SourceEvidence(
+            source_name="1000genomes",
+            allele_frequency=float(af) if af else None,
+        ))
+
+    # ── gnomAD gene constraint ──────────────────────────────────────
+    gnomad_tx = annotations.get("gnomad_tx_data") or {}
+    if isinstance(gnomad_tx, dict) and gnomad_tx.get("found"):
+        evidence.append(SourceEvidence(source_name="gnomad_tx"))
+
+    return evidence
+
+
+def _is_severe(condition: str) -> bool:
+    """Return True if condition describes a severe medical condition."""
+    lower = condition.lower()
+    return any(kw in lower for kw in _SEVERE_EXCLUSION_KW)
+
+
+def _risk_from_evidence(evidence_list: List[SourceEvidence]) -> float:
+    """Compute risk_multiplier from multi-source evidence."""
+    path_scores = [e.pathogenicity_score for e in evidence_list
+                   if e.pathogenicity_score is not None]
+    if not path_scores:
+        return 1.1
+
+    avg_path = sum(path_scores) / len(path_scores)
+    # Scale: 0.0-0.3 → 1.0, 0.3-0.5 → 1.1, 0.5-0.7 → 1.2, 0.7-0.85 → 1.5, 0.85-1.0 → 2.0
+    if avg_path >= 0.85:
+        base = 2.0
+    elif avg_path >= 0.7:
+        base = 1.5
+    elif avg_path >= 0.5:
+        base = 1.2
+    elif avg_path >= 0.3:
+        base = 1.1
+    else:
+        base = 1.0
+
+    # Bonus for multi-source confirmation (up to +0.5)
+    n_confirming = len([s for s in path_scores if s >= 0.5])
+    bonus = min(n_confirming * 0.15, 0.5)
+    return round(min(base + bonus, 3.0), 2)
+
+
+def _compute_confidence(evidence_list: List[SourceEvidence], category: str) -> float:
+    """Compute confidence score (0.0-1.0) based on number & agreement of sources."""
+    if not evidence_list:
+        return 0.0
+
+    source_count = len(evidence_list)
+    # Base confidence from source count: 1 source=0.3, 2=0.5, 3=0.65, 4+=0.75
+    base = min(0.15 + source_count * 0.15, 0.75)
+
+    # Bonus from pathogenicity agreement
+    path_scores = [e.pathogenicity_score for e in evidence_list
+                   if e.pathogenicity_score is not None]
+    if len(path_scores) >= 2:
+        # All agree on direction?
+        all_high = all(s >= 0.5 for s in path_scores)
+        all_low = all(s < 0.3 for s in path_scores)
+        if all_high or all_low:
+            base += 0.15  # Strong agreement bonus
+
+    # Bonus for gene-category match
+    genes = [e.gene for e in evidence_list if e.gene]
+    if genes:
+        gene = genes[0].upper()
+        if gene in GENE_CATEGORY_MAP and category in GENE_CATEGORY_MAP[gene]:
+            base += 0.1
+
+    return round(min(base, 1.0), 2)
+
+
+def categorize_variant(
+    rsid: str,
+    annotations: Dict[str, Any],
+    gene_hint: Optional[str] = None,
+) -> List[CategorySuggestion]:
+    """Analyze annotation data and return category suggestions.
+
+    Returns a list of CategorySuggestion objects sorted by confidence,
+    one per applicable category.
+    """
+    evidence_list = extract_evidence(annotations)
+    if not evidence_list:
+        return []
+
+    # Collect gene from any source
+    gene = gene_hint
+    for ev in evidence_list:
+        if ev.gene and not gene:
+            gene = ev.gene
+            break
+
+    # Collect all conditions
+    all_conditions: List[str] = []
+    for ev in evidence_list:
+        all_conditions.extend(ev.conditions)
+    # Deduplicate preserving order
+    seen: Set[str] = set()
+    conditions: List[str] = []
+    for c in all_conditions:
+        cl = c.lower().strip()
+        if cl and cl not in seen:
+            seen.add(cl)
+            conditions.append(c)
+
+    # Collect all clinical significances
+    all_sigs: List[str] = []
+    for ev in evidence_list:
+        all_sigs.extend(ev.clinical_significances)
+    sig_set = set(s.lower() for s in all_sigs)
+
+    # Get consequence from Ensembl VEP
+    consequence = None
+    impact = None
+    for ev in evidence_list:
+        if ev.consequence:
+            consequence = ev.consequence
+            impact = ev.impact
+            break
+
+    # Source names
+    source_names = [ev.source_name for ev in evidence_list]
+
+    suggestions: List[CategorySuggestion] = []
+
+    # ── Determine applicable categories ─────────────────────────────
+
+    applicable_categories: Set[str] = set()
+
+    # 1. Gene-based assignment (highest specificity)
+    if gene and gene.upper() in GENE_CATEGORY_MAP:
+        applicable_categories.update(GENE_CATEGORY_MAP[gene.upper()])
+
+    # 2. ClinVar significance-based
+    has_pathogenic = bool(sig_set & _PATHOGENIC_SIGS)
+    has_drug_response = bool(sig_set & _DRUG_SIGS)
+    has_benign = bool(sig_set & _BENIGN_SIGS) and not has_pathogenic
+    has_risk = bool(sig_set & _RISK_SIGS)
+
+    if has_pathogenic or has_risk:
+        applicable_categories.add("health")
+    if has_drug_response:
+        applicable_categories.add("drug")
+
+    # 3. Condition keyword-based
+    for cat, keywords in _CONDITION_CATEGORY_KW.items():
+        for cond in conditions:
+            cond_lower = cond.lower()
+            if any(kw in cond_lower for kw in keywords):
+                applicable_categories.add(cat)
+                break
+
+    # 4. Rare / uncommon based on allele frequency
+    afs = [ev.allele_frequency for ev in evidence_list if ev.allele_frequency is not None]
+    min_af = min(afs) if afs else None
+    if min_af is not None:
+        if min_af < 0.001:
+            applicable_categories.add("rare")
+        elif min_af < 0.05:
+            applicable_categories.add("uncommon")
+
+    # 5. High-impact variants go to health if not already assigned
+    if impact == "HIGH" and "health" not in applicable_categories:
+        applicable_categories.add("health")
+
+    # If nothing matched, and we have pathogenicity evidence, default to health
+    if not applicable_categories:
+        path_scores = [ev.pathogenicity_score for ev in evidence_list
+                       if ev.pathogenicity_score is not None]
+        if path_scores and max(path_scores) >= 0.5:
+            applicable_categories.add("health")
+
+    # If still nothing, skip
+    if not applicable_categories:
+        return []
+
+    # Only benign? Skip health but still allow carrier/drug/lifestyle
+    if has_benign and not has_pathogenic:
+        applicable_categories.discard("health")
+        applicable_categories.discard("rare")
+
+    # ── Build suggestions per category ──────────────────────────────
+    condition_label = conditions[0] if conditions else (
+        f"{gene} variant" if gene else "Unknown variant"
+    )
+    clinical_sig_str = ", ".join(sorted(sig_set)) if sig_set else None
+
+    for category in applicable_categories:
+        # Severity filter for lifestyle panels
+        if category in _LIFESTYLE_CATEGORIES and _is_severe(condition_label):
+            continue
+
+        risk_mult = _risk_from_evidence(evidence_list)
+        conf = _compute_confidence(evidence_list, category)
+
+        # Build the data dict for this category
+        data: Dict[str, Any] = {
+            "condition": condition_label,
+            "gene": gene or "",
+            "clinical_significance": clinical_sig_str or "",
+            "risk_multiplier": risk_mult,
+            "source": ", ".join(source_names),
+        }
+
+        # Populate category-specific fields
+        primary = _PRIMARY_FIELD.get(category, "condition")
+        data.setdefault(primary, condition_label)
+        gene_label = f"{gene} variant" if gene else condition_label
+        for f in ("condition", "trait", "domain", "metric", "nutrient", "category", "drug"):
+            if f != primary:
+                data.setdefault(f, gene_label)
+
+        # Add pathogenicity details
+        path_scores = [e.pathogenicity_score for e in evidence_list
+                       if e.pathogenicity_score is not None]
+        if path_scores:
+            data["avg_pathogenicity"] = round(sum(path_scores) / len(path_scores), 3)
+        if consequence:
+            data["consequence"] = consequence
+        if impact:
+            data["impact"] = impact
+
+        suggestions.append(CategorySuggestion(
+            category=category,
+            confidence=conf,
+            sources=source_names,
+            condition=condition_label,
+            gene=gene,
+            risk_multiplier=risk_mult,
+            clinical_significance=clinical_sig_str,
+            data=data,
+        ))
+
+    # Sort by confidence descending
+    suggestions.sort(key=lambda s: s.confidence, reverse=True)
+    return suggestions

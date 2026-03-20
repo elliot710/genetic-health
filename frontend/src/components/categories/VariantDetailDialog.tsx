@@ -2,9 +2,10 @@
 
 import React, { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { ExternalLink, Dna, FlaskConical, BookOpen, Activity, X, ChevronDown, ChevronUp, AlertTriangle, Pill, Shield, Atom, RefreshCw } from 'lucide-react'
+import { ExternalLink, Dna, FlaskConical, BookOpen, Activity, X, ChevronDown, ChevronUp, AlertTriangle, Pill, Shield, Atom, RefreshCw, Bookmark } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { apiUrl } from '@/lib/api'
+import SmartInsights from '../SmartInsights'
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -310,6 +311,45 @@ export default function VariantDetailDialog({
   const [loading, setLoading] = useState(false)
   const [showPubs, setShowPubs] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [isSaved, setIsSaved] = useState(false)
+  const [saveBusy, setSaveBusy] = useState(false)
+
+  // Check if this variant is already saved when the dialog opens
+  useEffect(() => {
+    if (!open || !rsid) return
+    fetch(apiUrl('/auth/saved-variants'), { credentials: 'include' })
+      .then(r => r.ok ? r.json() : [])
+      .then((list: { rsid: string }[]) => setIsSaved(list.some(v => v.rsid === rsid)))
+      .catch(() => {})
+  }, [open, rsid])
+
+  const toggleSave = async () => {
+    if (saveBusy) return
+    setSaveBusy(true)
+    try {
+      if (isSaved) {
+        const res = await fetch(apiUrl(`/auth/saved-variants/${rsid}`), {
+          method: 'DELETE',
+          credentials: 'include',
+        })
+        if (res.ok) setIsSaved(false)
+      } else {
+        const res = await fetch(apiUrl('/auth/saved-variants'), {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            rsid,
+            gene: gene || details?.transcripts?.[0]?.gene_symbol || null,
+            most_severe_consequence: details?.most_severe_consequence || null,
+            clinical_significance: details?.clinical_significance?.[0] || null,
+          }),
+        })
+        if (res.ok || res.status === 409) setIsSaved(true)
+      }
+    } catch { /* ignore */ }
+    finally { setSaveBusy(false) }
+  }
 
   const fetchDetails = (forceRefresh = false) => {
     if (!rsid || !token) return
@@ -396,6 +436,14 @@ export default function VariantDetailDialog({
               </div>
             </div>
             <div className="flex items-center gap-1">
+              <button
+                onClick={toggleSave}
+                disabled={saveBusy || loading}
+                title={isSaved ? 'Remove from saved variants' : 'Save variant'}
+                className={`p-1.5 rounded-lg ${isDarkMode ? 'hover:bg-white/10' : 'hover:bg-gray-100'} transition-colors disabled:opacity-40`}
+              >
+                <Bookmark className={`h-4 w-4 ${isSaved ? 'fill-blue-400 text-blue-400' : textSecondary}`} />
+              </button>
               <button
                 onClick={() => fetchDetails(true)}
                 disabled={refreshing || loading}
@@ -1670,6 +1718,16 @@ export default function VariantDetailDialog({
                 )}
               </div>
             )}
+
+            {/* ── AI-Powered Analysis ── */}
+            <SmartInsights
+              isDarkMode={isDarkMode}
+              token={token}
+              rsid={rsid}
+              variantData={details as Record<string, unknown>}
+              compact
+              title="AI Variant Analysis"
+            />
 
             {/* ── External Links ── */}
             <div className={`flex flex-wrap gap-2 pt-2 border-t ${border}`}>

@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react'
 import { Dna, ChevronRight, Filter, Search } from 'lucide-react'
+import SmartInsights from '../SmartInsights'
 import { Badge } from '../ui/badge'
 import type { CategoryPanelProps } from './types'
 import {
@@ -254,6 +255,8 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
           ))}
         </div>
       </SectionCard>
+
+      <SmartInsights isDarkMode={isDarkMode} token={token} section="uncommon_mutations" title="AI Uncommon Mutations Analysis" />
 
       <DisclaimerCard theme={theme} />
     </div>

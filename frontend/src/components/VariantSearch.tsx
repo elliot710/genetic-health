@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Search, Loader2, AlertCircle, CheckCircle, Info, ExternalLink, AlertTriangle, ChevronLeft, ChevronRight, Database, Globe, X, BarChart3, RefreshCw, Clock } from 'lucide-react'
+import { Search, Loader2, AlertCircle, CheckCircle, Info, ExternalLink, AlertTriangle, ChevronLeft, ChevronRight, Database, Globe, X, BarChart3, RefreshCw, Clock, Bookmark } from 'lucide-react'
 import type { getTheme } from '@/utils/theme'
 import { apiUrl } from '@/lib/api'
 
@@ -196,6 +196,41 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
   const [lookupResults, setLookupResults] = useState<LookupResult | null>(null)
   const [lookupError, setLookupError] = useState('')
 
+  // Saved variants state
+  const [savedRsids, setSavedRsids] = useState<Set<string>>(new Set())
+  const [savedFilter, setSavedFilter] = useState(false)
+
+  const fetchSavedRsids = useCallback(async () => {
+    if (!token) return
+    try {
+      const res = await fetch(apiUrl('/auth/saved-variants'), { credentials: 'include' })
+      if (!res.ok) return
+      const data = await res.json()
+      setSavedRsids(new Set(data.map((v: { rsid: string }) => v.rsid)))
+    } catch { /* ignore */ }
+  }, [token])
+
+  useEffect(() => { fetchSavedRsids() }, [fetchSavedRsids])
+
+  const toggleSave = async (rsid: string, gene?: string | null, consequence?: string | null, clinSig?: string | null) => {
+    if (!token) return
+    const wasSaved = savedRsids.has(rsid)
+    try {
+      if (wasSaved) {
+        await fetch(apiUrl(`/auth/saved-variants/${rsid}`), { method: 'DELETE', credentials: 'include' })
+        setSavedRsids(prev => { const next = new Set(prev); next.delete(rsid); return next })
+      } else {
+        await fetch(apiUrl('/auth/saved-variants'), {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rsid, gene: gene || null, most_severe_consequence: consequence || null, clinical_significance: clinSig || null }),
+        })
+        setSavedRsids(prev => new Set(prev).add(rsid))
+      }
+    } catch { /* ignore */ }
+  }
+
   useEffect(() => {
     if (!token) return
     fetch(apiUrl('/api/variants/categories'), {
@@ -217,6 +252,7 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
       if (annotatedFilter === 'true') params.set('annotated', 'true')
       if (annotatedFilter === 'false') params.set('annotated', 'false')
       if (categoryFilter) params.set('category', categoryFilter)
+      if (savedFilter) params.set('saved', 'true')
       params.set('page', String(page))
       params.set('per_page', String(perPage))
 
@@ -231,7 +267,7 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
     } finally {
       setSearchLoading(false)
     }
-  }, [token, query, chromosome, annotatedFilter, categoryFilter, page, perPage])
+  }, [token, query, chromosome, annotatedFilter, categoryFilter, savedFilter, page, perPage])
 
   useEffect(() => {
     if (activeTab === 'my-variants') {
@@ -250,6 +286,7 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
     setChromosome('')
     setAnnotatedFilter('')
     setCategoryFilter('')
+    setSavedFilter(false)
     setPage(1)
   }
 
@@ -405,10 +442,23 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
                 <option key={c.name} value={c.name}>{c.name} ({c.count})</option>
               ))}
             </select>
+            <button
+              type="button"
+              onClick={() => { setSavedFilter(f => !f); setPage(1) }}
+              className={`flex items-center gap-1.5 px-3 py-2.5 rounded-xl border text-sm font-medium transition-all ${
+                savedFilter
+                  ? 'bg-blue-500/20 text-blue-400 border-blue-500/30'
+                  : `${t.glassBorder} ${t.text.muted} ${isDarkMode ? 'hover:bg-slate-700/40' : 'hover:bg-gray-200/40'}`
+              }`}
+              title="Show saved variants only"
+            >
+              <Bookmark className={`h-3.5 w-3.5 ${savedFilter ? 'fill-blue-400' : ''}`} />
+              Saved
+            </button>
             <button type="submit" className="px-5 py-2.5 bg-gradient-to-r from-indigo-500/80 to-purple-600/80 text-white rounded-xl hover:from-purple-600/80 hover:to-indigo-500/80 transition-all text-sm font-medium border border-white/20 shadow-lg">
               Search
             </button>
-            {(query || chromosome || annotatedFilter || categoryFilter) && (
+            {(query || chromosome || annotatedFilter || categoryFilter || savedFilter) && (
               <button type="button" onClick={clearFilters} className={`px-3 py-2.5 rounded-xl border ${t.glassBorder} ${t.text.muted} transition-all text-sm`}>
                 <X className="h-4 w-4" />
               </button>
@@ -502,14 +552,23 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
                         ) : <span className={t.text.muted}>-</span>}
                       </td>
                       <td className="py-3 px-3">
-                        <button
-                          onClick={() => doLookup(v.rsid)}
-                          className={`px-2 py-1 rounded-lg text-xs font-medium transition-all ${isDarkMode ? 'bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30' : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'}`}
-                          title="Full external lookup"
-                        >
-                          <Globe className="h-3 w-3 inline mr-1" />
-                          Lookup
-                        </button>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => toggleSave(v.rsid, v.annotation?.gene, v.annotation?.consequence, v.annotation?.clinical_significance?.join(', '))}
+                            className={`p-1 rounded-lg transition-all ${isDarkMode ? 'hover:bg-slate-700/40' : 'hover:bg-gray-200/40'}`}
+                            title={savedRsids.has(v.rsid) ? 'Remove from saved' : 'Save variant'}
+                          >
+                            <Bookmark className={`h-3.5 w-3.5 ${savedRsids.has(v.rsid) ? 'fill-blue-400 text-blue-400' : t.text.muted}`} />
+                          </button>
+                          <button
+                            onClick={() => doLookup(v.rsid)}
+                            className={`px-2 py-1 rounded-lg text-xs font-medium transition-all ${isDarkMode ? 'bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30' : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'}`}
+                            title="Full external lookup"
+                          >
+                            <Globe className="h-3 w-3 inline mr-1" />
+                            Lookup
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -688,7 +747,21 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
                       )}
                     </div>
                   </div>
-                  <CheckCircle className="h-6 w-6 text-green-500 flex-shrink-0" />
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <button
+                      onClick={() => toggleSave(
+                        lookupResults.variant_id,
+                        lookupResults.basic_info?.gene_symbol,
+                        lookupResults.basic_info?.most_severe_consequence,
+                        lookupResults.clinical_significance?.join(', ')
+                      )}
+                      className={`p-1.5 rounded-lg transition-all ${isDarkMode ? 'hover:bg-slate-700/40' : 'hover:bg-gray-200/40'}`}
+                      title={savedRsids.has(lookupResults.variant_id) ? 'Remove from saved' : 'Save variant'}
+                    >
+                      <Bookmark className={`h-5 w-5 ${savedRsids.has(lookupResults.variant_id) ? 'fill-blue-400 text-blue-400' : t.text.muted}`} />
+                    </button>
+                    <CheckCircle className="h-6 w-6 text-green-500" />
+                  </div>
                 </div>
 
                 {/* Source badges */}
@@ -914,17 +987,85 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
               )}
 
               {/* Pharmacogenomics */}
-              {lookupResults.pharmacogenomics?.found && (
-                <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
-                  <h4 className={`font-bold ${t.text.primary} mb-3 flex items-center gap-2`}>
-                    <Info className="h-4 w-4 text-purple-500" />
-                    Pharmacogenomic Data
-                  </h4>
-                  <pre className={`text-xs ${t.text.secondary} whitespace-pre-wrap font-mono p-3 rounded-lg ${isDarkMode ? 'bg-slate-700/30' : 'bg-gray-100/60'}`}>
-                    {JSON.stringify(lookupResults.pharmacogenomics.data, null, 2)}
-                  </pre>
-                </div>
-              )}
+              {lookupResults.pharmacogenomics?.found && (() => {
+                const pgxData = lookupResults.pharmacogenomics.data;
+                const variants = Array.isArray(pgxData) ? pgxData : [pgxData];
+                return (
+                  <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
+                    <h4 className={`font-bold ${t.text.primary} mb-3 flex items-center gap-2`}>
+                      <Info className="h-4 w-4 text-purple-500" />
+                      Pharmacogenomic Data
+                      <span className={`text-xs font-normal ${t.text.tertiary}`}>ClinPGx</span>
+                    </h4>
+                    {variants.filter(Boolean).map((v: Record<string, unknown>, vi: number) => {
+                      const genes = (v.relatedGenes as Array<{ symbol?: string; name?: string }>) || [];
+                      const locations = (v.locations as Array<{ assembly?: string; begin?: number; end?: number; variantAlleles?: string[]; sequence?: { name?: string } }>) || [];
+                      const genomicLocs = locations.filter(l => l.assembly);
+                      return (
+                        <div key={vi} className={`${vi > 0 ? 'mt-4 pt-4 border-t ' + t.glassBorder : ''}`}>
+                          <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                            <div>
+                              <span className={`${t.text.tertiary} text-xs`}>Variant</span>
+                              <p className={`${t.text.primary} font-medium`}>{(v.symbol as string) || (v.name as string) || '—'}</p>
+                            </div>
+                            <div>
+                              <span className={`${t.text.tertiary} text-xs`}>Type</span>
+                              <p className={`${t.text.primary}`}>{(v.type as string) || '—'} · {(v.changeClassification as string) || '—'}</p>
+                            </div>
+                            {v.clinicalSignificance && (
+                              <div>
+                                <span className={`${t.text.tertiary} text-xs`}>Clinical Significance</span>
+                                <p className={`font-medium ${(v.clinicalSignificance as string) === 'drug-response' ? 'text-purple-500' : t.text.primary}`}>{(v.clinicalSignificance as string)}</p>
+                              </div>
+                            )}
+                            {genes.length > 0 && (
+                              <div>
+                                <span className={`${t.text.tertiary} text-xs`}>Related Genes</span>
+                                <div className="flex flex-wrap gap-1 mt-0.5">
+                                  {genes.map((g, gi) => (
+                                    <span key={gi} className={`px-2 py-0.5 rounded text-xs font-medium ${isDarkMode ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'bg-purple-100 text-purple-700 border border-purple-200'}`}>
+                                      {g.symbol}{g.name ? ` — ${g.name}` : ''}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            <div>
+                              <span className={`${t.text.tertiary} text-xs`}>Rarity</span>
+                              <p className={`${t.text.primary}`}>{v.rare ? 'Rare' : 'Common'}{v.raritySource ? ` (${v.raritySource as string})` : ''}</p>
+                            </div>
+                          </div>
+                          {genomicLocs.length > 0 && (
+                            <div className="mt-3">
+                              <span className={`${t.text.tertiary} text-xs`}>Genomic Locations</span>
+                              <div className={`mt-1 rounded-lg overflow-hidden border ${t.glassBorder}`}>
+                                <table className="w-full text-xs">
+                                  <thead>
+                                    <tr className={isDarkMode ? 'bg-slate-700/30' : 'bg-gray-100/60'}>
+                                      <th className={`py-1.5 px-3 text-left ${t.text.tertiary}`}>Assembly</th>
+                                      <th className={`py-1.5 px-3 text-left ${t.text.tertiary}`}>Position</th>
+                                      <th className={`py-1.5 px-3 text-left ${t.text.tertiary}`}>Alt Alleles</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {genomicLocs.map((loc, li) => (
+                                      <tr key={li} className={li % 2 === 0 ? '' : (isDarkMode ? 'bg-slate-700/10' : 'bg-gray-50/40')}>
+                                        <td className={`py-1.5 px-3 ${t.text.primary}`}>{loc.assembly}</td>
+                                        <td className={`py-1.5 px-3 font-mono ${t.text.secondary}`}>{loc.sequence?.name?.replace(/\[.*?\]/, '')}:{loc.begin?.toLocaleString()}</td>
+                                        <td className={`py-1.5 px-3 font-mono ${t.text.secondary}`}>{loc.variantAlleles?.join(', ') || '—'}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
 
               {/* AlphaMissense AI Prediction */}
               {lookupResults.alpha_missense?.found && (

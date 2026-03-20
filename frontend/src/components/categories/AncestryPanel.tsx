@@ -1,6 +1,7 @@
 'use client'
 import React, { useMemo } from 'react'
 import { Globe, MapPin, Users, Clock, Dna } from 'lucide-react'
+import SmartInsights from '../SmartInsights'
 import { Badge } from '../ui/badge'
 import {
   ComposableMap,
@@ -334,7 +335,7 @@ function hexToRgba(hex: string, opacity: number): string {
   return `rgba(${r},${g},${b},${opacity})`
 }
 
-export default function AncestryPanel({ isDarkMode = false, data }: CategoryPanelProps) {
+export default function AncestryPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
   const theme = useThemeClasses(isDarkMode)
 
   const getAncestryData = () => {
@@ -548,6 +549,8 @@ export default function AncestryPanel({ isDarkMode = false, data }: CategoryPane
           </p>
         </div>
       </SectionCard>
+
+      <SmartInsights isDarkMode={isDarkMode} token={token} section="ancestry" title="AI Ancestry Analysis" />
 
       <DisclaimerCard theme={theme} />
     </div>

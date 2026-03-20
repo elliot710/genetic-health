@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from datetime import datetime
 
 from ..db.database import get_session
-from ..db.models import User, PanelMarkerConfig, GeneticAnalysis, VariantMapping, PendingDiscovery, SharedVariantAnnotation, AnnotationSourceConfig
+from ..db.models import User, GeneticAnalysis, VariantMapping, PendingDiscovery, SharedVariantAnnotation, AnnotationSourceConfig
 from .auth_routes import get_current_user
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -46,43 +46,6 @@ class AdminUserUpdate(BaseModel):
     is_active: Optional[bool] = None
     is_admin: Optional[bool] = None
     is_verified: Optional[bool] = None
-
-
-class MarkerConfigResponse(BaseModel):
-    id: int
-    panel_id: str
-    rsid: str
-    gene: Optional[str] = None
-    description: Optional[str] = None
-    category: Optional[str] = None
-    is_active: bool = True
-    is_auto_discovered: bool = False
-    created_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
-
-
-class MarkerConfigCreate(BaseModel):
-    panel_id: str
-    rsid: str
-    gene: Optional[str] = None
-    description: Optional[str] = None
-    category: Optional[str] = None
-
-
-class MarkerConfigUpdate(BaseModel):
-    rsid: Optional[str] = None
-    gene: Optional[str] = None
-    description: Optional[str] = None
-    category: Optional[str] = None
-    is_active: Optional[bool] = None
-
-
-class PanelSummary(BaseModel):
-    panel_id: str
-    marker_count: int
-    active_count: int
 
 
 # --- Dependencies ---
@@ -197,227 +160,6 @@ async def delete_user(
     await db.delete(user)
     await db.commit()
     return {"detail": "User deleted"}
-
-
-# --- Panel Marker Configuration ---
-
-@router.get("/panels", response_model=List[PanelSummary])
-async def list_panels(
-    db: AsyncSession = Depends(get_session),
-    admin: User = Depends(require_admin),
-):
-    """List all panels with marker counts."""
-    result = await db.execute(
-        select(
-            PanelMarkerConfig.panel_id,
-            func.count().label("marker_count"),
-            func.count().filter(PanelMarkerConfig.is_active == True).label("active_count"),
-        )
-        .group_by(PanelMarkerConfig.panel_id)
-        .order_by(PanelMarkerConfig.panel_id)
-    )
-    rows = result.all()
-    return [PanelSummary(panel_id=r[0], marker_count=r[1], active_count=r[2]) for r in rows]
-
-
-@router.get("/panels/{panel_id}/markers", response_model=List[MarkerConfigResponse])
-async def get_panel_markers(
-    panel_id: str,
-    db: AsyncSession = Depends(get_session),
-    admin: User = Depends(require_admin),
-):
-    """Get all markers for a specific panel."""
-    result = await db.execute(
-        select(PanelMarkerConfig)
-        .where(PanelMarkerConfig.panel_id == panel_id)
-        .order_by(PanelMarkerConfig.category, PanelMarkerConfig.gene)
-    )
-    return result.scalars().all()
-
-
-@router.post("/panels/{panel_id}/markers", response_model=MarkerConfigResponse, status_code=201)
-async def add_panel_marker(
-    panel_id: str,
-    marker: MarkerConfigCreate,
-    db: AsyncSession = Depends(get_session),
-    admin: User = Depends(require_admin),
-):
-    """Add a marker to a panel."""
-    # Check for duplicate
-    existing = await db.execute(
-        select(PanelMarkerConfig).where(
-            PanelMarkerConfig.panel_id == panel_id,
-            PanelMarkerConfig.rsid == marker.rsid,
-        )
-    )
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="Marker already exists for this panel")
-
-    config = PanelMarkerConfig(
-        panel_id=panel_id,
-        rsid=marker.rsid,
-        gene=marker.gene,
-        description=marker.description,
-        category=marker.category,
-    )
-    db.add(config)
-    await db.commit()
-    await db.refresh(config)
-    return config
-
-
-@router.put("/panels/markers/{config_id}", response_model=MarkerConfigResponse)
-async def update_panel_marker(
-    config_id: int,
-    update: MarkerConfigUpdate,
-    db: AsyncSession = Depends(get_session),
-    admin: User = Depends(require_admin),
-):
-    """Update a marker configuration."""
-    result = await db.execute(select(PanelMarkerConfig).where(PanelMarkerConfig.id == config_id))
-    config = result.scalar_one_or_none()
-    if not config:
-        raise HTTPException(status_code=404, detail="Marker config not found")
-
-    for field, value in update.model_dump(exclude_unset=True).items():
-        setattr(config, field, value)
-
-    config.updated_at = func.now()
-    await db.commit()
-    await db.refresh(config)
-    return config
-
-
-@router.delete("/panels/markers/{config_id}")
-async def delete_panel_marker(
-    config_id: int,
-    db: AsyncSession = Depends(get_session),
-    admin: User = Depends(require_admin),
-):
-    """Delete a marker from a panel."""
-    result = await db.execute(select(PanelMarkerConfig).where(PanelMarkerConfig.id == config_id))
-    config = result.scalar_one_or_none()
-    if not config:
-        raise HTTPException(status_code=404, detail="Marker config not found")
-
-    await db.delete(config)
-    await db.commit()
-    return {"detail": "Marker deleted"}
-
-
-# --- Export / Import ---
-
-@router.get("/panels/{panel_id}/markers/export")
-async def export_panel_markers(
-    panel_id: str,
-    format: str = Query("csv", pattern="^(csv|yaml)$"),
-    db: AsyncSession = Depends(get_session),
-    admin: User = Depends(require_admin),
-):
-    """Export markers for a panel as CSV or YAML."""
-    result = await db.execute(
-        select(PanelMarkerConfig)
-        .where(PanelMarkerConfig.panel_id == panel_id)
-        .order_by(PanelMarkerConfig.category, PanelMarkerConfig.gene)
-    )
-    markers = result.scalars().all()
-
-    rows = [
-        {
-            "rsid": m.rsid,
-            "gene": m.gene or "",
-            "description": m.description or "",
-            "category": m.category or "",
-            "is_active": m.is_active,
-        }
-        for m in markers
-    ]
-
-    if format == "csv":
-        buf = io.StringIO()
-        writer = csv.DictWriter(buf, fieldnames=["rsid", "gene", "description", "category", "is_active"])
-        writer.writeheader()
-        writer.writerows(rows)
-        return StreamingResponse(
-            iter([buf.getvalue()]),
-            media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename={panel_id}_markers.csv"},
-        )
-    else:
-        content = yaml.dump({"panel_id": panel_id, "markers": rows}, default_flow_style=False, allow_unicode=True)
-        return StreamingResponse(
-            iter([content]),
-            media_type="application/x-yaml",
-            headers={"Content-Disposition": f"attachment; filename={panel_id}_markers.yaml"},
-        )
-
-
-@router.post("/panels/{panel_id}/markers/import")
-async def import_panel_markers(
-    panel_id: str,
-    file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_session),
-    admin: User = Depends(require_admin),
-):
-    """Import markers for a panel from CSV or YAML. Skips duplicates."""
-    content = (await file.read()).decode("utf-8")
-    filename = file.filename or ""
-
-    if filename.endswith(".yaml") or filename.endswith(".yml"):
-        try:
-            parsed = yaml.safe_load(content)
-        except yaml.YAMLError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
-        if isinstance(parsed, dict):
-            rows = parsed.get("markers", [])
-        elif isinstance(parsed, list):
-            rows = parsed
-        else:
-            raise HTTPException(status_code=400, detail="YAML must contain a list or a dict with 'markers' key")
-    elif filename.endswith(".csv"):
-        reader = csv.DictReader(io.StringIO(content))
-        rows = list(reader)
-    else:
-        raise HTTPException(status_code=400, detail="File must be .csv, .yaml, or .yml")
-
-    # Validate rows have required 'rsid' field
-    added = 0
-    skipped = 0
-    for row in rows:
-        rsid = row.get("rsid", "").strip()
-        if not rsid:
-            skipped += 1
-            continue
-
-        existing = await db.execute(
-            select(PanelMarkerConfig).where(
-                PanelMarkerConfig.panel_id == panel_id,
-                PanelMarkerConfig.rsid == rsid,
-            )
-        )
-        if existing.scalar_one_or_none():
-            skipped += 1
-            continue
-
-        is_active_raw = row.get("is_active", True)
-        if isinstance(is_active_raw, str):
-            is_active = is_active_raw.lower() not in ("false", "0", "no")
-        else:
-            is_active = bool(is_active_raw)
-
-        config = PanelMarkerConfig(
-            panel_id=panel_id,
-            rsid=rsid,
-            gene=row.get("gene", "").strip() or None,
-            description=row.get("description", "").strip() or None,
-            category=row.get("category", "").strip() or None,
-            is_active=is_active,
-        )
-        db.add(config)
-        added += 1
-
-    await db.commit()
-    return {"detail": f"Import complete: {added} added, {skipped} skipped"}
 
 
 # --- Variant Mapping Registry ---
@@ -597,7 +339,6 @@ class DiscoverySummary(BaseModel):
     total_pending: int
     total_approved: int
     total_rejected: int
-    panel_marker_pending: int
     variant_mapping_pending: int
 
 
@@ -628,14 +369,12 @@ async def get_discovery_summary(
 
     summary = {
         'total_pending': 0, 'total_approved': 0, 'total_rejected': 0,
-        'panel_marker_pending': 0, 'variant_mapping_pending': 0,
+        'variant_mapping_pending': 0,
     }
     for status_val, dtype, cnt in rows:
         if status_val == 'pending':
             summary['total_pending'] += cnt
-            if dtype == 'panel_marker':
-                summary['panel_marker_pending'] = cnt
-            elif dtype == 'variant_mapping':
+            if dtype == 'variant_mapping':
                 summary['variant_mapping_pending'] = cnt
         elif status_val == 'approved':
             summary['total_approved'] += cnt
@@ -648,7 +387,7 @@ async def get_discovery_summary(
 @router.get("/discoveries", response_model=List[PendingDiscoveryResponse])
 async def list_discoveries(
     status_filter: Optional[str] = Query('pending', pattern="^(pending|approved|rejected|all)$"),
-    discovery_type: Optional[str] = Query(None, pattern="^(panel_marker|variant_mapping)$"),
+    discovery_type: Optional[str] = Query(None, pattern="^(variant_mapping)$"),
     db: AsyncSession = Depends(get_session),
     admin: User = Depends(require_admin),
 ):
@@ -682,7 +421,8 @@ async def review_discovery(
     if not discovery:
         raise HTTPException(status_code=404, detail="Discovery not found")
     if discovery.status != 'pending':
-        raise HTTPException(status_code=409, detail=f"Discovery already {discovery.status}")
+        # Already reviewed — return as-is (idempotent)
+        return discovery
 
     if review.action == 'reject':
         discovery.status = 'rejected'
@@ -694,39 +434,7 @@ async def review_discovery(
         return discovery
 
     # Approve: create the live entry
-    if discovery.discovery_type == 'panel_marker':
-        # Apply overrides if provided
-        desc = review.description or discovery.description
-        cat = review.category or discovery.category
-
-        # Final duplicate check
-        existing = await db.execute(
-            select(PanelMarkerConfig.id).where(
-                PanelMarkerConfig.panel_id == discovery.panel_id,
-                PanelMarkerConfig.rsid == discovery.rsid,
-            )
-        )
-        if existing.scalar_one_or_none() is not None:
-            discovery.status = 'rejected'
-            discovery.reviewed_by = admin.id
-            discovery.reviewed_at = func.now()
-            discovery.rejection_reason = 'Already exists in panel markers'
-            await db.commit()
-            await db.refresh(discovery)
-            raise HTTPException(status_code=409, detail="Marker already exists in the target panel")
-
-        marker = PanelMarkerConfig(
-            panel_id=discovery.panel_id,
-            rsid=discovery.rsid,
-            gene=discovery.gene,
-            description=desc,
-            category=cat,
-            is_active=True,
-            is_auto_discovered=True,
-        )
-        db.add(marker)
-
-    elif discovery.discovery_type == 'variant_mapping':
+    if discovery.discovery_type == 'variant_mapping':
         m_data = review.mapping_data or discovery.mapping_data
         m_cat = discovery.mapping_category
 
@@ -745,7 +453,7 @@ async def review_discovery(
             discovery.rejection_reason = 'Already exists in variant mappings'
             await db.commit()
             await db.refresh(discovery)
-            raise HTTPException(status_code=409, detail="Mapping already exists")
+            return discovery
 
         mapping = VariantMapping(
             category=m_cat,
@@ -798,32 +506,7 @@ async def bulk_review_discoveries(
             continue
 
         # Approve with duplicate check
-        if discovery.discovery_type == 'panel_marker':
-            existing = await db.execute(
-                select(PanelMarkerConfig.id).where(
-                    PanelMarkerConfig.panel_id == discovery.panel_id,
-                    PanelMarkerConfig.rsid == discovery.rsid,
-                )
-            )
-            if existing.scalar_one_or_none() is not None:
-                discovery.status = 'rejected'
-                discovery.reviewed_by = admin.id
-                discovery.reviewed_at = func.now()
-                discovery.rejection_reason = 'Duplicate - already exists'
-                skipped += 1
-                continue
-
-            db.add(PanelMarkerConfig(
-                panel_id=discovery.panel_id,
-                rsid=discovery.rsid,
-                gene=discovery.gene,
-                description=discovery.description,
-                category=discovery.category,
-                is_active=True,
-                is_auto_discovered=True,
-            ))
-
-        elif discovery.discovery_type == 'variant_mapping':
+        if discovery.discovery_type == 'variant_mapping':
             existing = await db.execute(
                 select(VariantMapping.id).where(
                     VariantMapping.category == discovery.mapping_category,
@@ -2074,63 +1757,50 @@ async def delete_job(
 
 @router.post("/purge-deleted")
 async def purge_deleted_analyses(
-    older_than_days: int = Query(30, ge=1, description="Hard-delete analyses soft-deleted more than N days ago"),
+    older_than_days: int = Query(0, ge=0, description="Hard-delete analyses soft-deleted more than N days ago (0 = all)"),
     db: AsyncSession = Depends(get_session),
     admin: User = Depends(require_admin),
 ):
-    """Hard-delete analyses (and cascaded children) that were soft-deleted more than `older_than_days` days ago."""
-    from datetime import timedelta
-    from ..db.database import async_session_factory
+    """Queue hard-deletion of soft-deleted analyses as a background worker job."""
+    filters = [GeneticAnalysis.deleted_at.isnot(None)]
+    if older_than_days > 0:
+        cutoff = func.now() - text(f"interval '{int(older_than_days)} days'")
+        filters.append(GeneticAnalysis.deleted_at < cutoff)
 
-    cutoff = func.now() - text(f"interval '{int(older_than_days)} days'")
-    result = await db.execute(
-        select(GeneticAnalysis.id).where(
-            GeneticAnalysis.deleted_at.isnot(None),
-            GeneticAnalysis.deleted_at < cutoff,
-        )
-    )
+    result = await db.execute(select(GeneticAnalysis.id).where(*filters))
     ids = [row[0] for row in result.all()]
 
     if not ids:
+        if older_than_days > 0:
+            total = await db.execute(
+                select(func.count()).select_from(GeneticAnalysis).where(GeneticAnalysis.deleted_at.isnot(None))
+            )
+            pending = total.scalar() or 0
+            if pending:
+                return {
+                    "detail": f"No analyses deleted more than {older_than_days} days ago. "
+                              f"{pending} soft-deleted analyse(s) exist but are newer. Use 0 days to purge all.",
+                    "purged": 0,
+                }
         return {"detail": "No analyses to purge", "purged": 0}
 
-    BATCH = 50_000
-    async def _batched_delete(table: str):
-        total = 0
-        while True:
-            async with async_session_factory() as s:
-                r = await s.execute(
-                    text(f"DELETE FROM {table} WHERE ctid IN ("
-                         f"SELECT ctid FROM {table} WHERE analysis_id = ANY(:ids) LIMIT :lim)"),
-                    {"ids": ids, "lim": BATCH},
-                )
-                await s.commit()
-                deleted = r.rowcount
-            total += deleted
-            if deleted < BATCH:
-                break
-        return total
-
-    # Big tables first (batched)
-    await _batched_delete("variant_annotations")
-    await _batched_delete("analysis_variants")
-
-    # Insight tables + parent
-    async with async_session_factory() as s:
-        async with s.begin():
-            for tbl in [
-                "health_risks", "drug_responses", "physical_traits",
-                "nutrition_traits", "sports_performance", "cognitive_profiles",
-                "personality_traits", "ancestry_results", "carrier_status",
-                "wellness_metrics", "methylation_profiles",
-                "detoxification_profiles", "rare_mutations", "uncommon_mutations",
-                "dashboard_cache",
-            ]:
-                await s.execute(text(f"DELETE FROM {tbl} WHERE analysis_id = ANY(:ids)"), {"ids": ids})
-            await s.execute(text("DELETE FROM genetic_analyses WHERE id = ANY(:ids)"), {"ids": ids})
-
-    logger.info(f"Admin purge: hard-deleted {len(ids)} analyses older than {older_than_days} days")
-    return {"detail": f"Purged {len(ids)} analyses", "purged": len(ids), "ids": ids}
+    from ..db.models import WorkerJob
+    job = WorkerJob(
+        job_type="purge_deleted",
+        status="pending",
+        params={"analysis_ids": ids, "older_than_days": older_than_days},
+        requested_by=admin.id,
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    logger.info(f"Purge job {job.id} queued by admin {admin.id}: {len(ids)} analyses")
+    return {
+        "job_id": job.id,
+        "status": "pending",
+        "detail": f"Queued purge of {len(ids)} analyses for background processing",
+        "count": len(ids),
+    }
 
 
 @router.get("/jobs/{job_id}/logs")
@@ -2406,30 +2076,93 @@ async def gnomad_bigquery_backfill(
 @router.post("/auto-categorize")
 async def run_auto_categorize(
     categories: Optional[str] = Query(None, description="Comma-separated category filter"),
+    db: AsyncSession = Depends(get_session),
     admin: User = Depends(require_admin),
 ):
-    """Run auto-categorization: evaluate active rules against ClinVar data to
-    generate VariantMapping rows. Optional category filter (comma-separated)."""
-    from ..services.auto_categorizer import AutoCategorizer
+    """Queue auto-categorization as a background worker job.
+
+    Returns immediately with a job ID that can be polled via
+    GET /api/admin/jobs/{job_id}.
+    """
+    from ..db.models import WorkerJob
     cat_list = [c.strip() for c in categories.split(",")] if categories else None
-    categorizer = AutoCategorizer()
-    return await categorizer.run(categories=cat_list)
+    job = WorkerJob(
+        job_type="auto_categorize",
+        status="pending",
+        params={"categories": cat_list} if cat_list else None,
+        requested_by=admin.id,
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    logger.info(f"Auto-categorize job {job.id} queued by admin {admin.id}")
+    return {"job_id": job.id, "status": "pending", "detail": "Queued for worker processing"}
 
 
-# ======================================================================
-# Sync variant mappings → panel marker configs
-# ======================================================================
+# --- Worker Job status ---
 
-@router.post("/panels/sync-from-mappings")
-async def sync_panels_from_mappings(
-    categories: Optional[str] = Query(None, description="Comma-separated category filter"),
+@router.get("/worker-jobs/{job_id}")
+async def get_worker_job_status(
+    job_id: int,
+    db: AsyncSession = Depends(get_session),
     admin: User = Depends(require_admin),
 ):
-    """Populate PanelMarkerConfig from active VariantMappings so the admin
-    panel reflects the full registry. Only inserts — never overwrites manual markers."""
-    from ..services.auto_categorizer import sync_panels_from_mappings
-    cat_list = [c.strip() for c in categories.split(",")] if categories else None
-    return await sync_panels_from_mappings(categories=cat_list)
+    """Poll the status of a background worker job."""
+    from ..db.models import WorkerJob
+    result = await db.execute(
+        select(WorkerJob).where(WorkerJob.id == job_id)
+    )
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {
+        "job_id": job.id,
+        "job_type": job.job_type,
+        "status": job.status,
+        "params": job.params,
+        "result": job.result,
+        "error": job.error,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+    }
+
+
+@router.get("/worker-jobs")
+async def list_worker_jobs(
+    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status"),
+    limit: int = Query(50, le=200),
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """List recent worker jobs (auto_categorize, purge_deleted, etc.)."""
+    from ..db.models import WorkerJob
+    q = (
+        select(WorkerJob, User.email, User.username)
+        .outerjoin(User, WorkerJob.requested_by == User.id)
+        .order_by(WorkerJob.created_at.desc())
+        .limit(limit)
+    )
+    if status_filter:
+        q = q.where(WorkerJob.status == status_filter)
+    result = await db.execute(q)
+    rows = result.all()
+    return [
+        {
+            "job_id": j.id,
+            "job_type": j.job_type,
+            "status": j.status,
+            "params": j.params,
+            "result": j.result,
+            "error": j.error,
+            "requested_by_email": email,
+            "requested_by_username": uname,
+            "created_at": j.created_at.isoformat() if j.created_at else None,
+            "started_at": j.started_at.isoformat() if j.started_at else None,
+            "completed_at": j.completed_at.isoformat() if j.completed_at else None,
+        }
+        for j, email, uname in rows
+    ]
 
 
 # --- Annotation sentinel reset ---

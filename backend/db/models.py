@@ -23,6 +23,29 @@ class User(Base):
     
     # Relationship to genetic analyses
     genetic_analyses = relationship("GeneticAnalysis", back_populates="user")
+    saved_variants = relationship("SavedVariant", back_populates="user", cascade="all, delete-orphan")
+
+
+class SavedVariant(Base):
+    """User-bookmarked variants for quick access from the profile."""
+    __tablename__ = "saved_variants"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    rsid = Column(String, nullable=False)
+    gene = Column(String, nullable=True)
+    most_severe_consequence = Column(String, nullable=True)
+    clinical_significance = Column(String, nullable=True)
+    note = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="saved_variants")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "rsid", name="uq_saved_variant_user_rsid"),
+        Index("ix_saved_variants_user_id", "user_id"),
+    )
+
 
 class GeneticAnalysis(Base):
     __tablename__ = "genetic_analyses"
@@ -380,26 +403,6 @@ class UncommonMutation(Base):
     analysis = relationship("GeneticAnalysis")
 
 
-class PanelMarkerConfig(Base):
-    """Configures which genetic markers are used for each dashboard panel."""
-    __tablename__ = "panel_marker_configs"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    panel_id = Column(String, nullable=False, index=True)  # e.g. 'methylation', 'detox', 'health'
-    rsid = Column(String, nullable=False)  # e.g. 'rs1801133'
-    gene = Column(String)  # e.g. 'MTHFR'
-    description = Column(String)  # Human-readable description
-    category = Column(String)  # Sub-category within panel
-    is_active = Column(Boolean, default=True)
-    is_auto_discovered = Column(Boolean, default=False)  # True if created by auto-discovery
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-    
-    __table_args__ = (
-        Index('ix_panel_marker_panel_rsid', 'panel_id', 'rsid', unique=True),
-    )
-
-
 class VariantMapping(Base):
     """Stores rsid→condition and gene→trait mappings used by the analysis engine.
     Replaces the static variant_registry.py file so mappings can be managed from the admin panel."""
@@ -412,6 +415,8 @@ class VariantMapping(Base):
     data = Column(JSON, nullable=False)                      # Metadata dict (varies by category)
     is_active = Column(Boolean, default=True)
     is_auto_discovered = Column(Boolean, default=False)  # True if created by auto-discovery
+    sources = Column(JSON, nullable=True)     # e.g. ["clinvar_local", "ensembl_vep", "gnomad"]
+    confidence = Column(Float, nullable=True)  # 0.0–1.0 based on source agreement
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -862,4 +867,47 @@ class DashboardCache(Base):
     user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, unique=True, index=True)
     dashboard_json = Column(JSON, nullable=False)
     analysis_fingerprint = Column(String, nullable=True)
+
+
+class WorkerJob(Base):
+    """Generic background job dispatched to the worker process.
+
+    The worker polls for rows with status='pending' and executes them.
+    Used for heavy tasks that should not block the API (e.g. auto-categorize).
+    """
+    __tablename__ = 'worker_jobs'
+
+    id = Column(Integer, primary_key=True)
+    job_type = Column(String, nullable=False, index=True)       # e.g. 'auto_categorize'
+    status = Column(String, nullable=False, default='pending')   # pending → processing → completed / failed
+    params = Column(JSON, nullable=True)                         # job-specific parameters
+    result = Column(JSON, nullable=True)                         # output / stats on completion
+    error = Column(Text, nullable=True)                          # error message on failure
+    requested_by = Column(Integer, ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index('ix_worker_jobs_status', 'status'),
+    )
     refreshed_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AiInsightCache(Base):
+    """Persistent cache for AI-generated insights (panel sections and variant dialogs).
+
+    cache_key format:
+      - Panel:   "panel:{analysis_id}:{section}"
+      - Variant: "variant:{rsid}"
+
+    Rows are upserted on generation and returned on subsequent requests to avoid
+    repeated LLM calls. Force-refresh deletes the row before regenerating.
+    """
+    __tablename__ = 'ai_insight_cache'
+
+    id = Column(Integer, primary_key=True)
+    cache_key = Column(String, unique=True, nullable=False, index=True)
+    result = Column(JSON, nullable=False)
+    provider = Column(String, nullable=True)
+    generated_at = Column(DateTime(timezone=True), server_default=func.now())

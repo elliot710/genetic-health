@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react'
 import { Activity, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
+import SmartInsights from '../SmartInsights'
 import { Badge } from '../ui/badge'
 import { CategoryDistributionChart } from './GenomicCharts'
 import {
@@ -285,6 +286,8 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
           </div>
         </SectionCard>
       )}
+
+      <SmartInsights isDarkMode={isDarkMode} token={token} section="wellness" title="AI Wellness Analysis" />
 
       <DisclaimerCard theme={theme} />
     </div>

@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from 'react'
 import { AlertTriangle, Shield, Info, ChevronRight, ChevronDown, CheckCircle, Search, Filter, LayoutGrid } from 'lucide-react'
+import SmartInsights from '../SmartInsights'
 import { Badge } from '../ui/badge'
 import {
   useThemeClasses,
@@ -388,6 +389,8 @@ export default function RareMutationsPanel({ data, isDarkMode = false, token }: 
           )
         })}
       </SectionCard>
+
+      <SmartInsights isDarkMode={isDarkMode} token={token} section="rare_mutations" title="AI Rare Mutations Analysis" />
 
       <DisclaimerCard
         icon={Info}

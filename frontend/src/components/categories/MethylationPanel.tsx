@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo, useCallback } from 'react'
 import { Dna, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
+import SmartInsights from '../SmartInsights'
 import { Badge } from '../ui/badge'
 import { CapacityChart } from './GenomicCharts'
 import {
@@ -238,6 +239,8 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
           </div>
         </SectionCard>
       )}
+
+      <SmartInsights isDarkMode={isDarkMode} token={token} section="methylation" title="AI Methylation Analysis" />
 
       <DisclaimerCard theme={theme} />
     </div>

@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo } from 'react'
 import { Shield, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
+import SmartInsights from '../SmartInsights'
 import { Badge } from '../ui/badge'
 import { CapacityChart } from './GenomicCharts'
 import {
@@ -289,6 +290,8 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
           </div>
         </SectionCard>
       )}
+
+      <SmartInsights isDarkMode={isDarkMode} token={token} section="detox" title="AI Detox Analysis" />
 
       <DisclaimerCard theme={theme} />
     </div>

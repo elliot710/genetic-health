@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react'
 import { Zap, Eye, Ruler, Palette, Sun, ChevronRight, Search, Filter } from 'lucide-react'
+import SmartInsights from '../SmartInsights'
 import { Badge } from '../ui/badge'
 import { CapacityChart } from './GenomicCharts'
 import {
@@ -221,6 +222,8 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
           </div>
         ))}
       </SectionCard>
+
+      <SmartInsights isDarkMode={isDarkMode} token={token} section="physical_traits" title="AI Physical Traits Analysis" />
 
       <DisclaimerCard theme={theme} />
     </div>

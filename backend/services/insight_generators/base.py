@@ -798,6 +798,8 @@ async def generate_from_maps(
             if is_clinvar_benign(annotation_result):
                 continue
 
+            info = rsid_map[rsid]
+
             # BUG-06: Allele verification — confirm the user's genotype
             # actually carries the alternate (risk) allele from annotation
             # data. Without this, variants where user is hom-ref but ref
@@ -820,8 +822,6 @@ async def generate_from_maps(
                         carries = ann_alt in {a.translate(_COMPLEMENT_MAP) for a in alleles}
                     if not carries:
                         continue
-
-            info = rsid_map[rsid]
             key = info[dedup_field]
             if key not in seen:
                 seen.add(key)

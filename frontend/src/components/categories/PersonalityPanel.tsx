@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react'
 import { Brain, Heart, Users, Target, Zap, Palette, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
+import SmartInsights from '../SmartInsights'
 import { Badge } from '../ui/badge'
 import { TraitRadarChart } from './GenomicCharts'
 import {
@@ -270,6 +271,8 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
           </div>
         </SectionCard>
       )}
+
+      <SmartInsights isDarkMode={isDarkMode} token={token} section="personality" title="AI Personality Analysis" />
 
       <DisclaimerCard theme={theme} />
     </div>

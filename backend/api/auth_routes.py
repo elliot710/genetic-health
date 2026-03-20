@@ -4,13 +4,14 @@ Authentication API routes
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, delete as sa_delete
 from datetime import timedelta
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
 from ..db.database import get_session
 from ..db.schemas import UserCreate, UserResponse, Token, UserLogin
-from ..db.models import User
+from ..db.models import User, SavedVariant
 from ..services.user_service import UserService
 from ..core.auth import (
     create_access_token, create_refresh_token, verify_token, verify_refresh_token,
@@ -196,3 +197,110 @@ async def refresh_access_token(request: Request, response: Response, db: AsyncSe
     new_refresh = create_refresh_token(data={"sub": username})
     set_auth_cookies(response, access_token, new_refresh)
     return {"detail": "Token refreshed"}
+
+
+# ── Saved Variants ───────────────────────────────────────────────
+
+class SaveVariantRequest(BaseModel):
+    rsid: str
+    gene: Optional[str] = None
+    most_severe_consequence: Optional[str] = None
+    clinical_significance: Optional[str] = None
+    note: Optional[str] = None
+
+
+class SavedVariantResponse(BaseModel):
+    id: int
+    rsid: str
+    gene: Optional[str] = None
+    most_severe_consequence: Optional[str] = None
+    clinical_significance: Optional[str] = None
+    note: Optional[str] = None
+    created_at: str
+
+    class Config:
+        from_attributes = True
+
+
+@router.get("/saved-variants", response_model=List[SavedVariantResponse])
+async def list_saved_variants(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """List all saved variants for the current user."""
+    result = await db.execute(
+        select(SavedVariant)
+        .where(SavedVariant.user_id == current_user.id)
+        .order_by(SavedVariant.created_at.desc())
+    )
+    rows = result.scalars().all()
+    return [
+        SavedVariantResponse(
+            id=r.id,
+            rsid=r.rsid,
+            gene=r.gene,
+            most_severe_consequence=r.most_severe_consequence,
+            clinical_significance=r.clinical_significance,
+            note=r.note,
+            created_at=r.created_at.isoformat() if r.created_at else "",
+        )
+        for r in rows
+    ]
+
+
+@router.post("/saved-variants", response_model=SavedVariantResponse, status_code=201)
+async def save_variant(
+    body: SaveVariantRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Save a variant to the user's bookmarks."""
+    # Check for duplicate
+    existing = await db.execute(
+        select(SavedVariant).where(
+            SavedVariant.user_id == current_user.id,
+            SavedVariant.rsid == body.rsid,
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="Variant already saved")
+
+    sv = SavedVariant(
+        user_id=current_user.id,
+        rsid=body.rsid,
+        gene=body.gene,
+        most_severe_consequence=body.most_severe_consequence,
+        clinical_significance=body.clinical_significance,
+        note=body.note,
+    )
+    db.add(sv)
+    await db.commit()
+    await db.refresh(sv)
+    return SavedVariantResponse(
+        id=sv.id,
+        rsid=sv.rsid,
+        gene=sv.gene,
+        most_severe_consequence=sv.most_severe_consequence,
+        clinical_significance=sv.clinical_significance,
+        note=sv.note,
+        created_at=sv.created_at.isoformat() if sv.created_at else "",
+    )
+
+
+@router.delete("/saved-variants/{rsid}")
+async def unsave_variant(
+    rsid: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Remove a variant from the user's bookmarks."""
+    result = await db.execute(
+        sa_delete(SavedVariant).where(
+            SavedVariant.user_id == current_user.id,
+            SavedVariant.rsid == rsid,
+        )
+    )
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Variant not found in saved list")
+    await db.commit()
+    return {"detail": "Variant removed"}

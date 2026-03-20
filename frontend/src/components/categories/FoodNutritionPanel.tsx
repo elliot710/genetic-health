@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react'
 import { Apple, Coffee, Utensils, Wheat, ChefHat, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
+import SmartInsights from '../SmartInsights'
 import { Badge } from '../ui/badge'
 import { CapacityChart } from './GenomicCharts'
 import {
@@ -248,6 +249,8 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
           </div>
         </SectionCard>
       )}
+
+      <SmartInsights isDarkMode={isDarkMode} token={token} section="nutrition" title="AI Nutrition Analysis" />
 
       <DisclaimerCard theme={theme} />
     </div>

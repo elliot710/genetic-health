@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { Shield, Users, Settings, Plus, Trash2, Pencil, Check, X, ChevronRight, Download, Upload, Database, Lightbulb, RefreshCw, AlertTriangle, Minus, Info, Activity, Play, Pause, Square, Clock, FileText, Zap, Sparkles, HardDrive, Scale, RotateCcw, Layers } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -44,23 +44,6 @@ interface AdminUser {
   analysis_count: number
 }
 
-interface PanelSummary {
-  panel_id: string
-  marker_count: number
-  active_count: number
-}
-
-interface MarkerConfig {
-  id: number
-  panel_id: string
-  rsid: string
-  gene: string | null
-  description: string | null
-  category: string | null
-  is_active: boolean
-  created_at: string | null
-}
-
 interface VariantMapping {
   id: number
   category: string
@@ -101,7 +84,6 @@ interface DiscoverySummary {
   total_pending: number
   total_approved: number
   total_rejected: number
-  panel_marker_pending: number
   variant_mapping_pending: number
 }
 
@@ -161,6 +143,20 @@ interface AdminJobsSummary {
   failed: number
 }
 
+interface WorkerJob {
+  job_id: number
+  job_type: string
+  status: string
+  params: Record<string, unknown> | null
+  result: Record<string, unknown> | null
+  error: string | null
+  requested_by_email: string | null
+  requested_by_username: string | null
+  created_at: string | null
+  started_at: string | null
+  completed_at: string | null
+}
+
 interface AnnotationSource {
   id: number
   source_name: string
@@ -186,6 +182,8 @@ const CATEGORY_LABELS: Record<string, string> = {
   methylation: 'Methylation',
   detox: 'Detoxification',
   carrier: 'Carrier Status',
+  rare: 'Rare Mutations',
+  uncommon: 'Uncommon Mutations',
 }
 
 function formatCompactNumber(n: number): string {
@@ -232,26 +230,9 @@ interface AdminPanelProps {
   theme: ReturnType<typeof import('@/utils/theme').getTheme>
 }
 
-const PANEL_LABELS: Record<string, string> = {
-  methylation: 'Methylation',
-  detox: 'Detoxification',
-  health: 'Health & Wellness',
-  sports: 'Sports & Fitness',
-  drug_responses: 'Drug Responses',
-  nutrition: 'Food & Nutrition',
-  carrier: 'Carrier Status',
-  ancestry: 'Ancestry & Origins',
-  wellness: 'Wellness Reports',
-  intelligence: 'Intelligence',
-  personality: 'Personality',
-  physical_traits: 'Physical Traits',
-  rare_mutations: 'Rare Mutations',
-  uncommon_mutations: 'Uncommon Mutations',
-}
-
 export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps) {
   // --- Tab routing via URL hash ---
-  const VALID_TABS = ['users', 'markers', 'registry', 'discoveries', 'sources', 'data', 'rules', 'annotations', 'jobs'] as const
+  const VALID_TABS = ['users', 'registry', 'discoveries', 'sources', 'data', 'rules', 'annotations', 'jobs'] as const
   type AdminTab = typeof VALID_TABS[number]
 
   const [activeTab, setActiveTab] = useState<AdminTab>(() => {
@@ -285,20 +266,11 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   }, [])
 
   const [users, setUsers] = useState<AdminUser[]>([])
-  const [panels, setPanels] = useState<PanelSummary[]>([])
-  const [selectedPanel, setSelectedPanel] = useState<string | null>(null)
-  const [markers, setMarkers] = useState<MarkerConfig[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   // Dialog states
-  const [showAddMarker, setShowAddMarker] = useState(false)
   const [showDeleteUser, setShowDeleteUser] = useState<AdminUser | null>(null)
-  const [showDeleteMarker, setShowDeleteMarker] = useState<MarkerConfig | null>(null)
-  const [editingMarker, setEditingMarker] = useState<MarkerConfig | null>(null)
-
-  // New marker form
-  const [newMarker, setNewMarker] = useState({ rsid: '', gene: '', description: '', category: '', panel_id: '' })
 
   // Variant registry state
   const [registryCategories, setRegistryCategories] = useState<VariantMappingCategorySummary[]>([])
@@ -341,6 +313,10 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const [jobLogs, setJobLogs] = useState<{ ts: string; level: string; msg: string }[]>([])
   const [logsLoading, setLogsLoading] = useState(false)
   const [deleteConfirmJobId, setDeleteConfirmJobId] = useState<number | null>(null)
+
+  // Worker jobs state
+  const [workerJobs, setWorkerJobs] = useState<WorkerJob[]>([])
+  const [workerJobsExpanded, setWorkerJobsExpanded] = useState<number | null>(null)
   const logsEndRef = useRef<HTMLDivElement>(null)
   const logsRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -359,7 +335,6 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   // Client-side pagination for all tabs
   const PAGE_SIZE = 25
   const [usersPage, setUsersPage] = useState(0)
-  const [markersPage, setMarkersPage] = useState(0)
   const [registryPage, setRegistryPage] = useState(0)
   const [discoveriesPage, setDiscoveriesPage] = useState(0)
   const [jobsPage, setJobsPage] = useState(0)
@@ -393,9 +368,8 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
 
   // Utility state
   const [autoCategorizing, setAutoCategorizing] = useState(false)
-  const [syncingPanels, setSyncingPanels] = useState(false)
   const [purgingDeleted, setPurgingDeleted] = useState(false)
-  const [purgeOlderThanDays, setPurgeOlderThanDays] = useState('30')
+  const [purgeOlderThanDays, setPurgeOlderThanDays] = useState('0')
   const [utilityFeedback, setUtilityFeedback] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
   const [resettingSentinels, setResettingSentinels] = useState<string | null>(null)
   const [sentinelFeedback, setSentinelFeedback] = useState<{ source: string; message: string; type: 'success' | 'error' } | null>(null)
@@ -416,33 +390,9 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     }
   }, [headers])
 
-  const fetchPanels = useCallback(async () => {
-    try {
-      const res = await authFetch(`${API}/panels`, { headers })
-      if (!res.ok) throw new Error('Failed to load panels')
-      setPanels(await res.json())
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Unknown error')
-    }
-  }, [headers])
-
-  const fetchMarkers = useCallback(async (panelId: string) => {
-    try {
-      const res = await authFetch(`${API}/panels/${encodeURIComponent(panelId)}/markers`, { headers })
-      if (!res.ok) throw new Error('Failed to load markers')
-      setMarkers(await res.json())
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Unknown error')
-    }
-  }, [headers])
-
   useEffect(() => {
-    Promise.all([fetchUsers(), fetchPanels(), fetchRegistryCategories()]).finally(() => setLoading(false))
-  }, [fetchUsers, fetchPanels])
-
-  useEffect(() => {
-    if (selectedPanel) fetchMarkers(selectedPanel)
-  }, [selectedPanel, fetchMarkers])
+    Promise.all([fetchUsers(), fetchRegistryCategories()]).finally(() => setLoading(false))
+  }, [fetchUsers])
 
   useEffect(() => {
     if (selectedRegistryCategory) fetchRegistryMappings(selectedRegistryCategory)
@@ -545,101 +495,6 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     }
   }
 
-  // --- Marker actions ---
-  const addMarker = async () => {
-    const panelId = newMarker.panel_id || selectedPanel
-    if (!panelId || !newMarker.rsid) return
-    const res = await authFetch(`${API}/panels/${encodeURIComponent(panelId)}/markers`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ ...newMarker, panel_id: panelId }),
-    })
-    if (res.ok) {
-      setShowAddMarker(false)
-      setNewMarker({ rsid: '', gene: '', description: '', category: '', panel_id: '' })
-      fetchPanels()
-      if (selectedPanel === panelId) fetchMarkers(panelId)
-    }
-  }
-
-  const updateMarker = async (marker: MarkerConfig) => {
-    const res = await authFetch(`${API}/panels/markers/${marker.id}`, {
-      method: 'PUT',
-      headers,
-      body: JSON.stringify({
-        rsid: marker.rsid,
-        gene: marker.gene,
-        description: marker.description,
-        category: marker.category,
-        is_active: marker.is_active,
-      }),
-    })
-    if (res.ok) {
-      const updated = await res.json()
-      setMarkers(prev => prev.map(m => m.id === marker.id ? updated : m))
-      setEditingMarker(null)
-    }
-  }
-
-  const deleteMarker = async (id: number) => {
-    const res = await authFetch(`${API}/panels/markers/${id}`, { method: 'DELETE', headers })
-    if (res.ok) {
-      setMarkers(prev => prev.filter(m => m.id !== id))
-      setShowDeleteMarker(null)
-      fetchPanels()
-    }
-  }
-
-  const toggleMarkerActive = async (marker: MarkerConfig) => {
-    updateMarker({ ...marker, is_active: !marker.is_active })
-  }
-
-  // --- Import / Export ---
-  const importFileRef = useRef<HTMLInputElement>(null)
-  const [importResult, setImportResult] = useState<string | null>(null)
-
-  const exportMarkers = async (format: 'csv' | 'yaml') => {
-    if (!selectedPanel) return
-    const res = await authFetch(
-      `${API}/panels/${encodeURIComponent(selectedPanel)}/markers/export?format=${format}`,
-      { headers }
-    )
-    if (!res.ok) return
-    const blob = await res.blob()
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${selectedPanel}_markers.${format}`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file || !selectedPanel) return
-    const formData = new FormData()
-    formData.append('file', file)
-    try {
-      const res = await authFetch(
-        `${API}/panels/${encodeURIComponent(selectedPanel)}/markers/import`,
-        { method: 'POST', credentials: 'include' as RequestCredentials, body: formData }
-      )
-      const data = await res.json()
-      if (res.ok) {
-        setImportResult(data.detail)
-        fetchMarkers(selectedPanel)
-        fetchPanels()
-      } else {
-        setImportResult(`Error: ${data.detail}`)
-      }
-    } catch {
-      setImportResult('Import failed')
-    }
-    // reset file input so same file can be re-imported
-    if (importFileRef.current) importFileRef.current.value = ''
-    setTimeout(() => setImportResult(null), 5000)
-  }
-
   // --- Discoveries ---
   const fetchDiscoverySummary = useCallback(async () => {
     try {
@@ -668,9 +523,12 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
         method: 'POST', headers,
         body: JSON.stringify({ action, rejection_reason: reason }),
       })
-      if (res.ok) {
-        fetchDiscoveries()
-        fetchDiscoverySummary()
+      // Always refresh — even on conflict the backend may have updated the discovery status
+      fetchDiscoveries()
+      fetchDiscoverySummary()
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Review failed' }))
+        setError(err.detail || `Review failed (${res.status})`)
       }
     } catch { /* ignore */ }
     setReviewingId(null)
@@ -773,6 +631,15 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   useEffect(() => { fetchJobsSummary() }, [fetchJobsSummary])
   useEffect(() => { fetchJobs() }, [fetchJobs])
 
+  const fetchWorkerJobs = useCallback(async () => {
+    try {
+      const res = await authFetch(`${API}/worker-jobs`, { headers })
+      if (res.ok) setWorkerJobs(await res.json())
+    } catch { /* ignore */ }
+  }, [headers])
+
+  useEffect(() => { fetchWorkerJobs() }, [fetchWorkerJobs])
+
   // Auto-refresh jobs when any are processing
   const jobsRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
   useEffect(() => {
@@ -782,6 +649,16 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     }
     return () => { if (jobsRefreshRef.current) clearInterval(jobsRefreshRef.current) }
   }, [jobs, fetchJobs, fetchJobsSummary])
+
+  // Auto-refresh worker jobs when any are active
+  const workerJobsRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  useEffect(() => {
+    const hasActive = workerJobs.some(j => j.status === 'processing' || j.status === 'pending')
+    if (hasActive) {
+      workerJobsRefreshRef.current = setInterval(() => fetchWorkerJobs(), 5000)
+    }
+    return () => { if (workerJobsRefreshRef.current) clearInterval(workerJobsRefreshRef.current) }
+  }, [workerJobs, fetchWorkerJobs])
 
   const cancelJob = async (id: number) => {
     setJobActionLoading(id)
@@ -1143,29 +1020,12 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     setTimeout(() => setUtilityFeedback(null), 10000)
   }
 
-  const runSyncPanels = async () => {
-    setSyncingPanels(true)
-    setUtilityFeedback(null)
-    try {
-      const res = await authFetch(`${API}/panels/sync-from-mappings`, { method: 'POST', headers })
-      if (res.ok) {
-        const data = await res.json()
-        setUtilityFeedback({ message: data.detail || JSON.stringify(data), type: 'success' })
-        fetchPanels()
-      } else {
-        const err = await res.json().catch(() => ({ detail: 'Failed' }))
-        setUtilityFeedback({ message: err.detail, type: 'error' })
-      }
-    } catch { setUtilityFeedback({ message: 'Network error', type: 'error' }) }
-    setSyncingPanels(false)
-    setTimeout(() => setUtilityFeedback(null), 10000)
-  }
-
   const runPurgeDeleted = async () => {
     setPurgingDeleted(true)
     setUtilityFeedback(null)
     try {
-      const res = await authFetch(`${API}/purge-deleted?older_than_days=${parseInt(purgeOlderThanDays) || 30}`, {
+      const days = parseInt(purgeOlderThanDays)
+      const res = await authFetch(`${API}/purge-deleted?older_than_days=${isNaN(days) ? 0 : days}`, {
         method: 'POST', headers,
       })
       if (res.ok) {
@@ -1250,7 +1110,6 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
 
   // Paginated slices
   const paginatedUsers = users.slice(usersPage * PAGE_SIZE, (usersPage + 1) * PAGE_SIZE)
-  const paginatedMarkers = markers.slice(markersPage * PAGE_SIZE, (markersPage + 1) * PAGE_SIZE)
   const filteredRegistryMappings = registryMappings.filter(m => registryFilter === 'all' || m.map_type === registryFilter)
   const paginatedRegistry = filteredRegistryMappings.slice(registryPage * PAGE_SIZE, (registryPage + 1) * PAGE_SIZE)
   const paginatedDiscoveries = discoveries.slice(discoveriesPage * PAGE_SIZE, (discoveriesPage + 1) * PAGE_SIZE)
@@ -1275,10 +1134,6 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
           <TabsTrigger value="users" className="gap-2">
             <Users className="h-4 w-4" />
             Users
-          </TabsTrigger>
-          <TabsTrigger value="markers" className="gap-2">
-            <Settings className="h-4 w-4" />
-            Markers
           </TabsTrigger>
           <TabsTrigger value="registry" className="gap-2">
             <Database className="h-4 w-4" />
@@ -1406,222 +1261,6 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
               {renderPagination(users.length, usersPage, setUsersPage)}
             </CardContent>
           </Card>
-        </TabsContent>
-
-        {/* ===== PANEL MARKERS TAB ===== */}
-        <TabsContent value="markers" className="mt-6">
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 min-h-[calc(100vh-280px)]">
-            {/* Panel list */}
-            <Card className="lg:col-span-1 glass-card flex flex-col">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base">Panels</CardTitle>
-                <CardDescription>Select a panel to manage&apos;s markers</CardDescription>
-              </CardHeader>
-              <CardContent className="p-0 flex-1">
-                <ScrollArea className="h-full">
-                  <div className="space-y-1 px-4 pb-4">
-                    {/* Show all possible panels, not just ones with data */}
-                    {Object.entries(PANEL_LABELS).map(([id, label]) => {
-                      const panel = panels.find(p => p.panel_id === id)
-                      const isSelected = selectedPanel === id
-                      return (
-                        <button
-                          key={id}
-                          onClick={() => { setSelectedPanel(id); setMarkersPage(0) }}
-                          className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-colors ${
-                            isSelected
-                              ? 'bg-primary text-primary-foreground'
-                              : 'hover:bg-muted'
-                          }`}
-                        >
-                          <span className="font-medium truncate">{label}</span>
-                          <div className="flex items-center gap-2">
-                            {panel && (
-                              <Badge variant={isSelected ? 'outline' : 'secondary'} className="text-xs">
-                                {panel.active_count}/{panel.marker_count}
-                              </Badge>
-                            )}
-                            <ChevronRight className="h-4 w-4 opacity-50" />
-                          </div>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </ScrollArea>
-              </CardContent>
-            </Card>
-
-            {/* Marker details */}
-            <Card className="lg:col-span-3 glass-card flex flex-col">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle>
-                      {selectedPanel ? (PANEL_LABELS[selectedPanel] || selectedPanel) : 'Select a Panel'}
-                    </CardTitle>
-                    <CardDescription>
-                      {selectedPanel
-                        ? `${markers.length} marker${markers.length !== 1 ? 's' : ''} configured`
-                        : 'Choose a panel from the left to manage its genetic markers'}
-                    </CardDescription>
-                  </div>
-                  {selectedPanel && (
-                    <div className="flex items-center gap-2">
-                      <Button size="sm" variant="outline" onClick={() => exportMarkers('csv')}>
-                        <Download className="h-4 w-4 mr-1" />
-                        CSV
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => exportMarkers('yaml')}>
-                        <Download className="h-4 w-4 mr-1" />
-                        YAML
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => importFileRef.current?.click()}>
-                        <Upload className="h-4 w-4 mr-1" />
-                        Import
-                      </Button>
-                      <input
-                        ref={importFileRef}
-                        type="file"
-                        accept=".csv,.yaml,.yml"
-                        className="hidden"
-                        onChange={handleImportFile}
-                      />
-                      <Button size="sm" onClick={() => {
-                        setNewMarker(prev => ({ ...prev, panel_id: selectedPanel }))
-                        setShowAddMarker(true)
-                      }}>
-                        <Plus className="h-4 w-4 mr-1" />
-                        Add Marker
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              </CardHeader>
-              {selectedPanel && (
-                <CardContent>
-                  {importResult && (
-                    <div className={`mb-4 px-4 py-2.5 rounded-lg text-sm font-medium ${
-                      importResult.startsWith('Error') ? 'bg-red-500/10 text-red-400 border border-red-500/20'
-                        : 'bg-green-500/10 text-green-400 border border-green-500/20'
-                    }`}>
-                      {importResult}
-                    </div>
-                  )}
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>RSID</TableHead>
-                        <TableHead>Gene</TableHead>
-                        <TableHead>Description</TableHead>
-                        <TableHead>Category</TableHead>
-                        <TableHead className="text-center">Active</TableHead>
-                        <TableHead></TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {markers.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-                            No markers configured for this panel. Click &quot;Add Marker&quot; to get started.
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        paginatedMarkers.map(marker => (
-                          <TableRow key={marker.id}>
-                            {editingMarker?.id === marker.id ? (
-                              <>
-                                <TableCell>
-                                  <Input
-                                    value={editingMarker.rsid}
-                                    onChange={e => setEditingMarker({ ...editingMarker, rsid: e.target.value })}
-                                    className="h-8 w-28"
-                                  />
-                                </TableCell>
-                                <TableCell>
-                                  <Input
-                                    value={editingMarker.gene || ''}
-                                    onChange={e => setEditingMarker({ ...editingMarker, gene: e.target.value })}
-                                    className="h-8 w-24"
-                                  />
-                                </TableCell>
-                                <TableCell>
-                                  <Input
-                                    value={editingMarker.description || ''}
-                                    onChange={e => setEditingMarker({ ...editingMarker, description: e.target.value })}
-                                    className="h-8"
-                                  />
-                                </TableCell>
-                                <TableCell>
-                                  <Input
-                                    value={editingMarker.category || ''}
-                                    onChange={e => setEditingMarker({ ...editingMarker, category: e.target.value })}
-                                    className="h-8 w-28"
-                                  />
-                                </TableCell>
-                                <TableCell className="text-center">
-                                  <Switch
-                                    checked={editingMarker.is_active}
-                                    onCheckedChange={v => setEditingMarker({ ...editingMarker, is_active: v })}
-                                  />
-                                </TableCell>
-                                <TableCell>
-                                  <div className="flex gap-1">
-                                    <Button size="sm" variant="ghost" onClick={() => updateMarker(editingMarker)}>
-                                      <Check className="h-4 w-4 text-green-400" />
-                                    </Button>
-                                    <Button size="sm" variant="ghost" onClick={() => setEditingMarker(null)}>
-                                      <X className="h-4 w-4 text-red-400" />
-                                    </Button>
-                                  </div>
-                                </TableCell>
-                              </>
-                            ) : (
-                              <>
-                                <TableCell className="font-mono text-sm">{marker.rsid}</TableCell>
-                                <TableCell>
-                                  {marker.gene && <Badge variant="outline">{marker.gene}</Badge>}
-                                </TableCell>
-                                <TableCell className="text-sm text-muted-foreground max-w-xs truncate">
-                                  {marker.description}
-                                </TableCell>
-                                <TableCell>
-                                  {marker.category && (
-                                    <Badge variant="secondary" className="text-xs">{marker.category}</Badge>
-                                  )}
-                                </TableCell>
-                                <TableCell className="text-center">
-                                  <Switch
-                                    checked={marker.is_active}
-                                    onCheckedChange={() => toggleMarkerActive(marker)}
-                                  />
-                                </TableCell>
-                                <TableCell>
-                                  <div className="flex gap-1">
-                                    <Button size="sm" variant="ghost" onClick={() => setEditingMarker({ ...marker })}>
-                                      <Pencil className="h-4 w-4" />
-                                    </Button>
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      className="text-red-400 hover:text-red-300"
-                                      onClick={() => setShowDeleteMarker(marker)}
-                                    >
-                                      <Trash2 className="h-4 w-4" />
-                                    </Button>
-                                  </div>
-                                </TableCell>
-                              </>
-                            )}
-                          </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                  </Table>
-                  {renderPagination(markers.length, markersPage, setMarkersPage)}
-                </CardContent>
-              )}
-            </Card>
-          </div>
         </TabsContent>
 
         {/* ===== VARIANT REGISTRY TAB ===== */}
@@ -1848,7 +1487,6 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                     onChange={e => { setDiscoveryTypeFilter(e.target.value); setDiscoveriesPage(0) }}
                   >
                     <option value="all">All Types</option>
-                    <option value="panel_marker">Panel Markers</option>
                     <option value="variant_mapping">Variant Mappings</option>
                   </select>
                   {discoveryStatusFilter === 'pending' && discoveries.length > 0 && (
@@ -1886,8 +1524,8 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                     {paginatedDiscoveries.map(d => (
                       <TableRow key={d.id}>
                         <TableCell>
-                          <Badge variant={d.discovery_type === 'panel_marker' ? 'default' : 'secondary'}>
-                            {d.discovery_type === 'panel_marker' ? 'Panel Marker' : 'Variant Mapping'}
+                          <Badge variant="secondary">
+                            Variant Mapping
                           </Badge>
                         </TableCell>
                         <TableCell
@@ -1896,9 +1534,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                         >{d.rsid}</TableCell>
                         <TableCell>{d.gene || '—'}</TableCell>
                         <TableCell>
-                          {d.discovery_type === 'panel_marker'
-                            ? PANEL_LABELS[d.panel_id || ''] || d.panel_id
-                            : CATEGORY_LABELS[d.mapping_category || ''] || d.mapping_category}
+                          {CATEGORY_LABELS[d.mapping_category || ''] || d.mapping_category}
                           {d.category && <span className={`ml-1 text-xs ${theme.text.tertiary}`}>({d.category})</span>}
                         </TableCell>
                         <TableCell className={`max-w-[200px] truncate text-sm ${theme.text.secondary}`}>
@@ -2403,36 +2039,17 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                   </Button>
                 </div>
 
-                {/* Sync Panels from Mappings */}
-                <div className={`rounded-lg border p-4 flex items-center justify-between ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-gray-200 bg-gray-50'}`}>
-                  <div>
-                    <span className={`font-medium ${theme.text.primary}`}>Sync Panels from Mappings</span>
-                    <p className={`text-sm mt-0.5 ${theme.text.muted}`}>
-                      Populate PanelMarkerConfig from active VariantMappings. Only inserts — never overwrites manual markers.
-                    </p>
-                  </div>
-                  <Button
-                    size="sm" variant="outline"
-                    disabled={syncingPanels}
-                    onClick={runSyncPanels}
-                  >
-                    {syncingPanels
-                      ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Syncing...</>
-                      : <><Download className="h-3 w-3 mr-1" /> Sync</>}
-                  </Button>
-                </div>
-
                 {/* Purge Deleted Analyses */}
                 <div className={`rounded-lg border p-4 flex items-center justify-between ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-gray-200 bg-gray-50'}`}>
                   <div>
                     <span className={`font-medium ${theme.text.primary}`}>Purge Deleted Analyses</span>
                     <p className={`text-sm mt-0.5 ${theme.text.muted}`}>
-                      Hard-delete analyses (and cascaded children) that were soft-deleted more than N days ago.
+                      Hard-delete analyses (and cascaded children) that were soft-deleted more than N days ago. Use 0 for all.
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
                     <Input
-                      type="number" min={1}
+                      type="number" min={0}
                       value={purgeOlderThanDays}
                       onChange={e => setPurgeOlderThanDays(e.target.value)}
                       className="w-16 h-8 text-xs text-center"
@@ -2961,6 +2578,132 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
               )}
             </CardContent>
           </Card>
+
+          {/* Worker Jobs section */}
+          <Card className="glass-card mt-6">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Zap className="h-5 w-5" />
+                    Background Worker Jobs
+                  </CardTitle>
+                  <CardDescription>
+                    System tasks: auto-categorize, purge deleted analyses, etc.
+                  </CardDescription>
+                </div>
+                <Button size="sm" variant="outline" onClick={() => fetchWorkerJobs()}>
+                  <RefreshCw className="h-3 w-3 mr-1" /> Refresh
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {workerJobs.length === 0 ? (
+                <div className="text-center py-8">
+                  <Zap className={`h-10 w-10 mx-auto mb-3 ${theme.text.muted}`} />
+                  <p className={theme.text.muted}>No background jobs found</p>
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>ID</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead className="text-center">Status</TableHead>
+                      <TableHead>Requested By</TableHead>
+                      <TableHead>Created</TableHead>
+                      <TableHead>Completed</TableHead>
+                      <TableHead>Details</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {workerJobs.map(job => (
+                      <React.Fragment key={job.job_id}>
+                      <TableRow className="cursor-pointer hover:bg-white/5" onClick={() => setWorkerJobsExpanded(workerJobsExpanded === job.job_id ? null : job.job_id)}>
+                        <TableCell className="font-mono text-xs">#{job.job_id}</TableCell>
+                        <TableCell>
+                          <Badge className={`font-mono text-xs ${
+                            job.job_type === 'auto_categorize' ? 'bg-violet-500/20 text-violet-400 border-violet-500/30' :
+                            job.job_type === 'purge_deleted' ? 'bg-orange-500/20 text-orange-400 border-orange-500/30' :
+                            'bg-blue-500/20 text-blue-400 border-blue-500/30'
+                          }`}>
+                            {job.job_type.replace(/_/g, ' ')}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Badge className={
+                            job.status === 'completed' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' :
+                            job.status === 'processing' ? 'bg-amber-500/20 text-amber-400 border-amber-500/30' :
+                            job.status === 'pending' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' :
+                            job.status === 'failed' ? 'bg-red-500/20 text-red-400 border-red-500/30' :
+                            'bg-gray-500/20 text-gray-400 border-gray-500/30'
+                          }>
+                            {job.status === 'processing' && <RefreshCw className="h-3 w-3 mr-1 inline animate-spin" />}
+                            {job.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {job.requested_by_username ? (
+                            <div>
+                              <div className="text-sm font-medium">{job.requested_by_username}</div>
+                              <div className={`text-xs ${theme.text.muted}`}>{job.requested_by_email}</div>
+                            </div>
+                          ) : (
+                            <span className={`text-xs ${theme.text.muted}`}>system</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <span className={`text-xs ${theme.text.muted}`}>
+                            {job.created_at ? new Date(job.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <span className={`text-xs ${theme.text.muted}`}>
+                            {job.completed_at ? new Date(job.completed_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <Button size="sm" variant="ghost" className="h-6 px-2 text-xs">
+                            <ChevronRight className={`h-3 w-3 transition-transform ${workerJobsExpanded === job.job_id ? 'rotate-90' : ''}`} />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                      {workerJobsExpanded === job.job_id && (
+                        <TableRow key={`${job.job_id}-detail`}>
+                          <TableCell colSpan={7} className="p-0">
+                            <div className="mx-2 my-1 rounded-lg bg-gray-950 border border-white/10 px-4 py-3 space-y-2 text-xs font-mono">
+                              {job.params && Object.keys(job.params).length > 0 && (
+                                <div>
+                                  <span className="text-gray-400 font-sans font-medium">Params: </span>
+                                  <span className="text-blue-400">{JSON.stringify(job.params)}</span>
+                                </div>
+                              )}
+                              {job.result && Object.keys(job.result).length > 0 && (
+                                <div>
+                                  <span className="text-gray-400 font-sans font-medium">Result: </span>
+                                  <span className="text-emerald-400">{JSON.stringify(job.result)}</span>
+                                </div>
+                              )}
+                              {job.error && (
+                                <div>
+                                  <span className="text-gray-400 font-sans font-medium">Error: </span>
+                                  <span className="text-red-400">{job.error}</span>
+                                </div>
+                              )}
+                              {!job.params && !job.result && !job.error && (
+                                <span className="text-gray-500">No additional details</span>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                      </React.Fragment>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
 
@@ -3048,62 +2791,6 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
         </DialogContent>
       </Dialog>
 
-      {/* Add Marker Dialog */}
-      <Dialog open={showAddMarker} onOpenChange={setShowAddMarker}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add Genetic Marker</DialogTitle>
-            <DialogDescription>
-              Add a new genetic marker to the {PANEL_LABELS[newMarker.panel_id || selectedPanel || ''] || 'selected'} panel.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="rsid">RSID *</Label>
-                <Input
-                  id="rsid"
-                  placeholder="rs1801133"
-                  value={newMarker.rsid}
-                  onChange={e => setNewMarker({ ...newMarker, rsid: e.target.value })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="gene">Gene</Label>
-                <Input
-                  id="gene"
-                  placeholder="MTHFR"
-                  value={newMarker.gene}
-                  onChange={e => setNewMarker({ ...newMarker, gene: e.target.value })}
-                />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="description">Description</Label>
-              <Input
-                id="description"
-                placeholder="C677T - Reduced folate metabolism"
-                value={newMarker.description}
-                onChange={e => setNewMarker({ ...newMarker, description: e.target.value })}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="category">Category</Label>
-              <Input
-                id="category"
-                placeholder="e.g. folate_cycle, phase1"
-                value={newMarker.category}
-                onChange={e => setNewMarker({ ...newMarker, category: e.target.value })}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowAddMarker(false)}>Cancel</Button>
-            <Button onClick={addMarker} disabled={!newMarker.rsid}>Add Marker</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       {/* Delete User Dialog */}
       <Dialog open={!!showDeleteUser} onOpenChange={() => setShowDeleteUser(null)}>
         <DialogContent>
@@ -3117,24 +2804,6 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
             <Button variant="outline" onClick={() => setShowDeleteUser(null)}>Cancel</Button>
             <Button variant="destructive" onClick={() => showDeleteUser && deleteUser(showDeleteUser.id)}>
               Delete User
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete Marker Dialog */}
-      <Dialog open={!!showDeleteMarker} onOpenChange={() => setShowDeleteMarker(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete Marker</DialogTitle>
-            <DialogDescription>
-              Remove <strong>{showDeleteMarker?.rsid}</strong> ({showDeleteMarker?.gene}) from this panel?
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowDeleteMarker(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={() => showDeleteMarker && deleteMarker(showDeleteMarker.id)}>
-              Delete Marker
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -3219,7 +2888,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
           <DialogHeader>
             <DialogTitle>Reject Discovery</DialogTitle>
             <DialogDescription>
-              Reject <strong>{showRejectDialog?.rsid}</strong> ({showRejectDialog?.discovery_type === 'panel_marker' ? 'Panel Marker' : 'Variant Mapping'})? Optionally provide a reason.
+              Reject <strong>{showRejectDialog?.rsid}</strong> (Variant Mapping)? Optionally provide a reason.
             </DialogDescription>
           </DialogHeader>
           <div className="py-2">

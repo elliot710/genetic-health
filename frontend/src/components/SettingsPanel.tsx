@@ -1,13 +1,14 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { User, Mail, Key, Save, Check, Dna, Upload, Shield, Camera } from 'lucide-react'
+import { User, Mail, Key, Save, Check, Dna, Upload, Shield, Camera, Bookmark, Trash2, ExternalLink } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import type { DashboardData } from './categories/types'
 import { apiUrl } from '@/lib/api'
+import VariantDetailDialog from './categories/VariantDetailDialog'
 
 const API = apiUrl('')
 
@@ -27,6 +28,40 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate }: S
   const [pwMessage, setPwMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // Saved variants state
+  interface SavedVariantItem {
+    id: number
+    rsid: string
+    gene: string | null
+    most_severe_consequence: string | null
+    clinical_significance: string | null
+    note: string | null
+    created_at: string
+  }
+  const [savedVariants, setSavedVariants] = useState<SavedVariantItem[]>([])
+  const [savedLoading, setSavedLoading] = useState(false)
+  const [variantDialogRsid, setVariantDialogRsid] = useState<string | null>(null)
+  const [variantDialogGene, setVariantDialogGene] = useState<string | undefined>(undefined)
+
+  const fetchSavedVariants = async () => {
+    setSavedLoading(true)
+    try {
+      const res = await fetch(apiUrl('/auth/saved-variants'), { credentials: 'include' })
+      if (res.ok) setSavedVariants(await res.json())
+    } catch { /* ignore */ }
+    finally { setSavedLoading(false) }
+  }
+
+  const removeSavedVariant = async (rsid: string) => {
+    try {
+      const res = await fetch(apiUrl(`/auth/saved-variants/${rsid}`), {
+        method: 'DELETE',
+        credentials: 'include',
+      })
+      if (res.ok) setSavedVariants(prev => prev.filter(v => v.rsid !== rsid))
+    } catch { /* ignore */ }
+  }
+
   useEffect(() => {
     const fetchProfile = async () => {
       try {
@@ -42,6 +77,7 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate }: S
       }
     }
     fetchProfile()
+    fetchSavedVariants()
   }, [token])
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -320,6 +356,103 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate }: S
           </Card>
         </div>
       </div>
+
+      {/* Saved Variants */}
+      <Card className="glass-card">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Bookmark className="h-5 w-5 text-blue-400" />
+            Saved Variants
+          </CardTitle>
+          <CardDescription>
+            Variants you bookmarked from the variant detail dialog
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {savedLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-500 border-t-transparent" />
+            </div>
+          ) : savedVariants.length === 0 ? (
+            <p className={`text-sm ${theme.text.secondary} text-center py-6`}>
+              No saved variants yet. Open a variant detail dialog and click the bookmark icon to save it here.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {savedVariants.map(v => (
+                <div
+                  key={v.id}
+                  className={`flex items-center justify-between p-3 glass-card rounded-lg group`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVariantDialogRsid(v.rsid)
+                      setVariantDialogGene(v.gene || undefined)
+                    }}
+                    className="flex-1 flex items-center gap-3 text-left min-w-0"
+                  >
+                    <Dna className="h-4 w-4 text-blue-400 shrink-0" />
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className={`font-medium ${theme.text.primary}`}>{v.rsid}</span>
+                        {v.gene && (
+                          <span className={`text-xs ${theme.text.muted}`}>({v.gene})</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        {v.most_severe_consequence && (
+                          <span className={`text-xs ${theme.text.secondary}`}>
+                            {v.most_severe_consequence.replace(/_/g, ' ')}
+                          </span>
+                        )}
+                        {v.clinical_significance && (
+                          <span className={`text-xs px-1.5 py-0.5 rounded ${
+                            v.clinical_significance.toLowerCase().includes('pathogenic')
+                              ? 'bg-red-500/15 text-red-400'
+                              : v.clinical_significance.toLowerCase().includes('benign')
+                                ? 'bg-green-500/15 text-green-400'
+                                : 'bg-yellow-500/15 text-yellow-400'
+                          }`}>
+                            {v.clinical_significance}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <ExternalLink className={`h-3.5 w-3.5 ${theme.text.muted} opacity-0 group-hover:opacity-100 transition-opacity shrink-0`} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeSavedVariant(v.rsid)}
+                    title="Remove from saved"
+                    className={`p-1.5 rounded-lg hover:bg-red-500/15 transition-colors ml-2 opacity-0 group-hover:opacity-100 shrink-0`}
+                  >
+                    <Trash2 className="h-3.5 w-3.5 text-red-400" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Variant Detail Dialog for saved item */}
+      {variantDialogRsid && (
+        <VariantDetailDialog
+          rsid={variantDialogRsid}
+          gene={variantDialogGene}
+          token={token}
+          isDarkMode={theme.glass.includes('slate')}
+          open={!!variantDialogRsid}
+          onOpenChange={(open) => {
+            if (!open) {
+              setVariantDialogRsid(null)
+              setVariantDialogGene(undefined)
+              fetchSavedVariants()
+            }
+          }}
+        />
+      )}
     </div>
   )
 }

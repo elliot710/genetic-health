@@ -446,5 +446,8 @@ Users cannot filter insights by ClinVar review status (stars), evidence strength
 ### PERF-01: gnomAD PG skip when empty
 **✅ FIXED** — `gnomad_local.py` now skips PG lookup (both individual and batch) when `_variant_count == 0`, saving ~143 seconds per analysis run.
 
+### BUG-14: `info` Variable Referenced Before Assignment in `generate_from_maps()`
+**✅ FIXED** — In `base.py`, the allele verification block (BUG-06) referenced `info.get('risk_allele')` before `info = rsid_map[rsid]` was executed. On the first loop iteration (or when the previous iteration didn't assign `info`), this caused an `UnboundLocalError`. If a previous iteration did assign `info`, the fallback silently read the *wrong* variant's mapping data. Fix: moved `info = rsid_map[rsid]` before the allele verification block.
+
 ### FE: X-linked hemizygous interpretation
 **✅ FIXED** — `VariantDetailDialog.tsx` now detects X-chromosome variants and single-allele genotypes, displaying "Hemizygous" instead of "Homozygous Alternate" with appropriate messaging.

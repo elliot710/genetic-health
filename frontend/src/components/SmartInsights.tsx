@@ -18,8 +18,13 @@ interface InsightData {
 interface SmartInsightsProps {
   isDarkMode: boolean
   token?: string
-  section: string
+  section?: string
   title?: string
+  /** For variant-detail mode: pass rsid + full variant data directly */
+  rsid?: string
+  variantData?: Record<string, unknown>
+  /** Compact mode for embedding inside dialogs (no outer SectionCard wrapper) */
+  compact?: boolean
 }
 
 const confidenceColors: Record<string, { bg: string; text: string; label: string }> = {
@@ -28,22 +33,36 @@ const confidenceColors: Record<string, { bg: string; text: string; label: string
   low: { bg: 'bg-slate-500/15 border-slate-500/30', text: 'text-slate-400', label: 'Low Confidence' },
 }
 
-export default function SmartInsights({ isDarkMode, token, section, title }: SmartInsightsProps) {
+export default function SmartInsights({ isDarkMode, token, section, title, rsid, variantData, compact }: SmartInsightsProps) {
   const theme = useThemeClasses(isDarkMode)
   const [insight, setInsight] = useState<InsightData | null>(null)
   const [loading, setLoading] = useState(false)
   const [expanded, setExpanded] = useState(true)
   const [status, setStatus] = useState<{ provider: string; enabled: boolean; openai_configured: boolean; anthropic_configured: boolean; gemini_configured: boolean } | null>(null)
 
+  const isVariantMode = !!(rsid && variantData)
+
   const fetchInsight = useCallback(async () => {
     if (!token) return
     setLoading(true)
     try {
-      const resp = await fetch(apiUrl(`/api/insights/generate/${section}`), {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-      })
+      let resp: Response
+      if (isVariantMode) {
+        resp = await fetch(apiUrl('/api/insights/generate-variant'), {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rsid, variant_data: variantData }),
+        })
+      } else if (section) {
+        resp = await fetch(apiUrl(`/api/insights/generate/${section}`), {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+        })
+      } else {
+        return
+      }
       if (resp.ok) {
         const data = await resp.json()
         setInsight(data)
@@ -56,7 +75,7 @@ export default function SmartInsights({ isDarkMode, token, section, title }: Sma
     } finally {
       setLoading(false)
     }
-  }, [token, section])
+  }, [token, section, isVariantMode, rsid, variantData])
 
   const fetchStatus = useCallback(async () => {
     if (!token || status) return
@@ -78,12 +97,7 @@ export default function SmartInsights({ isDarkMode, token, section, title }: Sma
   // Hide when: admin-disabled, no API keys configured, or status not yet loaded
   if (!status || !isEnabled || !isConfigured) return null
 
-  return (
-    <SectionCard
-      title={title || 'AI Insights'}
-      description={!isConfigured ? 'Configure an LLM API key to enable' : undefined}
-      theme={theme}
-    >
+  const content = (
       <div className="space-y-4">
         {/* Header row */}
         <div className="flex items-center justify-between">
@@ -137,9 +151,21 @@ export default function SmartInsights({ isDarkMode, token, section, title }: Sma
         {insight && expanded && (
           <div className="space-y-4 animate-in fade-in duration-300">
             {/* Summary */}
-            <div className={`p-4 rounded-xl border ${isDarkMode ? 'bg-slate-800/40 border-slate-700/50' : 'bg-slate-50 border-slate-200'}`}>
-              <p className={`text-sm leading-relaxed ${theme.textPrimary}`}>{insight.summary}</p>
-              {conf && (
+            <div className={`p-4 rounded-xl border ${
+              insight.error
+                ? isDarkMode ? 'bg-red-500/10 border-red-500/30' : 'bg-red-50 border-red-200'
+                : isDarkMode ? 'bg-slate-800/40 border-slate-700/50' : 'bg-slate-50 border-slate-200'
+            }`}>
+              <div className="flex items-start gap-2">
+                {insight.error && <AlertCircle className={`h-4 w-4 shrink-0 mt-0.5 ${isDarkMode ? 'text-red-400' : 'text-red-500'}`} />}
+                <p className={`text-sm leading-relaxed ${theme.textPrimary}`}>{insight.summary}</p>
+              </div>
+              {insight.error && (
+                <p className={`mt-2 text-xs font-mono ${isDarkMode ? 'text-red-300/70' : 'text-red-600/70'} break-all`}>
+                  {insight.error}
+                </p>
+              )}
+              {conf && !insight.error && (
                 <div className={`inline-flex items-center gap-1.5 mt-3 px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase border ${conf.bg} ${conf.text}`}>
                   <CheckCircle2 className="h-3 w-3" />
                   {conf.label}
@@ -184,6 +210,23 @@ export default function SmartInsights({ isDarkMode, token, section, title }: Sma
           </div>
         )}
       </div>
+  )
+
+  if (compact) {
+    return (
+      <div className={`rounded-xl p-4 border ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-gray-50 border-gray-200'}`}>
+        {content}
+      </div>
+    )
+  }
+
+  return (
+    <SectionCard
+      title={title || 'AI Insights'}
+      description={!isConfigured ? 'Configure an LLM API key to enable' : undefined}
+      theme={theme}
+    >
+      {content}
     </SectionCard>
   )
 }

@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo } from 'react'
 import { ShieldCheck, ChevronRight, ChevronDown, Search, Filter, LayoutGrid } from 'lucide-react'
+import SmartInsights from '../SmartInsights'
 import { Badge } from '../ui/badge'
 import { CarrierStatusChart, CategoryDistributionChart } from './GenomicCharts'
 import {
@@ -493,6 +494,8 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
           </div>
         </SectionCard>
       )}
+
+      <SmartInsights isDarkMode={isDarkMode} token={token} section="carrier_status" title="AI Carrier Status Analysis" />
 
       <DisclaimerCard theme={theme} />
     </div>

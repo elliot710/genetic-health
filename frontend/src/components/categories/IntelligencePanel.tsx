@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react'
 import { Brain, BookOpen, Lightbulb, Target, Puzzle, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
+import SmartInsights from '../SmartInsights'
 import { Badge } from '../ui/badge'
 import { PercentileBarChart } from './GenomicCharts'
 import {
@@ -259,6 +260,8 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
           </div>
         </SectionCard>
       )}
+
+      <SmartInsights isDarkMode={isDarkMode} token={token} section="intelligence" title="AI Intelligence Analysis" />
 
       <DisclaimerCard theme={theme} />
     </div>

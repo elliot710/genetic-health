@@ -691,17 +691,15 @@ export function DisclaimerCard({
   theme,
 }: DisclaimerCardProps) {
   return (
-    <Card className={`${theme.glass} border ${theme.border} ring-0 ${borderColorClass} ${bgTintClass}`}>
-      <CardContent className="pt-6">
-        <div className="flex items-start space-x-3">
-          <Icon className="h-5 w-5 text-blue-500 mt-0.5" />
-          <div>
-            <h3 className={`font-semibold ${theme.textPrimary} mb-2`}>{title}</h3>
-            <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{text}</p>
-          </div>
+    <div className={`${theme.glass} border ${theme.border} rounded-xl ${borderColorClass} ${bgTintClass} px-3 py-2`}>
+      <div className="flex items-center space-x-2">
+        <Icon className="h-4 w-4 text-blue-500 shrink-0" />
+        <div>
+          <h3 className={`text-sm font-semibold ${theme.textPrimary}`}>{title}</h3>
+          <p className={`text-xs ${theme.textSecondary} leading-relaxed`}>{text}</p>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   )
 }
 

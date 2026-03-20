@@ -340,6 +340,19 @@ class ComprehensiveAnalysisService:
             progress.phase_progress = 1.0
             logger.info(f"═══ Phase 3/4 complete ({phase_elapsed:.1f}s) ═══")
 
+            # ── Phase 3.5: Multi-source mapping enrichment ──────────
+            # Cross-reference annotated variants against multi-source
+            # categorizer to discover new mappings from user's data.
+            ms_start = time.time()
+            new_mappings = await self._enrich_mappings_from_annotations(
+                annotation_results
+            )
+            if new_mappings > 0:
+                # Reload registry to include newly created mappings
+                await self._load_registry()
+                logger.info(f"  Multi-source enrichment: {new_mappings} new mappings "
+                            f"({time.time() - ms_start:.1f}s), registry reloaded")
+
             # ── Phase 4: Generate insights (own session, committed at end) ──
             progress.phase = 4
             progress.phase_progress = 0.0
@@ -503,6 +516,71 @@ class ComprehensiveAnalysisService:
             check_cancelled_fn=self._check_if_cancelled,
             update_progress_fn=self._update_progress,
         )
+
+    async def _enrich_mappings_from_annotations(
+        self, annotation_results: Dict,
+    ) -> int:
+        """Create variant mappings from user's annotated variants using multi-source evidence.
+
+        Scans annotation_results (already fetched during Phase 2/3) and runs
+        the multi-source categorizer on each. New mappings are created directly,
+        so the insight generator in Phase 4 can use them.
+        """
+        from ..db.database import async_session_factory
+        from ..db.models import VariantMapping
+        from .multi_source_categorizer import categorize_variant
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        new_mappings = 0
+        batch_count = 0
+
+        async with async_session_factory() as session:
+            for rsid, ar in annotation_results.items():
+                if not ar.annotation_data:
+                    continue
+                annotations = ar.annotation_data.get("annotations", {})
+                if not annotations:
+                    continue
+
+                # Get gene from rsid→gene map
+                gene_hint = self._rsid_gene_map.get(rsid)
+
+                suggestions = categorize_variant(rsid, annotations, gene_hint=gene_hint)
+                for s in suggestions:
+                    if s.confidence < 0.4:
+                        continue
+                    stmt = pg_insert(VariantMapping).values(
+                        category=s.category,
+                        map_type="rsid",
+                        key=rsid,
+                        data=s.data,
+                        sources=s.sources,
+                        confidence=s.confidence,
+                        is_active=True,
+                        is_auto_discovered=True,
+                    ).on_conflict_do_update(
+                        index_elements=["category", "map_type", "key"],
+                        set_={
+                            "sources": s.sources,
+                            "confidence": s.confidence,
+                            # Only update data if new confidence is higher
+                        },
+                        where=VariantMapping.confidence < s.confidence,
+                    )
+                    try:
+                        result = await session.execute(stmt)
+                        if result.rowcount > 0:
+                            new_mappings += 1
+                    except Exception:
+                        pass
+
+                batch_count += 1
+                if batch_count % 5000 == 0:
+                    await session.commit()
+
+            await session.commit()
+
+        return new_mappings
 
     async def _generate_comprehensive_insights(
         self, variants, annotation_results, analysis_id, _unused, progress,

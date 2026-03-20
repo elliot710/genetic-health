@@ -36,7 +36,8 @@ import signal
 import sys
 from typing import Set
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
+from sqlalchemy.sql import func
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -66,7 +67,7 @@ from backend.db.database import _session_factory_ctx  # noqa: E402
 _session_factory_ctx.set(session_factory)
 
 # Backend service imports (after the ContextVar override is in place)
-from backend.db.models import GeneticAnalysis  # noqa: E402
+from backend.db.models import GeneticAnalysis, WorkerJob  # noqa: E402
 from backend.services.analysis_service import ComprehensiveAnalysisService  # noqa: E402
 from backend.services.job_logs import JobLogHandler  # noqa: E402
 
@@ -87,7 +88,8 @@ for _name in [
 
 
 # ── Active job tracking ─────────────────────────────────────────────────────
-_active: Set[int] = set()
+_active: Set[int] = set()           # active analysis IDs
+_active_jobs: Set[int] = set()      # active WorkerJob IDs
 _shutdown = False
 
 
@@ -156,6 +158,204 @@ async def _run_one(analysis_id: int, user_id: int, regen_only: bool = False) -> 
             pass
         _active.discard(analysis_id)
 
+
+# ── Generic WorkerJob handlers ──────────────────────────────────────────────
+
+async def _execute_job(job_id: int, job_type: str, params: dict) -> dict:
+    """Route a WorkerJob to the appropriate handler. Returns result dict."""
+    if job_type == "auto_categorize":
+        from backend.services.auto_categorizer import AutoCategorizer
+        cat_list = (params or {}).get("categories")
+        categorizer = AutoCategorizer()
+        return await categorizer.run(categories=cat_list)
+    elif job_type == "purge_deleted":
+        return await _purge_deleted_analyses(params)
+    else:
+        raise ValueError(f"Unknown job type: {job_type}")
+
+
+async def _purge_deleted_analyses(params: dict) -> dict:
+    """Hard-delete soft-deleted analyses.
+
+    Uses TRUNCATE + re-insert for large purges (>50% of table),
+    otherwise direct DELETE per analysis.
+    """
+    ids = params.get("analysis_ids", [])
+    if not ids:
+        return {"purged": 0, "total": 0}
+
+    # Check if TRUNCATE approach is faster (when deleting >50% of rows)
+    async with session_factory() as sess:
+        total_result = await sess.execute(text("SELECT count(*) FROM analysis_variants"))
+        total_rows = total_result.scalar() or 0
+        delete_result = await sess.execute(
+            text("SELECT count(*) FROM analysis_variants WHERE analysis_id = ANY(:ids)"),
+            {"ids": ids},
+        )
+        delete_rows = delete_result.scalar() or 0
+
+    if total_rows > 0 and delete_rows > total_rows * 0.5:
+        return await _purge_via_truncate(ids, delete_rows, total_rows)
+    else:
+        return await _purge_via_delete(ids)
+
+
+async def _purge_via_truncate(ids: list[int], delete_rows: int, total_rows: int) -> dict:
+    """Fast purge: save active rows, TRUNCATE, re-insert, delete parents."""
+    keep_rows = total_rows - delete_rows
+    logger.info(f"[purge] TRUNCATE approach: removing {delete_rows} rows, keeping {keep_rows}")
+    async with session_factory() as sess:
+        await sess.execute(text("SET LOCAL work_mem = '256MB'"))
+        # Save rows to keep
+        await sess.execute(text(
+            "CREATE TEMP TABLE _keep_av ON COMMIT DROP AS "
+            "SELECT * FROM analysis_variants WHERE analysis_id != ALL(:ids)"
+        ), {"ids": ids})
+        await sess.execute(text(
+            "CREATE TEMP TABLE _keep_va ON COMMIT DROP AS "
+            "SELECT * FROM variant_annotations WHERE analysis_id != ALL(:ids)"
+        ), {"ids": ids})
+        # TRUNCATE (instant, cascades to variant_annotations)
+        await sess.execute(text("TRUNCATE analysis_variants CASCADE"))
+        # Re-insert
+        await sess.execute(text("INSERT INTO analysis_variants SELECT * FROM _keep_av"))
+        await sess.execute(text("INSERT INTO variant_annotations SELECT * FROM _keep_va"))
+        # Delete parent analyses (CASCADE handles small insight tables)
+        await sess.execute(text("DELETE FROM genetic_analyses WHERE id = ANY(:ids)"), {"ids": ids})
+        await sess.commit()
+    logger.info(f"[purge] completed: {len(ids)} analyses purged via TRUNCATE")
+    return {"purged": len(ids), "total": len(ids), "method": "truncate"}
+
+
+async def _purge_via_delete(ids: list[int]) -> dict:
+    """Standard purge: direct DELETE per analysis (for small purges)."""
+    purged = 0
+    for aid in ids:
+        try:
+            async with session_factory() as sess:
+                await sess.execute(text("SET LOCAL synchronous_commit = off"))
+                await sess.execute(text("SET LOCAL work_mem = '256MB'"))
+                await sess.execute(
+                    text("DELETE FROM variant_annotations WHERE analysis_id = :aid"),
+                    {"aid": aid},
+                )
+                await sess.execute(
+                    text("DELETE FROM analysis_variants WHERE analysis_id = :aid"),
+                    {"aid": aid},
+                )
+                await sess.execute(
+                    text("DELETE FROM genetic_analyses WHERE id = :aid"),
+                    {"aid": aid},
+                )
+                await sess.commit()
+            purged += 1
+            logger.info(f"[purge] deleted analysis {aid} ({purged}/{len(ids)})")
+        except Exception as e:
+            logger.error(f"[purge] failed to delete analysis {aid}: {e}")
+    return {"purged": purged, "total": len(ids), "method": "delete"}
+
+
+async def _run_job(job_id: int, job_type: str, params: dict) -> None:
+    """Run a single WorkerJob and update its DB row."""
+    logger.info(f"[worker_job {job_id}] starting ({job_type})")
+    try:
+        result = await _execute_job(job_id, job_type, params)
+        async with session_factory() as sess:
+            await sess.execute(
+                update(WorkerJob)
+                .where(WorkerJob.id == job_id)
+                .values(
+                    status="completed",
+                    result=result,
+                    completed_at=func.now(),
+                )
+            )
+            await sess.commit()
+        logger.info(f"[worker_job {job_id}] completed")
+    except Exception as e:
+        logger.error(f"[worker_job {job_id}] failed: {e}", exc_info=True)
+        try:
+            async with session_factory() as sess:
+                await sess.execute(
+                    update(WorkerJob)
+                    .where(WorkerJob.id == job_id)
+                    .values(
+                        status="failed",
+                        error=str(e)[:2000],
+                        completed_at=func.now(),
+                    )
+                )
+                await sess.commit()
+        except Exception:
+            pass
+    finally:
+        _active_jobs.discard(job_id)
+
+
+async def _poll_jobs() -> None:
+    """Find pending WorkerJobs and dispatch them."""
+    total_active = len(_active) + len(_active_jobs)
+    if total_active >= MAX_CONCURRENT:
+        return
+
+    slots = MAX_CONCURRENT - total_active
+    try:
+        async with session_factory() as sess:
+            rows = (
+                await sess.execute(
+                    select(WorkerJob.id, WorkerJob.job_type, WorkerJob.params)
+                    .where(
+                        WorkerJob.status == "pending",
+                        WorkerJob.id.not_in(_active_jobs) if _active_jobs else True,
+                    )
+                    .order_by(WorkerJob.created_at)
+                    .limit(slots)
+                )
+            ).all()
+
+            if not rows:
+                return
+
+            ids = [r.id for r in rows]
+            await sess.execute(
+                update(WorkerJob)
+                .where(WorkerJob.id.in_(ids))
+                .values(status="processing", started_at=func.now())
+            )
+            await sess.commit()
+    except Exception as e:
+        logger.error(f"WorkerJob poll failed: {e}")
+        return
+
+    for row in rows:
+        _active_jobs.add(row.id)
+        logger.info(f"[worker_job {row.id}] dispatched ({row.job_type})")
+        asyncio.create_task(_run_job(row.id, row.job_type, row.params or {}))
+
+
+async def _recover_stale_jobs() -> None:
+    """Reset any WorkerJobs stuck in 'processing' back to 'pending'."""
+    try:
+        async with session_factory() as sess:
+            result = await sess.execute(
+                select(WorkerJob.id).where(WorkerJob.status == "processing")
+            )
+            stale = result.all()
+            if not stale:
+                return
+            ids = [r.id for r in stale]
+            await sess.execute(
+                update(WorkerJob)
+                .where(WorkerJob.id.in_(ids))
+                .values(status="pending", started_at=None)
+            )
+            await sess.commit()
+            logger.info(f"Recovered {len(stale)} stale worker job(s)")
+    except Exception as e:
+        logger.error(f"WorkerJob recovery failed: {e}")
+
+
+# ── Analysis polling ────────────────────────────────────────────────────────
 
 async def _poll() -> None:
     """Find pending analyses and dispatch them as asyncio tasks."""
@@ -298,16 +498,18 @@ async def _main() -> None:
     )
 
     await _recover_stale()
+    await _recover_stale_jobs()
     await _preload_local_services()
 
     while not _shutdown:
         await _poll()
+        await _poll_jobs()
         await asyncio.sleep(POLL_INTERVAL)
 
     # Wait for in-flight jobs
-    if _active:
-        logger.info(f"Waiting for {len(_active)} in-flight jobs to finish...")
-        while _active:
+    if _active or _active_jobs:
+        logger.info(f"Waiting for {len(_active)} analysis + {len(_active_jobs)} worker jobs to finish...")
+        while _active or _active_jobs:
             await asyncio.sleep(1)
 
     await engine.dispose()

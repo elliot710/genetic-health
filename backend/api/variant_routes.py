@@ -12,6 +12,7 @@ import re
 
 from ..services.genetic_api_service import GeneticAPIService
 from ..services.discovery_service import process_lookup_discoveries
+from ..services.multi_source_categorizer import categorize_variant
 from ..utils.alpha_missense import get_alpha_missense_service
 from ..services.clinvar_local import get_clinvar_local_service
 from ..services.gnomad_local import get_gnomad_service
@@ -20,7 +21,8 @@ from ..services.bq_public import BigQueryPublicService
 from ..db.database import get_session
 from ..db.models import (
     GeneticAnalysis, AnalysisVariant, GeneticMarker,
-    SharedVariantAnnotation, VariantAnnotation, VariantLookupCache
+    SharedVariantAnnotation, VariantAnnotation, VariantLookupCache, SavedVariant,
+    VariantMapping,
 )
 from .auth_routes import get_current_user
 
@@ -113,6 +115,16 @@ async def lookup_variant(
                 # Increment lookup count
                 cached.lookup_count = (cached.lookup_count or 0) + 1
                 await session.commit()
+
+                # Create multi-source mappings from cached data
+                if resp.get("found"):
+                    try:
+                        await _create_multi_source_mappings(session, variant_id, resp)
+                        await session.commit()
+                    except Exception as e:
+                        import logging
+                        logging.getLogger(__name__).warning("Multi-source mapping failed (cached) for %s: %s", variant_id, e)
+                        await session.rollback()
                 
                 return VariantLookupResponse(
                     variant_id=variant_id,
@@ -412,6 +424,15 @@ async def lookup_variant(
                     await session.commit()
                 except Exception:
                     await session.rollback()
+
+                # Multi-source direct mapping creation
+                try:
+                    await _create_multi_source_mappings(session, variant_id, response_data)
+                    await session.commit()
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).warning("Multi-source mapping failed for %s: %s", variant_id, e)
+                    await session.rollback()
             
             return VariantLookupResponse(
                 variant_id=variant_id,
@@ -442,6 +463,77 @@ async def lookup_variant(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Variant lookup failed: {str(e)}"
         )
+
+
+async def _create_multi_source_mappings(
+    session: AsyncSession,
+    rsid: str,
+    response_data: Dict[str, Any],
+    min_confidence: float = 0.4,
+) -> int:
+    """Create VariantMappings from multi-source evidence collected during lookup.
+
+    Upserts mappings: if the category+rsid already exists, it updates sources
+    and confidence if the new evidence is stronger.
+    """
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    annotations = response_data.get("annotations", {})
+    gene = response_data.get("basic_info", {}).get("gene_symbol")
+    suggestions = categorize_variant(rsid, annotations, gene_hint=gene)
+    created = 0
+
+    for s in suggestions:
+        if s.confidence < min_confidence:
+            continue
+        stmt = pg_insert(VariantMapping).values(
+            category=s.category,
+            map_type="rsid",
+            key=rsid,
+            data=s.data,
+            sources=s.sources,
+            confidence=s.confidence,
+            is_active=True,
+            is_auto_discovered=True,
+        ).on_conflict_do_update(
+            index_elements=["category", "map_type", "key"],
+            set_={
+                "data": s.data,
+                "sources": s.sources,
+                "confidence": s.confidence,
+                "is_active": True,
+            },
+        )
+        result = await session.execute(stmt)
+        if result.rowcount > 0:
+            created += 1
+
+    # Also create gene-level mappings
+    if gene:
+        from ..services.multi_source_categorizer import GENE_CATEGORY_MAP
+        if gene.upper() in GENE_CATEGORY_MAP:
+            for cat in GENE_CATEGORY_MAP[gene.upper()]:
+                data = {
+                    "gene": gene,
+                    "condition": f"{gene} variant",
+                    "source": ", ".join(src for s in suggestions for src in s.sources) if suggestions else "lookup",
+                }
+                stmt = pg_insert(VariantMapping).values(
+                    category=cat,
+                    map_type="gene",
+                    key=gene,
+                    data=data,
+                    sources=["lookup"],
+                    confidence=0.5,
+                    is_active=True,
+                    is_auto_discovered=True,
+                ).on_conflict_do_nothing(
+                    index_elements=["category", "map_type", "key"],
+                )
+                await session.execute(stmt)
+
+    return created
+
 
 def _generate_external_links(variant_id: str) -> Dict[str, str]:
     """Generate external resource links for a variant"""
@@ -629,6 +721,7 @@ async def search_user_variants(
     chromosome: Optional[str] = Query(default=None, description="Filter by chromosome"),
     annotated: Optional[bool] = Query(default=None, description="Filter by annotation status"),
     category: Optional[str] = Query(default=None, description="Filter by functional category"),
+    saved: Optional[bool] = Query(default=None, description="Filter to saved variants only"),
     page: int = Query(default=1, ge=1, description="Page number"),
     per_page: int = Query(default=50, ge=1, le=200, description="Items per page"),
     db: AsyncSession = Depends(get_session),
@@ -685,6 +778,11 @@ async def search_user_variants(
         base_query = base_query.where(SharedVariantAnnotation.id.isnot(None))
     elif annotated is False:
         base_query = base_query.where(SharedVariantAnnotation.id.is_(None))
+    if saved is True:
+        base_query = base_query.join(
+            SavedVariant,
+            (SavedVariant.rsid == GeneticMarker.rsid) & (SavedVariant.user_id == current_user.id)
+        )
     if category:
         # Filter by functional category using consequence type from ensembl_data
         matching_consequences = [k for k, v in CONSEQUENCE_CATEGORIES.items() if v == category]

@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react'
 import { Dumbbell, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
+import SmartInsights from '../SmartInsights'
 import { Badge } from '../ui/badge'
 import { CapacityChart } from './GenomicCharts'
 import {
@@ -234,6 +235,8 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
           </div>
         </SectionCard>
       )}
+
+      <SmartInsights isDarkMode={isDarkMode} token={token} section="sports" title="AI Sports Analysis" />
 
       <DisclaimerCard theme={theme} />
     </div>

@@ -20,13 +20,41 @@ from ..db.database import async_session_factory
 from ..db.models import (
     CategoryRule, ClinVarVariant, ClinVarGeneCondition,
     VariantMapping, GnomadVariant, GnomadGeneConstraint,
-    PanelMarkerConfig,
+    SharedVariantAnnotation, GeneticMarker,
 )
+from .multi_source_categorizer import categorize_variant, CategorySuggestion
 
 logger = logging.getLogger(__name__)
 
 # Upper limit on auto-generated mappings per category to keep the table manageable
-MAX_MAPPINGS_PER_CATEGORY = 2000
+MAX_MAPPINGS_PER_CATEGORY = 500
+
+# ── Category-safety rules ──────────────────────────────────────────
+# Lifestyle/trait panels must NOT contain serious medical conditions.
+# If any of these keywords appear in the ClinVar condition, the mapping
+# is rejected for the listed categories.
+_SEVERE_EXCLUSION_KW = frozenset([
+    "cardiomyopathy", "dystrophy", "atrophy", "encephalopathy",
+    "cancer", "tumor", "lymphoma", "leukemia", "carcinoma", "neoplasm",
+    "neurodegenerat", "amyotrophic", "huntington", "parkinson",
+    "epilepsy", "seizure", "stroke", "aneurysm",
+    "failure", "fibrosis", "cirrhosis", "nephropathy",
+    "immunodeficiency", "periodic fever", "cryopyrin",
+    "congenital", "lethal", "fatal", "death",
+    "syndrome", "aplastic", "retinitis", "blindness",
+    "deafness", "hearing loss", "spasticity",
+])
+
+# Categories where severe-condition exclusion applies
+_LIFESTYLE_CATEGORIES = frozenset([
+    "sports", "physical", "personality", "nutrition", "wellness",
+    "methylation", "detox", "cognitive", "ancestry",
+])
+
+# Minimum review-status quality for auto-categorization.
+# Variants with no-assertion / no-classification / single submitter
+# without criteria are excluded regardless.
+_REQUIRE_CRITERIA_REVIEW = True
 
 
 class AutoCategorizer:
@@ -66,9 +94,123 @@ class AutoCategorizer:
 
             await session.commit()
 
+        # ── Phase 2: Multi-source annotation pass ───────────────────
+        # Process shared_variant_annotations through the multi-source engine
+        annotation_stats = await self._run_annotation_pass(categories=categories)
+        stats["annotation_pass"] = annotation_stats
+
         stats["total_elapsed_s"] = round(time.time() - start, 1)
-        stats["total_new_mappings"] = sum(v for k, v in stats.items()
-                                           if k not in ("total_elapsed_s", "total_new_mappings"))
+        stats["total_new_mappings"] = sum(
+            v for k, v in stats.items()
+            if k not in ("total_elapsed_s", "total_new_mappings", "annotation_pass")
+        ) + annotation_stats.get("total_new", 0)
+        return stats
+
+    async def _run_annotation_pass(
+        self,
+        *,
+        categories: Optional[List[str]] = None,
+        batch_size: int = 5000,
+        min_confidence: float = 0.4,
+    ) -> Dict[str, Any]:
+        """Process shared_variant_annotations through multi-source categorizer.
+
+        Reads annotation JSON columns and uses the multi-source engine to
+        create high-confidence mappings. Only processes variants that don't
+        already have an active mapping in a given category.
+        """
+        stats = {"processed": 0, "total_new": 0, "by_category": {}}
+
+        async with async_session_factory() as session:
+            # Count total annotations to process
+            count_q = select(func.count(SharedVariantAnnotation.id)).where(
+                SharedVariantAnnotation.clinvar_local_data.isnot(None),
+            )
+            total = (await session.execute(count_q)).scalar() or 0
+            logger.info("Annotation pass: %d annotations with ClinVar local data", total)
+
+            offset = 0
+            while offset < total:
+                rows = (await session.execute(
+                    select(
+                        SharedVariantAnnotation.rsid,
+                        SharedVariantAnnotation.clinvar_local_data,
+                        SharedVariantAnnotation.clinvar_data,
+                        SharedVariantAnnotation.ensembl_data,
+                        SharedVariantAnnotation.alpha_missense_data,
+                        SharedVariantAnnotation.gnomad_data,
+                        SharedVariantAnnotation.snpedia_data,
+                        SharedVariantAnnotation.thousand_genomes_data,
+                        SharedVariantAnnotation.gnomad_tx_data,
+                    )
+                    .where(SharedVariantAnnotation.clinvar_local_data.isnot(None))
+                    .order_by(SharedVariantAnnotation.id)
+                    .offset(offset)
+                    .limit(batch_size)
+                )).all()
+
+                if not rows:
+                    break
+
+                for row in rows:
+                    rsid = row[0]
+                    annotations = {
+                        "clinvar_local_data": row[1],
+                        "clinvar_data": row[2],
+                        "ensembl_data": row[3],
+                        "alpha_missense_data": row[4],
+                        "gnomad_data": row[5],
+                        "snpedia_data": row[6],
+                        "thousand_genomes_data": row[7],
+                        "gnomad_tx_data": row[8],
+                    }
+
+                    suggestions = categorize_variant(rsid, annotations)
+                    for s in suggestions:
+                        if s.confidence < min_confidence:
+                            continue
+                        if categories and s.category not in categories:
+                            continue
+
+                        # Check if we've hit the per-category cap
+                        cat_count = stats["by_category"].get(s.category, 0)
+                        if cat_count >= MAX_MAPPINGS_PER_CATEGORY:
+                            continue
+
+                        # Upsert: insert or update sources/confidence if existing
+                        stmt = insert(VariantMapping).values(
+                            category=s.category,
+                            map_type="rsid",
+                            key=rsid,
+                            data=s.data,
+                            sources=s.sources,
+                            confidence=s.confidence,
+                            is_active=True,
+                            is_auto_discovered=True,
+                        ).on_conflict_do_update(
+                            index_elements=["category", "map_type", "key"],
+                            set_={
+                                "data": s.data,
+                                "sources": s.sources,
+                                "confidence": s.confidence,
+                                "is_active": True,
+                            },
+                        )
+                        result = await session.execute(stmt)
+                        if result.rowcount > 0:
+                            stats["total_new"] += 1
+                            stats["by_category"][s.category] = cat_count + 1
+
+                stats["processed"] += len(rows)
+                offset += batch_size
+                if offset % 20000 == 0:
+                    logger.info("  Annotation pass: %d/%d processed, %d new mappings",
+                                offset, total, stats["total_new"])
+
+            await session.commit()
+
+        logger.info("Annotation pass complete: %d processed, %d new mappings",
+                    stats["processed"], stats["total_new"])
         return stats
 
     async def _process_category(
@@ -100,11 +242,14 @@ class AutoCategorizer:
         # Upsert into variant_mappings
         inserted = 0
         for key, entry in candidates.items():
+            source_name = entry["data"].get("source", "clinvar_auto")
             stmt = insert(VariantMapping).values(
                 category=category,
                 map_type=entry["map_type"],
                 key=key,
                 data=entry["data"],
+                sources=[source_name],
+                confidence=0.3,  # Single-source ClinVar rule = baseline confidence
                 is_active=True,
                 is_auto_discovered=True,
             ).on_conflict_do_nothing(
@@ -150,6 +295,15 @@ class AutoCategorizer:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _is_severe_for_category(condition: str, category: str) -> bool:
+        """Return True if condition describes a severe medical condition that
+        should NOT be placed in a lifestyle/trait panel."""
+        if category not in _LIFESTYLE_CATEGORIES:
+            return False
+        cond_lower = condition.lower()
+        return any(kw in cond_lower for kw in _SEVERE_EXCLUSION_KW)
+
+    @staticmethod
     def _populate_category_fields(data: dict, category: str, condition: str, gene: str):
         """Populate dedup-critical fields with category-appropriate values.
 
@@ -174,6 +328,8 @@ class AutoCategorizer:
             'physical_traits': 'trait',
             'methylation': 'gene',
             'detox': 'gene',
+            'rare': 'condition',
+            'uncommon': 'condition',
         }
 
         primary = _PRIMARY_FIELD.get(category, 'condition')
@@ -286,6 +442,8 @@ class AutoCategorizer:
             clean = self._clean_condition(cond)
             if not clean:
                 continue
+            if self._is_severe_for_category(clean, category):
+                continue
             data = {**template}
             data.setdefault("condition", clean)
             data.setdefault("clinical_significance", sig)
@@ -335,6 +493,8 @@ class AutoCategorizer:
             cond = cond or keyword
             clean = self._clean_condition(cond)
             if not clean:
+                continue
+            if self._is_severe_for_category(clean, category):
                 continue
             data = {**template}
             data.setdefault("condition", clean)
@@ -391,23 +551,39 @@ class AutoCategorizer:
                 ClinVarVariant.gene,
                 ClinVarVariant.molecular_consequence,
                 ClinVarVariant.conditions,
+                ClinVarVariant.review_status,
+                ClinVarVariant.clinical_significance,
             )
             .where(ClinVarVariant.molecular_consequence.ilike(f"%{consequence}%"))
             .where(ClinVarVariant.rsid.isnot(None))
+            .where(~ClinVarVariant.clinical_significance.ilike('benign%'))
+            .where(~ClinVarVariant.clinical_significance.ilike('likely_benign%'))
+            .where(~ClinVarVariant.clinical_significance.ilike('likely benign%'))
+            .where(ClinVarVariant.review_status.isnot(None))
+            .where(~ClinVarVariant.review_status.ilike('no assertion%'))
+            .where(~ClinVarVariant.review_status.ilike('no_assertion%'))
+            .where(~ClinVarVariant.review_status.ilike('no classification%'))
+            .where(~ClinVarVariant.review_status.ilike('no_classification%'))
+            .where(ClinVarVariant.review_status != '-')
+            .where(ClinVarVariant.review_status != '')
             .distinct(ClinVarVariant.rsid)
             .limit(MAX_MAPPINGS_PER_CATEGORY)
         )
         out: Dict[str, dict] = {}
         for row in result.all():
+            rsid, gene, mc, cond_raw, review, sig = row
+            cond = self._clean_condition(cond_raw or "") or f"{gene} - {consequence}"
+            if self._is_severe_for_category(cond, category):
+                continue
             data = {**template}
-            cond = row[3] or f"{row[1]} - {consequence}"
             data.setdefault("condition", cond)
-            data.setdefault("gene", row[1] or "")
-            data.setdefault("molecular_consequence", row[2])
+            data.setdefault("gene", gene or "")
+            data.setdefault("molecular_consequence", mc)
             data.setdefault("source", "clinvar_auto")
-            # FLAW-01: populate category-appropriate dedup fields
-            self._populate_category_fields(data, category, cond, row[1] or "")
-            out[row[0]] = {"map_type": "rsid", "data": data}
+            data["review_status"] = review or ""
+            data["risk_multiplier"] = self._risk_multiplier_from_review_status(review, sig)
+            self._populate_category_fields(data, category, cond, gene or "")
+            out[rsid] = {"map_type": "rsid", "data": data}
         return out
 
     async def _match_origin(
@@ -420,22 +596,37 @@ class AutoCategorizer:
                 ClinVarVariant.gene,
                 ClinVarVariant.clinical_significance,
                 ClinVarVariant.conditions,
+                ClinVarVariant.review_status,
             )
             .where(ClinVarVariant.origin.ilike(f"%{origin_val}%"))
             .where(ClinVarVariant.rsid.isnot(None))
+            .where(~ClinVarVariant.clinical_significance.ilike('benign%'))
+            .where(~ClinVarVariant.clinical_significance.ilike('likely_benign%'))
+            .where(~ClinVarVariant.clinical_significance.ilike('likely benign%'))
+            .where(ClinVarVariant.review_status.isnot(None))
+            .where(~ClinVarVariant.review_status.ilike('no assertion%'))
+            .where(~ClinVarVariant.review_status.ilike('no_assertion%'))
+            .where(~ClinVarVariant.review_status.ilike('no classification%'))
+            .where(~ClinVarVariant.review_status.ilike('no_classification%'))
+            .where(ClinVarVariant.review_status != '-')
+            .where(ClinVarVariant.review_status != '')
             .distinct(ClinVarVariant.rsid)
             .limit(MAX_MAPPINGS_PER_CATEGORY)
         )
         out: Dict[str, dict] = {}
         for row in result.all():
+            rsid, gene, sig, cond_raw, review = row
+            cond = self._clean_condition(cond_raw or "") or "Unknown"
+            if self._is_severe_for_category(cond, category):
+                continue
             data = {**template}
-            cond = row[3] or "Unknown"
             data.setdefault("condition", cond)
-            data.setdefault("gene", row[1] or "")
+            data.setdefault("gene", gene or "")
             data.setdefault("source", "clinvar_auto")
-            # FLAW-01: populate category-appropriate dedup fields
-            self._populate_category_fields(data, category, cond, row[1] or "")
-            out[row[0]] = {"map_type": "rsid", "data": data}
+            data["review_status"] = review or ""
+            data["risk_multiplier"] = self._risk_multiplier_from_review_status(review, sig)
+            self._populate_category_fields(data, category, cond, gene or "")
+            out[rsid] = {"map_type": "rsid", "data": data}
         return out
 
     async def _match_gnomad_rare(
@@ -851,167 +1042,3 @@ async def seed_category_rules(*, force: bool = False) -> Dict[str, int]:
 
     logger.info("Seeded %d category rules across %d categories", inserted, len(by_cat))
     return {"inserted": inserted, "by_category": by_cat}
-
-
-# ======================================================================
-# Sync VariantMappings → PanelMarkerConfigs
-# ======================================================================
-
-# Map analysis category names → panel_id used in the admin UI
-CATEGORY_TO_PANEL = {
-    "health":      "health",
-    "drug":        "drug_responses",
-    "physical":    "physical_traits",
-    "nutrition":   "nutrition",
-    "sports":      "sports",
-    "cognitive":   "intelligence",
-    "personality": "personality",
-    "wellness":    "wellness",
-    "methylation": "methylation",
-    "detox":       "detox",
-    "carrier":     "carrier",
-    "ancestry":    "ancestry",
-}
-
-
-def _extract_description(category: str, data: dict) -> str:
-    """Build a human-readable description from a VariantMapping's data JSON."""
-    if category == "health":
-        cond = data.get("condition", "")
-        risk = data.get("risk_multiplier")
-        return f"{cond} — Risk: {risk}x" if risk else cond
-    if category == "drug":
-        gene = data.get("gene", "")
-        drugs = data.get("drugs", [])
-        # drugs can be list of strings or list of [name, status, note] tuples
-        names = []
-        for d in drugs[:4]:
-            names.append(d[0] if isinstance(d, (list, tuple)) else d)
-        return f"{gene} — {', '.join(names)}" if names else gene
-    if category == "physical":
-        return data.get("trait", data.get("description", ""))
-    if category == "nutrition":
-        nut = data.get("nutrient", "")
-        met = data.get("metabolism", "")
-        return f"{nut} ({met})" if met else nut
-    if category == "sports":
-        cat = data.get("category", "")
-        adv = data.get("advantage", "")
-        return f"{cat} — {adv} advantage" if adv else cat
-    if category == "cognitive":
-        return data.get("domain", "")
-    if category == "personality":
-        return data.get("trait", "")
-    if category == "wellness":
-        return data.get("metric", data.get("trait", ""))
-    if category == "methylation":
-        gene = data.get("gene", "")
-        cap = data.get("capacity", "")
-        return f"{gene} — {cap}" if cap else gene
-    if category == "detox":
-        gene = data.get("gene", "")
-        phase = data.get("phase", "")
-        return f"{gene} Phase {phase}" if phase else gene
-    if category == "carrier":
-        cond = data.get("condition", "")
-        st = data.get("status", "")
-        return f"{cond} ({st})" if st else cond
-    # ancestry / fallback
-    return data.get("condition", data.get("trait", data.get("description", "")))
-
-
-async def sync_panels_from_mappings(
-    *, categories: Optional[List[str]] = None
-) -> Dict[str, Any]:
-    """Read active VariantMappings and upsert corresponding PanelMarkerConfig
-    rows so the admin panel reflects the full registry.
-
-    Only inserts; never overwrites existing manual markers.
-    Returns per-panel insert counts.
-    """
-    start = time.time()
-
-    async with async_session_factory() as session:
-        q = select(VariantMapping).where(VariantMapping.is_active == True)
-        if categories:
-            q = q.where(VariantMapping.category.in_(categories))
-        result = await session.execute(q)
-        mappings = result.scalars().all()
-
-        if not mappings:
-            return {"error": "No active variant mappings found."}
-
-        stats: Dict[str, int] = {}
-        batch: list[dict] = []
-
-        for m in mappings:
-            panel_id = CATEGORY_TO_PANEL.get(m.category)
-            if not panel_id:
-                continue
-
-            data = m.data if isinstance(m.data, dict) else {}
-            desc = _extract_description(m.category, data)
-            # Truncate overly long auto-generated descriptions
-            if len(desc) > 200:
-                desc = desc[:197] + "..."
-
-            if m.map_type == "rsid":
-                rsid = m.key
-                gene = data.get("gene", "")
-            else:
-                # gene-type mapping — use synthetic rsid for unique constraint
-                rsid = f"GENE:{m.key}"
-                gene = m.key
-
-            batch.append({
-                "panel_id": panel_id,
-                "rsid": rsid,
-                "gene": gene or None,
-                "description": desc or None,
-                "category": m.category,
-                "is_active": True,
-                "is_auto_discovered": True,
-            })
-
-        # Bulk upsert in chunks of 500
-        total_inserted = 0
-        chunk_size = 500
-        for i in range(0, len(batch), chunk_size):
-            chunk = batch[i : i + chunk_size]
-            stmt = insert(PanelMarkerConfig).values(chunk)
-            stmt = stmt.on_conflict_do_nothing(
-                index_elements=["panel_id", "rsid"]
-            )
-            res = await session.execute(stmt)
-            inserted = res.rowcount
-            total_inserted += inserted
-
-            # Count per panel
-            for row in chunk:
-                if inserted > 0:  # approximate — PostgreSQL doesn't give per-row info
-                    stats[row["panel_id"]] = stats.get(row["panel_id"], 0)
-
-        # Re-count inserted per panel accurately
-        count_q = (
-            select(
-                PanelMarkerConfig.panel_id,
-                func.count().label("cnt"),
-            )
-            .where(PanelMarkerConfig.is_auto_discovered == True)
-            .group_by(PanelMarkerConfig.panel_id)
-        )
-        count_result = await session.execute(count_q)
-        stats = {r[0]: r[1] for r in count_result.all()}
-
-        await session.commit()
-
-    elapsed = round(time.time() - start, 2)
-    logger.info(
-        "Panel sync: inserted %d new markers across %d panels in %.2fs",
-        total_inserted, len(stats), elapsed,
-    )
-    return {
-        "inserted": total_inserted,
-        "auto_discovered_per_panel": stats,
-        "elapsed_seconds": elapsed,
-    }

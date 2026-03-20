@@ -1,5 +1,5 @@
 """
-Auto-discovery service for generating panel markers and variant mappings
+Auto-discovery service for generating variant mappings
 from external lookup results. Entries require admin approval before going live.
 """
 from typing import Dict, Any, Optional
@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from ..db.models import PendingDiscovery, PanelMarkerConfig, VariantMapping
+from ..db.models import PendingDiscovery, VariantMapping
 
 # Maps clinical significance keywords → panel categories
 CLINICAL_PANEL_MAP = {
@@ -111,59 +111,6 @@ async def process_lookup_discoveries(
     population_data = response_data.get('population_data', {})
 
     created = 0
-
-    # Determine which panels this variant should be suggested for
-    panels = _determine_panels(rsid, gene, consequence, clinical_sigs, pharmacogenomics)
-
-    for panel_id, panel_info in panels.items():
-        # Check if already live in panel_marker_configs
-        existing_marker = await session.execute(
-            select(PanelMarkerConfig.id).where(
-                PanelMarkerConfig.panel_id == panel_id,
-                PanelMarkerConfig.rsid == rsid,
-            )
-        )
-        if existing_marker.scalar_one_or_none() is not None:
-            continue
-
-        # Check if already pending or previously reviewed
-        existing_pending = await session.execute(
-            select(PendingDiscovery).where(
-                PendingDiscovery.discovery_type == 'panel_marker',
-                PendingDiscovery.rsid == rsid,
-                PendingDiscovery.panel_id == panel_id,
-            )
-        )
-        pending = existing_pending.scalar_one_or_none()
-        if pending:
-            # Increment count if still pending (more users searching = higher signal)
-            if pending.status == 'pending':
-                pending.lookup_count = (pending.lookup_count or 1) + 1
-            continue
-
-        # Create new pending discovery for panel marker
-        discovery = PendingDiscovery(
-            discovery_type='panel_marker',
-            rsid=rsid,
-            gene=gene,
-            panel_id=panel_id,
-            description=panel_info.get('description', ''),
-            category=panel_info.get('category', ''),
-            source_data={
-                'basic_info': basic_info,
-                'clinical_significance': clinical_sigs,
-                'consequence': consequence,
-                'population_data': {
-                    'minor_allele': population_data.get('minor_allele'),
-                    'minor_allele_frequency': population_data.get('minor_allele_frequency'),
-                },
-            },
-            status='pending',
-            discovered_by=user_id,
-            lookup_count=1,
-        )
-        session.add(discovery)
-        created += 1
 
     # Generate variant mapping suggestions
     mappings = _determine_variant_mappings(rsid, gene, consequence, clinical_sigs, pharmacogenomics)
@@ -274,56 +221,6 @@ def _infer_drug_subcategory(pharmacogenomics: dict, gene: str | None) -> str:
         if g == 'SLCO1B1':
             return 'statins'
     return 'pharmacogenomic'
-
-
-def _determine_panels(
-    rsid: str,
-    gene: str | None,
-    consequence: str,
-    clinical_sigs: list,
-    pharmacogenomics: dict,
-) -> Dict[str, Dict[str, str]]:
-    """Determine which dashboard panels a variant should be suggested for."""
-    panels: Dict[str, Dict[str, str]] = {}
-    gene_label = gene or 'Unknown'
-    consequence_label = consequence.replace('_', ' ') if consequence else ''
-
-    # Clinical significance → health panel
-    sig_lower = [s.lower().replace(' ', '_') for s in clinical_sigs]
-    for sig in sig_lower:
-        for keyword, panel in CLINICAL_PANEL_MAP.items():
-            if keyword in sig:
-                if panel == 'health':
-                    condition = _infer_condition(clinical_sigs, gene)
-                    subcategory = _infer_subcategory(gene, consequence, clinical_sigs, pharmacogenomics, 'health')
-                    panels['health'] = {
-                        'description': f"{gene_label} - {condition}" if condition else f"{gene_label} - {consequence_label}",
-                        'category': subcategory,
-                    }
-                elif panel == 'drug_responses':
-                    subcategory = _infer_subcategory(gene, consequence, clinical_sigs, pharmacogenomics, 'drug_responses')
-                    panels['drug_responses'] = {
-                        'description': f"{gene_label} - Drug response variant",
-                        'category': subcategory,
-                    }
-
-    # Pharmacogenomics data → drug_responses panel
-    if pharmacogenomics.get('found'):
-        subcategory = _infer_subcategory(gene, consequence, clinical_sigs, pharmacogenomics, 'drug_responses')
-        panels.setdefault('drug_responses', {
-            'description': f"{gene_label} - ClinPGx annotated variant",
-            'category': subcategory,
-        })
-
-    # Severe consequences → health panel
-    if consequence in CONSEQUENCE_PANEL_MAP and 'health' not in panels:
-        subcategory = _infer_subcategory(gene, consequence, clinical_sigs, pharmacogenomics, 'health')
-        panels['health'] = {
-            'description': f"{gene_label} - {consequence_label}",
-            'category': subcategory,
-        }
-
-    return panels
 
 
 def _determine_variant_mappings(

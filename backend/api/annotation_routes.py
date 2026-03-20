@@ -2,6 +2,7 @@
 API routes for genetic variant annotation using external services
 Enhanced with NCBI E-utilities, LitVar, SNPedia, ClinVar, and Ensembl APIs
 """
+import re
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
@@ -15,6 +16,60 @@ from .auth_routes import get_current_user
 from backend.db.schemas import User
 
 router = APIRouter(prefix="/api/annotations", tags=["annotations"])
+
+
+def _clean_snpedia_text(wiki_text: str) -> str:
+    """Extract a human-readable summary from raw SNPedia MediaWiki markup.
+
+    Strategy:
+    1. Try to pull the |Summary= field from {{Rsnum...}} template.
+    2. Strip all {{ ... }} template blocks (Rsnum, ClinVar, population diversity, etc.).
+    3. Convert wiki links [[target|label]] → label, [[target]] → target.
+    4. Convert external links [url label] → label.
+    5. Strip remaining markup artifacts and collapse whitespace.
+    """
+    if not wiki_text:
+        return ""
+
+    # 1. Try to extract |Summary= from {{Rsnum...}} template
+    rsnum_summary = ""
+    m = re.search(r'\|Summary\s*=\s*([^\n|]+)', wiki_text)
+    if m:
+        rsnum_summary = m.group(1).strip()
+
+    # 2. Strip all template blocks {{ ... }} including nested/multiline
+    # Process from innermost outward to handle nesting
+    cleaned = wiki_text
+    for _ in range(10):  # max depth
+        prev = cleaned
+        cleaned = re.sub(r'\{\{[^{}]*\}\}', ' ', cleaned)
+        if cleaned == prev:
+            break
+    # Strip any remaining unclosed template starts
+    cleaned = re.sub(r'\{\{[^}]*$', '', cleaned, flags=re.MULTILINE)
+
+    # 3. Convert wiki links: [[target|label]] → label, [[target]] → target
+    cleaned = re.sub(r'\[\[([^|\]]+)\|([^\]]+)\]\]', r'\2', cleaned)
+    cleaned = re.sub(r'\[\[([^\]]+)\]\]', r'\1', cleaned)
+
+    # 4. Convert external links: [url label] → label, [url] → (drop)
+    cleaned = re.sub(r'\[https?://[^\]\s]+\s+([^\]]+)\]', r'\1', cleaned)
+    cleaned = re.sub(r'\[https?://[^\]\s]+\]', '', cleaned)
+
+    # 5. Strip Category links, HTML tags, residual markup
+    cleaned = re.sub(r'\[\[Category:[^\]]*\]\]', '', cleaned)
+    cleaned = re.sub(r'<[^>]+>', '', cleaned)
+    cleaned = re.sub(r"'{2,}", '', cleaned)  # bold/italic wiki markup
+
+    # 6. Collapse whitespace, trim
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+
+    # If we got a good cleaned body, use it; otherwise fall back to |Summary=
+    if len(cleaned) > 20:
+        return cleaned[:800]
+    if rsnum_summary:
+        return rsnum_summary
+    return cleaned[:800]
 
 
 def _is_noise_condition(s: str) -> bool:
@@ -593,19 +648,7 @@ async def get_variant_details(
         wiki_data = snpedia.get("data", {})
         revisions = wiki_data.get("revisions", [])
         wiki_text = revisions[0].get("*", "") if revisions else ""
-        # Extract a clean summary from wiki text
-        summary = ""
-        if wiki_text:
-            lines = [
-                l.strip() for l in wiki_text.split("\n")
-                if l.strip()
-                and not l.strip().startswith("{{")
-                and not l.strip().startswith("}}")
-                and not l.strip().startswith("[[Category")
-                and not l.strip().startswith("|")
-                and not l.strip().startswith("<")
-            ]
-            summary = " ".join(lines[:3])[:500]
+        summary = _clean_snpedia_text(wiki_text)
         response["snpedia"] = {
             "found": True,
             "title": wiki_data.get("title", ""),

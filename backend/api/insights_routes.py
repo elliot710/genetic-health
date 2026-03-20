@@ -2,13 +2,13 @@
 Smart Insights API routes — LLM-powered genetic analysis insights.
 """
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.database import get_session
 from ..db.models import GeneticAnalysis
 from .auth_routes import get_current_user
-from ..services.insights_service import generate_insight, get_llm_status, set_insights_enabled
+from ..services.insights_service import generate_insight, generate_variant_insight, get_llm_status, set_insights_enabled
 from ..services.knowledge_graph import build_knowledge_graph
 
 logger = logging.getLogger(__name__)
@@ -35,18 +35,16 @@ async def toggle_insights(
 @router.post("/generate/{section}")
 async def generate_section_insight(
     section: str,
+    force_refresh: bool = False,
     user=Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    """Generate an LLM-powered insight for a dashboard section.
-    
-    Sections: overview, health, drug_responses, carrier_status, ancestry,
-    personality, intelligence, wellness, methylation, detox
-    """
+    """Generate an LLM-powered insight for a dashboard section."""
     allowed_sections = {
         "overview", "health", "drug_responses", "carrier_status",
         "ancestry", "personality", "intelligence", "wellness",
         "methylation", "detox", "nutrition", "sports",
+        "physical_traits", "rare_mutations", "uncommon_mutations",
     }
     if section not in allowed_sections:
         raise HTTPException(status_code=400, detail=f"Invalid section. Allowed: {', '.join(sorted(allowed_sections))}")
@@ -70,8 +68,23 @@ async def generate_section_insight(
     from .analysis_routes import get_dashboard_data as _get_dashboard_data
     dashboard_data = await _get_dashboard_data(db=session, current_user=user)
 
-    insight = await generate_insight(analysis.id, section, dashboard_data)
+    insight = await generate_insight(analysis.id, section, dashboard_data, db=session, force_refresh=force_refresh)
     return insight
+
+
+@router.post("/generate-variant")
+async def generate_variant_detail_insight(
+    payload: dict = Body(...),
+    force_refresh: bool = False,
+    user=Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Generate an LLM-powered insight for a specific variant using its detail data."""
+    rsid = payload.get("rsid")
+    variant_data = payload.get("variant_data")
+    if not rsid or not variant_data:
+        raise HTTPException(status_code=400, detail="rsid and variant_data are required")
+    return await generate_variant_insight(rsid, variant_data, db=session, force_refresh=force_refresh)
 
 
 @router.get("/knowledge-graph")
