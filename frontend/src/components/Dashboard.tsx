@@ -14,6 +14,7 @@ import type { DashboardData } from './categories/types'
 // Hooks
 import { useDashboardData } from '@/hooks/useDashboardData'
 import { useAnalysisControls } from '@/hooks/useAnalysisControls'
+import { useNotifications } from '@/hooks/useNotifications'
 
 // Dashboard sub-components
 import DashboardHeader from './dashboard/DashboardHeader'
@@ -157,6 +158,16 @@ export default function Dashboard({
     onDataRefresh: () => refreshData(true),
     showNotification,
   })
+
+  // ── Notifications (WebSocket) ─────────────────────────────
+  const {
+    notifications,
+    unreadCount,
+    isConnected: isNotificationConnected,
+    markRead,
+    markAllRead,
+    deleteNotification: deleteNotif,
+  } = useNotifications(token)
 
   // ── Theme persistence ─────────────────────────────────────
   useEffect(() => {
@@ -392,6 +403,12 @@ export default function Dashboard({
         onRefreshData={handleRefreshData}
         onReset={onReset}
         onDeleteClick={() => setShowDeleteDialog(true)}
+        notifications={notifications}
+        unreadCount={unreadCount}
+        isNotificationConnected={isNotificationConnected}
+        onMarkRead={markRead}
+        onMarkAllRead={markAllRead}
+        onDeleteNotification={deleteNotif}
       />
 
       <div className="flex" style={{ height: 'calc(100vh - 73px)' }}>
