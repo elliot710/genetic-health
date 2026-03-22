@@ -387,20 +387,35 @@ class OptimizedGeneticAPIService:
         return await self.annotate_variant(rsid)
     
     async def _get_ensembl_annotation(self, rsid: str) -> Optional[Dict[str, Any]]:
-        """Get Ensembl VEP annotation."""
+        """Get Ensembl VEP annotation — local SQLite cache first, remote API fallback."""
+        # Try local VEP service first (fast, no network)
+        try:
+            from .ensembl_vep_local import get_ensembl_vep_service
+            vep_svc = get_ensembl_vep_service()
+            local_result = await vep_svc.lookup_or_scan(rsid)
+            if local_result and local_result.get('found'):
+                return {
+                    'found': True,
+                    'source': 'ensembl_local',
+                    'data': local_result.get('data', local_result),
+                }
+        except Exception as e:
+            logger.debug(f"Local VEP lookup failed for {rsid}: {e}")
+
+        # Fall back to remote Ensembl REST API
         try:
             url = self.endpoints['ensembl_vep'].url.format(rsid=rsid)
             response = await self._make_request('ensembl_vep', url)
-            
+
             if response.success and response.data:
                 return {
                     'found': True,
                     'source': 'ensembl',
                     'data': response.data
                 }
-            
+
             return {'found': False, 'source': 'ensembl', 'error': response.error}
-            
+
         except Exception as e:
             logger.error(f"Ensembl annotation error for {rsid}: {e}")
             return {'found': False, 'source': 'ensembl', 'error': str(e)}

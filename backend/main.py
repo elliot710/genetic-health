@@ -14,7 +14,9 @@ from .api.insights_routes import router as insights_router
 from .api.notification_routes import router as notification_ws_router, notification_router
 from .api.sharing_routes import router as sharing_router
 from .core.telemetry import configure_telemetry
-from .db.database import init_db
+from .db.database import init_db, async_session_factory
+
+logger = logging.getLogger(__name__)
 
 # Configure logging — show INFO from our services
 logging.basicConfig(
@@ -123,7 +125,6 @@ async def lifespan(app: FastAPI):
         while True:
             await asyncio.sleep(86400)  # Run once per day
             try:
-                from .db.database import async_session_factory
                 from sqlalchemy import text as sa_text
                 async with async_session_factory() as s:
                     result = await s.execute(

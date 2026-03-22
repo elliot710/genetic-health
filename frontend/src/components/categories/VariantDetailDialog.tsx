@@ -375,6 +375,12 @@ export default function VariantDetailDialog({
     })
       .then((res) => res.json())
       .then((data) => {
+        // If the refreshed response is missing user_genotype (e.g. the DB lookup
+        // silently failed), carry forward the value from the previous load so the
+        // genotype card never disappears after a refresh.
+        if (forceRefresh && !data?.user_genotype && details?.user_genotype) {
+          data = { ...data, user_genotype: details.user_genotype }
+        }
         setDetails(data)
         // First-time open: if data was served from DB cache, kick off a silent
         // background refresh so the user always sees up-to-date information

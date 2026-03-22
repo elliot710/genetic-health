@@ -79,7 +79,7 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
           description: trait.description || 'Analysis based on genetic markers',
           icon: getTraitIcon(name),
           bgColor: styles.bgColor,
-          characteristics: trait.characteristics || [],
+          characteristics: Array.isArray(trait.characteristics) ? trait.characteristics : (trait.characteristics ? [trait.characteristics] : []),
         }
       })
     }

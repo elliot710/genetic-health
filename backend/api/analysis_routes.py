@@ -565,6 +565,15 @@ def _clean_trait_name(raw: str) -> str:
     return parts[0].strip().title() if parts else raw
 
 
+def _to_list(val) -> list:
+    """Normalize a JSON column value (list, string, or None) to always return a list."""
+    if isinstance(val, list):
+        return val
+    if isinstance(val, str) and val:
+        return [val]
+    return []
+
+
 def _analysis_fingerprint(analyses) -> str:
     """Hash of analysis IDs + statuses to detect any changes."""
     parts = sorted(f"{a.id}:{a.analysis_status}:{a.processed_variants or 0}" for a in analyses)
@@ -733,7 +742,7 @@ async def get_dashboard_data(
         health_rows = hr.scalars().all()
         dashboard_data["health_risks"] = _dedup_by([
             {"condition": _clean_trait_name(r.condition), "risk_level": r.risk_level, "risk_score": r.risk_score,
-             "associated_variants": r.associated_variants, "recommendations": r.recommendations,
+             "associated_variants": r.associated_variants, "recommendations": _to_list(r.recommendations),
              "gene": r.gene, "review_status": r.review_status,
              "pathogenicity_classification": r.pathogenicity_classification}
             for r in health_rows
@@ -746,7 +755,7 @@ async def get_dashboard_data(
         drug_rows = dr.scalars().all()
         dashboard_data["drug_responses"] = _dedup_by([
             {"gene": r.gene, "drug": r.drug, "response_type": r.response_type,
-             "recommendations": r.recommendations, "variants_involved": r.variants_involved}
+             "recommendations": _to_list(r.recommendations), "variants_involved": r.variants_involved}
             for r in drug_rows
         ], "drug")
 
@@ -772,7 +781,7 @@ async def get_dashboard_data(
         sports_rows = sp.scalars().all()
         dashboard_data["sports_performance"] = _dedup_by([
             {"category": r.performance_category, "genetic_advantage": r.genetic_advantage,
-             "sport_recommendations": r.sport_recommendations, "training_advice": r.training_advice,
+             "sport_recommendations": _to_list(r.sport_recommendations), "training_advice": r.training_advice,
              "associated_variants": r.associated_variants or []}
             for r in sports_rows
         ], "category")
@@ -784,7 +793,7 @@ async def get_dashboard_data(
         nutrition_rows = nt.scalars().all()
         dashboard_data["nutrition_traits"] = _dedup_by([
             {"nutrient": r.nutrient, "metabolism_type": r.metabolism_type,
-             "dietary_recommendations": r.dietary_recommendations, "sensitivity_level": r.sensitivity_level,
+             "dietary_recommendations": _to_list(r.dietary_recommendations), "sensitivity_level": r.sensitivity_level,
              "associated_variants": r.associated_variants or []}
             for r in nutrition_rows
         ], "nutrient")
@@ -810,7 +819,7 @@ async def get_dashboard_data(
         dashboard_data["methylation_profiles"] = _dedup_by([
             {"gene": r.gene, "variant": r.variant,
              "methylation_capacity": r.methylation_capacity,
-             "supplement_recommendations": r.supplement_recommendations,
+             "supplement_recommendations": _to_list(r.supplement_recommendations),
              "associated_variants": r.associated_variants}
             for r in methylation_rows
         ], "gene")
@@ -823,7 +832,7 @@ async def get_dashboard_data(
         dashboard_data["detoxification_profiles"] = _dedup_by([
             {"detox_phase": r.detox_phase, "gene": r.gene,
              "detox_capacity": r.detox_capacity, "toxin_sensitivity": r.toxin_sensitivity,
-             "support_recommendations": r.support_recommendations,
+             "support_recommendations": _to_list(r.support_recommendations),
              "associated_variants": r.associated_variants}
             for r in detox_rows
         ], "gene")
@@ -840,7 +849,9 @@ async def get_dashboard_data(
              "disease_association": _clean_trait_name(r.disease_association) if r.disease_association else r.disease_association,
              "penetrance": r.penetrance,
              "population_frequency": r.population_frequency,
-             "associated_variants": r.associated_variants}
+             "associated_variants": r.associated_variants,
+             "clinical_actions": _to_list(r.clinical_actions),
+             "monitoring_recommendations": _to_list(r.monitoring_recommendations)}
             for r in rare_rows
         ], "mutation_name")
 
@@ -865,7 +876,7 @@ async def get_dashboard_data(
              "name": _clean_trait_name(r.metric_name), "result": r.genetic_predisposition,
              "marker": "Multiple genes",
              "associated_variants": r.associated_variants or [],
-             "recommendations": r.lifestyle_recommendations}
+             "recommendations": _to_list(r.lifestyle_recommendations)}
             for r in wellness_rows
         ], "trait") if wellness_rows else []
 
@@ -892,8 +903,8 @@ async def get_dashboard_data(
              "genetic_advantage": r.genetic_score, "genetic_result": r.genetic_score,
              "percentile": r.percentile,
              "associated_variants": r.associated_variants,
-             "description": '; '.join(r.enhancement_suggestions) if r.enhancement_suggestions else '',
-             "enhancement_suggestions": r.enhancement_suggestions}
+             "description": '; '.join(r.enhancement_suggestions) if isinstance(r.enhancement_suggestions, list) else (r.enhancement_suggestions or ''),
+             "enhancement_suggestions": r.enhancement_suggestions if isinstance(r.enhancement_suggestions, list) else ([r.enhancement_suggestions] if r.enhancement_suggestions else [])}
             for r in cognitive_rows
         ], "trait_name") if cognitive_rows else []
 
@@ -909,9 +920,9 @@ async def get_dashboard_data(
              "gene": r.associated_variants[0] if r.associated_variants else "Multiple markers",
              "marker": r.associated_variants[0] if r.associated_variants else "Multiple markers",
              "associated_variants": r.associated_variants or [],
-             "description": r.behavioral_insights[0] if r.behavioral_insights else "Genetic analysis based",
-             "summary": r.behavioral_insights[0] if r.behavioral_insights else "Genetic analysis based",
-             "characteristics": r.behavioral_insights or ["Trait-based behavior"]}
+             "description": (_to_list(r.behavioral_insights) or ["Genetic analysis based"])[0],
+             "summary": (_to_list(r.behavioral_insights) or ["Genetic analysis based"])[0],
+             "characteristics": _to_list(r.behavioral_insights) or ["Trait-based behavior"]}
             for r in personality_rows
         ], "trait") if personality_rows else []
 

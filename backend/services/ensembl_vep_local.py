@@ -259,6 +259,26 @@ class EnsemblVepLocalService:
             return row
         return {'found': False, 'source': 'ensembl'}
 
+    async def lookup_or_scan(self, rsid: str) -> Optional[Dict[str, Any]]:
+        """Try SQLite cache first; if not found (or cache not ready), scan VCF files directly.
+
+        Results found in the VCF scan are cached into SQLite immediately so
+        subsequent lookups for the same rsid are fast.
+        """
+        # 1. Try SQLite cache
+        if self._db is not None:
+            row = await asyncio.to_thread(self._lookup_one, rsid)
+            if row:
+                return row
+
+        # 2. No cache hit — scan VCF files directly
+        if _VCF_VEP_DIR.exists():
+            result = await asyncio.to_thread(self._scan_single_rsid, rsid)
+            if result:
+                return result
+
+        return {'found': False, 'source': 'ensembl'}
+
     def _lookup_one(self, rsid: str) -> Optional[Dict[str, Any]]:
         if not self._db:
             return None
@@ -267,6 +287,53 @@ class EnsemblVepLocalService:
         ).fetchone()
         if row:
             return json.loads(zlib.decompress(row[0]))
+        return None
+
+    def _scan_single_rsid(self, rsid: str) -> Optional[Dict[str, Any]]:
+        """Linear scan of all VCF files for a single rsid.
+
+        Stops at the first hit, parses the line, caches the result into
+        the SQLite DB (if open) and returns the VEP data dict.
+        """
+        from .ensembl_vep_etl import parse_vcf_line
+
+        vcf_files = self._discover_vcf_files()
+        for vcf_path in vcf_files:
+            try:
+                with gzip.open(vcf_path, 'rt', encoding='utf-8', errors='replace') as fh:
+                    for line in fh:
+                        if line.startswith('#'):
+                            continue
+                        # Fast pre-filter before full parse
+                        parts = line.split('\t', 3)
+                        if len(parts) < 3 or parts[2] != rsid:
+                            continue
+                        # Found the rsid — parse it
+                        parsed = parse_vcf_line(line, {rsid})
+                        if not parsed or parsed.get('rsid') != rsid:
+                            continue
+                        vep_dict = json.loads(parsed['vep_data'])
+                        # Cache into SQLite so next hit is instant
+                        if self._db is not None:
+                            try:
+                                blob = zlib.compress(
+                                    parsed['vep_data'].encode('utf-8'), level=1
+                                )
+                                self._db.execute(
+                                    "INSERT OR REPLACE INTO vep_data (rsid, data) VALUES (?, ?)",
+                                    (rsid, blob),
+                                )
+                                self._db.commit()
+                                self._variant_count += 1
+                            except Exception:
+                                pass
+                        logger.debug(
+                            f"[VEP] Direct VCF scan hit for {rsid} in {vcf_path.name}"
+                        )
+                        return vep_dict
+            except Exception as e:
+                logger.debug(f"[VEP scan] error reading {vcf_path.name}: {e}")
+                continue
         return None
 
     async def lookup_batch(self, rsids: List[str]) -> Dict[str, Optional[Dict[str, Any]]]:

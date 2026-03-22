@@ -119,7 +119,22 @@ def _build_user_prompt(section: str, data: dict) -> str:
 
 def _build_variant_prompt(variant_data: dict) -> str:
     """Build a prompt from variant detail dialog data (all fields)."""
-    return f"Analyze this specific genetic variant in detail. Include clinical significance, population frequency interpretation, functional predictions, and any relevant drug interactions or disease associations:\n{json.dumps(variant_data, default=str)}"
+    # Emphasize the user's personal genotype context so the LLM doesn't just
+    # describe the variant's pathogenicity in the abstract — it must clarify
+    # whether the USER actually carries the pathogenic allele(s) or not.
+    genotype_context = ""
+    user_gt = variant_data.get("user_genotype")
+    allele_string = variant_data.get("allele_string", "")
+    if user_gt:
+        genotype_context = (
+            f"\n\nCRITICAL CONTEXT — The user's personal genotype for this variant is: {user_gt}. "
+            f"The reference/alternate alleles are: {allele_string}. "
+            "You MUST first determine whether the user carries the pathogenic/alternate allele or the reference allele. "
+            "If the user is homozygous reference (carries only the reference allele), clearly state upfront that they are NOT affected by this variant — "
+            "even if the variant itself is classified as pathogenic. Do not alarm the user about pathogenicity that does not apply to their genotype. "
+            "If the user carries one or two copies of the alternate allele, explain the clinical implications for their specific zygosity."
+        )
+    return f"Analyze this specific genetic variant in detail. Include clinical significance, population frequency interpretation, functional predictions, and any relevant drug interactions or disease associations.{genotype_context}\n{json.dumps(variant_data, default=str)}"
 
 
 # ── LLM Calls ──────────────────────────────────────────────────────

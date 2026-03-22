@@ -237,13 +237,13 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                     </div>
                   )}
 
-                  {item.support_recommendations?.[0] && (
+                  {Array.isArray(item.support_recommendations) && item.support_recommendations[0] && (
                     <p className={`text-sm ${theme.textSecondary} mt-2 line-clamp-2`}>{item.support_recommendations[0]}</p>
                   )}
 
                   {isExpanded && (
                     <div className={`mt-4 pt-4 border-t ${theme.border} space-y-4`}>
-                      {item.support_recommendations?.length > 0 && (
+                      {Array.isArray(item.support_recommendations) && item.support_recommendations.length > 0 && (
                         <div>
                           <h5 className={`text-sm font-semibold ${theme.textPrimary} mb-2`}>Support Recommendations</h5>
                           <div className="space-y-2">

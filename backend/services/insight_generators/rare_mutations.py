@@ -5,7 +5,7 @@ from ...db.models import RareMutation
 from .base import (
     GeneratorContext, extract_gene_and_consequence, extract_frequency,
     get_user_genotype, _get_effective_ref_allele, is_homozygous_reference,
-    is_no_call_genotype, is_indel_genotype,
+    is_no_call_genotype, is_indel_genotype, get_annotation_allele_parts,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,9 +50,10 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
             if is_no_call_genotype(user_gt):
                 continue
             effective_ref = _get_effective_ref_allele(variant, annotation_result)
+            _, _ann_alt = get_annotation_allele_parts(annotation_result) if annotation_result else (None, None)
             if effective_ref:
                 gt = user_gt.upper()
-                if is_homozygous_reference(gt, effective_ref):
+                if is_homozygous_reference(gt, effective_ref, alt_allele=_ann_alt):
                     continue
                 # Strand-flip: if none of the alleles match ref on forward strand,
                 # try reverse complement — hom-ref on minus strand means no variant.

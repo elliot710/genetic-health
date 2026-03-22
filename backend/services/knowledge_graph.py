@@ -153,9 +153,10 @@ async def build_knowledge_graph(user_id: int, session: AsyncSession) -> dict:
                     add_node(var_id, v, "variant")
                     if gene_id:
                         add_edge(gene_id, var_id, "contains")
-            # Link gene to disease/condition
+            # Link gene to disease/condition (skip placeholder texts)
             condition = getattr(mut, 'disease_association', None) or getattr(mut, 'trait_association', None)
-            if condition and gene_id:
+            _PLACEHOLDER_CONDITIONS = {'no known disease association', 'not provided', 'not specified', 'under investigation', ''}
+            if condition and gene_id and condition.strip().lower() not in _PLACEHOLDER_CONDITIONS:
                 cond_id = f"cond:{condition}"
                 add_node(cond_id, condition, "condition")
                 add_edge(gene_id, cond_id, "associated_with")

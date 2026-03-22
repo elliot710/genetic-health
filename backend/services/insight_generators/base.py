@@ -791,9 +791,12 @@ async def generate_from_maps(
         annotation_result = ctx.annotation_results.get(rsid)
         effective_ref = _get_effective_ref_allele(variant, annotation_result)
 
+        # Get alt allele for proper indel D/I code interpretation
+        _, _alt_allele = get_annotation_allele_parts(annotation_result)
+
         # Skip homozygous reference — user doesn't carry any risk allele
         # at this position. Other variants in the same gene can still match.
-        if effective_ref and is_homozygous_reference(genotype, effective_ref):
+        if effective_ref and is_homozygous_reference(genotype, effective_ref, alt_allele=_alt_allele):
             continue
 
         # rsid-based matching

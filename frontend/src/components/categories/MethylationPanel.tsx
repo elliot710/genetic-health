@@ -37,7 +37,7 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
     const seen = new Set<string>()
     const result: string[] = []
     for (const profile of profiles) {
-      for (const rec of profile.supplement_recommendations || []) {
+      for (const rec of (Array.isArray(profile.supplement_recommendations) ? profile.supplement_recommendations : [])) {
         const key = rec.toLowerCase().trim()
         if (!seen.has(key)) {
           seen.add(key)
@@ -200,7 +200,7 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
-                    {item.supplement_recommendations?.length > 0 && (
+                    {Array.isArray(item.supplement_recommendations) && item.supplement_recommendations.length > 0 && (
                       <div className="space-y-2">
                         <span className={`text-xs font-semibold ${theme.textSecondary} uppercase tracking-wider`}>Recommendations</span>
                         {item.supplement_recommendations.map((rec: string, i: number) => (

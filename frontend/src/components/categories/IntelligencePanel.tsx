@@ -54,7 +54,7 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
         score: trait.percentile || (trait.genetic_advantage === 'high' ? 85 : trait.genetic_advantage === 'moderate' ? 65 : 45),
         description: trait.description || `Genetic analysis for ${trait.cognitive_ability || trait.trait_name}`,
         icon: getTraitIcon(trait.cognitive_ability || trait.trait_name),
-        suggestions: trait.enhancement_suggestions || [],
+        suggestions: Array.isArray(trait.enhancement_suggestions) ? trait.enhancement_suggestions : (trait.enhancement_suggestions ? [trait.enhancement_suggestions] : []),
       }))
     }
 
