@@ -1,0 +1,191 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: genetic_health_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    shm_size: 1gb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    command:
+      - "postgres"
+      - "-c" 
+      - "shared_buffers=512MB"
+      - "-c"
+      - "work_mem=32MB"
+      - "-c"
+      - "maintenance_work_mem=256MB"
+      - "-c"
+      - "effective_cache_size=2GB"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "effective_io_concurrency=200"
+      - "-c"
+      - "max_parallel_workers_per_gather=2"
+      - "-c"
+      - "idle_in_transaction_session_timeout=300000"
+      - "-c"
+      - "max_wal_size=2GB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/genetic_health_db
+      - NCBI_API_KEY=${NCBI_API_KEY}
+      - ALPHA_MISSENSE_DATA_DIR=/app/data_sources/alpha_missense
+      - CLINVAR_DATA_DIR=/app/data_sources/clinvar
+      - GNOMAD_DATA_DIR=/app/data_sources/gnomad
+      - ENSEMBL_DATA_DIR=/app/data_sources/ensembl/homo_sapiens
+      - TKG_DATA_DIR=/app/data_sources/1000G
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/genetic-health-490017-b854a959d61b.json
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # OpenTelemetry — traces go to the OTel Collector (→ Jaeger + spanmetrics → Prometheus for SPM).
+      # Set OTEL_EXPORTER_OTLP_ENDPOINT='' in your .env to disable tracing.
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+      - OTEL_SERVICE_NAME=dna-toolkit-backend
+      - OTEL_CONSOLE_EXPORT=${OTEL_CONSOLE_EXPORT:-false}
+    volumes:
+      - .:/app
+      - /app/.venv  # Exclude virtual environment from volume mount
+    depends_on:
+      postgres:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    command: ["uv", "run", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "backend"]
+
+  # Jaeger — distributed tracing UI + SPM (http://localhost:16686)
+  # Receives traces via OTLP gRPC from the OTel Collector.
+  # Reads RED metrics from Prometheus for Service Performance Monitoring.
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4317:4317"     # OTLP gRPC (internal — collector → jaeger)
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      # SPM: read RED metrics from Prometheus
+      - METRICS_STORAGE_TYPE=prometheus
+      - PROMETHEUS_SERVER_URL=http://prometheus:9090
+      - PROMETHEUS_QUERY_SUPPORT_SPANMETRICS_CONNECTOR=true
+      - PROMETHEUS_QUERY_NAMESPACE=traces
+      - PROMETHEUS_QUERY_DURATION_UNIT=ms
+      - PROMETHEUS_QUERY_NORMALIZE_CALLS=true
+      - PROMETHEUS_QUERY_NORMALIZE_DURATION=true
+    volumes:
+      - jaeger_data:/badger
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # OpenTelemetry Collector — receives traces from backend, fans out to:
+  #   1. Jaeger (full trace storage)
+  #   2. spanmetrics connector → Prometheus (RED metrics for SPM)
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.123.0
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "4318:4318"     # OTLP HTTP (backend → collector)
+      - "4319:4317"     # OTLP gRPC (exposed for external tools, mapped to avoid conflict)
+      - "8889:8889"     # Prometheus metrics endpoint (collector exposes RED metrics)
+    depends_on:
+      - jaeger
+    restart: unless-stopped
+
+  # Prometheus — stores RED metrics scraped from the OTel Collector.
+  # Required by Jaeger SPM for rate/error/duration dashboards.
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"     # Prometheus UI (http://localhost:9090)
+    restart: unless-stopped
+
+  # Analysis Worker — completely separate process from the API server.
+  # Polls the DB for queued analyses and runs them in isolation so the
+  # FastAPI event loop is NEVER touched by analysis code.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/genetic_health_db
+      - NCBI_API_KEY=${NCBI_API_KEY}
+      - ALPHA_MISSENSE_DATA_DIR=/app/data_sources/alpha_missense
+      - CLINVAR_DATA_DIR=/app/data_sources/clinvar
+      - GNOMAD_DATA_DIR=/app/data_sources/gnomad
+      - ENSEMBL_DATA_DIR=/app/data_sources/ensembl/homo_sapiens
+      - TKG_DATA_DIR=/app/data_sources/1000G
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/genetic-health-490017-b854a959d61b.json
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+      - OTEL_SERVICE_NAME=dna-toolkit-worker
+      - OTEL_CONSOLE_EXPORT=${OTEL_CONSOLE_EXPORT:-false}
+      - WORKER_POLL_INTERVAL=2
+      - WORKER_MAX_CONCURRENT=2
+    volumes:
+      - .:/app
+      - /app/.venv
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    command: ["uv", "run", "python", "-m", "backend.worker"]
+
+  # Next.js Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules  # Exclude node_modules from volume mount
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  jaeger_data:
+  prometheus_data:
