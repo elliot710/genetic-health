@@ -850,6 +850,136 @@ export default function VariantDetailDialog({
               </div>
             )}
 
+            {/* ── Ensembl VEP Summary ── */}
+            {details.transcripts && details.transcripts.length > 0 && (() => {
+              const tcs = details.transcripts
+              const uniqueGenes = [...new Set(tcs.map(t => t.gene_symbol).filter(Boolean))]
+              const impacts: Record<string, number> = {}
+              tcs.forEach(t => { if (t.impact) impacts[t.impact] = (impacts[t.impact] || 0) + 1 })
+              const worstSift = tcs.reduce<TranscriptConsequence | null>((worst, t) => {
+                if (t.sift_score == null) return worst
+                if (!worst || worst.sift_score == null || t.sift_score < worst.sift_score) return t
+                return worst
+              }, null)
+              const worstPP = tcs.reduce<TranscriptConsequence | null>((worst, t) => {
+                if (t.polyphen_score == null) return worst
+                if (!worst || worst.polyphen_score == null || t.polyphen_score > worst.polyphen_score) return t
+                return worst
+              }, null)
+              const uniqueConsequences = [...new Set(tcs.flatMap(t => t.consequence_terms || []))]
+              return (
+                <div>
+                  <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
+                    <Dna className="h-3.5 w-3.5" /> Ensembl VEP
+                    <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/20 text-[10px] ml-1">
+                      {details.total_transcripts || tcs.length} transcripts
+                    </Badge>
+                  </h4>
+                  <div className={`${cardBg} rounded-xl p-3 border ${border} space-y-2.5`}>
+                    {/* Consequence types */}
+                    <div>
+                      <span className={`text-[10px] font-semibold ${textSecondary} uppercase tracking-wider`}>Consequence Types</span>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {uniqueConsequences.map(c => (
+                          <Badge key={c} variant="outline" className={`text-[10px] px-1.5 py-0 ${
+                            c.includes('stop') || c.includes('frameshift') || c.includes('splice_donor') || c.includes('splice_acceptor')
+                              ? 'bg-red-500/15 text-red-400 border-red-500/30'
+                              : c.includes('missense') || c.includes('inframe')
+                                ? 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30'
+                                : c.includes('synonymous') || c.includes('coding_sequence')
+                                  ? 'bg-green-500/15 text-green-400 border-green-500/30'
+                                  : 'bg-gray-500/15 text-gray-400 border-gray-500/30'
+                          }`}>
+                            {c}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Affected genes & impact distribution */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <span className={`text-[10px] font-semibold ${textSecondary} uppercase tracking-wider`}>Affected Genes</span>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {uniqueGenes.slice(0, 6).map(g => (
+                            <Badge key={g} variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/20 text-[10px] px-1.5 py-0">
+                              {g}
+                            </Badge>
+                          ))}
+                          {uniqueGenes.length > 6 && (
+                            <span className={`text-[10px] ${textSecondary}`}>+{uniqueGenes.length - 6} more</span>
+                          )}
+                        </div>
+                      </div>
+                      <div>
+                        <span className={`text-[10px] font-semibold ${textSecondary} uppercase tracking-wider`}>Impact Distribution</span>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {['HIGH', 'MODERATE', 'LOW', 'MODIFIER'].filter(imp => impacts[imp]).map(imp => (
+                            <Badge key={imp} variant="outline" className={`${impactColor(imp)} text-[10px] px-1.5 py-0`}>
+                              {imp} ({impacts[imp]})
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Functional predictions summary */}
+                    {(worstSift || worstPP) && (
+                      <div className={`pt-2 border-t ${border}`}>
+                        <span className={`text-[10px] font-semibold ${textSecondary} uppercase tracking-wider`}>Functional Predictions</span>
+                        <div className="grid grid-cols-2 gap-2 mt-1">
+                          {worstSift && (
+                            <div className={`p-1.5 rounded-lg ${isDarkMode ? 'bg-white/5' : 'bg-gray-100'}`}>
+                              <div className={`text-[10px] ${textSecondary}`}>SIFT (worst)</div>
+                              <Badge variant="outline" className={`text-[10px] px-1.5 py-0 mt-0.5 ${
+                                worstSift.sift_prediction?.includes('deleterious') ? 'bg-red-500/15 text-red-400 border-red-500/30' :
+                                'bg-green-500/15 text-green-400 border-green-500/30'
+                              }`}>
+                                {worstSift.sift_prediction?.replace(/_/g, ' ') || 'N/A'}
+                              </Badge>
+                              {worstSift.sift_score != null && (
+                                <div className={`text-[10px] font-mono ${textSecondary} mt-0.5`}>{worstSift.sift_score.toFixed(3)} — {worstSift.gene_symbol}</div>
+                              )}
+                            </div>
+                          )}
+                          {worstPP && (
+                            <div className={`p-1.5 rounded-lg ${isDarkMode ? 'bg-white/5' : 'bg-gray-100'}`}>
+                              <div className={`text-[10px] ${textSecondary}`}>PolyPhen (worst)</div>
+                              <Badge variant="outline" className={`text-[10px] px-1.5 py-0 mt-0.5 ${
+                                worstPP.polyphen_prediction?.includes('damaging') ? 'bg-red-500/15 text-red-400 border-red-500/30' :
+                                worstPP.polyphen_prediction === 'possibly_damaging' ? 'bg-amber-500/15 text-amber-400 border-amber-500/30' :
+                                'bg-green-500/15 text-green-400 border-green-500/30'
+                              }`}>
+                                {worstPP.polyphen_prediction?.replace(/_/g, ' ') || 'N/A'}
+                              </Badge>
+                              {worstPP.polyphen_score != null && (
+                                <div className={`text-[10px] font-mono ${textSecondary} mt-0.5`}>{worstPP.polyphen_score.toFixed(3)} — {worstPP.gene_symbol}</div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Ensembl link */}
+                    <div className={`pt-2 border-t ${border} flex items-center justify-between`}>
+                      <span className={`text-[10px] ${textSecondary}`}>
+                        VEP annotated {details.total_transcripts || tcs.length} transcript{(details.total_transcripts || tcs.length) !== 1 ? 's' : ''} across {uniqueGenes.length} gene{uniqueGenes.length !== 1 ? 's' : ''}
+                      </span>
+                      <a
+                        href={`https://www.ensembl.org/Homo_sapiens/Variation/Explore?v=${rsid}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-[10px] text-blue-400 hover:text-blue-300 transition-colors"
+                      >
+                        View on Ensembl <ExternalLink className="h-3 w-3" />
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
+
             {/* ── Transcript Consequences ── */}
             {details.transcripts && details.transcripts.length > 0 && (
               <div>

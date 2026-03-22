@@ -321,6 +321,9 @@ class ScoringEngine:
         result = ScoringResult()
 
         if not evidences:
+            # No evidence → score stays 0.0, classify accordingly (benign)
+            # rather than leaving the default "uncertain".
+            result.classification = self._classify(result.composite_score)
             return result
 
         # Deduplicate: if both clinvar + clinvar_local present, keep higher-weight

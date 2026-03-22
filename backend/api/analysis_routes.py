@@ -719,7 +719,8 @@ async def get_dashboard_data(
         dashboard_data["health_risks"] = _dedup_by([
             {"condition": _clean_trait_name(r.condition), "risk_level": r.risk_level, "risk_score": r.risk_score,
              "associated_variants": r.associated_variants, "recommendations": r.recommendations,
-             "gene": r.gene, "review_status": r.review_status}
+             "gene": r.gene, "review_status": r.review_status,
+             "pathogenicity_classification": r.pathogenicity_classification}
             for r in health_rows
         ], "condition")
 

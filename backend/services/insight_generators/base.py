@@ -9,9 +9,12 @@ from typing import Callable, Dict, List, Optional, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...core.config import settings
 from ...db.models import AnalysisVariant
 
 logger = logging.getLogger(__name__)
+
+_BENIGN_CLASSIFICATIONS = frozenset(('benign', 'likely_benign'))
 
 
 # ---------------------------------------------------------------------------
@@ -755,6 +758,7 @@ async def generate_from_maps(
     dedup_field: str,
     build_from_rsid: Callable,
     build_from_gene: Callable,
+    filter_benign: bool = False,
 ) -> int:
     """
     Generic loop shared by most category generators.
@@ -764,6 +768,10 @@ async def generate_from_maps(
         dedup_field: key inside the info dict used to avoid duplicates.
         build_from_rsid(analysis_id, rsid, genotype, info) -> model | None
         build_from_gene(analysis_id, rsid, gene, consequence, info) -> model | None
+        filter_benign: if True AND config.exclude_benign_from_panels is set,
+            skip variants classified as benign/likely_benign. Only set for
+            categories where pathogenicity is medically relevant (health_risks,
+            carrier_status).
     """
     items = []
     seen: set = set()
@@ -836,6 +844,12 @@ async def generate_from_maps(
                     )
                 )
                 info_with_ref = {**info, '_ref_allele': effective_ref, '_pathogenicity_score': _path_score}
+                # Filter benign/likely_benign variants from health-relevant panels
+                if (filter_benign
+                        and settings.analysis.exclude_benign_from_panels
+                        and isinstance(_path_score, dict)
+                        and _path_score.get('classification') in _BENIGN_CLASSIFICATIONS):
+                    continue
                 item = build_from_rsid(ctx.analysis_id, rsid, genotype or '', info_with_ref)
                 if item:
                     items.append(item)
@@ -894,6 +908,12 @@ async def generate_from_maps(
                     )
                 )
                 info_with_gt = {**info, '_ref_allele': effective_ref, '_genotype': genotype or '', '_pathogenicity_score': _path_score}
+                # Filter benign/likely_benign variants from health-relevant panels
+                if (filter_benign
+                        and settings.analysis.exclude_benign_from_panels
+                        and isinstance(_path_score, dict)
+                        and _path_score.get('classification') in _BENIGN_CLASSIFICATIONS):
+                    continue
                 item = build_from_gene(ctx.analysis_id, rsid, gene, consequence, info_with_gt)
                 if item:
                     items.append(item)

@@ -11,6 +11,7 @@ export interface HealthRisk {
   clinical_significance?: string
   gene?: string         // Gene symbol (FE-01)
   review_status?: string // ClinVar review status (FE-02/03)
+  pathogenicity_classification?: string // benign, likely_benign, uncertain, likely_pathogenic, pathogenic
 }
 
 export interface DrugResponse {

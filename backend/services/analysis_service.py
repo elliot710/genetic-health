@@ -561,9 +561,9 @@ class ComprehensiveAnalysisService:
                     ).on_conflict_do_update(
                         index_elements=["category", "map_type", "key"],
                         set_={
+                            "data": s.data,
                             "sources": s.sources,
                             "confidence": s.confidence,
-                            # Only update data if new confidence is higher
                         },
                         where=VariantMapping.confidence < s.confidence,
                     )

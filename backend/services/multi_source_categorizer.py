@@ -153,6 +153,82 @@ _PRIMARY_FIELD = {
 }
 
 
+def _conf_to_level(conf: float) -> str:
+    """Convert a 0.0-1.0 confidence float to a string severity level."""
+    if conf >= 0.7:
+        return "high"
+    if conf >= 0.4:
+        return "moderate"
+    return "low"
+
+
+def _category_extra_fields(category: str, data: Dict[str, Any], conf: float) -> Dict[str, Any]:
+    """Return category-specific fields that insight generators expect.
+
+    Each generator accesses specific keys from the mapping data dict.
+    This function ensures enrichment-generated mappings contain those keys
+    with sensible defaults derived from the available evidence.
+    """
+    level = _conf_to_level(conf)
+    gene = data.get("gene", "")
+    condition = data.get("condition", "Unknown variant")
+
+    if category == "drug":
+        drug_name = data.get("drug", condition)
+        return {
+            "drugs": [drug_name],  # rsid-map format: list of drug name strings
+        }
+    if category == "physical":
+        return {
+            "result": f"Variant associated with {condition}",
+            "confidence": level,
+            "description": f"Genetic variant in {gene} linked to {data.get('trait', 'physical trait')}",
+        }
+    if category == "nutrition":
+        return {
+            "sensitivity": level,
+            "metabolism": "variable",
+            "recommendations": f"Consult a nutritionist regarding {data.get('nutrient', 'nutrient metabolism')}",
+        }
+    if category == "sports":
+        return {
+            "advantage": level,
+            "recommendations": f"Genetic factor in {data.get('category', 'athletic performance')}",
+            "advice": "Consider personalized training approaches based on genetic profile",
+        }
+    if category == "cognitive":
+        return {
+            "score": str(round(conf * 100)),
+            "percentile": min(99, max(1, int(conf * 80 + 10))),
+            "suggestions": f"Variant associated with {data.get('domain', 'cognitive function')}",
+        }
+    if category == "personality":
+        return {
+            "tendency": level,
+            "confidence": level,
+            "insights": f"Genetic association with {data.get('trait', 'behavioral trait')}",
+        }
+    if category == "wellness":
+        return {
+            "predisposition": level,
+            "score": str(round(conf * 100)),
+            "recommendations": f"Monitor and optimize {data.get('metric', 'health metric')}",
+        }
+    if category == "methylation":
+        return {
+            "capacity": level,
+            "supplements": f"Consider supporting {gene or 'methylation'} pathway",
+        }
+    if category == "detox":
+        return {
+            "phase": "Phase I/II",
+            "capacity": level,
+            "sensitivity": level,
+            "recommendations": f"Support {gene or 'detoxification'} function",
+        }
+    return {}
+
+
 @dataclass
 class SourceEvidence:
     """Evidence collected from a single annotation source."""
@@ -571,6 +647,11 @@ def categorize_variant(
             data["consequence"] = consequence
         if impact:
             data["impact"] = impact
+
+        # Add category-specific fields that insight generators require
+        extras = _category_extra_fields(category, data, conf)
+        for k, v in extras.items():
+            data.setdefault(k, v)
 
         suggestions.append(CategorySuggestion(
             category=category,

@@ -24,6 +24,7 @@ class AnalysisConfiguration:
     progress_update_interval: int = 5
     enable_specialized_analysis: bool = True
     enable_parallel_processing: bool = True
+    exclude_benign_from_panels: bool = True  # Skip benign/likely_benign classified variants from panel insights
 
 
 @dataclass
@@ -61,6 +62,7 @@ class Settings:
         self.analysis.processing_timeout = int(os.getenv('ANALYSIS_TIMEOUT', self.analysis.processing_timeout))
         self.analysis.enable_specialized_analysis = os.getenv('ENABLE_SPECIALIZED_ANALYSIS', 'true').lower() == 'true'
         self.analysis.enable_parallel_processing = os.getenv('ENABLE_PARALLEL_PROCESSING', 'true').lower() == 'true'
+        self.analysis.exclude_benign_from_panels = os.getenv('EXCLUDE_BENIGN_FROM_PANELS', 'true').lower() == 'true'
         
         # Database settings
         self.database.max_connections = int(os.getenv('DB_MAX_CONNECTIONS', self.database.max_connections))

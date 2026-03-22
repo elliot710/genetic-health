@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react'
-import { Heart, AlertTriangle, ChevronRight, CheckCircle, Search, Filter, Shield } from 'lucide-react'
+import { Heart, AlertTriangle, ChevronRight, CheckCircle, Search, Filter, Shield, FlaskConical } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import {
   useThemeClasses,
@@ -53,6 +53,7 @@ interface MappedHealthRisk {
   riskLevel: string
   prevention: string[]
   reviewStatus: string | null   // ClinVar review status (FE-02/03)
+  pathogenicityClassification: string | null
 }
 
 export default function HealthPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
@@ -61,6 +62,7 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
   const [searchQuery, setSearchQuery] = useState('')
   const [riskFilter, setRiskFilter] = useState<string>('all')
   const [evidenceFilter, setEvidenceFilter] = useState<number>(0)  // min ClinVar stars (FE-03)
+  const [pathFilter, setPathFilter] = useState<string>('non-benign')
   const [groupBy, setGroupBy] = useState('none')
 
   const [variantAnnotations, setVariantAnnotations] = useState<Record<string, VariantAnnotation>>({})
@@ -164,6 +166,7 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
           riskLevel: risk.risk_level,
           prevention: Array.isArray(risk.recommendations) ? risk.recommendations : [risk.recommendations || 'Consult with healthcare provider'],
           reviewStatus: risk.review_status ?? null,
+          pathogenicityClassification: risk.pathogenicity_classification ?? null,
           }
         })
         .sort((a: MappedHealthRisk, b: MappedHealthRisk) => {
@@ -194,6 +197,7 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
           riskLevel: risk.risk_level,
           prevention: risk.recommendations || ['Consult with healthcare provider', 'Monitor regularly', 'Maintain healthy lifestyle'],
           reviewStatus: risk.review_status ?? null,
+          pathogenicityClassification: risk.pathogenicity_classification ?? null,
           }
         })
         .sort((a: MappedHealthRisk, b: MappedHealthRisk) => {
@@ -245,8 +249,15 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
     if (evidenceFilter > 0) {
       list = list.filter(r => reviewStatusStars(r.reviewStatus) >= evidenceFilter)
     }
+    if (pathFilter === 'non-benign') {
+      list = list.filter(r => !r.pathogenicityClassification || !['benign', 'likely_benign'].includes(r.pathogenicityClassification))
+    } else if (pathFilter === 'benign-only') {
+      list = list.filter(r => r.pathogenicityClassification && ['benign', 'likely_benign'].includes(r.pathogenicityClassification))
+    } else if (pathFilter === 'pathogenic') {
+      list = list.filter(r => r.pathogenicityClassification && ['pathogenic', 'likely_pathogenic'].includes(r.pathogenicityClassification))
+    }
     return list
-  }, [healthRisks, searchQuery, riskFilter, evidenceFilter])
+  }, [healthRisks, searchQuery, riskFilter, evidenceFilter, pathFilter])
 
   const HEALTH_GROUP_OPTIONS: Record<string, string> = { none: 'No Grouping', riskLevel: 'Risk Level', gene: 'Gene' }
   const getGroupKey = useCallback((risk: MappedHealthRisk): string => {
@@ -340,6 +351,19 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
             <option value={3}>3★ or better</option>
             <option value={4}>4★ Guidelines</option>
             <option value={5}>Curated only</option>
+          </select>
+        </div>
+        <div className="relative min-w-44">
+          <FlaskConical className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${theme.textSecondary}`} />
+          <select
+            value={pathFilter}
+            onChange={e => setPathFilter(e.target.value)}
+            className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme.border} ${theme.glass} ${theme.textPrimary} focus:outline-none focus:ring-2 focus:ring-red-500/40 text-sm appearance-none cursor-pointer`}
+          >
+            <option value="all">All Classifications</option>
+            <option value="non-benign">Exclude Benign</option>
+            <option value="pathogenic">Pathogenic Only</option>
+            <option value="benign-only">Benign Only</option>
           </select>
         </div>
         <GroupBySelect value={groupBy} onChange={v => { setGroupBy(v); resetCollapsed() }} options={HEALTH_GROUP_OPTIONS} theme={theme} />

@@ -163,6 +163,7 @@ class HealthRisk(Base):
     recommendations = Column(JSON)  # List of recommendations
     gene = Column(String(100))  # Gene symbol (FE-01)
     review_status = Column(String(200))  # ClinVar review status for evidence level (FE-02/03)
+    pathogenicity_classification = Column(String(30))  # benign, likely_benign, uncertain, likely_pathogenic, pathogenic
     
 class DrugResponse(Base):
     __tablename__ = "drug_responses"
