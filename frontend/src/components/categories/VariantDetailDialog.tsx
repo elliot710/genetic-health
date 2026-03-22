@@ -192,7 +192,14 @@ interface VariantDetails {
     model_date?: string
     all_isoforms?: Array<{ entry_id?: string; uniprot_id?: string; confidence?: number }>
   }
+  user_genotype?: string
+  cache_hit?: boolean
 }
+
+// ─── Session-level set of rsids that have been refreshed from external APIs
+// this session (resets on page reload). Ensures first open auto-refreshes
+// while subsequent opens are served instantly from the DB cache.
+const sessionRefreshedRsids = new Set<string>()
 
 // ─── Props ──────────────────────────────────────────────────────
 
@@ -301,7 +308,7 @@ function confidenceBadge(conf: string): string {
 export default function VariantDetailDialog({
   rsid,
   gene,
-  genotype,
+  genotype: genotypeProp,
   token,
   isDarkMode = false,
   open,
@@ -341,6 +348,7 @@ export default function VariantDetailDialog({
           body: JSON.stringify({
             rsid,
             gene: gene || details?.transcripts?.[0]?.gene_symbol || null,
+            genotype: genotypeProp || details?.user_genotype || null,
             most_severe_consequence: details?.most_severe_consequence || null,
             clinical_significance: details?.clinical_significance?.[0] || null,
           }),
@@ -368,6 +376,14 @@ export default function VariantDetailDialog({
       .then((res) => res.json())
       .then((data) => {
         setDetails(data)
+        // First-time open: if data was served from DB cache, kick off a silent
+        // background refresh so the user always sees up-to-date information
+        // without having to click the refresh button manually.
+        if (!forceRefresh && data?.found && data?.cache_hit && !sessionRefreshedRsids.has(rsid)) {
+          sessionRefreshedRsids.add(rsid)
+          // Small delay lets React finish rendering the cached data first
+          setTimeout(() => fetchDetails(true), 100)
+        }
         // Broadcast updated pathogenicity score so panel cards can sync
         if (forceRefresh && data?.pathogenicity_score) {
           const ps = data.pathogenicity_score
@@ -399,6 +415,10 @@ export default function VariantDetailDialog({
   const textPrimary = isDarkMode ? 'text-gray-100' : 'text-gray-900'
   const textSecondary = isDarkMode ? 'text-gray-400' : 'text-gray-500'
   const cardBg = isDarkMode ? 'bg-white/5' : 'bg-gray-50'
+
+  // Use the prop genotype if provided, otherwise fall back to the user_genotype
+  // returned by the backend (looked up from their analysis variants).
+  const genotype = genotypeProp || details?.user_genotype
 
   if (!open) return null
 

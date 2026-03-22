@@ -12,6 +12,7 @@ from .api.analysis_routes import router as analysis_router
 from .api.admin_routes import router as admin_router
 from .api.insights_routes import router as insights_router
 from .api.notification_routes import router as notification_ws_router, notification_router
+from .api.sharing_routes import router as sharing_router
 from .core.telemetry import configure_telemetry
 from .db.database import init_db
 
@@ -242,6 +243,7 @@ app.include_router(admin_router)
 app.include_router(insights_router)
 app.include_router(notification_ws_router)   # WebSocket: /ws/notifications
 app.include_router(notification_router)      # REST:      /api/notifications/...
+app.include_router(sharing_router)           # REST:      /api/sharing/...
 
 @app.get("/")
 async def root():

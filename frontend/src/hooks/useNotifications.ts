@@ -15,6 +15,7 @@ export type NotificationType =
   | 'discovery_approved'
   | 'discovery_rejected'
   | 'data_deleted'
+  | 'dashboard_shared'
 
 export interface AppNotification {
   id: number
@@ -45,11 +46,13 @@ const PING_INTERVAL_MS = 25_000
 export function useNotifications(token?: string): UseNotificationsReturn {
   const [notifications, setNotifications] = useState<AppNotification[]>([])
   const [isConnected, setIsConnected] = useState(false)
+  const [wsToken, setWsToken] = useState<string | null>(null)
 
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectDelayRef = useRef(RECONNECT_DELAY_MS)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const mountedRef = useRef(true)
 
   const unreadCount = notifications.filter((n) => !n.read).length
@@ -67,7 +70,17 @@ export function useNotifications(token?: string): UseNotificationsReturn {
       return [notif, ...prev]
     })
   }, [])
+  // ── REST fetch (initial load + polling fallback) ──────────
 
+  const fetchFromRest = useCallback(async () => {
+    try {
+      const res = await fetch(apiUrl('/api/notifications?limit=50'), { credentials: 'include' })
+      if (res.ok && mountedRef.current) {
+        const data: AppNotification[] = await res.json()
+        setNotifications(data)
+      }
+    } catch { /* ignore */ }
+  }, [])
   // ── REST calls ────────────────────────────────────────────────
 
   const markRead = useCallback(async (id: number) => {
@@ -119,7 +132,9 @@ export function useNotifications(token?: string): UseNotificationsReturn {
     // Derive ws:// or wss:// from the API_BASE
     const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
     const wsBase = apiBase.replace(/^http/, 'ws')
-    const url = `${wsBase}/ws/notifications?token=${token}`
+    // Use real JWT from ws-token endpoint; fall back to the app token state
+    const wsTokenParam = wsToken || token
+    const url = `${wsBase}/ws/notifications?token=${wsTokenParam}`
 
     const ws = new WebSocket(url)
     wsRef.current = ws
@@ -128,6 +143,12 @@ export function useNotifications(token?: string): UseNotificationsReturn {
       if (!mountedRef.current) return
       setIsConnected(true)
       reconnectDelayRef.current = RECONNECT_DELAY_MS
+
+      // Stop REST polling — WS handles live updates now
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current)
+        pollTimerRef.current = null
+      }
 
       // Keepalive ping
       pingTimerRef.current = setInterval(() => {
@@ -170,30 +191,63 @@ export function useNotifications(token?: string): UseNotificationsReturn {
         pingTimerRef.current = null
       }
 
-      // 4001 = unauthorized — don't reconnect
-      if (ev.code === 4001) return
+      // 4001 = unauthorized — don't reconnect via WS, fall back to polling
+      if (ev.code === 4001) {
+        if (!pollTimerRef.current) {
+          pollTimerRef.current = setInterval(fetchFromRest, 30_000)
+        }
+        return
+      }
 
       // Exponential back-off
       const delay = Math.min(reconnectDelayRef.current, MAX_RECONNECT_DELAY_MS)
       reconnectDelayRef.current = delay * 2
       reconnectTimerRef.current = setTimeout(connect, delay)
     }
-  }, [token, upsertNotification])
+  }, [token, wsToken, upsertNotification, fetchFromRest])
 
   // ── lifecycle ─────────────────────────────────────────────────
 
   useEffect(() => {
+    if (!token) return
     mountedRef.current = true
-    connect()
+
+    // 1. Seed notifications from REST immediately (no wait for WS)
+    fetchFromRest()
+
+    // 2. Fetch real JWT for WS auth, then connect
+    fetch(apiUrl('/auth/ws-token'), { credentials: 'include' })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.token && mountedRef.current) {
+          setWsToken(data.token)
+        } else if (mountedRef.current) {
+          // No JWT available — use REST polling only
+          pollTimerRef.current = setInterval(fetchFromRest, 30_000)
+        }
+      })
+      .catch(() => {
+        if (mountedRef.current) {
+          pollTimerRef.current = setInterval(fetchFromRest, 30_000)
+        }
+      })
 
     return () => {
       mountedRef.current = false
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current)
       if (pingTimerRef.current) clearInterval(pingTimerRef.current)
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current)
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [connect])
+  }, [token, fetchFromRest])
+
+  // Connect (or reconnect) when wsToken becomes available
+  useEffect(() => {
+    if (wsToken && mountedRef.current) {
+      connect()
+    }
+  }, [wsToken, connect])
 
   return {
     notifications,

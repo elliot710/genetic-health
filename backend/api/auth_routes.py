@@ -173,6 +173,66 @@ async def logout(response: Response):
     return {"detail": "Logged out"}
 
 
+DEFAULT_NOTIFICATION_PREFERENCES: dict[str, bool] = {
+    "analysis_queued": True,
+    "analysis_completed": True,
+    "analysis_failed": True,
+    "upload_complete": True,
+    "upload_failed": True,
+    "variant_saved": True,
+    "discovery_approved": True,
+    "discovery_rejected": True,
+    "data_deleted": True,
+    "dashboard_shared": True,
+}
+
+
+@router.get("/ws-token")
+async def get_ws_token(request: Request, current_user: User = Depends(get_current_user)):
+    """Return the raw access token from the HttpOnly cookie for WebSocket use.
+
+    WebSocket connections in browsers cannot use HttpOnly cookies directly via
+    the WS query-param pattern, so this endpoint bridges the gap.
+    """
+    token = request.cookies.get(ACCESS_COOKIE)
+    if not token:
+        raise HTTPException(status_code=401, detail="No access token cookie found")
+    return {"token": token}
+
+
+@router.get("/notification-preferences")
+async def get_notification_preferences(current_user: User = Depends(get_current_user)):
+    """Return the user's notification preferences (all default to True)."""
+    prefs = dict(DEFAULT_NOTIFICATION_PREFERENCES)
+    if current_user.notification_preferences:
+        prefs.update(current_user.notification_preferences)
+    return prefs
+
+
+class NotificationPreferencesUpdate(BaseModel):
+    preferences: dict[str, bool]
+
+
+@router.put("/notification-preferences")
+async def update_notification_preferences(
+    body: NotificationPreferencesUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Update notification preferences. Only known keys accepted."""
+    unknown = set(body.preferences) - set(DEFAULT_NOTIFICATION_PREFERENCES)
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown preference keys: {sorted(unknown)}")
+    existing: dict = dict(current_user.notification_preferences or {})
+    existing.update(body.preferences)
+    current_user.notification_preferences = existing
+    await db.commit()
+    # Return full merged prefs
+    merged = dict(DEFAULT_NOTIFICATION_PREFERENCES)
+    merged.update(existing)
+    return merged
+
+
 @router.post("/refresh")
 async def refresh_access_token(request: Request, response: Response, db: AsyncSession = Depends(get_session)):
     """Issue a fresh access-token cookie using the refresh-token cookie."""
@@ -204,6 +264,7 @@ async def refresh_access_token(request: Request, response: Response, db: AsyncSe
 class SaveVariantRequest(BaseModel):
     rsid: str
     gene: Optional[str] = None
+    genotype: Optional[str] = None
     most_severe_consequence: Optional[str] = None
     clinical_significance: Optional[str] = None
     note: Optional[str] = None
@@ -213,6 +274,7 @@ class SavedVariantResponse(BaseModel):
     id: int
     rsid: str
     gene: Optional[str] = None
+    genotype: Optional[str] = None
     most_severe_consequence: Optional[str] = None
     clinical_significance: Optional[str] = None
     note: Optional[str] = None
@@ -239,6 +301,7 @@ async def list_saved_variants(
             id=r.id,
             rsid=r.rsid,
             gene=r.gene,
+            genotype=r.genotype,
             most_severe_consequence=r.most_severe_consequence,
             clinical_significance=r.clinical_significance,
             note=r.note,
@@ -269,6 +332,7 @@ async def save_variant(
         user_id=current_user.id,
         rsid=body.rsid,
         gene=body.gene,
+        genotype=body.genotype,
         most_severe_consequence=body.most_severe_consequence,
         clinical_significance=body.clinical_significance,
         note=body.note,
@@ -280,6 +344,7 @@ async def save_variant(
         id=sv.id,
         rsid=sv.rsid,
         gene=sv.gene,
+        genotype=sv.genotype,
         most_severe_consequence=sv.most_severe_consequence,
         clinical_significance=sv.clinical_significance,
         note=sv.note,

@@ -290,7 +290,7 @@ export default function DashboardHeader({
                   className={`w-full text-left px-4 py-3 text-sm ${theme.text.primary} ${theme.glassHover} flex items-center space-x-3 transition-all duration-200`}
                 >
                   <Settings className="h-4 w-4" />
-                  <span>Settings</span>
+                  <span>Profile</span>
                 </button>
                 <button
                   onClick={onDeleteClick}

@@ -60,6 +60,12 @@ interface DashboardProps {
   userAvatarUrl?: string | null
 }
 
+interface SharedUserInfo {
+  id: number
+  name: string
+  email: string
+}
+
 const CATEGORIES: SidebarCategory[] = [
   { id: 'overview', title: 'Overview', icon: Home },
   { id: 'health', title: 'Health & Wellness', icon: Heart },
@@ -118,6 +124,7 @@ export default function Dashboard({
     }
     return false
   })
+  const [viewingSharedUser, setViewingSharedUser] = useState<SharedUserInfo | null>(null)
 
   const theme = getTheme(isDarkMode)
   const panelTheme = useThemeClasses(isDarkMode)
@@ -213,6 +220,19 @@ export default function Dashboard({
       /* ignore */
     }
   }, [token])
+
+  // ── Load shared user dashboard when viewingSharedUser changes ──
+  useEffect(() => {
+    if (viewingSharedUser) {
+      fetch(apiUrl(`/api/sharing/dashboard/${viewingSharedUser.id}`), { credentials: 'include' })
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (d) setData(d) })
+        .catch(() => {/* ignore */})
+    } else if (viewingSharedUser === null && analysisData) {
+      // Switched back to own data — restore
+      setData(analysisData)
+    }
+  }, [viewingSharedUser]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Show progress if analysis ID present but no data ──────
   useEffect(() => {
@@ -322,7 +342,7 @@ export default function Dashboard({
       case 'admin':
         return <AdminPanel token={token} isDarkMode={isDarkMode} theme={theme} />
       case 'settings':
-        return <SettingsPanel token={token} theme={theme} data={data} onProfileUpdate={refreshUserInfo} />
+        return <SettingsPanel token={token} theme={theme} data={viewingSharedUser ? undefined : data} onProfileUpdate={refreshUserInfo} onViewSharedUser={setViewingSharedUser} viewingSharedUser={viewingSharedUser} />
       default:
         return (
           <DashboardOverview
@@ -422,6 +442,24 @@ export default function Dashboard({
 
         <main className={`flex-1 overflow-auto ${theme.background}`}>
           <div className="p-8 max-w-none">
+            {/* Shared-view banner */}
+            {viewingSharedUser && (
+              <div className="mb-6 flex items-center justify-between gap-4 rounded-xl border border-green-500/30 bg-green-500/10 px-4 py-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Users className="h-4 w-4 text-green-400 shrink-0" />
+                  <span className="text-sm text-green-300">
+                    Viewing <span className="font-semibold">{viewingSharedUser.name}</span>&apos;s dashboard
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setViewingSharedUser(null)}
+                  className="shrink-0 rounded-lg border border-green-500/30 bg-green-500/15 px-3 py-1 text-xs font-medium text-green-300 hover:bg-green-500/25 transition-colors"
+                >
+                  Switch to my data
+                </button>
+              </div>
+            )}
             {analysis.showProgress && analysisId ? (
               <AnalysisProgressLoader
                 analysisId={analysisId}
