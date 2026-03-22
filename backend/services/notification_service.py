@@ -28,9 +28,22 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.database import async_session_factory
-from ..db.models import Notification
+from ..db.models import Notification, User
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_PREFS: dict[str, bool] = {
+    "analysis_queued": True,
+    "analysis_completed": True,
+    "analysis_failed": True,
+    "upload_complete": True,
+    "upload_failed": True,
+    "variant_saved": True,
+    "discovery_approved": True,
+    "discovery_rejected": True,
+    "data_deleted": True,
+    "dashboard_shared": True,
+}
 
 
 class NotificationService:
@@ -90,9 +103,21 @@ class NotificationService:
         title: str,
         message: str,
         data: Optional[dict[str, Any]] = None,
-    ) -> Notification:
-        """Persist a notification to the DB and push it to connected clients."""
+    ) -> Optional[Notification]:
+        """Persist a notification to the DB and push it to connected clients.
+
+        Returns None (silently) if the user has disabled this notification type.
+        """
         async with async_session_factory() as session:
+            # Check user notification preferences before persisting
+            user_result = await session.get(User, user_id)
+            if user_result is not None:
+                prefs: dict = dict(user_result.notification_preferences or {})
+                enabled = prefs.get(type, _DEFAULT_PREFS.get(type, True))
+                if not enabled:
+                    logger.debug(f"[notifications] user {user_id} has disabled '{type}' — skipping")
+                    return None
+
             notif = Notification(
                 user_id=user_id,
                 type=type,

@@ -25,6 +25,12 @@ class User(Base):
     genetic_analyses = relationship("GeneticAnalysis", back_populates="user")
     saved_variants = relationship("SavedVariant", back_populates="user", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
+    # Notification preferences — JSON map of type → bool, e.g. {"analysis_completed": true}
+    notification_preferences = Column(JSON, nullable=True)
+    # Shares I created (as owner)
+    shares_given = relationship("DashboardShare", foreign_keys="DashboardShare.owner_id", back_populates="owner", cascade="all, delete-orphan")
+    # Shares others created for me (as recipient)
+    shares_received = relationship("DashboardShare", foreign_keys="DashboardShare.recipient_id", back_populates="recipient", cascade="all, delete-orphan")
 
 
 class Notification(Base):
@@ -47,6 +53,25 @@ class Notification(Base):
     )
 
 
+class DashboardShare(Base):
+    """Records that owner has granted recipient access to view their dashboard."""
+    __tablename__ = "dashboard_shares"
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    recipient_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    owner = relationship("User", foreign_keys=[owner_id], back_populates="shares_given")
+    recipient = relationship("User", foreign_keys=[recipient_id], back_populates="shares_received")
+
+    __table_args__ = (
+        UniqueConstraint("owner_id", "recipient_id", name="uq_dashboard_share"),
+        Index("ix_dashboard_shares_owner", "owner_id"),
+        Index("ix_dashboard_shares_recipient", "recipient_id"),
+    )
+
+
 class SavedVariant(Base):
     """User-bookmarked variants for quick access from the profile."""
     __tablename__ = "saved_variants"
@@ -55,6 +80,7 @@ class SavedVariant(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     rsid = Column(String, nullable=False)
     gene = Column(String, nullable=True)
+    genotype = Column(String, nullable=True)
     most_severe_consequence = Column(String, nullable=True)
     clinical_significance = Column(String, nullable=True)
     note = Column(Text, nullable=True)

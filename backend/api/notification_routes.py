@@ -19,6 +19,7 @@ from ..db.database import get_session
 from ..db.models import User
 from ..services.notification_service import get_notification_service
 from .auth_routes import get_current_user, verify_token
+from ..core.auth import ACCESS_COOKIE
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +41,14 @@ async def notifications_ws(
     svc = get_notification_service()
     user_id: Optional[int] = None
 
-    # ── Authenticate via query param ──────────────────────────────
-    if token:
-        username = verify_token(token)
+    # ── Authenticate: HttpOnly cookie first, then query param ─────
+    # The browser always sends cookies with the WS handshake, so
+    # cookie-based auth works transparently without exposing the JWT.
+    cookie_token = websocket.cookies.get(ACCESS_COOKIE)
+    effective_token = cookie_token or token
+
+    if effective_token:
+        username = verify_token(effective_token)
         if username:
             # Resolve user_id from DB
             from ..db.database import async_session_factory

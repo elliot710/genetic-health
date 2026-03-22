@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from backend.services.genetic_api_service import GeneticAPIService
 from backend.db.database import get_session
-from backend.db.models import SharedVariantAnnotation, VariantLookupCache, AnnotationSourceConfig, DashboardCache
+from backend.db.models import SharedVariantAnnotation, VariantLookupCache, AnnotationSourceConfig, DashboardCache, GeneticAnalysis, AnalysisVariant, GeneticMarker
 from backend.utils.alpha_missense import get_alpha_missense_service, AlphaMissenseService
 from .auth_routes import get_current_user
 from backend.db.schemas import User
@@ -438,12 +438,15 @@ async def get_variant_details(
     Pass ?refresh=true to force a fresh fetch from external APIs.
     """
     annotation = None
+    cache_hit = False
 
     if not refresh:
         result = await db.execute(
             select(SharedVariantAnnotation).where(SharedVariantAnnotation.rsid == rsid)
         )
         annotation = result.scalar_one_or_none()
+        if annotation:
+            cache_hit = True
 
     if not annotation:
         # Fall back: fetch live data from external APIs and persist it
@@ -499,7 +502,27 @@ async def get_variant_details(
         except Exception:
             return {"found": False, "rsid": rsid}
 
-    response: Dict[str, Any] = {"found": True, "rsid": rsid}
+    response: Dict[str, Any] = {"found": True, "rsid": rsid, "cache_hit": cache_hit}
+
+    # Look up the current user's genotype for this variant from their latest analysis
+    try:
+        geno_result = await db.execute(
+            select(AnalysisVariant.genotype)
+            .join(GeneticMarker, GeneticMarker.id == AnalysisVariant.marker_id)
+            .join(GeneticAnalysis, GeneticAnalysis.id == AnalysisVariant.analysis_id)
+            .where(
+                GeneticMarker.rsid == rsid,
+                GeneticAnalysis.user_id == current_user.id,
+                GeneticAnalysis.deleted_at.is_(None),
+            )
+            .order_by(GeneticAnalysis.id.desc())
+            .limit(1)
+        )
+        user_genotype = geno_result.scalar_one_or_none()
+        if user_genotype:
+            response["user_genotype"] = user_genotype
+    except Exception:
+        pass
 
     # Process Ensembl data
     ensembl = annotation.ensembl_data
