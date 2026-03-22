@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from ..db.database import get_session, async_session_factory
 from ..db.models import GeneticAnalysis, HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait, SportsPerformance, CognitiveProfile, PersonalityTrait, AncestryResult, CarrierStatus, WellnessMetric, MethylationProfile, DetoxificationProfile, RareMutation, UncommonMutation, DashboardCache
 from .auth_routes import get_current_user
+from ..services.notification_service import get_notification_service
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,20 @@ async def start_analysis(
             )
         )
         await db.commit()
+
+        # Notify user that analysis has been queued
+        try:
+            fname = getattr(analysis, 'filename', 'your file')
+            svc = get_notification_service()
+            await svc.create(
+                user_id=current_user.id,
+                type="analysis_queued",
+                title="Analysis Queued",
+                message=f"Analysis of {fname!r} queued — the worker will start shortly.",
+                data={"analysis_id": analysis_id, "filename": fname},
+            )
+        except Exception as ne:
+            logger.warning(f"Could not send analysis-queued notification: {ne}")
 
         return AnalysisResponse(
             analysis_id=analysis_id,

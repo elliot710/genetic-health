@@ -24,6 +24,27 @@ class User(Base):
     # Relationship to genetic analyses
     genetic_analyses = relationship("GeneticAnalysis", back_populates="user")
     saved_variants = relationship("SavedVariant", back_populates="user", cascade="all, delete-orphan")
+    notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
+
+
+class Notification(Base):
+    """In-app notifications for user events (analysis completion, uploads, etc.)."""
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    type = Column(String(64), nullable=False)  # e.g. 'analysis_completed', 'upload_complete'
+    title = Column(String(255), nullable=False)
+    message = Column(Text, nullable=False)
+    data = Column(JSON, nullable=True)          # extra payload (analysis_id, filename, …)
+    read = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="notifications")
+
+    __table_args__ = (
+        Index("ix_notifications_user_id_created", "user_id", "created_at"),
+    )
 
 
 class SavedVariant(Base):

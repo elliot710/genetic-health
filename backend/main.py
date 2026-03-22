@@ -11,6 +11,7 @@ from .api import auth_routes, upload_routes, annotation_routes, variant_routes
 from .api.analysis_routes import router as analysis_router
 from .api.admin_routes import router as admin_router
 from .api.insights_routes import router as insights_router
+from .api.notification_routes import router as notification_ws_router, notification_router
 from .core.telemetry import configure_telemetry
 from .db.database import init_db
 
@@ -138,6 +139,68 @@ async def lifespan(app: FastAPI):
                 print(f"⚠️ Nightly purge failed: {e}")
     asyncio.create_task(_nightly_purge())
 
+    # Watch for analysis completions from the worker process and create notifications
+    from .services.notification_service import get_notification_service
+    from .db.models import GeneticAnalysis
+    from sqlalchemy import select as sa_select, text as sa_text2
+
+    async def _watch_analysis_completions():
+        """Poll for analyses that just completed/failed and push notifications."""
+        svc = get_notification_service()
+        # Track which analyses we've already notified about
+        notified: set[int] = set()
+        while True:
+            await asyncio.sleep(12)
+            try:
+                async with async_session_factory() as s:
+                    # Find recently completed/failed analyses not yet notified
+                    rows = await s.execute(
+                        sa_text(
+                            """
+                            SELECT a.id, a.user_id, a.analysis_status, a.filename,
+                                   a.progress_percentage, a.total_variants
+                            FROM genetic_analyses a
+                            LEFT JOIN notifications n
+                              ON n.user_id = a.user_id
+                              AND n.data->>'analysis_id' = a.id::text
+                              AND n.type IN ('analysis_completed','analysis_failed')
+                            WHERE a.analysis_status IN ('completed','failed')
+                              AND a.deleted_at IS NULL
+                              AND n.id IS NULL
+                            ORDER BY a.upload_date DESC
+                            LIMIT 30
+                            """
+                        )
+                    )
+                    analyses = rows.fetchall()
+
+                for row in analyses:
+                    aid, uid, astatus, fname, pct, total = row
+                    if aid in notified:
+                        continue
+                    notified.add(aid)
+                    if astatus == 'completed':
+                        await svc.create(
+                            user_id=uid,
+                            type='analysis_completed',
+                            title='Analysis Complete',
+                            message=f'Your DNA analysis of {fname!r} finished with {total:,} variants processed.',
+                            data={'analysis_id': aid, 'filename': fname, 'total_variants': total},
+                        )
+                    elif astatus == 'failed':
+                        await svc.create(
+                            user_id=uid,
+                            type='analysis_failed',
+                            title='Analysis Failed',
+                            message=f'Analysis of {fname!r} encountered an error. Please try again.',
+                            data={'analysis_id': aid, 'filename': fname},
+                        )
+            except Exception as e:
+                logger.warning(f"Analysis completion watcher error: {e}")
+
+    asyncio.create_task(_watch_analysis_completions())
+    print("👁  Analysis completion watcher started")
+
     yield
 
     # ── Shutdown ─────────────────────────────────────────────────
@@ -177,6 +240,8 @@ app.include_router(annotation_routes.router)
 app.include_router(variant_routes.router)
 app.include_router(admin_router)
 app.include_router(insights_router)
+app.include_router(notification_ws_router)   # WebSocket: /ws/notifications
+app.include_router(notification_router)      # REST:      /api/notifications/...
 
 @app.get("/")
 async def root():

@@ -5,6 +5,8 @@ import {
   ChevronDown, Sun, Moon, Shield, Settings, Trash2, LogOut,
 } from 'lucide-react'
 import { getThemeClass, getTheme } from '@/utils/theme'
+import NotificationBell from './NotificationBell'
+import type { AppNotification } from '@/hooks/useNotifications'
 
 type Theme = ReturnType<typeof getTheme>
 
@@ -30,6 +32,13 @@ interface DashboardHeaderProps {
   onRefreshData: () => void
   onReset: () => void
   onDeleteClick: () => void
+  // Notification props
+  notifications: AppNotification[]
+  unreadCount: number
+  isNotificationConnected: boolean
+  onMarkRead: (id: number) => Promise<void>
+  onMarkAllRead: () => Promise<void>
+  onDeleteNotification: (id: number) => Promise<void>
 }
 
 export default function DashboardHeader({
@@ -54,6 +63,12 @@ export default function DashboardHeader({
   onRefreshData,
   onReset,
   onDeleteClick,
+  notifications,
+  unreadCount,
+  isNotificationConnected,
+  onMarkRead,
+  onMarkAllRead,
+  onDeleteNotification,
 }: DashboardHeaderProps) {
   return (
     <header className={`${theme.glass} border-b ${theme.glassBorder} sticky top-0 z-30`}>
@@ -209,6 +224,18 @@ export default function DashboardHeader({
               </button>
             </div>
           </div>
+
+          {/* Notification Bell */}
+          <NotificationBell
+            theme={theme}
+            isDarkMode={isDarkMode}
+            notifications={notifications}
+            unreadCount={unreadCount}
+            isConnected={isNotificationConnected}
+            onMarkRead={onMarkRead}
+            onMarkAllRead={onMarkAllRead}
+            onDelete={onDeleteNotification}
+          />
 
           {/* User Menu */}
           <div className="relative">

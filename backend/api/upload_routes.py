@@ -14,6 +14,7 @@ from ..utils.vcf_parser import VCFParser
 from ..services.variant_uploader import VariantUploader
 from ..services.analysis_queue import queue_analysis
 from ..services.analysis_service import ComprehensiveAnalysisService
+from ..services.notification_service import get_notification_service
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,24 @@ async def _process_upload_background(
             await session.commit()
             logger.info(f"Upload complete for analysis {analysis_id} ({processed_count} variants). Queued for worker.")
 
+            # Notify user that upload is done and analysis is queued
+            try:
+                # Fetch filename for the notification
+                row = await session.execute(
+                    select(GeneticAnalysis.filename)
+                    .where(GeneticAnalysis.id == analysis_id)
+                )
+                fname = row.scalar_one_or_none() or "your file"
+                svc = get_notification_service()
+                await svc.create(
+                    user_id=user_id,
+                    type="upload_complete",
+                    title="Upload Complete",
+                    message=f"{fname!r} uploaded successfully — {processed_count:,} variants queued for analysis.",
+                    data={"analysis_id": analysis_id, "filename": fname, "total_variants": processed_count},
+                )
+            except Exception as ne:
+                logger.warning(f"Could not send upload notification: {ne}")
     except Exception as e:
         logger.error(f"Background upload failed for analysis {analysis_id}: {e}")
         try:
@@ -77,6 +96,19 @@ async def _process_upload_background(
                 await session.commit()
         except Exception:
             logger.exception(f"Failed to mark analysis {analysis_id} as failed")
+
+        # Notify user that upload processing failed
+        try:
+            svc = get_notification_service()
+            await svc.create(
+                user_id=user_id,
+                type="upload_failed",
+                title="Upload Failed",
+                message=f"Failed to process uploaded file: {str(e)[:200]}",
+                data={"analysis_id": analysis_id},
+            )
+        except Exception as ne:
+            logger.warning(f"Could not send upload-failed notification: {ne}")
 
 
 @router.post("/vcf")
@@ -263,6 +295,19 @@ async def delete_all_user_data(
         )
 
         await session.commit()
+
+        # Notify user that data has been deleted
+        try:
+            svc = get_notification_service()
+            await svc.create(
+                user_id=current_user.id,
+                type="data_deleted",
+                title="Data Deleted",
+                message=f"{deleted_count} analysis record(s) and all associated data have been deleted.",
+                data={"deleted_count": deleted_count},
+            )
+        except Exception as ne:
+            logger.warning(f"Could not send data-deleted notification: {ne}")
 
         return JSONResponse({
             "status": "success",

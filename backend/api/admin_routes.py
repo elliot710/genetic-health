@@ -19,6 +19,7 @@ from datetime import datetime
 from ..db.database import get_session
 from ..db.models import User, GeneticAnalysis, VariantMapping, PendingDiscovery, SharedVariantAnnotation, AnnotationSourceConfig
 from .auth_routes import get_current_user
+from ..services.notification_service import get_notification_service
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 logger = logging.getLogger(__name__)
@@ -431,6 +432,21 @@ async def review_discovery(
         discovery.rejection_reason = review.rejection_reason
         await db.commit()
         await db.refresh(discovery)
+
+        # Notify the submitter if known
+        if discovery.discovered_by:
+            try:
+                svc = get_notification_service()
+                await svc.create(
+                    user_id=discovery.discovered_by,
+                    type='discovery_rejected',
+                    title='Variant Discovery Rejected',
+                    message=f'Variant {discovery.rsid!r} was not approved for the panel. Reason: {review.rejection_reason or "No reason provided"}.',
+                    data={'discovery_id': discovery_id, 'rsid': discovery.rsid},
+                )
+            except Exception as ne:
+                logger.warning(f"Could not send discovery-rejected notification: {ne}")
+
         return discovery
 
     # Approve: create the live entry
@@ -470,6 +486,21 @@ async def review_discovery(
     discovery.reviewed_at = func.now()
     await db.commit()
     await db.refresh(discovery)
+
+    # Notify the submitter if known
+    if discovery.discovered_by:
+        try:
+            svc = get_notification_service()
+            await svc.create(
+                user_id=discovery.discovered_by,
+                type='discovery_approved',
+                title='Variant Discovery Approved',
+                message=f'Variant {discovery.rsid!r} has been approved and added to the variant panel.',
+                data={'discovery_id': discovery_id, 'rsid': discovery.rsid},
+            )
+        except Exception as ne:
+            logger.warning(f"Could not send discovery-approved notification: {ne}")
+
     return discovery
 
 
