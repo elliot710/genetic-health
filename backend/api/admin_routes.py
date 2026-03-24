@@ -2045,6 +2045,41 @@ async def gnomad_etl_import(
     return {"job_id": job.id, "status": "pending", "detail": f"gnomAD ETL queued as worker job #{job.id} — monitor via Worker Jobs"}
 
 
+@router.get("/ensembl-etl/status")
+async def ensembl_etl_status(admin: User = Depends(require_admin)):
+    """Get current Ensembl gene model import status (row counts + file availability)."""
+    import os
+    from pathlib import Path
+    from sqlalchemy import text as sa_text
+    from ..db.database import async_session_factory
+    async with async_session_factory() as session:
+        total = (await session.execute(sa_text("SELECT COUNT(*) FROM ensembl_genes"))).scalar() or 0
+        protein_coding = (await session.execute(
+            sa_text("SELECT COUNT(*) FROM ensembl_genes WHERE biotype = 'protein_coding'")
+        )).scalar() or 0
+        chromosomes = (await session.execute(
+            sa_text("SELECT COUNT(DISTINCT chromosome) FROM ensembl_genes")
+        )).scalar() or 0
+    data_dir = Path(os.environ.get(
+        "ENSEMBL_DATA_DIR",
+        os.path.join(os.path.dirname(__file__), "..", "..", "data_sources", "ensembl", "homo_sapiens"),
+    ))
+    fasta_base = data_dir / "fasta"
+    cdna_path = fasta_base / "cdna" / "Homo_sapiens.GRCh38.cdna.all.fa.gz"
+    ncrna_path = fasta_base / "ncrna" / "Homo_sapiens.GRCh38.ncrna.fa.gz"
+    if not cdna_path.exists():
+        cdna_path = data_dir / "cdna" / "Homo_sapiens.GRCh38.cdna.all.fa.gz"
+    if not ncrna_path.exists():
+        ncrna_path = data_dir / "ncrna" / "Homo_sapiens.GRCh38.ncrna.fa.gz"
+    return {
+        "ensembl_genes": total,
+        "protein_coding_genes": protein_coding,
+        "chromosomes": chromosomes,
+        "cdna_file_exists": cdna_path.exists(),
+        "ncrna_file_exists": ncrna_path.exists(),
+    }
+
+
 @router.post("/ensembl-etl/import")
 async def ensembl_etl_import(
     admin: User = Depends(require_admin),

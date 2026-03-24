@@ -12,8 +12,8 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 if not SECRET_KEY:
     raise RuntimeError("SECRET_KEY environment variable must be set")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 120  # 2 hours
-REFRESH_TOKEN_EXPIRE_DAYS = 7
+ACCESS_TOKEN_EXPIRE_MINUTES = 43200  # 30 days
+REFRESH_TOKEN_EXPIRE_DAYS = 30
 
 # Cookie settings
 ACCESS_COOKIE = "access_token"

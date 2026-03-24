@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { Shield, Users, Settings, Plus, Trash2, Pencil, Check, X, ChevronRight, Download, Upload, Database, Lightbulb, RefreshCw, AlertTriangle, Minus, Info, Activity, Play, Pause, Square, Clock, FileText, Zap, Sparkles, HardDrive, Scale, RotateCcw, Layers } from 'lucide-react'
+import { Shield, Users, Settings, Plus, Trash2, Pencil, Check, X, ChevronRight, Download, Upload, Database, Lightbulb, RefreshCw, AlertTriangle, Minus, Info, Activity, Play, Pause, Square, Clock, FileText, Zap, Sparkles, HardDrive, Scale, RotateCcw, Layers, CheckCircle, XCircle } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -826,11 +826,61 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
 
   // --- ETL Management ---
   const ETL_SOURCES = [
-    { key: 'clinvar', label: 'ClinVar', statusEndpoint: '/clinvar-etl/status', importEndpoint: '/clinvar-etl/import', description: 'Clinical variant database (VCF → PostgreSQL)' },
-    { key: 'gnomad', label: 'gnomAD', statusEndpoint: '/gnomad-etl/status', importEndpoint: '/gnomad-etl/import', description: 'Genome aggregation database (TSV → PostgreSQL)' },
-    { key: '1kg', label: '1000 Genomes', statusEndpoint: '/1kg-etl/status', importEndpoint: '/1kg-etl/import', description: 'Phase 3 population frequencies (VCF → PostgreSQL)' },
-    { key: 'vep', label: 'Ensembl VEP', statusEndpoint: '/ensembl-vep-etl/status', importEndpoint: '/ensembl-vep-etl/import', description: 'Variant Effect Predictor annotations (VCF → SQLite/PG)' },
-    { key: 'ensembl', label: 'Ensembl Genes', statusEndpoint: null, importEndpoint: '/ensembl-etl/import', description: 'Gene models from cDNA/ncRNA FASTA headers' },
+    {
+      key: 'clinvar', label: 'ClinVar',
+      statusEndpoint: '/clinvar-etl/status', importEndpoint: '/clinvar-etl/import',
+      description: 'Clinical variant database (VCF → PostgreSQL)',
+      displayConfig: {
+        primaryKey: 'clinvar_variants',
+        countKeys: ['clinvar_gene_conditions', 'clinvar_gene_stats'] as string[],
+        fileKeys: ['tsv_file_exists', 'vcf_file_exists'] as string[],
+        arrayKeys: [] as string[],
+      },
+    },
+    {
+      key: 'gnomad', label: 'gnomAD',
+      statusEndpoint: '/gnomad-etl/status', importEndpoint: '/gnomad-etl/import',
+      description: 'Genome aggregation database (TSV → PostgreSQL)',
+      displayConfig: {
+        primaryKey: 'gnomad_variants',
+        countKeys: ['gnomad_gene_constraints'] as string[],
+        fileKeys: [] as string[],
+        arrayKeys: ['variant_files'] as string[],
+      },
+    },
+    {
+      key: '1kg', label: '1000 Genomes',
+      statusEndpoint: '/1kg-etl/status', importEndpoint: '/1kg-etl/import',
+      description: 'Phase 3 population frequencies (VCF → PostgreSQL)',
+      displayConfig: {
+        primaryKey: 'thousand_genomes_variants',
+        countKeys: [] as string[],
+        fileKeys: [] as string[],
+        arrayKeys: [] as string[],
+      },
+    },
+    {
+      key: 'vep', label: 'Ensembl VEP',
+      statusEndpoint: '/ensembl-vep-etl/status', importEndpoint: '/ensembl-vep-etl/import',
+      description: 'Variant Effect Predictor annotations (VCF → PostgreSQL)',
+      displayConfig: {
+        primaryKey: 'variant_count',
+        countKeys: [] as string[],
+        fileKeys: ['loaded'] as string[],
+        arrayKeys: ['available_vcf_files'] as string[],
+      },
+    },
+    {
+      key: 'ensembl', label: 'Ensembl Genes',
+      statusEndpoint: '/ensembl-etl/status', importEndpoint: '/ensembl-etl/import',
+      description: 'Gene models from cDNA/ncRNA FASTA headers',
+      displayConfig: {
+        primaryKey: 'ensembl_genes',
+        countKeys: ['protein_coding_genes', 'chromosomes'] as string[],
+        fileKeys: ['cdna_file_exists', 'ncrna_file_exists'] as string[],
+        arrayKeys: [] as string[],
+      },
+    },
   ]
 
   const fetchEtlStatus = useCallback(async (key: string, endpoint: string) => {
@@ -1920,80 +1970,149 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                   const isLoading = etlLoading[src.key]
                   const isRunning = etlRunning[src.key]
                   const showProgress = src.key === 'clinvar' && isRunning && etlProgress
+                  const dc = src.displayConfig
                   return (
                     <div
                       key={src.key}
                       className={`rounded-lg border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-gray-200 bg-gray-50'}`}
                     >
-                      <div className="flex items-center justify-between">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className={`font-medium ${theme.text.primary}`}>{src.label}</span>
+                      {/* Header row */}
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`font-semibold ${theme.text.primary}`}>{src.label}</span>
                             <Badge variant="outline" className="text-xs text-emerald-600 border-emerald-500/30">Local</Badge>
+                            {status && !isLoading && dc.primaryKey && (
+                              <Badge variant="outline" className="text-xs text-sky-500 border-sky-500/30">
+                                {Number(status[dc.primaryKey] ?? 0).toLocaleString()} rows
+                              </Badge>
+                            )}
                           </div>
-                          <p className={`text-sm mt-1 ${theme.text.muted}`}>{src.description}</p>
-                          {status && !showProgress && (
-                            <div className="flex flex-wrap gap-2 mt-2">
-                              {Object.entries(status).map(([k, v]) => (
-                                <span key={k} className={`text-xs font-mono ${theme.text.secondary}`}>
-                                  {k}: {typeof v === 'number' ? v.toLocaleString() : typeof v === 'boolean' ? (v ? 'Yes' : 'No') : String(v ?? '—')}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                          {showProgress && etlProgress && (
-                            <div className="mt-3 space-y-2">
-                              <div className="flex items-center justify-between text-xs">
-                                <span className={`font-medium capitalize ${theme.text.secondary}`}>
-                                  Step: <span className="text-violet-400">{etlProgress.step ?? '…'}</span>
-                                  {etlProgress.rows > 0 && (
-                                    <span className={`ml-2 ${theme.text.muted}`}>({etlProgress.rows.toLocaleString()} rows)</span>
-                                  )}
-                                </span>
-                                <span className={theme.text.muted}>{etlProgress.pct}% · {etlProgress.total_elapsed}s</span>
-                              </div>
-                              <div className={`w-full h-2 rounded-full overflow-hidden ${isDarkMode ? 'bg-white/10' : 'bg-gray-200'}`}>
-                                <div
-                                  className="h-full rounded-full bg-linear-to-r from-violet-500 to-fuchsia-500 transition-all duration-500"
-                                  style={{ width: `${etlProgress.pct}%` }}
-                                />
-                              </div>
-                              {etlProgress.steps.length > 0 && (
-                                <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
-                                  {etlProgress.steps.map(s => (
-                                    <span key={s.step} className={`text-xs ${theme.text.muted}`}>
-                                      ✓ {s.step}{s.count > 0 ? ` (${s.count.toLocaleString()})` : ''} {s.elapsed_s}s
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          )}
+                          <p className={`text-sm mt-0.5 ${theme.text.muted}`}>{src.description}</p>
                         </div>
-                        <div className="flex items-center gap-2 ml-4">
+                        <div className="flex items-center gap-2 shrink-0">
                           {src.statusEndpoint && (
                             <Button
-                              size="sm"
-                              variant="outline"
+                              size="sm" variant="outline"
                               disabled={!!isLoading}
+                              title="Refresh status"
                               onClick={() => fetchEtlStatus(src.key, src.statusEndpoint!)}
                             >
-                              <RefreshCw className={`h-3 w-3 mr-1 ${isLoading ? 'animate-spin' : ''}`} /> Status
+                              <RefreshCw className={`h-3 w-3 ${isLoading ? 'animate-spin' : ''}`} />
                             </Button>
                           )}
                           <Button
-                            size="sm"
-                            variant="default"
+                            size="sm" variant="default"
                             disabled={!!isRunning}
                             onClick={() => runEtlImport(src.key, src.importEndpoint)}
                             className="bg-violet-600 hover:bg-violet-700"
                           >
                             {isRunning
-                              ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Importing...</>
+                              ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Importing…</>
                               : <><Upload className="h-3 w-3 mr-1" /> Import</>}
                           </Button>
                         </div>
                       </div>
+
+                      {/* Loading skeleton */}
+                      {isLoading && !status && (
+                        <div className="mt-3 flex gap-3">
+                          <div className={`h-16 flex-1 rounded-lg animate-pulse ${isDarkMode ? 'bg-white/5' : 'bg-gray-200'}`} />
+                          <div className={`h-16 w-28 rounded-lg animate-pulse ${isDarkMode ? 'bg-white/5' : 'bg-gray-200'}`} />
+                          <div className={`h-16 w-28 rounded-lg animate-pulse ${isDarkMode ? 'bg-white/5' : 'bg-gray-200'}`} />
+                        </div>
+                      )}
+
+                      {/* Stats cards */}
+                      {status && !showProgress && (
+                        <div className="mt-3 space-y-2">
+                          <div className="flex flex-wrap gap-2">
+                            {/* Primary hero stat */}
+                            {dc.primaryKey && status[dc.primaryKey] !== undefined && (
+                              <div className={`flex-1 min-w-32 rounded-lg p-3 ${isDarkMode ? 'bg-white/7 border border-white/10' : 'bg-white border border-gray-200'}`}>
+                                <div className={`text-2xl font-bold tabular-nums tracking-tight ${theme.text.primary}`}>
+                                  {Number(status[dc.primaryKey]).toLocaleString()}
+                                </div>
+                                <div className={`text-xs mt-0.5 ${theme.text.muted}`}>
+                                  {dc.primaryKey.replace(/_/g, ' ')}
+                                </div>
+                              </div>
+                            )}
+                            {/* Secondary count stats */}
+                            {dc.countKeys.filter(k => status[k] !== undefined).map(k => (
+                              <div key={k} className={`flex-1 min-w-28 rounded-lg p-3 ${isDarkMode ? 'bg-white/4 border border-white/6' : 'bg-gray-50 border border-gray-100'}`}>
+                                <div className={`text-lg font-semibold tabular-nums ${theme.text.primary}`}>
+                                  {Number(status[k]).toLocaleString()}
+                                </div>
+                                <div className={`text-xs mt-0.5 ${theme.text.muted}`}>
+                                  {k.replace(/_/g, ' ')}
+                                </div>
+                              </div>
+                            ))}
+                            {/* Array keys — show count */}
+                            {dc.arrayKeys.filter(k => status[k] !== undefined).map(k => (
+                              <div key={k} className={`flex-1 min-w-28 rounded-lg p-3 ${isDarkMode ? 'bg-white/4 border border-white/6' : 'bg-gray-50 border border-gray-100'}`}>
+                                <div className={`text-lg font-semibold tabular-nums ${theme.text.primary}`}>
+                                  {Array.isArray(status[k]) ? (status[k] as unknown[]).length : '—'}
+                                </div>
+                                <div className={`text-xs mt-0.5 ${theme.text.muted}`}>
+                                  {k.replace(/_/g, ' ')}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                          {/* File existence badges */}
+                          {dc.fileKeys.length > 0 && (
+                            <div className="flex flex-wrap gap-2 pt-1">
+                              {dc.fileKeys.map(k => {
+                                const exists = Boolean(status[k])
+                                return (
+                                  <span key={k} className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium ${
+                                    exists
+                                      ? 'bg-green-500/10 text-green-600 border border-green-500/20'
+                                      : 'bg-red-500/10 text-red-500 border border-red-500/20'
+                                  }`}>
+                                    {exists
+                                      ? <CheckCircle className="h-3 w-3 shrink-0" />
+                                      : <XCircle className="h-3 w-3 shrink-0" />}
+                                    {k.replace(/_exists$/, '').replace(/_/g, ' ')}
+                                  </span>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* ClinVar live progress */}
+                      {showProgress && etlProgress && (
+                        <div className="mt-3 space-y-2">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className={`font-medium capitalize ${theme.text.secondary}`}>
+                              Step: <span className="text-violet-400">{etlProgress.step ?? '…'}</span>
+                              {etlProgress.rows > 0 && (
+                                <span className={`ml-2 ${theme.text.muted}`}>({etlProgress.rows.toLocaleString()} rows)</span>
+                              )}
+                            </span>
+                            <span className={theme.text.muted}>{etlProgress.pct}% · {etlProgress.total_elapsed}s</span>
+                          </div>
+                          <div className={`w-full h-2 rounded-full overflow-hidden ${isDarkMode ? 'bg-white/10' : 'bg-gray-200'}`}>
+                            <div
+                              className="h-full rounded-full bg-linear-to-r from-violet-500 to-fuchsia-500 transition-all duration-500"
+                              style={{ width: `${etlProgress.pct}%` }}
+                            />
+                          </div>
+                          {etlProgress.steps.length > 0 && (
+                            <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
+                              {etlProgress.steps.map(s => (
+                                <span key={s.step} className={`text-xs ${theme.text.muted}`}>
+                                  ✓ {s.step}{s.count > 0 ? ` (${s.count.toLocaleString()})` : ''} {s.elapsed_s}s
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )
                 })}
