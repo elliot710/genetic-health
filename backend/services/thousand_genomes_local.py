@@ -538,6 +538,14 @@ class ThousandGenomesLocalService:
         """Batch lookup by rsIDs using IN clause. Returns {rsid: result_or_none}."""
         if not rsids:
             return {}
+        # Short-circuit: if PG is empty and we have the direct in-memory cache, skip PG entirely.
+        # Without this, we'd waste ~60s sleeping 0.05s × 1200+ empty PG batches.
+        direct = self._direct
+        if direct is not None:
+            direct_results = await direct.lookup_batch(rsids)
+            found_count = sum(1 for v in direct_results.values() if v and v.get("found"))
+            logger.info("  1000G direct: %d/%d found (pg empty, skipped)", found_count, len(rsids))
+            return direct_results
         results: Dict[str, Optional[Dict[str, Any]]] = {}
         batch_size = 500
         total = len(rsids)

@@ -319,18 +319,22 @@ async def run_all_lookups(
         logger.info(f"  1000G: starting lookup for {len(tkg_rsids)} RSIDs...")
         results.thousand_genomes = await sources.thousand_genomes.lookup_batch(tkg_rsids)
         tkg_found = sum(1 for v in results.thousand_genomes.values() if v and v.get('found'))
-        # Position fallback for rsid misses (uses tabix on the indexed VCF)
+        # Position fallback for rsid misses — capped at 5000 to avoid sequential tabix
+        # I/O over a 1.6 GB VCF for low-hit-rate datasets.
         tkg_misses = [
             r for r in tkg_rsids
             if not (results.thousand_genomes.get(r) and results.thousand_genomes[r].get('found'))
         ]
-        if tkg_misses and hasattr(sources.thousand_genomes, 'lookup_batch_by_position'):
+        _TKG_TABIX_LIMIT = 5000
+        if tkg_misses and len(tkg_misses) <= _TKG_TABIX_LIMIT and hasattr(sources.thousand_genomes, 'lookup_batch_by_position'):
             pos_tuples = _build_pos_tuples(tkg_misses, rsid_to_variant)
             if pos_tuples:
                 pos_results = await sources.thousand_genomes.lookup_batch_by_position(pos_tuples)
                 for rsid, data in pos_results.items():
                     if data and data.get('found'):
                         results.thousand_genomes[rsid] = data
+        elif tkg_misses and len(tkg_misses) > _TKG_TABIX_LIMIT:
+            logger.info(f"  1000G: skipping pos fallback ({len(tkg_misses)} misses > {_TKG_TABIX_LIMIT} limit)")
         total_found = sum(1 for v in results.thousand_genomes.values() if v and v.get('found'))
         logger.info(f"  1000G: {total_found}/{len(tkg_rsids)} found "
                     f"(rsid: {tkg_found}, pos fallback: {total_found - tkg_found}) "
