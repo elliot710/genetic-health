@@ -450,6 +450,9 @@ async def _preload_local_services() -> None:
     These are all read-once, cache-forever operations.  Doing them at startup
     means the first job doesn't incur a cold-load penalty inline.
     """
+    from backend.services.datasource_utils import log_data_source_availability
+    log_data_source_availability()
+
     from backend.services.clinvar_local import get_clinvar_local_service
     cv = get_clinvar_local_service()
     ok = await cv.ensure_loaded()
@@ -463,7 +466,12 @@ async def _preload_local_services() -> None:
     from backend.services.gnomad_local import get_gnomad_cache_service
     gc = get_gnomad_cache_service()
     ok = await gc.ensure_loaded()
-    logger.info(f"gnomAD cache: {gc.variant_count} variants {'cached' if ok else '(no CADD TSV files found)'}")
+    if ok:
+        logger.info(f"gnomAD cache: {gc.variant_count} variants cached")
+    elif gc.has_tabix_files:
+        logger.info(f"gnomAD CADD: {len(gc._tsv_files or [])} indexed TSV file(s) available — tabix queries enabled")
+    else:
+        logger.info("gnomAD cache: no CADD TSV files found — position queries unavailable")
 
     from backend.services.thousand_genomes_local import get_thousand_genomes_service
     tkg = get_thousand_genomes_service()
@@ -476,7 +484,12 @@ async def _preload_local_services() -> None:
     vep = get_ensembl_vep_service()
     async def _load_vep():
         ok = await vep.ensure_loaded()
-        logger.info(f"Ensembl VEP: {vep.variant_count} variants {'loaded' if ok else '(no VCF files found)'}")
+        if ok and vep._db is not None:
+            logger.info(f"Ensembl VEP: {vep.variant_count} variants loaded from SQLite cache")
+        elif ok and vep._vcf_available:
+            logger.info("Ensembl VEP: no SQLite cache — tabix position queries available")
+        else:
+            logger.info("Ensembl VEP: no VCF files found — annotation unavailable")
     asyncio.create_task(_load_vep())
     logger.info("Ensembl VEP: loading in background...")
 

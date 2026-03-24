@@ -236,27 +236,34 @@ class GnomadCacheService:
         if is_grch38:
             logger.info("gnomAD CADD file '%s' is %s — will bridge via Ensembl VEP GRCh38 positions",
                         tsv_files[0].name, build)
-        marker_fp = await self._get_marker_fingerprint()
         file_fp = get_multi_file_fingerprint(tsv_files)
-        if is_cache_valid(_SQLITE_FILE, _META_FILE, marker_fp, file_fp):
-            t0 = time.time()
-            self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE, cache_size_mb=32)
-            row = self._db.execute("SELECT COUNT(*) FROM gnomad_data").fetchone()
-            self._variant_count = row[0] if row else 0
-            self._full_scan_done = True  # Loaded from disk → full scan already done
-            logger.info("gnomAD: opened SQLite cache with %d variants in %.1fs",
-                        self._variant_count, time.time() - t0)
-            return
-        logger.info("gnomAD cache miss — scanning %d TSV files at known positions...", len(tsv_files))
-        pos_map = await self._load_known_positions(genome_build=build)
-        if not pos_map:
-            logger.info("No known variant positions — skipping gnomAD cache build")
-            return
-        count = await asyncio.to_thread(self._scan_tabix_to_sqlite, tsv_files, pos_map)
-        save_cache_meta(_META_FILE, marker_fp, file_fp, count)
-        self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE, cache_size_mb=32)
-        self._variant_count = count
-        self._full_scan_done = True  # Just completed a full scan
+
+        # Use existing cache if TSV files are unchanged (marker_fp not required).
+        if _SQLITE_FILE.exists() and _META_FILE.exists():
+            try:
+                meta = json.loads(_META_FILE.read_text())
+                if meta.get("file_fingerprint") == file_fp and meta.get("variant_count", 0) > 0:
+                    t0 = time.time()
+                    self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE, cache_size_mb=32)
+                    row = self._db.execute("SELECT COUNT(*) FROM gnomad_data").fetchone()
+                    self._variant_count = row[0] if row else 0
+                    self._full_scan_done = True
+                    logger.info("gnomAD: opened SQLite cache with %d variants in %.1fs",
+                                self._variant_count, time.time() - t0)
+                    return
+            except Exception:
+                pass
+
+        # No valid SQLite cache — files and tabix indexes are available for
+        # on-demand queries.  Cache building from genetic_markers positions is
+        # no longer performed here; local_annotation.py uses lookup_batch_by_position
+        # with variant positions from the current analysis.
+        if self._tsv_files:
+            logger.info(
+                "gnomAD: no pre-built SQLite cache — %d CADD TSV file(s) available for tabix queries",
+                len(self._tsv_files),
+            )
+        return
 
     def _scan_tabix_to_sqlite(
         self, tsv_files: List[Path], pos_map: Dict[Tuple[str, int], List[Tuple[str, str, str]]]
@@ -664,8 +671,10 @@ class GnomadLocalService:
 
     @property
     def is_loaded(self) -> bool:
-        # Consider loaded if cache OR PG has data
+        # Consider loaded if cache OR PG has data, OR tabix files are available
         if self._cache.is_loaded and self._cache.variant_count > 0:
+            return True
+        if self._cache.has_tabix_files:
             return True
         return self._variant_count is not None and self._variant_count > 0
 
@@ -684,7 +693,10 @@ class GnomadLocalService:
     # ------------------------------------------------------------------
 
     async def ensure_loaded(self) -> bool:
-        """Check that gnomAD data is available (SQLite cache, PG, or both)."""
+        """Check that gnomAD data is available (SQLite cache, PG, tabix, or all)."""
+        # Ensure the cache service is initialized so has_tabix_files reflects file presence
+        if not self._cache._loaded:
+            await self._cache.ensure_loaded()
         try:
             async with async_session_factory() as session:
                 result = await session.execute(
@@ -697,20 +709,25 @@ class GnomadLocalService:
                 )
                 self._constraint_count = result.scalar() or 0
 
-            self._available = self._variant_count > 0 or self._cache.is_loaded
+            self._available = (self._variant_count > 0
+                               or self._cache.is_loaded
+                               or self._cache.has_tabix_files)
             if self._variant_count > 0:
                 logger.info("gnomAD PG: %d variants, %d gene constraints available",
                             self._variant_count, self._constraint_count)
             if self._cache.is_loaded:
                 logger.info("gnomAD SQLite cache: %d variants available",
                             self._cache.variant_count)
+            elif self._cache.has_tabix_files:
+                logger.info("gnomAD: %d CADD TSV file(s) available — tabix queries enabled",
+                            len(self._cache._tsv_files or []))
             if not self._available:
                 logger.warning("gnomAD: no data — run ETL import or place TSV files in data_sources/gnomad/")
             return self._available
         except Exception as e:
             logger.warning("gnomAD PG check failed: %s", e)
-            self._available = False
-            return False
+            self._available = self._cache.has_tabix_files
+            return self._available
 
     # ------------------------------------------------------------------
     # Core lookups

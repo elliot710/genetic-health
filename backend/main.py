@@ -52,6 +52,10 @@ async def lifespan(app: FastAPI):
     # separate process so the FastAPI event loop is never touched by analysis code.
     print("🚀 API server started (analysis handled by worker service)")
 
+    # Log which data source files are available on disk with tabix indexes
+    from .services.datasource_utils import log_data_source_availability
+    log_data_source_availability()
+
     # Check ClinVar PG availability (instant — just counts rows)
     from .services.clinvar_local import get_clinvar_local_service
     cv_svc = get_clinvar_local_service()

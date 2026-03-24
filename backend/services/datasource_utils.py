@@ -231,3 +231,83 @@ def finalize_cache_db(conn: sqlite3.Connection, tmp: Path, final: Path):
         if f.exists():
             f.unlink()
     tmp.rename(final)
+
+
+# ===========================================================================
+# Data source file availability scan
+# ===========================================================================
+
+def scan_data_source_availability(base_dir: Optional[Path] = None) -> Dict[str, Any]:
+    """Scan data_sources directories and report what files are present with indexes.
+
+    Returns a dict keyed by source name, each with:
+      - exists (bool): directory is present
+      - file_count (int): number of data files
+      - indexed_count (int): files with .tbi or .csi index
+      - total_size_mb (float): sum of all file sizes
+      - files (list[dict]): per-file name, size_mb, indexed
+    """
+    import os as _os
+
+    if base_dir is None:
+        base_dir = Path(_os.environ.get("DATA_SOURCES_DIR", "/app/data_sources"))
+
+    source_dirs: Dict[str, Path] = {
+        "clinvar": base_dir / "clinvar",
+        "1000G": base_dir / "1000G",
+        "ensembl_vep": base_dir / "ensembl" / "homo_sapiens" / "variation" / "vcf_vep",
+        "gnomad": base_dir / "gnomad",
+        "alpha_missense": base_dir / "alpha_missense",
+    }
+
+    result: Dict[str, Any] = {}
+    for name, path in source_dirs.items():
+        info: Dict[str, Any] = {
+            "dir": str(path),
+            "exists": path.exists(),
+            "file_count": 0,
+            "indexed_count": 0,
+            "total_size_mb": 0.0,
+            "files": [],
+        }
+        if path.exists():
+            try:
+                for f in sorted(path.iterdir()):
+                    if not f.is_file():
+                        continue
+                    # Skip index files themselves in the count
+                    if f.name.endswith(('.tbi', '.csi', '.bai')):
+                        continue
+                    has_index = (
+                        Path(str(f) + '.tbi').exists()
+                        or Path(str(f) + '.csi').exists()
+                    )
+                    size_mb = round(f.stat().st_size / 1_000_000, 1)
+                    info['file_count'] += 1
+                    info['total_size_mb'] += size_mb
+                    if has_index:
+                        info['indexed_count'] += 1
+                    info['files'].append({
+                        'name': f.name,
+                        'size_mb': size_mb,
+                        'indexed': has_index,
+                    })
+                info['total_size_mb'] = round(info['total_size_mb'], 1)
+            except Exception as e:
+                info['error'] = str(e)
+        result[name] = info
+    return result
+
+
+def log_data_source_availability(base_dir: Optional[Path] = None) -> None:
+    """Log a human-readable summary of available data sources at startup."""
+    sources = scan_data_source_availability(base_dir)
+    for name, info in sources.items():
+        if not info['exists']:
+            logger.warning("📂 %-20s NOT FOUND (%s)", name, info['dir'])
+        elif info['file_count'] == 0:
+            logger.warning("📂 %-20s empty directory", name)
+        else:
+            status = f"{info['file_count']} files, {info['indexed_count']} indexed, {info['total_size_mb']} MB"
+            logger.info("📂 %-20s %s", name, status)
+

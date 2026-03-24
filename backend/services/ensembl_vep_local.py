@@ -35,14 +35,8 @@ from sqlalchemy import select, func, text
 from ..db.database import async_session_factory
 from ..db.models import GeneticMarker, EnsemblGene
 from .datasource_utils import (
-    load_known_rsids,
-    get_marker_fingerprint,
     get_multi_file_fingerprint,
-    is_cache_valid,
-    save_cache_meta,
     open_cache_db,
-    create_cache_db,
-    finalize_cache_db,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,10 +69,11 @@ class EnsemblVepLocalService:
         self._variant_count: int = 0
         self._loaded = False
         self._lock = asyncio.Lock()
+        self._vcf_available: bool = False
 
     @property
     def is_loaded(self) -> bool:
-        return self._loaded and self._db is not None
+        return self._loaded and (self._db is not None or self._vcf_available)
 
     @property
     def variant_count(self) -> int:
@@ -87,10 +82,10 @@ class EnsemblVepLocalService:
     async def ensure_loaded(self) -> bool:
         """Open or build the SQLite cache (runs once)."""
         if self._loaded:
-            return self._db is not None
+            return self._db is not None or self._vcf_available
         async with self._lock:
             if self._loaded:
-                return self._db is not None
+                return self._db is not None or self._vcf_available
             try:
                 await self._load_cache()
             except Exception as e:
@@ -113,37 +108,38 @@ class EnsemblVepLocalService:
             logger.warning(f"No VCF files found in {_VCF_VEP_DIR}")
             return
 
-        marker_fp = await get_marker_fingerprint()
+        # Mark VCF dir as available for tabix position queries if indexed files exist
+        indexed = [f for f in vcf_files if Path(str(f) + '.tbi').exists()]
+        if indexed:
+            self._vcf_available = True
+            logger.info("Ensembl VEP: %d indexed VCF files available for tabix queries", len(indexed))
+
         vcf_fp = get_multi_file_fingerprint(vcf_files)
 
-        # Try existing cache
-        if is_cache_valid(_SQLITE_FILE, _META_FILE, marker_fp, vcf_fp,
-                          file_key='vcf_fingerprint'):
-            t0 = time.time()
-            self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE)
-            row = self._db.execute("SELECT COUNT(*) FROM vep_data").fetchone()
-            self._variant_count = row[0] if row else 0
-            elapsed = time.time() - t0
-            logger.info(
-                f"Ensembl VEP: opened SQLite cache with {self._variant_count} "
-                f"variants in {elapsed:.1f}s"
-            )
-            return
+        # Load existing SQLite cache if VCF files are unchanged.
+        if _SQLITE_FILE.exists() and _META_FILE.exists():
+            try:
+                meta = json.loads(_META_FILE.read_text())
+                if meta.get("vcf_fingerprint") == vcf_fp and meta.get("variant_count", 0) > 0:
+                    t0 = time.time()
+                    self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE)
+                    row = self._db.execute("SELECT COUNT(*) FROM vep_data").fetchone()
+                    self._variant_count = row[0] if row else 0
+                    logger.info(
+                        f"Ensembl VEP: opened SQLite cache with {self._variant_count} "
+                        f"variants in {time.time() - t0:.1f}s"
+                    )
+                    return
+            except Exception:
+                pass
 
-        # Cold scan
-        logger.info(f"VEP cache miss — scanning {len(vcf_files)} VCF files into SQLite...")
-        known_rsids = await load_known_rsids()
-        if not known_rsids:
-            logger.info("No known rsids — skipping VCF scan")
-            return
-
-        count = await asyncio.to_thread(
-            self._scan_vcf_to_sqlite, vcf_files, known_rsids
-        )
-        save_cache_meta(_META_FILE, marker_fp, vcf_fp, count,
-                        file_key='vcf_fingerprint')
-        self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE)
-        self._variant_count = count
+        # No valid SQLite cache — rely on per-chromosome VCF tabix for position queries.
+        # Cache builds from filtered rsid sets are no longer performed here;
+        # position fallback in local_annotation.py handles uncached variants.
+        if self._vcf_available:
+            logger.info("Ensembl VEP: no SQLite cache — tabix position queries will be used for analysis")
+        else:
+            logger.warning("Ensembl VEP: no SQLite cache and no indexed VCFs — annotation unavailable")
 
     def _discover_vcf_files(self) -> List[Path]:
         vcf_files = sorted(
@@ -374,11 +370,125 @@ class EnsemblVepLocalService:
         logger.info(f"  Ensembl VEP complete: {len(results)}/{total} found in {elapsed:.1f}s")
         return results
 
+    async def lookup_by_position(
+        self, chrom: str, pos: int, ref: str, alt: str
+    ) -> Optional[Dict[str, Any]]:
+        """Tabix-based position lookup on the per-chromosome VCF file."""
+        vcf_file = self._find_chr_vcf(chrom)
+        if not vcf_file:
+            return None
+        return await asyncio.to_thread(
+            self._tabix_pos_lookup, vcf_file, chrom, pos, ref, alt
+        )
 
-# ---------------------------------------------------------------------------
-# EnsemblLocalService — PostgreSQL-backed gene coordinate lookup
-# (formerly ensembl_local.py)
-# ---------------------------------------------------------------------------
+    async def lookup_batch_by_position(
+        self, variants: List[Tuple[str, str, int, str, str]]
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
+        """Batch tabix position lookup for (rsid, chrom, pos, ref, alt) tuples.
+
+        Groups variants by chromosome to minimise file opens.
+        """
+        if not variants:
+            return {}
+        return await asyncio.to_thread(self._tabix_batch_by_chr, variants)
+
+    def _find_chr_vcf(self, chrom: str) -> Optional[Path]:
+        """Return the per-chromosome VCF path if it exists and is tabix-indexed."""
+        chrom_clean = chrom.replace('chr', '')
+        p = _VCF_VEP_DIR / f'homo_sapiens_incl_consequences-chr{chrom_clean}.vcf.gz'
+        if p.exists() and Path(str(p) + '.tbi').exists():
+            return p
+        return None
+
+    def _tabix_pos_lookup(
+        self, vcf_path: Path, chrom: str, pos: int, ref: str, alt: str
+    ) -> Optional[Dict[str, Any]]:
+        """Single-variant tabix query on a per-chromosome VCF. Returns VEP data dict."""
+        from .ensembl_vep_etl import parse_vcf_line
+        try:
+            import pysam
+        except ImportError:
+            return None
+        chrom_clean = chrom.replace('chr', '')
+        ref_upper, alt_upper = ref.upper(), alt.upper()
+        try:
+            tabix = pysam.TabixFile(str(vcf_path))
+            for row_str in tabix.fetch(chrom_clean, pos - 1, pos):
+                parts = row_str.split('\t', 8)
+                if len(parts) < 5:
+                    continue
+                if parts[3].upper() != ref_upper:
+                    continue
+                row_alts = parts[4].split(',')
+                if not any(a.strip().upper() == alt_upper for a in row_alts):
+                    continue
+                rsid = parts[2] if parts[2].startswith('rs') else f"{chrom_clean}:{pos}:{ref}:{alt}"
+                parsed = parse_vcf_line(row_str, {rsid})
+                if parsed and parsed.get('rsid'):
+                    vep_dict = json.loads(parsed['vep_data'])
+                    vep_dict['found'] = True
+                    vep_dict['source'] = 'ensembl_vep_local'
+                    tabix.close()
+                    return vep_dict
+            tabix.close()
+        except Exception as e:
+            logger.debug("VEP tabix pos lookup failed for %s:%d: %s", chrom, pos, e)
+        return None
+
+    def _tabix_batch_by_chr(
+        self, variants: List[Tuple[str, str, int, str, str]]
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
+        """Batch tabix queries grouped by chromosome to minimise file I/O."""
+        from .ensembl_vep_etl import parse_vcf_line
+        try:
+            import pysam
+        except ImportError:
+            return {}
+        # Group by chromosome
+        by_chr: Dict[str, List[Tuple[str, str, int, str, str]]] = {}
+        for item in variants:
+            rsid, chrom, pos, ref, alt = item
+            chrom_clean = chrom.replace('chr', '')
+            by_chr.setdefault(chrom_clean, []).append(item)
+
+        results: Dict[str, Optional[Dict[str, Any]]] = {}
+        for chrom_clean, chr_variants in by_chr.items():
+            vcf_path = self._find_chr_vcf(chrom_clean)
+            if not vcf_path:
+                continue
+            try:
+                tabix = pysam.TabixFile(str(vcf_path))
+                for rsid, chrom, pos, ref, alt in chr_variants:
+                    ref_upper, alt_upper = ref.upper(), alt.upper()
+                    try:
+                        for row_str in tabix.fetch(chrom_clean, pos - 1, pos):
+                            parts = row_str.split('\t', 8)
+                            if len(parts) < 5:
+                                continue
+                            if parts[3].upper() != ref_upper:
+                                continue
+                            row_alts = parts[4].split(',')
+                            if not any(a.strip().upper() == alt_upper for a in row_alts):
+                                continue
+                            row_rsid = parts[2] if parts[2].startswith('rs') else \
+                                f"{chrom_clean}:{pos}:{ref}:{alt}"
+                            parsed = parse_vcf_line(row_str, {row_rsid})
+                            if parsed and parsed.get('rsid'):
+                                vep_dict = json.loads(parsed['vep_data'])
+                                vep_dict['found'] = True
+                                vep_dict['source'] = 'ensembl_vep_local'
+                                results[rsid] = vep_dict
+                                break
+                    except ValueError:
+                        pass
+                    except Exception as e:
+                        logger.debug("VEP tabix fetch error %s:%d: %s", chrom_clean, pos, e)
+                tabix.close()
+            except Exception as e:
+                logger.debug("VEP tabix open error for chr%s: %s", chrom_clean, e)
+        return results
+
+
 
 class EnsemblLocalService:
     """PostgreSQL-backed Ensembl gene lookup service."""

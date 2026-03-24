@@ -33,8 +33,8 @@ from ..db.database import async_session_factory
 from ..db.datasource_models import ThousandGenomesRecord
 from ..db.models import ThousandGenomesVariant
 from .datasource_utils import (
-    load_known_rsids, get_marker_fingerprint, get_file_fingerprint,
-    is_cache_valid, save_cache_meta, open_cache_db, parse_vcf_info,
+    get_file_fingerprint,
+    open_cache_db, parse_vcf_info,
     safe_float, safe_int, clean_str,
 )
 
@@ -78,10 +78,12 @@ class ThousandGenomesDirectService:
         self._variant_count: int = 0
         self._loaded = False
         self._lock = asyncio.Lock()
+        self._vcf_available: bool = False
+        self._vcf_path: Optional[Path] = None
 
     @property
     def is_loaded(self) -> bool:
-        return self._loaded and bool(self._memory)
+        return self._loaded and (bool(self._memory) or self._vcf_available)
 
     @property
     def variant_count(self) -> int:
@@ -89,16 +91,16 @@ class ThousandGenomesDirectService:
 
     async def ensure_loaded(self) -> bool:
         if self._loaded:
-            return bool(self._memory)
+            return bool(self._memory) or self._vcf_available
         async with self._lock:
             if self._loaded:
-                return bool(self._memory)
+                return bool(self._memory) or self._vcf_available
             try:
                 await self._load_cache()
             except Exception as e:
                 logger.error("1000G direct cache failed: %s", e, exc_info=True)
             self._loaded = True
-        return bool(self._memory)
+        return bool(self._memory) or self._vcf_available
 
     async def lookup(self, rsid: str) -> Optional[Dict[str, Any]]:
         if not await self.ensure_loaded():
@@ -119,12 +121,40 @@ class ThousandGenomesDirectService:
         self, chrom: str, pos: int, ref: str, alt: str
     ) -> Optional[Dict[str, Any]]:
         """Position-based lookup using pysam.VariantFile (supports CSI index)."""
-        vcf_path = self._find_vcf()
+        vcf_path = self._vcf_path or self._find_vcf()
         if not vcf_path:
             return None
         return await asyncio.to_thread(
             self._variant_file_lookup, vcf_path, chrom, pos, ref, alt
         )
+
+    async def lookup_batch_by_position(
+        self, variants: List[Tuple[str, str, int, str, str]]
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
+        """Batch position-based lookup for (rsid, chrom, pos, ref, alt) tuples.
+
+        Used as a fallback when rsid is not found in the in-memory dict.
+        Requires the VCF to have a .tbi or .csi index.
+        """
+        if not variants:
+            return {}
+        vcf_path = self._vcf_path or self._find_vcf()
+        if not vcf_path:
+            return {}
+        return await asyncio.to_thread(self._tabix_batch_lookup, vcf_path, variants)
+
+    def _tabix_batch_lookup(
+        self, vcf_path: Path, variants: List[Tuple[str, str, int, str, str]]
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
+        """Run position lookups sequentially via pysam. Returns {rsid: result}."""
+        results: Dict[str, Optional[Dict[str, Any]]] = {}
+        for rsid, chrom, pos, ref, alt in variants:
+            result = self._variant_file_lookup(vcf_path, chrom, pos, ref, alt)
+            if result:
+                result['rsid'] = result.get('rsid') or rsid
+                results[rsid] = result
+        return results
+
 
     async def _load_cache(self):
         vcf_path = self._find_vcf()
@@ -132,31 +162,43 @@ class ThousandGenomesDirectService:
             logger.warning("1000G direct: no VCF file found in %s", _DATA_DIR)
             return
 
-        marker_fp = await get_marker_fingerprint()
+        # Check for tabix/CSI index — marks VCF as available for direct position queries
+        has_tbi = Path(str(vcf_path) + ".tbi").exists()
+        has_csi = Path(str(vcf_path) + ".csi").exists()
+        if has_tbi or has_csi:
+            self._vcf_available = True
+            self._vcf_path = vcf_path
+            logger.info("1000G: VCF indexed (%s) — tabix queries available",
+                        "TBI" if has_tbi else "CSI")
+        else:
+            logger.warning("1000G: VCF found but no .tbi/.csi index — tabix queries unavailable")
+
         file_fp = get_file_fingerprint(vcf_path)
 
-        if is_cache_valid(_SQLITE_FILE, _META_FILE, marker_fp, file_fp):
-            self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE)
+        # Load existing SQLite cache if source file is unchanged
+        if _SQLITE_FILE.exists() and _META_FILE.exists():
+            try:
+                meta = json.loads(_META_FILE.read_text())
+                if meta.get("file_fingerprint") == file_fp and meta.get("variant_count", 0) > 0:
+                    self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE)
+                    # Preload entire SQLite into memory for O(1) bulk lookups
+                    logger.info("1000G direct: preloading SQLite into memory...")
+                    t0 = time.time()
+                    self._memory = await asyncio.to_thread(self._preload_memory)
+                    self._variant_count = len(self._memory)
+                    logger.info("1000G direct: preloaded %d variants into memory (%.1fs)",
+                                self._variant_count, time.time() - t0)
+                    return
+            except Exception:
+                pass
+
+        # No valid SQLite cache — rely on VCF tabix for position-based queries.
+        # Cache builds from filtered rsid sets are no longer performed here;
+        # position fallback in local_annotation.py handles uncached variants.
+        if self._vcf_available:
+            logger.info("1000G: no SQLite cache — tabix position queries will be used for analysis")
         else:
-            logger.info("1000G direct: building cache from %s ...", vcf_path.name)
-            known_rsids = await load_known_rsids()
-            if not known_rsids:
-                logger.warning("1000G direct: no rsids in genetic_markers — skipping build")
-                return
-
-            count = await asyncio.to_thread(self._scan_vcf_to_sqlite, vcf_path, known_rsids)
-            save_cache_meta(_META_FILE, marker_fp, file_fp, count)
-            self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE)
-
-        # Preload entire SQLite into memory for O(1) bulk lookups during analysis
-        logger.info("1000G direct: preloading SQLite into memory...")
-        t0 = time.time()
-        self._memory = await asyncio.to_thread(self._preload_memory)
-        self._variant_count = len(self._memory)
-        logger.info(
-            "1000G direct: preloaded %d variants into memory (%.1fs)",
-            self._variant_count, time.time() - t0,
-        )
+            logger.warning("1000G: no SQLite cache and no tabix index — annotation unavailable")
 
     def _preload_memory(self) -> Dict[str, Dict[str, Any]]:
         """Load entire SQLite into an in-memory dict.  Called once at startup."""
