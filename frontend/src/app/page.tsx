@@ -186,7 +186,7 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-white">
-      {(!analysisData || showUpload) && (!user?.is_admin || showUpload) ? (
+      {showUpload ? (
         <div className={`min-h-screen ${theme.background}`}>
           {/* Background Elements */}
           <div className="absolute inset-0 overflow-hidden">
