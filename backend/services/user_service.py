@@ -80,6 +80,61 @@ class UserService:
         await self.db.refresh(user)
         return user
     
+    async def update_password(self, user_id: int, new_password: str) -> None:
+        """Update a user's password."""
+        user = await self.get_user_by_id(user_id)
+        if user:
+            user.hashed_password = get_password_hash(new_password)
+            await self.db.commit()
+
+    async def get_or_create_google_user(
+        self, email: str, google_id: str, full_name: str, avatar_url: str | None
+    ) -> "User":
+        """Find an existing user by Google ID or email, or create one."""
+        from ..db.models import User as UserModel
+        # 1. Look up by google_id
+        result = await self.db.execute(
+            select(UserModel).where(UserModel.google_id == google_id)
+        )
+        user = result.scalar_one_or_none()
+        if user:
+            return user
+
+        # 2. Look up by email (link existing account)
+        user = await self.get_user_by_email(email)
+        if user:
+            user.google_id = google_id
+            user.auth_provider = "google"
+            if avatar_url and not user.avatar_url:
+                user.avatar_url = avatar_url
+            await self.db.commit()
+            await self.db.refresh(user)
+            return user
+
+        # 3. Create new user
+        import re
+        base = re.sub(r"[^a-z0-9]", "", email.split("@")[0].lower()) or "user"
+        username = base
+        suffix = 1
+        while await self.get_user_by_username(username):
+            username = f"{base}{suffix}"
+            suffix += 1
+
+        db_user = UserModel(
+            email=email,
+            username=username,
+            full_name=full_name,
+            avatar_url=avatar_url,
+            google_id=google_id,
+            auth_provider="google",
+            hashed_password=None,
+            is_verified=True,
+        )
+        self.db.add(db_user)
+        await self.db.commit()
+        await self.db.refresh(db_user)
+        return db_user
+
     async def get_user_analyses(self, user_id: int) -> List[GeneticAnalysis]:
         """Get all genetic analyses for a user"""
         result = await self.db.execute(

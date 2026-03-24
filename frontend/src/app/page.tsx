@@ -26,6 +26,8 @@ export default function Home() {
   const [loading, setLoading] = useState(true)
   const [isHydrated, setIsHydrated] = useState(false)
   const [showUpload, setShowUpload] = useState(false)
+  const [resetToken, setResetToken] = useState<string | undefined>(undefined)
+  const [authMode, setAuthMode] = useState<'login' | 'reset' | undefined>(undefined)
   
   // Initialize theme from localStorage or default to false
   const [isDarkMode, setIsDarkMode] = useState(false)
@@ -37,6 +39,14 @@ export default function Home() {
       const saved = localStorage.getItem('darkMode')
       if (saved) {
         setIsDarkMode(JSON.parse(saved))
+      }
+      // Check for password reset token in URL
+      const params = new URLSearchParams(window.location.search)
+      if (params.get('mode') === 'reset' && params.get('token')) {
+        setResetToken(params.get('token') ?? undefined)
+        setAuthMode('reset')
+        // Clean URL without reload
+        window.history.replaceState({}, '', '/')
       }
     }
   }, [])
@@ -179,7 +189,7 @@ export default function Home() {
   }
 
   if (!token) {
-    return <AuthForm onLogin={handleLogin} isDarkMode={isDarkMode} isHydrated={isHydrated} />
+    return <AuthForm onLogin={handleLogin} isDarkMode={isDarkMode} isHydrated={isHydrated} initialMode={authMode} resetToken={resetToken} />
   }
 
   console.log('Render - analysisData:', analysisData)

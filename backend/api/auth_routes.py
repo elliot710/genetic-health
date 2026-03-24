@@ -2,12 +2,22 @@
 Authentication API routes
 """
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete as sa_delete
-from datetime import timedelta
-from pydantic import BaseModel
+from datetime import timedelta, datetime, timezone
+from pydantic import BaseModel, EmailStr
 from typing import Optional, List
+import asyncio
+import smtplib
+import secrets
+import urllib.parse
+import json
+import base64
+import os
+import logging
+import requests as http_requests
 
 from ..db.database import get_session
 from ..db.schemas import UserCreate, UserResponse, Token, UserLogin
@@ -17,12 +27,85 @@ from ..core.auth import (
     create_access_token, create_refresh_token, verify_token, verify_refresh_token,
     verify_password, get_password_hash, ACCESS_TOKEN_EXPIRE_MINUTES,
     set_auth_cookies, clear_auth_cookies, ACCESS_COOKIE,
+    SECRET_KEY, ALGORITHM,
 )
+from jose import JWTError, jwt
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 security = HTTPBearer(auto_error=False)  # auto_error=False so cookie fallback works
 
-@router.post("/register", response_model=UserResponse)
+# ─── Google OAuth config ───────────────────────────────────────────────────────
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "https://api.epigenic.xyz/auth/google/callback")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://epigenic.xyz")
+
+# ─── Password reset helpers ───────────────────────────────────────────────────
+RESET_TOKEN_EXPIRE_MINUTES = 60
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+def create_reset_token(email: str) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(minutes=RESET_TOKEN_EXPIRE_MINUTES)
+    return jwt.encode({"sub": email, "type": "password_reset", "exp": expire}, SECRET_KEY, algorithm=ALGORITHM)
+
+def verify_reset_token(token: str) -> Optional[str]:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") != "password_reset":
+            return None
+        return payload.get("sub")
+    except JWTError:
+        return None
+
+async def _send_reset_email(email: str, reset_url: str) -> None:
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+
+    smtp_host = os.getenv("SMTP_HOST")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+    smtp_from = os.getenv("SMTP_FROM", smtp_user)
+
+    if not smtp_host or not smtp_user:
+        logger.warning(f"SMTP not configured. Password reset URL for {email}: {reset_url}")
+        return
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = "Reset your Epigenic.xyz password"
+    msg["From"] = smtp_from
+    msg["To"] = email
+
+    html = f"""
+    <html><body style="font-family:sans-serif;background:#f0fdf4;padding:32px;">
+      <div style="max-width:480px;margin:auto;background:white;border-radius:12px;padding:32px;box-shadow:0 4px 24px rgba(0,0,0,.08);">
+        <h2 style="color:#0d9488;margin-bottom:8px;">Reset your password</h2>
+        <p style="color:#374151;">Click the button below to reset your Epigenic.xyz password. This link expires in 1 hour.</p>
+        <a href="{reset_url}" style="display:inline-block;margin:24px 0;padding:12px 28px;background:#0d9488;color:white;text-decoration:none;border-radius:8px;font-weight:600;">Reset Password</a>
+        <p style="color:#9ca3af;font-size:12px;">If you didn't request this, you can safely ignore this email.</p>
+      </div>
+    </body></html>
+    """
+    msg.attach(MIMEText(html, "html"))
+
+    def _send():
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(smtp_user, smtp_password)
+            server.sendmail(smtp_from, email, msg.as_string())
+
+    await asyncio.to_thread(_send)
+
+
 async def register(user_data: UserCreate, db: AsyncSession = Depends(get_session)):
     """Register a new user"""
     user_service = UserService(db)
@@ -157,6 +240,8 @@ async def change_password(
     db: AsyncSession = Depends(get_session),
 ):
     """Change current user password"""
+    if not current_user.hashed_password:
+        raise HTTPException(status_code=400, detail="Password login is not enabled for this account")
     if not verify_password(data.current_password, str(current_user.hashed_password)):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     if len(data.new_password) < 6:
@@ -369,3 +454,131 @@ async def unsave_variant(
         raise HTTPException(status_code=404, detail="Variant not found in saved list")
     await db.commit()
     return {"detail": "Variant removed"}
+
+
+# ─── Forgot / Reset Password ──────────────────────────────────────────────────
+
+@router.post("/forgot-password", status_code=202)
+async def forgot_password(data: ForgotPasswordRequest, db: AsyncSession = Depends(get_session)):
+    """Send a password reset email. Always returns 202 to avoid email enumeration."""
+    user_service = UserService(db)
+    user = await user_service.get_user_by_email(str(data.email))
+    if user:
+        token = create_reset_token(str(data.email))
+        reset_url = f"{FRONTEND_URL}?mode=reset&token={token}"
+        try:
+            await _send_reset_email(str(data.email), reset_url)
+        except Exception as exc:
+            logger.error(f"Failed to send reset email to {data.email}: {exc}")
+    return {"message": "If that email is registered, a reset link has been sent."}
+
+
+@router.post("/reset-password")
+async def reset_password(data: ResetPasswordRequest, db: AsyncSession = Depends(get_session)):
+    """Reset password using a valid reset token."""
+    email = verify_reset_token(data.token)
+    if not email:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+    if len(data.new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    user_service = UserService(db)
+    user = await user_service.get_user_by_email(email)
+    if not user:
+        raise HTTPException(status_code=400, detail="User not found")
+    await user_service.update_password(user.id, data.new_password)
+    return {"message": "Password reset successfully"}
+
+
+# ─── Google OAuth ─────────────────────────────────────────────────────────────
+
+@router.get("/google")
+async def google_login():
+    """Redirect the browser to Google's OAuth2 consent screen."""
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="Google OAuth is not configured")
+    params = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": GOOGLE_REDIRECT_URI,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "access_type": "offline",
+        "prompt": "select_account",
+    }
+    url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params)
+    return RedirectResponse(url)
+
+
+@router.get("/google/callback")
+async def google_callback(
+    code: str,
+    response: Response,
+    db: AsyncSession = Depends(get_session),
+    error: Optional[str] = None,
+):
+    """Handle Google OAuth2 callback: exchange code, find/create user, set cookies."""
+    if error or not code:
+        return RedirectResponse(f"{FRONTEND_URL}?error=oauth_cancelled")
+
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        return RedirectResponse(f"{FRONTEND_URL}?error=oauth_not_configured")
+
+    # Exchange authorization code for tokens
+    try:
+        token_resp = await asyncio.to_thread(
+            http_requests.post,
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code": code,
+                "client_id": GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "redirect_uri": GOOGLE_REDIRECT_URI,
+                "grant_type": "authorization_code",
+            },
+            timeout=10,
+        )
+        token_json = token_resp.json()
+    except Exception as exc:
+        logger.error(f"Google token exchange failed: {exc}")
+        return RedirectResponse(f"{FRONTEND_URL}?error=oauth_failed")
+
+    if "error" in token_json:
+        logger.error(f"Google token error: {token_json}")
+        return RedirectResponse(f"{FRONTEND_URL}?error=oauth_failed")
+
+    # Decode the ID token (JWT) — verify with Google's public keys via google-auth
+    id_token_str = token_json.get("id_token")
+    if not id_token_str:
+        return RedirectResponse(f"{FRONTEND_URL}?error=no_id_token")
+
+    try:
+        from google.oauth2 import id_token as google_id_token
+        from google.auth.transport import requests as google_requests
+        user_info = await asyncio.to_thread(
+            google_id_token.verify_oauth2_token,
+            id_token_str,
+            google_requests.Request(),
+            GOOGLE_CLIENT_ID,
+        )
+    except Exception as exc:
+        logger.error(f"Google ID token verification failed: {exc}")
+        return RedirectResponse(f"{FRONTEND_URL}?error=token_invalid")
+
+    email = user_info.get("email")
+    google_id = user_info.get("sub")
+    if not email or not google_id:
+        return RedirectResponse(f"{FRONTEND_URL}?error=no_email")
+
+    user_service = UserService(db)
+    user = await user_service.get_or_create_google_user(
+        email=email,
+        google_id=google_id,
+        full_name=user_info.get("name", ""),
+        avatar_url=user_info.get("picture"),
+    )
+
+    access_token = create_access_token(data={"sub": user.username})
+    refresh_token = create_refresh_token(data={"sub": user.username})
+
+    redirect = RedirectResponse(url=FRONTEND_URL)
+    set_auth_cookies(redirect, access_token, refresh_token)
+    return redirect
