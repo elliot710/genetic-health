@@ -2765,25 +2765,51 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                         <TableRow key={`${job.job_id}-detail`}>
                           <TableCell colSpan={7} className="p-0">
                             <div className="mx-2 my-1 rounded-lg bg-gray-950 border border-white/10 px-4 py-3 space-y-2 text-xs font-mono">
-                              {job.params && Object.keys(job.params).length > 0 && (
+                              {/* Duration */}
+                              {job.started_at && (
+                                <div>
+                                  <span className="text-gray-400 font-sans font-medium">Duration: </span>
+                                  <span className="text-cyan-400">
+                                    {job.completed_at
+                                      ? (() => {
+                                          const s = Math.round((new Date(job.completed_at).getTime() - new Date(job.started_at!).getTime()) / 1000)
+                                          return s >= 60 ? `${Math.floor(s/60)}m ${s%60}s` : `${s}s`
+                                        })()
+                                      : 'running…'}
+                                  </span>
+                                </div>
+                              )}
+                              {/* Params — filter out nulls/false defaults */}
+                              {job.params && Object.entries(job.params).filter(([,v]) => v !== null && v !== false).length > 0 && (
                                 <div>
                                   <span className="text-gray-400 font-sans font-medium">Params: </span>
-                                  <span className="text-blue-400">{JSON.stringify(job.params)}</span>
+                                  <span className="text-blue-400">
+                                    {JSON.stringify(Object.fromEntries(Object.entries(job.params).filter(([,v]) => v !== null && v !== false)))}
+                                  </span>
                                 </div>
                               )}
+                              {/* Result — pretty-print ETL stats */}
                               {job.result && Object.keys(job.result).length > 0 && (
-                                <div>
-                                  <span className="text-gray-400 font-sans font-medium">Result: </span>
-                                  <span className="text-emerald-400">{JSON.stringify(job.result)}</span>
+                                <div className="space-y-0.5">
+                                  <span className="text-gray-400 font-sans font-medium block">Result:</span>
+                                  {Object.entries(job.result).map(([k, v]) => (
+                                    <div key={k} className="pl-3">
+                                      <span className="text-gray-500">{k}: </span>
+                                      <span className="text-emerald-400">
+                                        {Array.isArray(v) ? `[${(v as unknown[]).length} items]` : String(v)}
+                                      </span>
+                                    </div>
+                                  ))}
                                 </div>
                               )}
+                              {/* Error */}
                               {job.error && (
                                 <div>
                                   <span className="text-gray-400 font-sans font-medium">Error: </span>
-                                  <span className="text-red-400">{job.error}</span>
+                                  <span className="text-red-400 whitespace-pre-wrap">{job.error}</span>
                                 </div>
                               )}
-                              {!job.params && !job.result && !job.error && (
+                              {!job.started_at && !job.result && !job.error && !(job.params && Object.entries(job.params).filter(([,v]) => v !== null && v !== false).length > 0) && (
                                 <span className="text-gray-500">No additional details</span>
                               )}
                             </div>
