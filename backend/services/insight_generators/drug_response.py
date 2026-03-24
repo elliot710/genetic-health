@@ -5,6 +5,7 @@ from .base import (
     assess_drug_response, get_drug_recommendations,
     get_user_genotype, is_homozygous_reference,
     is_no_call_genotype, _get_effective_ref_allele,
+    is_clinvar_benign,
 )
 
 
@@ -64,11 +65,12 @@ async def generate_drug_responses(ctx: GeneratorContext) -> int:
                     ))
 
         if gene and gene in drug_gene_map:
-            # BUG-08: skip benign variants in the broad gene-map path.
-            # The rsid-map path is curated so benign there is less likely,
-            # but the gene-map is broad enough that benign variants would
-            # generate spurious drug warnings without this guard.
-            if profile and profile.is_benign:
+            # Skip benign variants in the gene-map path — avoids false drug
+            # warnings for benign variants in pharmacogenes (e.g. CYP2D6).
+            # Use pre-computed profile when available; fall back to direct
+            # annotation inspection when profile is absent (non-profile path).
+            _drug_benign = profile.is_benign if profile else is_clinvar_benign(annotation_result)
+            if _drug_benign:
                 continue
             info = drug_gene_map[gene]
             for drug_name, _template_response, rec in info['drugs']:

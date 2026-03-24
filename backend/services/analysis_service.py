@@ -232,12 +232,18 @@ class ComprehensiveAnalysisService:
 
             # Determine resume point from prior run's current_step
             resume_step = getattr(analysis, 'current_step', None) or 'initializing'
-            # Map step names to completed phase numbers
+            # Map step names to completed phase numbers.
+            # 'annotating_variants' means Phase 2 was in progress when the
+            # worker stopped — we can't know how far it got, so restart Phase 2.
+            # 'annotation_complete' is written after Phase 2 fully finishes so
+            # a crash between Phase 2 completion and Phase 3 start is safe to
+            # resume from Phase 3 without re-annotating.
             _completed_phases = {
                 'initializing': 0,
-                'annotating_variants': 0,   # Phase 2 was in progress (not done)
-                'enriching_data': 1,         # Phase 2 done, Phase 3 in progress
-                'generating_insights': 2,    # Phases 2+3 done, Phase 4 in progress
+                'annotating_variants': 0,   # Phase 2 was in progress — restart it
+                'annotation_complete': 1,   # Phase 2 finished — skip to Phase 3
+                'enriching_data': 1,        # Phase 3 in progress (Phase 2 done)
+                'generating_insights': 2,   # Phases 2+3 done, Phase 4 in progress
                 'completed': 4,
             }
             last_completed_phase = _completed_phases.get(resume_step, 0)
@@ -319,6 +325,11 @@ class ComprehensiveAnalysisService:
             # Now that we have ClinVar/gnomAD/Ensembl data, correct the
             # genetic_markers.ref_allele column with the true reference.
             await self._correct_ref_alleles(variants, annotation_results)
+
+            # Mark Phase 2 as fully complete so a crash between here and Phase 3
+            # won't cause a full re-annotation on resume.
+            progress.current_step = "annotation_complete"
+            await self._update_progress(analysis_id, progress)
 
             # ── Phase 3: BigQuery enrichment (own session, periodic commits) ──
             progress.phase = 3
@@ -571,8 +582,8 @@ class ComprehensiveAnalysisService:
                         result = await session.execute(stmt)
                         if result.rowcount > 0:
                             new_mappings += 1
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("Failed to upsert variant_mapping for %s: %s", rsid, e)
 
                 batch_count += 1
                 if batch_count % 5000 == 0:

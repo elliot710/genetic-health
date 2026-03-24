@@ -5,11 +5,11 @@ from .base import GeneratorContext, generate_from_maps, zygosity_adjust, boost_i
 
 async def generate_methylation_profiles(ctx: GeneratorContext) -> int:
     def from_rsid(aid, rsid, genotype, info):
-        base = boost_if_pathogenic(info['capacity'], info.get('_pathogenicity_score'))
+        adjusted = zygosity_adjust(info['capacity'], genotype, ref_allele=info.get('_ref_allele'))
         return MethylationProfile(
             analysis_id=aid, gene=info['gene'],
             variant=rsid,
-            methylation_capacity=zygosity_adjust(base, genotype, ref_allele=info.get('_ref_allele')),
+            methylation_capacity=boost_if_pathogenic(adjusted, info.get('_pathogenicity_score')),
             supplement_recommendations=info['supplements'],
             associated_variants=[rsid]
         )
@@ -17,11 +17,11 @@ async def generate_methylation_profiles(ctx: GeneratorContext) -> int:
     def from_gene(aid, rsid, gene, consequence, info):
         genotype = info.get('_genotype', '')
         ref_allele = info.get('_ref_allele')
-        base = boost_if_pathogenic(info['capacity'], info.get('_pathogenicity_score'))
+        adjusted = zygosity_adjust(info['capacity'], genotype, ref_allele=ref_allele) if genotype else info['capacity']
         return MethylationProfile(
             analysis_id=aid, gene=info['gene'],
             variant=rsid,
-            methylation_capacity=zygosity_adjust(base, genotype, ref_allele=ref_allele) if genotype else base,
+            methylation_capacity=boost_if_pathogenic(adjusted, info.get('_pathogenicity_score')),
             supplement_recommendations=info['supplements'],
             associated_variants=[rsid]
         )

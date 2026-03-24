@@ -7,13 +7,13 @@ async def generate_detox_profiles(ctx: GeneratorContext) -> int:
     def from_rsid(aid, rsid, genotype, info):
         path_score = info.get('_pathogenicity_score')
         ref_allele = info.get('_ref_allele')
-        cap_base = boost_if_pathogenic(info['capacity'], path_score)
-        sen_base = boost_if_pathogenic(info['sensitivity'], path_score)
+        cap_adj = zygosity_adjust(info['capacity'], genotype, ref_allele=ref_allele)
+        sen_adj = zygosity_adjust(info['sensitivity'], genotype, ref_allele=ref_allele)
         return DetoxificationProfile(
             analysis_id=aid, detox_phase=info['phase'],
             gene=info['gene'],
-            detox_capacity=zygosity_adjust(cap_base, genotype, ref_allele=ref_allele),
-            toxin_sensitivity=zygosity_adjust(sen_base, genotype, ref_allele=ref_allele),
+            detox_capacity=boost_if_pathogenic(cap_adj, path_score),
+            toxin_sensitivity=boost_if_pathogenic(sen_adj, path_score),
             support_recommendations=info['recommendations'],
             associated_variants=[rsid]
         )
@@ -22,13 +22,13 @@ async def generate_detox_profiles(ctx: GeneratorContext) -> int:
         genotype = info.get('_genotype', '')
         ref_allele = info.get('_ref_allele')
         path_score = info.get('_pathogenicity_score')
-        cap_base = boost_if_pathogenic(info['capacity'], path_score)
-        sen_base = boost_if_pathogenic(info['sensitivity'], path_score)
+        cap_adj = zygosity_adjust(info['capacity'], genotype, ref_allele=ref_allele) if genotype else info['capacity']
+        sen_adj = zygosity_adjust(info['sensitivity'], genotype, ref_allele=ref_allele) if genotype else info['sensitivity']
         return DetoxificationProfile(
             analysis_id=aid, detox_phase=info['phase'],
             gene=info['gene'],
-            detox_capacity=zygosity_adjust(cap_base, genotype, ref_allele=ref_allele) if genotype else cap_base,
-            toxin_sensitivity=zygosity_adjust(sen_base, genotype, ref_allele=ref_allele) if genotype else sen_base,
+            detox_capacity=boost_if_pathogenic(cap_adj, path_score),
+            toxin_sensitivity=boost_if_pathogenic(sen_adj, path_score),
             support_recommendations=info['recommendations'],
             associated_variants=[rsid]
         )

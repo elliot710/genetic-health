@@ -590,12 +590,13 @@ def zygosity_adjust(level: str, genotype: Optional[str], *, ref_allele: Optional
     elif is_heterozygous(genotype):
         new_idx = idx  # baseline — no change
     else:
-        # Homozygous non-reference — only escalate when the ref allele is known
-        # (BUG-07: without ref we cannot distinguish hom-alt from hom-ref)
-        if ref_allele is None:
-            new_idx = idx  # preserve baseline; cannot determine true zygosity
-        else:
-            new_idx = min(len(_SEVERITY_LADDER) - 1, idx + steps)
+        # Homozygous non-reference: escalate unconditionally.
+        # The early hom-ref filter in generate_from_maps() removes variants
+        # that are confirmed-hom-ref when ref_allele IS known.  Variants
+        # arriving here without a known ref are more likely genuinely hom-alt
+        # (identical alleles that aren't reference) than secretly hom-ref, so
+        # escalate rather than silently preserving baseline risk.
+        new_idx = min(len(_SEVERITY_LADDER) - 1, idx + steps)
 
     result = _SEVERITY_LADDER[new_idx]
     # Preserve original casing style (Title Case if original was)
@@ -662,11 +663,11 @@ def assess_risk_level(genotype: str, risk_multiplier: float, ref_allele: Optiona
             else:
                 base = 'low'
     else:
-        # Fallback: multiplier-only with finer-grained thresholds (SCORE-03 fix).
-        # Added a 1.7x tier so 1.7–2.0 → "high" instead of forcing a jump at 2.0×.
-        if risk_multiplier >= 1.7:
-            base = 'high'
-        elif risk_multiplier >= 1.2:
+        # Fallback: multiplier-only — cap at 'moderate', never 'high'.
+        # 'high' requires evidence from the composite pathogenicity score
+        # (ClinVar + gnomAD + AlphaMissense); a population risk multiplier
+        # alone is insufficient to justify the highest risk category.
+        if risk_multiplier >= 1.2:
             base = 'moderate'
         elif risk_multiplier <= 0.8:
             base = 'low'
@@ -811,19 +812,24 @@ async def generate_from_maps(
 
             info = rsid_map[rsid]
 
-            # BUG-06: Allele verification — confirm the user's genotype
-            # actually carries the alternate (risk) allele from annotation
-            # data. Without this, variants where user is hom-ref but ref
-            # allele was unavailable (so hom-ref check was skipped) would
-            # generate false insights.  Skip verification for indel D/I
-            # codes since their alleles don't map to nucleotides.
+            # Allele verification — confirm the user's genotype actually carries
+            # the alternate (risk) allele from annotation data.  Both SNPs and
+            # consumer-array indel codes (D/I) are now verified.
             if genotype and not is_indel_genotype(genotype):
                 _, ann_alt = get_annotation_allele_parts(annotation_result)
                 # Fallback: use risk_allele stored directly in the mapping when
                 # annotation data doesn't carry allele information (BUG-01).
                 if ann_alt is None:
                     ann_alt = info.get('risk_allele')
-                if ann_alt and len(ann_alt) == 1:
+                # FIX-02: skip when both annotation and mapping lack allele data.
+                # We cannot verify the user carries the risk allele vs reference,
+                # so omit rather than risk a false positive.
+                if ann_alt is None:
+                    logger.debug(
+                        "rsid %s: no allele data for SNP verification — skipping", rsid
+                    )
+                    continue
+                if len(ann_alt) == 1:
                     gt_upper = genotype.upper()
                     alleles = set(gt_upper.replace('/', '').replace('|', ''))
                     carries = ann_alt in alleles
@@ -833,6 +839,19 @@ async def generate_from_maps(
                         carries = ann_alt in {a.translate(_COMPLEMENT_MAP) for a in alleles}
                     if not carries:
                         continue
+            elif genotype and is_indel_genotype(genotype):
+                # FIX-01: Verify consumer D/I indel codes against annotation allele
+                # lengths.  D = shorter allele, I = longer allele.  indel_d_is_ref()
+                # returns True when D maps to the reference (insertion variant), False
+                # when D maps to the alternate (deletion variant), None when unknown.
+                _ind_ref, _ind_alt = get_annotation_allele_parts(annotation_result)
+                _d_is_ref = indel_d_is_ref(_ind_ref, _ind_alt)
+                if _d_is_ref is not None:
+                    # The risk (alternate) allele code
+                    _risk_code = 'I' if _d_is_ref else 'D'
+                    _user_codes = _parse_alleles(genotype) or []
+                    if _risk_code not in _user_codes:
+                        continue  # User carries only the reference indel allele
             key = info[dedup_field]
             if key not in seen:
                 seen.add(key)

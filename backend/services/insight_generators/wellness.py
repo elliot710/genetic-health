@@ -5,10 +5,10 @@ from .base import GeneratorContext, generate_from_maps, zygosity_adjust, boost_i
 
 async def generate_wellness_metrics(ctx: GeneratorContext) -> int:
     def from_rsid(aid, rsid, genotype, info):
-        base = boost_if_pathogenic(info['predisposition'], info.get('_pathogenicity_score'))
+        adjusted = zygosity_adjust(info['predisposition'], genotype, ref_allele=info.get('_ref_allele'))
         return WellnessMetric(
             analysis_id=aid, metric_name=info['metric'],
-            genetic_predisposition=zygosity_adjust(base, genotype, ref_allele=info.get('_ref_allele')),
+            genetic_predisposition=boost_if_pathogenic(adjusted, info.get('_pathogenicity_score')),
             optimization_score=info['score'],
             lifestyle_recommendations=info['recommendations'],
             associated_variants=[rsid]
@@ -17,10 +17,10 @@ async def generate_wellness_metrics(ctx: GeneratorContext) -> int:
     def from_gene(aid, rsid, gene, consequence, info):
         genotype = info.get('_genotype', '')
         ref_allele = info.get('_ref_allele')
-        base = boost_if_pathogenic(info['predisposition'], info.get('_pathogenicity_score'))
+        adjusted = zygosity_adjust(info['predisposition'], genotype, ref_allele=ref_allele) if genotype else info['predisposition']
         return WellnessMetric(
             analysis_id=aid, metric_name=info['metric'],
-            genetic_predisposition=zygosity_adjust(base, genotype, ref_allele=ref_allele) if genotype else base,
+            genetic_predisposition=boost_if_pathogenic(adjusted, info.get('_pathogenicity_score')),
             optimization_score=info['score'],
             lifestyle_recommendations=info['recommendations'],
             associated_variants=[rsid]
