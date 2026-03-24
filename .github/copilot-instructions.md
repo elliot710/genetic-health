@@ -10,7 +10,7 @@ A full-stack genetic data analysis platform providing personalized health insigh
 | Backend API | http://localhost:8000/docs | `dna_toolkit-backend-1` |
 | PostgreSQL | localhost:5432 | `dna_toolkit-postgres-1` |
 
-**Credentials**: elliotalderson710@gmail.com / Victor123!
+**Server**: 204.168.200.44 ~/.ssh/id_ed25519.pub
 **Login field**: `username` (not `email`) — POST `/auth/login` takes `{"username": "...", "password": "..."}`
 
 ## Architecture

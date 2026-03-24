@@ -166,9 +166,15 @@ class EnsemblETL:
         """Parse cDNA + ncRNA FASTAs and bulk-insert into ensembl_genes."""
         t0 = time.monotonic()
 
-        # Locate FASTA files
-        cdna_path = _ENSEMBL_DATA_DIR / "cdna" / "Homo_sapiens.GRCh38.cdna.all.fa.gz"
-        ncrna_path = _ENSEMBL_DATA_DIR / "ncrna" / "Homo_sapiens.GRCh38.ncrna.fa.gz"
+        # Locate FASTA files — files live under fasta/cdna/ and fasta/ncrna/
+        fasta_base = _ENSEMBL_DATA_DIR / "fasta"
+        cdna_path = fasta_base / "cdna" / "Homo_sapiens.GRCh38.cdna.all.fa.gz"
+        ncrna_path = fasta_base / "ncrna" / "Homo_sapiens.GRCh38.ncrna.fa.gz"
+        # Fallback: some deploys have files directly under homo_sapiens/
+        if not cdna_path.exists():
+            cdna_path = _ENSEMBL_DATA_DIR / "cdna" / "Homo_sapiens.GRCh38.cdna.all.fa.gz"
+        if not ncrna_path.exists():
+            ncrna_path = _ENSEMBL_DATA_DIR / "ncrna" / "Homo_sapiens.GRCh38.ncrna.fa.gz"
 
         all_headers: List[Dict[str, str]] = []
 

@@ -66,6 +66,14 @@ APP_DIR="$1"
 BRANCH="$2"
 cd "$APP_DIR"
 
+# ── Protect .env ──────────────────────────────────────────────────────────────
+# The canonical production .env lives at /root/.env.epigenic (outside the git repo).
+# We back up /app/.env there before any git operation and restore it after.
+ENV_BACKUP="/root/.env.epigenic"
+if [[ -f "$APP_DIR/.env" ]]; then
+  cp "$APP_DIR/.env" "$ENV_BACKUP"
+fi
+
 # Use the GitHub deploy key for this git operation
 export GIT_SSH_COMMAND="ssh -i /root/.ssh/github_deploy -o StrictHostKeyChecking=accept-new"
 
@@ -78,6 +86,15 @@ fi
 git fetch origin "$BRANCH"
 git checkout "$BRANCH"
 git reset --hard "origin/$BRANCH"
+
+# ── Restore .env ──────────────────────────────────────────────────────────────
+if [[ -f "$ENV_BACKUP" ]]; then
+  cp "$ENV_BACKUP" "$APP_DIR/.env"
+  echo "  .env restored from $ENV_BACKUP"
+else
+  echo "  WARNING: no .env backup found at $ENV_BACKUP — create one manually!"
+fi
+
 echo "  HEAD: $(git log -1 --oneline)"
 REMOTE "$APP_DIR" "$BRANCH"
 success "Code updated"
