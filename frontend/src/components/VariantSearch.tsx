@@ -171,6 +171,7 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
     text: {
       primary: isDarkMode ? 'text-white' : 'text-slate-900',
       secondary: isDarkMode ? 'text-slate-300' : 'text-slate-600',
+      tertiary: isDarkMode ? 'text-gray-400' : 'text-gray-600',
       muted: isDarkMode ? 'text-slate-400' : 'text-slate-500'
     }
   }
