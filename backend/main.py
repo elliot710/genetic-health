@@ -233,7 +233,10 @@ except Exception:
 
 # Configure CORS — base origins always allowed; extend via EXTRA_CORS_ORIGINS env var
 # e.g. EXTRA_CORS_ORIGINS=https://epigenic.xyz,https://www.epigenic.xyz
-_base_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001"]
+_base_origins = [
+    "http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001",
+    "https://epigenic.xyz", "https://www.epigenic.xyz",
+]
 _extra = [o.strip() for o in os.environ.get("EXTRA_CORS_ORIGINS", "").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,

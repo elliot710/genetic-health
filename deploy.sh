@@ -96,7 +96,7 @@ else
 fi
 
 echo "  HEAD: $(git log -1 --oneline)"
-REMOTE "$APP_DIR" "$BRANCH"
+REMOTE
 success "Code updated"
 
 # ── Migrations ───────────────────────────────────────────────────────────────
@@ -115,7 +115,7 @@ for i in 1 2 3 4 5; do
 done
 docker exec "$CONTAINER" uv run alembic upgrade head
 echo "  Migration version: $(docker exec "$CONTAINER" uv run alembic current 2>&1 | grep '(' | head -1)"
-REMOTE "$APP_DIR" "$BACKEND_CONTAINER"
+REMOTE
 success "Migrations applied"
 
 # ── Rebuild containers ───────────────────────────────────────────────────────
@@ -128,7 +128,7 @@ else
 set -euo pipefail
 cd "$1"
 docker compose up -d --build backend worker 2>&1 | grep -E 'Built|Started|Recreated|error' || true
-REMOTE "$APP_DIR"
+REMOTE
     success "Backend + worker rebuilt"
   fi
 
@@ -138,7 +138,7 @@ REMOTE "$APP_DIR"
 set -euo pipefail
 cd "$1"
 docker compose up -d --build frontend 2>&1 | grep -E 'Built|Started|Recreated|error' || true
-REMOTE "$APP_DIR"
+REMOTE
     success "Frontend rebuilt"
   fi
 fi
@@ -160,7 +160,7 @@ for i in $(seq 1 20); do
   sleep 3
 done
 echo "WARNING: backend did not reach healthy state within 60s"
-REMOTE "$BACKEND_CONTAINER"
+REMOTE
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 echo ""
