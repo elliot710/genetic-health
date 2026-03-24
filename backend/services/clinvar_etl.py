@@ -37,6 +37,37 @@ logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 50_000
 
+# ── Module-level progress state (shared across requests) ──────────────────────
+
+_etl_progress: Dict[str, Any] = {
+    "running": False,
+    "step": None,
+    "rows": 0,
+    "pct": 0,
+    "total_elapsed": 0.0,
+    "started_at": None,
+    "completed_at": None,
+    "error": None,
+    "steps": [],
+}
+
+# Rough percentage milestones per step (variant_summary is the bulk)
+_STEP_PCT: Dict[str, int] = {
+    "truncate": 2,
+    "drop_indexes": 5,
+    "variant_summary": 50,
+    "clinvar_vcf": 85,
+    "gene_conditions": 88,
+    "gene_stats": 91,
+    "create_indexes": 96,
+    "analyze": 100,
+}
+
+
+def get_etl_progress() -> Dict[str, Any]:
+    """Return a snapshot of the current ETL progress state."""
+    return dict(_etl_progress)
+
 _CLINVAR_DATA_DIR = Path(os.environ.get(
     "CLINVAR_DATA_DIR",
     os.path.join(os.path.dirname(__file__), "..", "..", "data_sources", "clinvar"),
@@ -94,88 +125,133 @@ class ClinVarETL:
 
     async def run_full_import(self, *, progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
         """Run the full ETL pipeline.  Returns summary stats."""
+        global _etl_progress
         total_start = time.time()
         stats: Dict[str, Any] = {"steps": []}
+
+        _etl_progress.update({
+            "running": True,
+            "step": "starting",
+            "rows": 0,
+            "pct": 0,
+            "total_elapsed": 0.0,
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "completed_at": None,
+            "error": None,
+            "steps": [],
+        })
 
         def _report(step: str, count: int, elapsed: float):
             entry = {"step": step, "count": count, "elapsed_s": round(elapsed, 1)}
             stats["steps"].append(entry)
+            _etl_progress["step"] = step
+            _etl_progress["rows"] = count
+            _etl_progress["pct"] = _STEP_PCT.get(step, _etl_progress["pct"])
+            _etl_progress["total_elapsed"] = round(time.time() - total_start, 1)
+            _etl_progress["steps"] = list(stats["steps"])
             if progress_callback:
                 progress_callback(step, count, elapsed)
             logger.info("ETL %s: %d rows in %.1fs", step, count, elapsed)
 
-        # 1. Truncate
-        t0 = time.time()
-        await self._truncate_tables()
-        _report("truncate", 0, time.time() - t0)
+        def _row_progress(step: str, rows: int):
+            """Called mid-step as rows accumulate."""
+            _etl_progress["step"] = step
+            _etl_progress["rows"] = rows
+            _etl_progress["total_elapsed"] = round(time.time() - total_start, 1)
 
-        # 2. Drop non-PK indexes for faster bulk loading
-        t0 = time.time()
-        await self._drop_indexes()
-        _report("drop_indexes", 0, time.time() - t0)
-
-        # 3. Stream-import variant_summary.txt.gz
-        tsv_path = self._tsv_dir / "variant_summary.txt.gz"
-        if tsv_path.exists():
+        try:
+            # 1. Truncate
             t0 = time.time()
-            n = await self._stream_import(
-                tsv_path, self._parse_tsv_chunks, "clinvar_variants", TSV_COLUMNS,
-            )
-            _report("variant_summary", n, time.time() - t0)
-        else:
-            logger.warning("variant_summary.txt.gz not found at %s", tsv_path)
+            await self._truncate_tables()
+            _report("truncate", 0, time.time() - t0)
 
-        # 4. Stream-import clinvar.vcf.gz
-        vcf_path = self._vcf_dir / "clinvar.vcf.gz"
-        if vcf_path.exists():
+            # 2. Drop non-PK indexes for faster bulk loading
             t0 = time.time()
-            n = await self._stream_import(
-                vcf_path, self._parse_vcf_chunks, "clinvar_variants", VCF_COLUMNS,
-            )
-            _report("clinvar_vcf", n, time.time() - t0)
-        else:
-            logger.warning("clinvar.vcf.gz not found")
+            await self._drop_indexes()
+            _report("drop_indexes", 0, time.time() - t0)
 
-        # 5. Gene conditions (small file — parse and COPY in one shot)
-        gc_path = self._tsv_dir / "gene_condition_source_id.txt"
-        if gc_path.exists():
+            # 3. Stream-import variant_summary.txt.gz
+            tsv_path = self._tsv_dir / "variant_summary.txt.gz"
+            if tsv_path.exists():
+                t0 = time.time()
+                n = await self._stream_import(
+                    tsv_path, self._parse_tsv_chunks, "clinvar_variants", TSV_COLUMNS,
+                    row_callback=lambda rows: _row_progress("variant_summary", rows),
+                )
+                _report("variant_summary", n, time.time() - t0)
+            else:
+                logger.warning("variant_summary.txt.gz not found at %s", tsv_path)
+
+            # 4. Stream-import clinvar.vcf.gz
+            vcf_path = self._vcf_dir / "clinvar.vcf.gz"
+            if vcf_path.exists():
+                t0 = time.time()
+                n = await self._stream_import(
+                    vcf_path, self._parse_vcf_chunks, "clinvar_variants", VCF_COLUMNS,
+                    row_callback=lambda rows: _row_progress("clinvar_vcf", rows),
+                )
+                _report("clinvar_vcf", n, time.time() - t0)
+            else:
+                logger.warning("clinvar.vcf.gz not found")
+
+            # 5. Gene conditions (small file — parse and COPY in one shot)
+            gc_path = self._tsv_dir / "gene_condition_source_id.txt"
+            if gc_path.exists():
+                t0 = time.time()
+                rows = await asyncio.to_thread(self._parse_gene_conditions, gc_path)
+                if rows:
+                    await self._copy_records("clinvar_gene_conditions", GC_COLUMNS, rows)
+                _report("gene_conditions", len(rows), time.time() - t0)
+
+            # 6. Gene stats (small file)
+            gs_path = self._tsv_dir / "gene_specific_summary.txt"
+            if gs_path.exists():
+                t0 = time.time()
+                rows = await asyncio.to_thread(self._parse_gene_stats, gs_path)
+                if rows:
+                    await self._copy_records("clinvar_gene_stats", GS_COLUMNS, rows)
+                _report("gene_stats", len(rows), time.time() - t0)
+
+            # 7. Recreate indexes
             t0 = time.time()
-            rows = await asyncio.to_thread(self._parse_gene_conditions, gc_path)
-            if rows:
-                await self._copy_records("clinvar_gene_conditions", GC_COLUMNS, rows)
-            _report("gene_conditions", len(rows), time.time() - t0)
+            await self._create_indexes()
+            _report("create_indexes", 0, time.time() - t0)
 
-        # 6. Gene stats (small file)
-        gs_path = self._tsv_dir / "gene_specific_summary.txt"
-        if gs_path.exists():
+            # 8. ANALYZE for query planner
             t0 = time.time()
-            rows = await asyncio.to_thread(self._parse_gene_stats, gs_path)
-            if rows:
-                await self._copy_records("clinvar_gene_stats", GS_COLUMNS, rows)
-            _report("gene_stats", len(rows), time.time() - t0)
+            await self._analyze_tables()
+            _report("analyze", 0, time.time() - t0)
 
-        # 7. Recreate indexes
-        t0 = time.time()
-        await self._create_indexes()
-        _report("create_indexes", 0, time.time() - t0)
+            # Final counts
+            counts = await self.get_import_status()
+            stats["final_counts"] = counts
+            stats["total_elapsed_s"] = round(time.time() - total_start, 1)
+            _etl_progress.update({
+                "running": False,
+                "step": "complete",
+                "pct": 100,
+                "total_elapsed": stats["total_elapsed_s"],
+                "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            })
+            logger.info("ClinVar ETL complete in %.1fs — %s", stats["total_elapsed_s"], counts)
+            return stats
 
-        # 8. ANALYZE for query planner
-        t0 = time.time()
-        await self._analyze_tables()
-        _report("analyze", 0, time.time() - t0)
-
-        # Final counts
-        counts = await self.get_import_status()
-        stats["final_counts"] = counts
-        stats["total_elapsed_s"] = round(time.time() - total_start, 1)
-        logger.info("ClinVar ETL complete in %.1fs — %s", stats["total_elapsed_s"], counts)
-        return stats
+        except Exception as exc:
+            _etl_progress.update({
+                "running": False,
+                "step": "error",
+                "error": str(exc),
+                "total_elapsed": round(time.time() - total_start, 1),
+                "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            })
+            logger.exception("ClinVar ETL failed: %s", exc)
+            raise
 
     # ------------------------------------------------------------------
     # Streaming producer-consumer import
     # ------------------------------------------------------------------
 
-    async def _stream_import(self, fpath, parser_func, table_name, columns):
+    async def _stream_import(self, fpath, parser_func, table_name, columns, *, row_callback=None):
         """Stream-parse a file in a thread and COPY-insert each chunk."""
         q: queue.Queue = queue.Queue(maxsize=4)
 
@@ -207,6 +283,8 @@ class ClinVarETL:
                 total += len(item)
                 if total % 200_000 < CHUNK_SIZE:
                     logger.info("  %s: %d rows inserted", table_name, total)
+                    if row_callback:
+                        row_callback(total)
         finally:
             await conn.close()
 

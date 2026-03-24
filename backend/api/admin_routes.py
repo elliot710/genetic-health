@@ -1879,18 +1879,38 @@ async def clinvar_etl_status(admin: User = Depends(require_admin)):
     return await etl.get_import_status()
 
 
+@router.get("/clinvar-etl/progress")
+async def clinvar_etl_progress(admin: User = Depends(require_admin)):
+    """Return live progress of the running (or last) ClinVar ETL import."""
+    from ..services.clinvar_etl import get_etl_progress
+    return get_etl_progress()
+
+
 @router.post("/clinvar-etl/import")
 async def clinvar_etl_import(admin: User = Depends(require_admin)):
-    """Run full ClinVar ETL import (truncates + reimports all data).
-    This is a long-running operation — may take 5-15 minutes."""
-    from ..services.clinvar_etl import ClinVarETL
-    etl = ClinVarETL()
-    stats = await etl.run_full_import()
-    # Refresh the ClinVar local service cache count
-    from ..services.clinvar_local import get_clinvar_local_service
-    cv_svc = get_clinvar_local_service()
-    await cv_svc.ensure_loaded()
-    return stats
+    """Kick off a ClinVar ETL import in the background and return immediately.
+    Poll GET /clinvar-etl/progress for live status."""
+    from ..services.clinvar_etl import ClinVarETL, get_etl_progress
+
+    # Reject concurrent imports
+    prog = get_etl_progress()
+    if prog.get("running"):
+        return {"status": "already_running", "step": prog.get("step"), "pct": prog.get("pct")}
+
+    async def _run():
+        etl = ClinVarETL()
+        try:
+            await etl.run_full_import()
+            # Refresh the ClinVar local service cache count
+            from ..services.clinvar_local import get_clinvar_local_service
+            cv_svc = get_clinvar_local_service()
+            await cv_svc.ensure_loaded()
+        except Exception:
+            pass  # errors are recorded in _etl_progress
+
+    import asyncio as _asyncio
+    _asyncio.create_task(_run())
+    return {"status": "started"}
 
 
 # ======================================================================
