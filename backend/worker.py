@@ -170,6 +170,24 @@ async def _execute_job(job_id: int, job_type: str, params: dict) -> dict:
         return await categorizer.run(categories=cat_list)
     elif job_type == "purge_deleted":
         return await _purge_deleted_analyses(params)
+    elif job_type == "etl_vep":
+        from backend.services.ensembl_vep_etl import EnsemblVepETL
+        p = params or {}
+        etl = EnsemblVepETL()
+        return await etl.run_import(
+            filter_to_known=True,
+            force_reload=p.get("force_reload", False),
+            chromosomes=p.get("chromosomes"),
+        )
+    elif job_type == "etl_gnomad":
+        from backend.services.gnomad_etl import GnomadETL
+        return await GnomadETL().run_full_import()
+    elif job_type == "etl_ensembl":
+        from backend.services.ensembl_etl import EnsemblETL
+        return await EnsemblETL().run_full_import()
+    elif job_type == "etl_1kg":
+        from backend.services.thousand_genomes_etl import ThousandGenomesETL
+        return await ThousandGenomesETL().run_full_import()
     else:
         raise ValueError(f"Unknown job type: {job_type}")
 

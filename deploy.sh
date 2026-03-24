@@ -143,6 +143,15 @@ REMOTE
   fi
 fi
 
+# ── Reload nginx (picks up nginx.conf changes) ───────────────────────────────
+info "Reloading nginx …"
+ssh "$SERVER" bash -s -- "$APP_DIR" <<'REMOTE'
+set -euo pipefail
+cd "$1"
+docker compose exec -T nginx nginx -s reload 2>/dev/null || docker compose up -d nginx
+REMOTE
+success "Nginx reloaded"
+
 # ── Health check ─────────────────────────────────────────────────────────────
 info "Waiting for backend to report healthy …"
 ssh "$SERVER" bash -s -- "$BACKEND_CONTAINER" <<'REMOTE'

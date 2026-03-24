@@ -922,34 +922,27 @@ class VepEtlResponse(BaseModel):
     total_variants: int = 0
     skipped_chromosomes: list = []
 
-@router.post("/ensembl-vep-etl/import", response_model=VepEtlResponse)
+@router.post("/ensembl-vep-etl/import")
 async def trigger_vep_etl(
     chromosomes: Optional[str] = Query(None, description="Comma-separated chromosome list, e.g. '1,2,X'. Omit for all available."),
     force_reload: bool = Query(False, description="Re-import already loaded chromosomes"),
     admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
 ):
-    """Import Ensembl VEP data from local VCF files into the ensembl_vep_variants table.
-    Only imports rsids that exist in genetic_markers (filtered ETL)."""
-    from ..services.ensembl_vep_etl import EnsemblVepETL
-
+    """Dispatch Ensembl VEP ETL to the background worker and return immediately."""
+    from ..db.models import WorkerJob
     chrom_list = [c.strip() for c in chromosomes.split(',')] if chromosomes else None
-
-    try:
-        etl = EnsemblVepETL()
-        result = await etl.run_import(
-            filter_to_known=True,
-            force_reload=force_reload,
-            chromosomes=chrom_list,
-        )
-        return VepEtlResponse(
-            detail=f"VEP ETL complete: {result.get('total_imported', 0)} variants from {len(result.get('imported', []))} chromosomes",
-            chromosomes_imported=result.get('imported', []),
-            total_variants=result.get('total_imported', 0),
-            skipped_chromosomes=result.get('skipped', []),
-        )
-    except Exception as e:
-        logger.error(f"VEP ETL failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"VEP ETL failed: {str(e)}")
+    job = WorkerJob(
+        job_type="etl_vep",
+        status="pending",
+        params={"chromosomes": chrom_list, "force_reload": force_reload},
+        requested_by=admin.id,
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    logger.info(f"VEP ETL job {job.id} queued by admin {admin.id}")
+    return {"job_id": job.id, "status": "pending", "detail": f"VEP ETL queued as worker job #{job.id} — monitor via Worker Jobs"}
 
 
 @router.get("/ensembl-vep-etl/status")
@@ -2038,31 +2031,33 @@ async def gnomad_etl_status(admin: User = Depends(require_admin)):
 
 
 @router.post("/gnomad-etl/import")
-async def gnomad_etl_import(admin: User = Depends(require_admin)):
-    """Run full gnomAD ETL import (truncates + reimports all data).
-    This is a long-running operation — may take 30+ minutes for large files."""
-    from ..services.gnomad_etl import GnomadETL
-    etl = GnomadETL()
-    stats = await etl.run_full_import()
-    # Refresh the gnomAD local service cache count
-    from ..services.gnomad_local import get_gnomad_service
-    gnomad_svc = get_gnomad_service()
-    await gnomad_svc.ensure_loaded()
-    return stats
+async def gnomad_etl_import(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+):
+    """Dispatch gnomAD ETL to the background worker and return immediately."""
+    from ..db.models import WorkerJob
+    job = WorkerJob(job_type="etl_gnomad", status="pending", params={}, requested_by=admin.id)
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    logger.info(f"gnomAD ETL job {job.id} queued by admin {admin.id}")
+    return {"job_id": job.id, "status": "pending", "detail": f"gnomAD ETL queued as worker job #{job.id} — monitor via Worker Jobs"}
 
 
 @router.post("/ensembl-etl/import")
-async def ensembl_etl_import(admin: User = Depends(require_admin)):
-    """Parse Ensembl cDNA/ncRNA FASTA headers and load gene models.
-    Usually completes in under 30 seconds."""
-    from ..services.ensembl_etl import EnsemblETL
-    etl = EnsemblETL()
-    stats = await etl.run_full_import()
-    from ..services.ensembl_vep_local import get_ensembl_local_service
-    svc = get_ensembl_local_service()
-    svc._gene_count = None  # Reset cache so next ensure_loaded re-checks
-    await svc.ensure_loaded()
-    return stats
+async def ensembl_etl_import(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+):
+    """Dispatch Ensembl gene model ETL to the background worker and return immediately."""
+    from ..db.models import WorkerJob
+    job = WorkerJob(job_type="etl_ensembl", status="pending", params={}, requested_by=admin.id)
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    logger.info(f"Ensembl ETL job {job.id} queued by admin {admin.id}")
+    return {"job_id": job.id, "status": "pending", "detail": f"Ensembl ETL queued as worker job #{job.id} — monitor via Worker Jobs"}
 
 
 # ======================================================================
@@ -2078,16 +2073,18 @@ async def thousand_genomes_etl_status(admin: User = Depends(require_admin)):
 
 
 @router.post("/1kg-etl/import")
-async def thousand_genomes_etl_import(admin: User = Depends(require_admin)):
-    """Run full 1000 Genomes Phase 3 ETL import (truncates + reimports).
-    Parses the Ensembl 1000GENOMES-phase_3.vcf.gz file (~1.5 GB)."""
-    from ..services.thousand_genomes_etl import ThousandGenomesETL
-    etl = ThousandGenomesETL()
-    stats = await etl.run_full_import()
-    from ..services.thousand_genomes_local import get_thousand_genomes_service
-    tkg_svc = get_thousand_genomes_service()
-    await tkg_svc.ensure_loaded()
-    return stats
+async def thousand_genomes_etl_import(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+):
+    """Dispatch 1000 Genomes ETL to the background worker and return immediately."""
+    from ..db.models import WorkerJob
+    job = WorkerJob(job_type="etl_1kg", status="pending", params={}, requested_by=admin.id)
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    logger.info(f"1000 Genomes ETL job {job.id} queued by admin {admin.id}")
+    return {"job_id": job.id, "status": "pending", "detail": f"1000 Genomes ETL queued as worker job #{job.id} — monitor via Worker Jobs"}
 
 
 # ======================================================================

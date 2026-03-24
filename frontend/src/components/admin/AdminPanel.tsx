@@ -894,14 +894,14 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
       return
     }
 
-    // Other ETL sources: wait for completion
+    // Other ETL sources: dispatched to worker, returns immediately with job_id
     try {
       const res = await authFetch(`${API}${endpoint}`, { method: 'POST', headers })
       if (res.ok) {
         const data = await res.json()
         const msg = data.detail || JSON.stringify(data)
         setEtlFeedback({ source: key, message: msg, type: 'success' })
-        // Refresh status after import
+        // Refresh status after queuing
         const src = ETL_SOURCES.find(s => s.key === key)
         if (src?.statusEndpoint) fetchEtlStatus(key, src.statusEndpoint)
       } else {
@@ -912,7 +912,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
       setEtlFeedback({ source: key, message: 'Network error during import', type: 'error' })
     }
     setEtlRunning(prev => ({ ...prev, [key]: false }))
-    setTimeout(() => setEtlFeedback(prev => prev?.source === key ? null : prev), 15000)
+    setTimeout(() => setEtlFeedback(prev => prev?.source === key ? null : prev), 30000)
   }
 
   // On mount: check if ClinVar ETL is already running and resume polling
