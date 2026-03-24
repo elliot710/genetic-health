@@ -7,6 +7,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import os
+
 from .api import auth_routes, upload_routes, annotation_routes, variant_routes
 from .api.analysis_routes import router as analysis_router
 from .api.admin_routes import router as admin_router
@@ -225,10 +227,13 @@ try:
 except Exception:
     pass  # OTel instrumentation is optional
 
-# Configure CORS
+# Configure CORS — base origins always allowed; extend via EXTRA_CORS_ORIGINS env var
+# e.g. EXTRA_CORS_ORIGINS=https://epigenic.xyz,https://www.epigenic.xyz
+_base_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001"]
+_extra = [o.strip() for o in os.environ.get("EXTRA_CORS_ORIGINS", "").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001", "http://204.168.200.44:3000"],
+    allow_origins=_base_origins + _extra,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],

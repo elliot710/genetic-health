@@ -64,15 +64,7 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
       - OTEL_SERVICE_NAME=dna-toolkit-backend
       - OTEL_CONSOLE_EXPORT=${OTEL_CONSOLE_EXPORT:-false}
-    volumes:
-      - .:/app
-      - /app/.venv  # Exclude virtual environment from volume mount
-    depends_on:
-      postgres:
-        condition: service_healthy
-      otel-collector:
-        condition: service_started
-    restart: unless-stopped
+      - EXTRA_CORS_ORIGINS=${EXTRA_CORS_ORIGINS:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -180,7 +172,7 @@ services:
       - ./frontend:/app
       - /app/node_modules  # Exclude node_modules from volume mount
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     depends_on:
       - backend
     restart: unless-stopped
