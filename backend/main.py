@@ -159,7 +159,7 @@ async def lifespan(app: FastAPI):
                 async with async_session_factory() as s:
                     # Find recently completed/failed analyses not yet notified
                     rows = await s.execute(
-                        sa_text(
+                        sa_text2(
                             """
                             SELECT a.id, a.user_id, a.analysis_status, a.filename,
                                    a.progress_percentage, a.total_variants
