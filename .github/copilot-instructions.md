@@ -19,7 +19,13 @@ user: root
 ## Architecture
 
 ```
-data_sources/               # local data sources. available only on the production server
+data_sources/               # Local data sources. available only on the production server
+│   ├── 1000G/
+│   ├── alpha_missense/
+│   ├── clinvar/
+│   ├── ensembl/
+│   └── gnomad/
+
 backend/
 ├── main.py                 # FastAPI app, CORS, router mounts, startup/shutdown
 ├── api/                    # Route handlers (7 routers)

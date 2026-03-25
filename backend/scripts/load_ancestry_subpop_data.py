@@ -96,41 +96,76 @@ POP_CODE_MAP = {
 def _extract_subpop_freqs(
     variant_data: Dict[str, Any],
 ) -> Optional[Dict[str, float]]:
-    """Extract sub-population allele frequencies from Ensembl variation response."""
+    """Extract sub-population allele frequencies from Ensembl variation response.
+
+    The API returns multiple entries per population (one per allele), so we
+    group by allele and pick the allele that provides the most informative
+    (non-fixed) frequencies across populations to ensure consistency.
+    """
     populations = variant_data.get("populations", [])
     if not populations:
         return None
 
-    # First try gnomAD (higher priority — more European sub-populations)
-    gnomad_freqs: Dict[str, float] = {}
-    tkg_freqs: Dict[str, float] = {}
+    # Group frequencies by (allele, source_tier).
+    # source_tier: 0=gnomAD genome, 1=gnomAD exome, 2=1000G
+    allele_freqs: Dict[str, Dict[int, Dict[str, float]]] = {}
 
     for pop_entry in populations:
         pop_name = pop_entry.get("population", "")
         freq = pop_entry.get("frequency")
-        if freq is None:
+        allele = pop_entry.get("allele", "")
+        if freq is None or not allele:
             continue
 
         short_code = POP_CODE_MAP.get(pop_name)
         if not short_code:
             continue
 
-        # Prefer gnomAD genome over exome (genome has "gnomADg:" prefix)
         if pop_name.startswith("gnomADg:"):
-            gnomad_freqs[short_code] = freq
-        elif pop_name.startswith("gnomADe:") and short_code not in gnomad_freqs:
-            gnomad_freqs[short_code] = freq
+            tier = 0
+        elif pop_name.startswith("gnomADe:"):
+            tier = 1
         elif pop_name.startswith("1000GENOMES:"):
-            tkg_freqs[short_code] = freq
+            tier = 2
+        else:
+            continue
 
-    # Use gnomAD if we got at least 4 sub-populations, else fall back to 1000G
-    if len(gnomad_freqs) >= 4:
-        return gnomad_freqs
-    if len(tkg_freqs) >= 3:
-        return tkg_freqs
-    # Merge whatever we have
-    merged = {**tkg_freqs, **gnomad_freqs}
-    return merged if len(merged) >= 3 else None
+        allele_freqs.setdefault(allele, {}).setdefault(tier, {})[short_code] = freq
+
+    if not allele_freqs:
+        return None
+
+    # For each allele, pick the best-available tier and count informative pops
+    best_allele = None
+    best_score = -1
+    best_freqs: Dict[str, float] = {}
+
+    for allele, tiers in allele_freqs.items():
+        # Pick the best tier for this allele (gnomAD genome > exome > 1000G)
+        for t in (0, 1, 2):
+            if t in tiers and len(tiers[t]) >= 3:
+                # Score: number of informative (non-fixed) populations
+                freqs = tiers[t]
+                score = sum(1 for f in freqs.values() if 0.001 < f < 0.999)
+                if score > best_score:
+                    best_score = score
+                    best_allele = allele
+                    best_freqs = freqs
+                break
+
+    if not best_freqs or len(best_freqs) < 3:
+        return None
+
+    # Prefer gnomAD if we got enough sub-populations
+    gnomad_pops = {k: v for k, v in best_freqs.items() if k.startswith("nfe_") or k in ("fin", "asj")}
+    if len(gnomad_pops) >= 4:
+        return gnomad_pops
+
+    tkg_pops = {k: v for k, v in best_freqs.items() if k in ("ceu", "fin", "gbr", "ibs", "tsi")}
+    if len(tkg_pops) >= 3:
+        return tkg_pops
+
+    return best_freqs if len(best_freqs) >= 3 else None
 
 
 async def _fetch_batch(
