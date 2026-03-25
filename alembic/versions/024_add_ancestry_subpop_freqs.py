@@ -12,7 +12,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "024_ancestry_subpop"
-down_revision = "023_worker_jobs_refreshed"
+down_revision = "023_add_worker_jobs_refreshed_at"
 branch_labels = None
 depends_on = None
 
