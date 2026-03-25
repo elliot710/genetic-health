@@ -27,9 +27,10 @@ import json
 import logging
 import sys
 import time
+import urllib.request
+import urllib.error
 from typing import Any, Dict, List, Optional, Set
 
-import httpx
 from sqlalchemy import text
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -133,35 +134,44 @@ def _extract_subpop_freqs(
 
 
 async def _fetch_batch(
-    client: httpx.AsyncClient,
     rsids: List[str],
     retry: int = 3,
 ) -> Dict[str, Dict[str, Any]]:
-    """POST a batch of rsids to Ensembl and return parsed responses."""
+    """POST a batch of rsids to Ensembl and return parsed responses (uses stdlib urllib)."""
     for attempt in range(retry):
         try:
-            resp = await client.post(
-                ENSEMBL_POST_URL,
-                json={"ids": rsids},
-                params={"pops": "1"},
+            body = json.dumps({"ids": rsids}).encode("utf-8")
+            req = urllib.request.Request(
+                f"{ENSEMBL_POST_URL}?pops=1",
+                data=body,
                 headers={
                     "Content-Type": "application/json",
                     "Accept": "application/json",
                 },
-                timeout=60.0,
+                method="POST",
             )
-            if resp.status_code == 429:
-                # Rate limited — wait and retry
-                wait = float(resp.headers.get("Retry-After", "2"))
+            # Run blocking urllib in a thread to not block the event loop
+            loop = asyncio.get_event_loop()
+            resp_data = await loop.run_in_executor(None, _sync_urlopen, req)
+            return resp_data
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                wait = float(e.headers.get("Retry-After", "2"))
                 logger.warning(f"Rate limited, waiting {wait}s")
                 await asyncio.sleep(wait)
                 continue
-            resp.raise_for_status()
-            return resp.json()
-        except (httpx.HTTPError, json.JSONDecodeError) as e:
+            logger.warning(f"Batch attempt {attempt+1} failed: HTTP {e.code}")
+            await asyncio.sleep(2 ** attempt)
+        except Exception as e:
             logger.warning(f"Batch attempt {attempt+1} failed: {e}")
             await asyncio.sleep(2 ** attempt)
     return {}
+
+
+def _sync_urlopen(req: urllib.request.Request) -> Dict[str, Any]:
+    """Synchronous urllib call (run in executor)."""
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 async def load_subpop_data(
@@ -208,41 +218,40 @@ async def load_subpop_data(
     updates: Dict[str, Dict[str, float]] = {}
     t0 = time.monotonic()
 
-    async with httpx.AsyncClient() as client:
-        for bi in range(0, len(rsids), batch_size):
-            batch = rsids[bi : bi + batch_size]
-            batch_num = (bi // batch_size) + 1
-            total_batches = (len(rsids) + batch_size - 1) // batch_size
+    for bi in range(0, len(rsids), batch_size):
+        batch = rsids[bi : bi + batch_size]
+        batch_num = (bi // batch_size) + 1
+        total_batches = (len(rsids) + batch_size - 1) // batch_size
 
-            data = await _fetch_batch(client, batch)
+        data = await _fetch_batch(batch)
 
-            for rsid in batch:
-                variant_data = data.get(rsid, {})
-                if not variant_data:
-                    stats["skipped"] += 1
-                    continue
+        for rsid in batch:
+            variant_data = data.get(rsid, {})
+            if not variant_data:
+                stats["skipped"] += 1
+                continue
 
-                freqs = _extract_subpop_freqs(variant_data)
-                if freqs:
-                    updates[rsid] = freqs
-                    stats["fetched"] += 1
-                    if any(k.startswith("nfe_") for k in freqs):
-                        stats["gnomad_hits"] += 1
-                    else:
-                        stats["tkg_hits"] += 1
+            freqs = _extract_subpop_freqs(variant_data)
+            if freqs:
+                updates[rsid] = freqs
+                stats["fetched"] += 1
+                if any(k.startswith("nfe_") for k in freqs):
+                    stats["gnomad_hits"] += 1
                 else:
-                    stats["skipped"] += 1
+                    stats["tkg_hits"] += 1
+            else:
+                stats["skipped"] += 1
 
-            # Rate limit: ~15 requests/second for Ensembl
-            await asyncio.sleep(0.1)
+        # Rate limit: ~15 requests/second for Ensembl
+        await asyncio.sleep(0.1)
 
-            if batch_num % 10 == 0 or batch_num == total_batches:
-                elapsed = time.monotonic() - t0
-                logger.info(
-                    f"  Batch {batch_num}/{total_batches} | "
-                    f"{stats['fetched']} fetched | "
-                    f"{elapsed:.0f}s elapsed"
-                )
+        if batch_num % 10 == 0 or batch_num == total_batches:
+            elapsed = time.monotonic() - t0
+            logger.info(
+                f"  Batch {batch_num}/{total_batches} | "
+                f"{stats['fetched']} fetched | "
+                f"{elapsed:.0f}s elapsed"
+            )
 
     # Bulk update the database
     if updates:
