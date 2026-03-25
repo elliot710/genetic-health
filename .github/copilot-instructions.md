@@ -10,12 +10,16 @@ A full-stack genetic data analysis platform providing personalized health insigh
 | Backend API | http://localhost:8000/docs | `dna_toolkit-backend-1` |
 | PostgreSQL | localhost:5432 | `dna_toolkit-postgres-1` |
 
-**Server**: 204.168.200.44 ~/.ssh/id_ed25519.pub
+**Server**: 
+IP: 204.168.200.44 
+ssh key: ~/.ssh/id_ed25519
+user: root
 **Login field**: `username` (not `email`) — POST `/auth/login` takes `{"username": "...", "password": "..."}`
 
 ## Architecture
 
 ```
+data_sources/               # local data sources. available only on the production server
 backend/
 ├── main.py                 # FastAPI app, CORS, router mounts, startup/shutdown
 ├── api/                    # Route handlers (7 routers)

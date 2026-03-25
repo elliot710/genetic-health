@@ -162,6 +162,42 @@ def _conf_to_level(conf: float) -> str:
     return "low"
 
 
+# ── Category-aware label helpers ────────────────────────────────────
+
+# Maps category → semantic suffix for non-primary fields when we only
+# have a gene name (i.e. no ClinVar condition).  These produce labels
+# like "CYP2D6 metabolism" instead of "CYP2D6 variant" as a nutrient.
+_CATEGORY_FIELD_SUFFIX: Dict[str, Dict[str, str]] = {
+    "nutrition":    {"nutrient": "{gene} metabolism",     "trait": "{gene}-related nutrition"},
+    "sports":       {"category": "{gene}-related fitness",  "trait": "{gene} performance factor"},
+    "wellness":     {"metric": "{gene} wellness factor",    "trait": "{gene}-related wellness"},
+    "cognitive":    {"domain": "{gene}-related cognition",  "trait": "{gene} cognitive factor"},
+    "personality":  {"trait": "{gene} behavioral factor",   "domain": "{gene}-related behavior"},
+    "physical":     {"trait": "{gene}-related trait",       "domain": "{gene} physical factor"},
+    "methylation":  {"nutrient": "{gene} methylation",      "trait": "{gene} methylation capacity"},
+    "detox":        {"nutrient": "{gene} detoxification",   "trait": "{gene} detox capacity"},
+    "drug":         {"drug": "{gene}-related drug response"},
+    "health":       {},
+    "carrier":      {},
+    "rare":         {},
+    "uncommon":     {},
+}
+
+
+def _category_aware_label(gene: str, category: str, field_name: str) -> str:
+    """Produce a semantically appropriate label for a non-primary field.
+
+    Instead of using "{gene} variant" for every field (which produces
+    nonsensical results like nutrient="MTHFR variant"), this picks a
+    label that makes sense for the field's category context.
+    """
+    templates = _CATEGORY_FIELD_SUFFIX.get(category, {})
+    template = templates.get(field_name)
+    if template:
+        return template.format(gene=gene)
+    return f"{gene} variant"
+
+
 def _category_extra_fields(category: str, data: Dict[str, Any], conf: float) -> Dict[str, Any]:
     """Return category-specific fields that insight generators expect.
 
@@ -185,10 +221,13 @@ def _category_extra_fields(category: str, data: Dict[str, Any], conf: float) -> 
             "description": f"Genetic variant in {gene} linked to {data.get('trait', 'physical trait')}",
         }
     if category == "nutrition":
+        nutrient = data.get("nutrient", "nutrient metabolism")
+        # Avoid echoing "XXX variant" in recommendations
+        rec_subject = data.get("gene", nutrient) if nutrient.endswith("variant") else nutrient
         return {
             "sensitivity": level,
             "metabolism": "variable",
-            "recommendations": f"Consult a nutritionist regarding {data.get('nutrient', 'nutrient metabolism')}",
+            "recommendations": f"Consult a nutritionist regarding {rec_subject} nutrient metabolism",
         }
     if category == "sports":
         return {
@@ -243,6 +282,7 @@ class SourceEvidence:
     allele_frequency: Optional[float] = None
     review_status: Optional[str] = None
     impact: Optional[str] = None  # HIGH, MODERATE, LOW, MODIFIER
+    gene_description: Optional[str] = None  # From ensembl_genes or similar
 
 
 @dataclass
@@ -501,8 +541,18 @@ def categorize_variant(
     rsid: str,
     annotations: Dict[str, Any],
     gene_hint: Optional[str] = None,
+    condition_hints: Optional[Dict[str, Any]] = None,
 ) -> List[CategorySuggestion]:
     """Analyze annotation data and return category suggestions.
+
+    Args:
+        rsid: Variant rsid.
+        annotations: Merged annotation dict from all sources.
+        gene_hint: Optional gene symbol from rsid→gene map.
+        condition_hints: Optional pre-loaded enrichment data with keys:
+            - gene_conditions: Dict[str, List[str]] — gene → disease names
+              from clinvar_gene_conditions table
+            - gene_descriptions: Dict[str, str] — gene → Ensembl description
 
     Returns a list of CategorySuggestion objects sorted by confidence,
     one per applicable category.
@@ -608,9 +658,30 @@ def categorize_variant(
         applicable_categories.discard("rare")
 
     # ── Build suggestions per category ──────────────────────────────
-    condition_label = conditions[0] if conditions else (
-        f"{gene} variant" if gene else "Unknown variant"
-    )
+    # Condition label resolution — multi-source fallback chain:
+    #   1. ClinVar variant-level conditions (from annotation evidence)
+    #   2. clinvar_gene_conditions table (gene↔disease associations)
+    #   3. Ensembl gene description (functional description)
+    #   4. Fallback: "{gene} variant"
+    condition_label = None
+    if conditions:
+        condition_label = conditions[0]
+    if not condition_label and gene and condition_hints:
+        # Try gene→condition from clinvar_gene_conditions
+        gene_conds = (condition_hints.get("gene_conditions") or {}).get(gene)
+        if gene_conds:
+            # Pick the shortest non-severe condition for lifestyle; first for health
+            condition_label = gene_conds[0]
+        # Try Ensembl gene description
+        if not condition_label:
+            gene_desc = (condition_hints.get("gene_descriptions") or {}).get(gene)
+            if gene_desc:
+                # Clean up Ensembl description: Title Case, remove "[Source:...]"
+                clean_desc = gene_desc.split("[")[0].strip()
+                if clean_desc:
+                    condition_label = f"{clean_desc.title()} variant"
+    if not condition_label:
+        condition_label = f"{gene} variant" if gene else "Unknown variant"
     clinical_sig_str = ", ".join(sorted(sig_set)) if sig_set else None
 
     for category in applicable_categories:
@@ -633,10 +704,10 @@ def categorize_variant(
         # Populate category-specific fields
         primary = _PRIMARY_FIELD.get(category, "condition")
         data.setdefault(primary, condition_label)
-        gene_label = f"{gene} variant" if gene else condition_label
         for f in ("condition", "trait", "domain", "metric", "nutrient", "category", "drug"):
             if f != primary:
-                data.setdefault(f, gene_label)
+                fallback = _category_aware_label(gene, category, f) if gene else condition_label
+                data.setdefault(f, fallback)
 
         # Add pathogenicity details
         path_scores = [e.pathogenicity_score for e in evidence_list
@@ -667,3 +738,245 @@ def categorize_variant(
     # Sort by confidence descending
     suggestions.sort(key=lambda s: s.confidence, reverse=True)
     return suggestions
+
+
+# ---------------------------------------------------------------------------
+# Async helpers for pre-loading condition hints from DB
+# ---------------------------------------------------------------------------
+
+async def load_condition_hints(genes: List[str]) -> Dict[str, Any]:
+    """Pre-load gene→condition and gene→description mappings from DB.
+
+    Used by callers of categorize_variant() to provide multi-source
+    condition naming when ClinVar variant-level conditions are absent.
+
+    Returns:
+        Dict with keys:
+        - "gene_conditions": Dict[str, List[str]] — gene → disease names
+        - "gene_descriptions": Dict[str, str] — gene → Ensembl description
+    """
+    if not genes:
+        return {"gene_conditions": {}, "gene_descriptions": {}}
+
+    from sqlalchemy import select
+    from ..db.database import async_session_factory
+    from ..db.models import ClinVarGeneCondition, EnsemblGene
+
+    gene_conditions: Dict[str, List[str]] = {}
+    gene_descriptions: Dict[str, str] = {}
+
+    _GARBAGE_DISEASES = frozenset({
+        "not provided", "not specified", "see cases", "not applicable",
+        "none", ".", "-", "",
+    })
+
+    async with async_session_factory() as session:
+        # 1. ClinVarGeneCondition — gene↔disease associations
+        result = await session.execute(
+            select(ClinVarGeneCondition.gene, ClinVarGeneCondition.disease_name)
+            .where(ClinVarGeneCondition.gene.in_(genes))
+        )
+        for gene_sym, disease in result.all():
+            if not disease or disease.lower().strip() in _GARBAGE_DISEASES:
+                continue
+            # Prefer shorter, more specific names (sort later)
+            gene_conditions.setdefault(gene_sym, []).append(disease.strip())
+
+        # Deduplicate and sort by length (shorter = more specific usually)
+        for g in gene_conditions:
+            seen: set = set()
+            unique = []
+            for d in gene_conditions[g]:
+                dl = d.lower()
+                if dl not in seen:
+                    seen.add(dl)
+                    unique.append(d)
+            gene_conditions[g] = sorted(unique, key=len)
+
+        # 2. EnsemblGene — functional gene descriptions
+        result = await session.execute(
+            select(EnsemblGene.gene_symbol, EnsemblGene.description)
+            .where(EnsemblGene.gene_symbol.in_(genes))
+            .distinct()
+        )
+        for gene_sym, desc in result.all():
+            if desc and gene_sym not in gene_descriptions:
+                gene_descriptions[gene_sym] = desc
+
+    return {
+        "gene_conditions": gene_conditions,
+        "gene_descriptions": gene_descriptions,
+    }
+
+
+async def enrich_generic_mappings(
+    dry_run: bool = False,
+    categories: Optional[List[str]] = None,
+    revise_all: bool = False,
+) -> Dict[str, Any]:
+    """Update existing variant_mappings with proper conditions from all
+    available sources.
+
+    Multi-source resolution order:
+    1. ClinVar variant-level conditions (clinvar_variants table)
+    2. ClinVar gene-level conditions (clinvar_gene_conditions table)
+    3. Ensembl gene descriptions (ensembl_genes table)
+
+    By default only updates rows with generic names (ending in ' variant').
+    When ``revise_all=True``, re-evaluates **every** active mapping and
+    upgrades condition text when a higher-priority source provides a better
+    name (ClinVar variant > ClinVar gene > Ensembl gene > current).
+    Named conditions are never downgraded to generic ones.
+
+    Args:
+        dry_run: If True, return what would be updated without writing.
+        categories: Optional list of categories to limit the update to.
+        revise_all: If True, check ALL active mappings (not just generic).
+
+    Returns:
+        Dict with stats: total_checked, total_updated, by_category, by_source.
+    """
+    from sqlalchemy import select, update, text
+    from ..db.database import async_session_factory
+    from ..db.models import VariantMapping, ClinVarVariant, ClinVarGeneCondition, EnsemblGene
+
+    stats = {
+        "total_checked": 0,
+        "total_updated": 0,
+        "by_category": {},
+        "by_source": {"clinvar_variant": 0, "clinvar_gene": 0, "ensembl_gene": 0},
+        "examples": [],
+    }
+
+    _GARBAGE = frozenset({
+        "not provided", "not specified", "see cases", "not applicable",
+        "none", ".", "-", "", ".|.",
+    })
+
+    def _is_generic(condition: str) -> bool:
+        return condition.endswith(" variant") or condition == "Unknown variant"
+
+    async with async_session_factory() as session:
+        # Load active mappings
+        q = select(VariantMapping).where(
+            VariantMapping.is_active == True,
+            VariantMapping.map_type == "rsid",
+        )
+        if categories:
+            q = q.where(VariantMapping.category.in_(categories))
+
+        result = await session.execute(q)
+        mappings = result.scalars().all()
+
+        if revise_all:
+            # Check every mapping with a data dict
+            target_mappings = [m for m in mappings if isinstance(m.data, dict)]
+        else:
+            # Only generic-named mappings
+            target_mappings = [
+                m for m in mappings
+                if isinstance(m.data, dict) and _is_generic(m.data.get("condition", ""))
+            ]
+        stats["total_checked"] = len(target_mappings)
+
+        if not target_mappings:
+            return stats
+
+        # Collect all rsids and genes
+        rsids = {m.key for m in target_mappings}
+        genes = {m.data.get("gene", "") for m in target_mappings if m.data.get("gene")}
+
+        # Source 1: ClinVar variant-level conditions
+        cv_map: Dict[str, str] = {}
+        if rsids:
+            result = await session.execute(
+                select(ClinVarVariant.rsid, ClinVarVariant.conditions)
+                .where(ClinVarVariant.rsid.in_(rsids))
+                .where(ClinVarVariant.conditions.isnot(None))
+            )
+            for rsid, raw_conds in result.all():
+                if rsid in cv_map:
+                    continue
+                if raw_conds:
+                    # Clean pipe-separated conditions
+                    parts = raw_conds.replace(";", "|").split("|")
+                    for part in parts:
+                        cleaned = part.strip()
+                        if cleaned and cleaned.lower() not in _GARBAGE:
+                            cv_map[rsid] = cleaned
+                            break
+
+        # Source 2: ClinVar gene-level conditions
+        gene_cond_map: Dict[str, str] = {}
+        if genes:
+            result = await session.execute(
+                select(ClinVarGeneCondition.gene, ClinVarGeneCondition.disease_name)
+                .where(ClinVarGeneCondition.gene.in_(genes))
+            )
+            for gene_sym, disease in result.all():
+                if gene_sym in gene_cond_map:
+                    continue
+                if disease and disease.lower().strip() not in _GARBAGE:
+                    gene_cond_map[gene_sym] = disease.strip()
+
+        # Source 3: Ensembl gene descriptions
+        gene_desc_map: Dict[str, str] = {}
+        if genes:
+            result = await session.execute(
+                select(EnsemblGene.gene_symbol, EnsemblGene.description)
+                .where(EnsemblGene.gene_symbol.in_(genes))
+                .distinct()
+            )
+            for gene_sym, desc in result.all():
+                if desc and gene_sym not in gene_desc_map:
+                    clean = desc.split("[")[0].strip()
+                    if clean:
+                        gene_desc_map[gene_sym] = f"{clean.title()} variant"
+
+        # Apply enrichment
+        for mapping in target_mappings:
+            rsid = mapping.key
+            gene = mapping.data.get("gene", "")
+            old_condition = mapping.data.get("condition", "")
+            new_condition = None
+            source_used = None
+
+            # Priority chain
+            if rsid in cv_map:
+                new_condition = cv_map[rsid]
+                source_used = "clinvar_variant"
+            elif gene in gene_cond_map:
+                new_condition = gene_cond_map[gene]
+                source_used = "clinvar_gene"
+            elif gene in gene_desc_map:
+                new_condition = gene_desc_map[gene]
+                source_used = "ensembl_gene"
+
+            if new_condition and new_condition != old_condition:
+                # In revise_all mode: never downgrade a named condition to
+                # a generic one (e.g. ClinVar disease → Ensembl gene desc).
+                if revise_all and not _is_generic(old_condition) and _is_generic(new_condition):
+                    continue
+                if not dry_run:
+                    # Merge: update condition in data dict, preserve everything else
+                    updated_data = {**mapping.data, "condition": new_condition}
+                    # Also update the primary dedup field if it had the old generic name
+                    primary = _PRIMARY_FIELD.get(mapping.category, "condition")
+                    if updated_data.get(primary) == old_condition:
+                        updated_data[primary] = new_condition
+                    mapping.data = updated_data
+
+                stats["total_updated"] += 1
+                stats["by_category"][mapping.category] = stats["by_category"].get(mapping.category, 0) + 1
+                stats["by_source"][source_used] += 1
+
+                if len(stats["examples"]) < 20:
+                    stats["examples"].append({
+                        "rsid": rsid, "gene": gene, "category": mapping.category,
+                        "old": old_condition, "new": new_condition, "source": source_used,
+                    })
+
+        if not dry_run:
+            await session.commit()
+
+    return stats

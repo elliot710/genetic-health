@@ -769,10 +769,8 @@ async def generate_from_maps(
         dedup_field: key inside the info dict used to avoid duplicates.
         build_from_rsid(analysis_id, rsid, genotype, info) -> model | None
         build_from_gene(analysis_id, rsid, gene, consequence, info) -> model | None
-        filter_benign: if True AND config.exclude_benign_from_panels is set,
-            skip variants classified as benign/likely_benign. Only set for
-            categories where pathogenicity is medically relevant (health_risks,
-            carrier_status).
+        filter_benign: deprecated — benign filtering is now applied universally
+            via the composite pathogenicity score.  Kept for backward compat.
     """
     items = []
     seen: set = set()
@@ -866,9 +864,13 @@ async def generate_from_maps(
                     )
                 )
                 info_with_ref = {**info, '_ref_allele': effective_ref, '_pathogenicity_score': _path_score}
-                # Filter benign/likely_benign variants from health-relevant panels
-                if (filter_benign
-                        and settings.analysis.exclude_benign_from_panels
+                # Filter benign/likely_benign variants from ALL panels when
+                # the composite pathogenicity score (which integrates ClinVar,
+                # gnomAD, AlphaMissense, CADD, VEP) classifies the variant as
+                # benign.  Previously gated behind filter_benign=True (only
+                # health), but a variant that scores benign with low evidence
+                # should not appear in any panel (nutrition, sports, etc.).
+                if (settings.analysis.exclude_benign_from_panels
                         and isinstance(_path_score, dict)
                         and _path_score.get('classification') in _BENIGN_CLASSIFICATIONS):
                     continue
@@ -930,9 +932,9 @@ async def generate_from_maps(
                     )
                 )
                 info_with_gt = {**info, '_ref_allele': effective_ref, '_genotype': genotype or '', '_pathogenicity_score': _path_score}
-                # Filter benign/likely_benign variants from health-relevant panels
-                if (filter_benign
-                        and settings.analysis.exclude_benign_from_panels
+                # Filter benign/likely_benign variants from ALL panels (see
+                # rsid-path comment above for rationale).
+                if (settings.analysis.exclude_benign_from_panels
                         and isinstance(_path_score, dict)
                         and _path_score.get('classification') in _BENIGN_CLASSIFICATIONS):
                     continue
@@ -961,7 +963,7 @@ async def build_variant_profiles(
     applies without re-annotating, and the annotation cache doesn't need
     to store pre-computed scores.
     """
-    from ..scoring_engine import get_scoring_engine
+    from ..scoring_engine import get_scoring_engine, ScoringEngine
     scorer = get_scoring_engine()
     profiles: Dict[str, VariantProfile] = {}
 
@@ -993,7 +995,7 @@ async def build_variant_profiles(
                    and is_homozygous_reference(genotype, effective_ref, alt_allele=ann_alt))
         het = not no_call and not hom_ref and is_heterozygous(genotype)
 
-        benign = is_clinvar_benign(annotation_result)
+        clinvar_benign = is_clinvar_benign(annotation_result)
 
         # Pathogenicity score — always compute fresh (ARCH-06).
         # Lazy scoring ensures updated scoring logic applies without re-annotating.
@@ -1014,6 +1016,13 @@ async def build_variant_profiles(
                 if sigs:
                     clin_sig = sigs[0].lower().replace('_', ' ')
 
+        # is_benign: True when ClinVar unanimously says benign OR when the
+        # composite pathogenicity score classifies as benign/likely_benign.
+        # This covers variants with no ClinVar data that still score benign
+        # from other evidence (e.g. VEP-only intron variants).
+        score_benign = composite < ScoringEngine.BENIGN_THRESHOLD
+        is_benign_flag = clinvar_benign or score_benign
+
         profiles[rsid] = VariantProfile(
             rsid=rsid,
             genotype=genotype,
@@ -1023,7 +1032,7 @@ async def build_variant_profiles(
             impact=impact,
             population_frequency=pop_freq,
             clinical_significance=clin_sig,
-            is_benign=benign,
+            is_benign=is_benign_flag,
             is_hom_ref=hom_ref,
             is_het=het,
             is_no_call=no_call,

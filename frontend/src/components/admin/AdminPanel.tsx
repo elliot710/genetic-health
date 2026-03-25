@@ -370,6 +370,8 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
 
   // Utility state
   const [autoCategorizing, setAutoCategorizing] = useState(false)
+  const [enrichingMappings, setEnrichingMappings] = useState(false)
+  const [enrichReviseAll, setEnrichReviseAll] = useState(false)
   const [purgingDeleted, setPurgingDeleted] = useState(false)
   const [purgeOlderThanDays, setPurgeOlderThanDays] = useState('0')
   const [utilityFeedback, setUtilityFeedback] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
@@ -1131,6 +1133,29 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
       }
     } catch { setUtilityFeedback({ message: 'Network error', type: 'error' }) }
     setAutoCategorizing(false)
+    setTimeout(() => setUtilityFeedback(null), 10000)
+  }
+
+  const runEnrichMappings = async (dryRun: boolean = false) => {
+    setEnrichingMappings(true)
+    setUtilityFeedback(null)
+    try {
+      const params = new URLSearchParams()
+      if (dryRun) params.set('dry_run', 'true')
+      if (enrichReviseAll) params.set('revise_all', 'true')
+      const res = await authFetch(`${API}/enrich-mappings?${params}`, { method: 'POST', headers })
+      if (res.ok) {
+        const data = await res.json()
+        const msg = dryRun
+          ? `[Dry run] Would update ${data.total_updated}/${data.total_checked} mappings`
+          : `Updated ${data.total_updated}/${data.total_checked} mappings`
+        setUtilityFeedback({ message: msg, type: 'success' })
+      } else {
+        const err = await res.json().catch(() => ({ detail: 'Failed' }))
+        setUtilityFeedback({ message: err.detail, type: 'error' })
+      }
+    } catch { setUtilityFeedback({ message: 'Network error', type: 'error' }) }
+    setEnrichingMappings(false)
     setTimeout(() => setUtilityFeedback(null), 10000)
   }
 
@@ -2249,6 +2274,48 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                       ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Running...</>
                       : <><Zap className="h-3 w-3 mr-1" /> Run</>}
                   </Button>
+                </div>
+
+                {/* Enrich Mappings */}
+                <div className={`rounded-lg border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-gray-200 bg-gray-50'}`}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className={`font-medium ${theme.text.primary}`}>Enrich Mappings</span>
+                      <p className={`text-sm mt-0.5 ${theme.text.muted}`}>
+                        Replace generic &quot;{'{gene}'} variant&quot; names with proper conditions from ClinVar &amp; Ensembl.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm" variant="outline"
+                        disabled={enrichingMappings}
+                        onClick={() => runEnrichMappings(true)}
+                      >
+                        {enrichingMappings
+                          ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Running...</>
+                          : <><Sparkles className="h-3 w-3 mr-1" /> Dry Run</>}
+                      </Button>
+                      <Button
+                        size="sm" variant="default"
+                        disabled={enrichingMappings}
+                        onClick={() => runEnrichMappings(false)}
+                      >
+                        {enrichingMappings
+                          ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Running...</>
+                          : <><Sparkles className="h-3 w-3 mr-1" /> Apply</>}
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 mt-2">
+                    <Switch
+                      id="enrich-revise-all"
+                      checked={enrichReviseAll}
+                      onCheckedChange={setEnrichReviseAll}
+                    />
+                    <Label htmlFor="enrich-revise-all" className={`text-xs ${theme.text.muted}`}>
+                      Revise all mappings (not just generic names)
+                    </Label>
+                  </div>
                 </div>
 
                 {/* Purge Deleted Analyses */}

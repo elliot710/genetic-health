@@ -121,6 +121,20 @@ class AutoCategorizer:
         """
         stats = {"processed": 0, "total_new": 0, "by_category": {}}
 
+        # Pre-load condition hints from all DB sources for better naming
+        from .multi_source_categorizer import load_condition_hints
+        from ..db.models import EnsemblGene
+        # Load all gene symbols that have descriptions (for condition naming)
+        async with async_session_factory() as hints_session:
+            result = await hints_session.execute(
+                select(EnsemblGene.gene_symbol).distinct()
+            )
+            all_genes = [r[0] for r in result.all()]
+        condition_hints = await load_condition_hints(all_genes)
+        logger.info("Loaded condition hints: %d gene conditions, %d gene descriptions",
+                     len(condition_hints.get("gene_conditions", {})),
+                     len(condition_hints.get("gene_descriptions", {})))
+
         async with async_session_factory() as session:
             # Count total annotations to process
             count_q = select(func.count(SharedVariantAnnotation.id)).where(
@@ -165,7 +179,8 @@ class AutoCategorizer:
                         "gnomad_tx_data": row[8],
                     }
 
-                    suggestions = categorize_variant(rsid, annotations)
+                    suggestions = categorize_variant(rsid, annotations,
+                                                      condition_hints=condition_hints)
                     for s in suggestions:
                         if s.confidence < min_confidence:
                             continue
@@ -177,7 +192,9 @@ class AutoCategorizer:
                         if cat_count >= MAX_MAPPINGS_PER_CATEGORY:
                             continue
 
-                        # Upsert: insert or update sources/confidence if existing
+                        # Upsert: insert or update only when new confidence is
+                        # higher (prevents downgrades from re-runs with fewer
+                        # annotation sources).
                         stmt = insert(VariantMapping).values(
                             category=s.category,
                             map_type="rsid",
@@ -195,6 +212,7 @@ class AutoCategorizer:
                                 "confidence": s.confidence,
                                 "is_active": True,
                             },
+                            where=VariantMapping.confidence < s.confidence,
                         )
                         result = await session.execute(stmt)
                         if result.rowcount > 0:
@@ -309,11 +327,11 @@ class AutoCategorizer:
 
         FLAW-01 fix: instead of blindly setting all fields (trait, domain, metric,
         nutrient, category) to the disease name, set only the semantically
-        relevant field to the condition and the rest to the gene name.
+        relevant field to the condition and the rest to category-aware labels.
         Each generator uses a specific dedup_field — only that field needs the
         condition-level granularity. Others just need a non-empty value.
         """
-        gene_label = f"{gene} variant" if gene else condition
+        from .multi_source_categorizer import _category_aware_label
 
         # Category → primary dedup field mapping (what the generator uses)
         _PRIMARY_FIELD = {
@@ -337,11 +355,12 @@ class AutoCategorizer:
         # Set the primary field to the condition (meaningful dedup key)
         data.setdefault(primary, condition)
 
-        # Set remaining fields to gene-based label (semantically appropriate
-        # fallback that won't produce "Familial hypercholesterolemia" as a nutrient)
+        # Set remaining fields to category-aware labels that make semantic
+        # sense (e.g. "MTHFR metabolism" for nutrition instead of "MTHFR variant")
         for field in ('condition', 'trait', 'domain', 'metric', 'nutrient', 'category'):
             if field != primary:
-                data.setdefault(field, gene_label)
+                fallback = _category_aware_label(gene, category, field) if gene else condition
+                data.setdefault(field, fallback)
 
     @staticmethod
     def _clean_condition(raw: str) -> str:
@@ -523,21 +542,43 @@ class AutoCategorizer:
         if not genes:
             return {}
 
+        # Query for found genes AND their most common non-garbage condition
+        _GARBAGE_CONDS = ("not provided", "not specified", "see cases", "not applicable", "none", ".", "-", "")
         result = await session.execute(
+            select(ClinVarVariant.gene, ClinVarVariant.conditions)
+            .where(ClinVarVariant.gene.in_(genes))
+            .where(ClinVarVariant.conditions.isnot(None))
+        )
+        rows = result.all()
+
+        # Build gene → best condition map
+        gene_conditions: Dict[str, str] = {}
+        found_genes: set = set()
+        for gene_val, raw_conds in rows:
+            found_genes.add(gene_val)
+            if gene_val in gene_conditions:
+                continue  # Already have a condition for this gene
+            if raw_conds:
+                clean = self._clean_condition(raw_conds)
+                if clean:
+                    gene_conditions[gene_val] = clean
+
+        # Also include genes found without conditions
+        result2 = await session.execute(
             select(ClinVarVariant.gene)
             .where(ClinVarVariant.gene.in_(genes))
             .distinct()
         )
-        found_genes = [r[0] for r in result.all()]
+        for (g,) in result2.all():
+            found_genes.add(g)
 
         out: Dict[str, dict] = {}
         for gene in found_genes:
             data = {**template}
-            data["gene"] = gene  # Always set from matched gene
+            data["gene"] = gene
             data.setdefault("source", "clinvar_auto")
-            # FLAW-01: populate category-appropriate dedup fields
-            gene_label = f"{gene} variant"
-            self._populate_category_fields(data, category, gene_label, gene)
+            condition_label = gene_conditions.get(gene, f"{gene} variant")
+            self._populate_category_fields(data, category, condition_label, gene)
             out[gene] = {"map_type": "gene", "data": data}
         return out
 

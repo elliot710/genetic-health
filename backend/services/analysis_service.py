@@ -536,14 +536,22 @@ class ComprehensiveAnalysisService:
         Scans annotation_results (already fetched during Phase 2/3) and runs
         the multi-source categorizer on each. New mappings are created directly,
         so the insight generator in Phase 4 can use them.
+
+        Loads condition hints from clinvar_gene_conditions and ensembl_genes so
+        that variants without ClinVar data still get meaningful condition names
+        instead of generic "{gene} variant".
         """
         from ..db.database import async_session_factory
         from ..db.models import VariantMapping
-        from .multi_source_categorizer import categorize_variant
+        from .multi_source_categorizer import categorize_variant, load_condition_hints
         from sqlalchemy.dialects.postgresql import insert as pg_insert
 
         new_mappings = 0
         batch_count = 0
+
+        # Pre-load condition hints for all genes in the rsid→gene map
+        all_genes = list(set(self._rsid_gene_map.values()))
+        condition_hints = await load_condition_hints(all_genes)
 
         async with async_session_factory() as session:
             for rsid, ar in annotation_results.items():
@@ -556,7 +564,10 @@ class ComprehensiveAnalysisService:
                 # Get gene from rsid→gene map
                 gene_hint = self._rsid_gene_map.get(rsid)
 
-                suggestions = categorize_variant(rsid, annotations, gene_hint=gene_hint)
+                suggestions = categorize_variant(
+                    rsid, annotations, gene_hint=gene_hint,
+                    condition_hints=condition_hints,
+                )
                 for s in suggestions:
                     if s.confidence < 0.4:
                         continue

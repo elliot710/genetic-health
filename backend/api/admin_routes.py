@@ -2306,3 +2306,38 @@ async def reset_source_sentinels(
         source=source_name,
         reset_count=reset_count,
     )
+
+
+# ======================================================================
+# Mapping enrichment endpoint
+# ======================================================================
+
+@router.post("/enrich-mappings")
+async def enrich_variant_mappings(
+    categories: Optional[str] = Query(None, description="Comma-separated category filter"),
+    dry_run: bool = Query(False, description="Preview changes without writing"),
+    revise_all: bool = Query(False, description="Re-evaluate ALL mappings, not just generic ones"),
+    admin: User = Depends(require_admin),
+):
+    """Enrich existing variant_mappings with proper conditions from all
+    available sources.
+
+    Multi-source resolution:
+    1. ClinVar variant-level conditions
+    2. ClinVar gene-level conditions (clinvar_gene_conditions)
+    3. Ensembl gene descriptions (ensembl_genes)
+
+    By default only updates rows with generic '{gene} variant' names.
+    With revise_all=True, re-evaluates every active mapping and upgrades
+    conditions when a higher-priority source is available.
+    Named conditions are never downgraded to generic ones.
+    """
+    from ..services.multi_source_categorizer import enrich_generic_mappings
+
+    cat_list = [c.strip() for c in categories.split(",")] if categories else None
+    stats = await enrich_generic_mappings(dry_run=dry_run, categories=cat_list, revise_all=revise_all)
+    logger.info(
+        f"Mapping enrichment {'(dry run)' if dry_run else ''}{' (revise all)' if revise_all else ''}: "
+        f"{stats['total_updated']}/{stats['total_checked']} updated"
+    )
+    return stats

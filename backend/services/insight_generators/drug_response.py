@@ -47,22 +47,26 @@ async def generate_drug_responses(ctx: GeneratorContext) -> int:
             )
 
         if variant_rsid in drug_rsid_map:
-            info = drug_rsid_map[variant_rsid]
-            for drug in info['drugs']:
-                if drug in _PLACEHOLDER_DRUGS:
-                    continue
-                drug_key = f"{info['gene']}_{drug}"
-                if drug_key not in seen_drugs:
-                    seen_drugs.add(drug_key)
-                    response_type = assess_drug_response(
-                        genotype or '', info['gene'], ref_allele=effective_ref,
-                    )
-                    drug_responses.append(DrugResponse(
-                        analysis_id=ctx.analysis_id, gene=info['gene'],
-                        drug=drug, response_type=response_type,
-                        recommendations=get_drug_recommendations(drug, response_type),
-                        variants_involved=[variant_rsid]
-                    ))
+            # Skip benign variants — prevents false drug warnings for
+            # confirmed-benign variants in pharmacogene rsid mappings.
+            _rsid_benign = profile.is_benign if profile else is_clinvar_benign(annotation_result)
+            if not _rsid_benign:
+                info = drug_rsid_map[variant_rsid]
+                for drug in info['drugs']:
+                    if drug in _PLACEHOLDER_DRUGS:
+                        continue
+                    drug_key = f"{info['gene']}_{drug}"
+                    if drug_key not in seen_drugs:
+                        seen_drugs.add(drug_key)
+                        response_type = assess_drug_response(
+                            genotype or '', info['gene'], ref_allele=effective_ref,
+                        )
+                        drug_responses.append(DrugResponse(
+                            analysis_id=ctx.analysis_id, gene=info['gene'],
+                            drug=drug, response_type=response_type,
+                            recommendations=get_drug_recommendations(drug, response_type),
+                            variants_involved=[variant_rsid]
+                        ))
 
         if gene and gene in drug_gene_map:
             # Skip benign variants in the gene-map path — avoids false drug

@@ -34,6 +34,19 @@ const REGION_COLORS: Record<string, string> = {
   'east asian': '#ef4444',
   'south asian': '#f97316',
   'admixed american': '#22c55e',
+  // European sub-regions (gnomAD-derived)
+  'balkan': '#eab308',
+  'east european': '#22c55e',
+  'northwestern european': '#6366f1',
+  'southern european': '#ec4899',
+  'nordic': '#06b6d4',
+  'finnish & baltic': '#f97316',
+  'ashkenazi jewish': '#a855f7',
+  // European sub-regions (1000G-derived)
+  'central & western european': '#3b82f6',
+  'british & northwestern': '#6366f1',
+  'iberian & mediterranean': '#f43f5e',
+  'italian & southern european': '#ec4899',
 }
 
 // ISO 3166-1 numeric → superpopulation mapping
@@ -224,6 +237,12 @@ const REGION_PROJECTIONS: Record<string, { center: [number, number]; scale: numb
 
 function getRegionKey(region: string): string {
   const r = region.toLowerCase()
+  // Sub-European regions → still zoom into Europe on the map
+  if (r.includes('balkan') || r.includes('east european') || r.includes('nordic') ||
+      r.includes('germanic') || r.includes('northwestern') || r.includes('baltic') ||
+      r.includes('iberian') || r.includes('italian') || r.includes('british') ||
+      r.includes('southern european') || r.includes('central') || r.includes('ashkenazi') ||
+      r.includes('western european')) return 'european'
   if (r.includes('europe')) return 'european'
   if (r.includes('africa')) return 'african'
   if (r.includes('east asia')) return 'east asian'
@@ -234,7 +253,12 @@ function getRegionKey(region: string): string {
 
 function getRegionIcon(region: string) {
   const name = region.toLowerCase()
-  if (name.includes('europe')) return '🌍'
+  if (name.includes('europe') || name.includes('balkan') || name.includes('nordic') ||
+      name.includes('germanic') || name.includes('northwestern') || name.includes('baltic') ||
+      name.includes('iberian') || name.includes('italian') || name.includes('british') ||
+      name.includes('southern european') || name.includes('east european') ||
+      name.includes('central') || name.includes('ashkenazi') || name.includes('finnish') ||
+      name.includes('western european') || name.includes('greek')) return '🌍'
   if (name.includes('africa')) return '🌍'
   if (name.includes('asia') || name.includes('east')) return '🌏'
   if (name.includes('america')) return '🌎'
@@ -243,20 +267,35 @@ function getRegionIcon(region: string) {
 
 function getRegionColor(region: string) {
   const name = region.toLowerCase()
-  if (name.includes('europe')) return { bg: 'bg-blue-500/20', bar: 'bg-gradient-to-r from-blue-500 to-blue-400', hex: '#3b82f6' }
-  if (name.includes('africa')) return { bg: 'bg-amber-500/20', bar: 'bg-gradient-to-r from-amber-500 to-amber-400', hex: '#f59e0b' }
-  if (name.includes('east asia')) return { bg: 'bg-red-500/20', bar: 'bg-gradient-to-r from-red-500 to-red-400', hex: '#ef4444' }
-  if (name.includes('south asia')) return { bg: 'bg-orange-500/20', bar: 'bg-gradient-to-r from-orange-500 to-orange-400', hex: '#f97316' }
-  if (name.includes('america')) return { bg: 'bg-green-500/20', bar: 'bg-gradient-to-r from-green-500 to-green-400', hex: '#22c55e' }
-  return { bg: 'bg-teal-500/20', bar: 'bg-gradient-to-r from-teal-500 to-teal-400', hex: '#14b8a6' }
+  // Sub-European regions (gnomAD-derived)
+  if (name.includes('balkan')) return { bg: 'bg-yellow-500/20', bar: 'bg-linear-to-r from-yellow-500 to-yellow-400', hex: '#eab308' }
+  if (name.includes('east european')) return { bg: 'bg-green-500/20', bar: 'bg-linear-to-r from-green-500 to-emerald-400', hex: '#22c55e' }
+  if (name.includes('northwestern')) return { bg: 'bg-indigo-500/20', bar: 'bg-linear-to-r from-indigo-500 to-indigo-400', hex: '#6366f1' }
+  if (name.includes('southern european') || name.includes('greek')) return { bg: 'bg-pink-500/20', bar: 'bg-linear-to-r from-pink-500 to-pink-400', hex: '#ec4899' }
+  if (name.includes('nordic')) return { bg: 'bg-cyan-500/20', bar: 'bg-linear-to-r from-cyan-500 to-cyan-400', hex: '#06b6d4' }
+  if (name.includes('finnish') || name.includes('baltic')) return { bg: 'bg-orange-500/20', bar: 'bg-linear-to-r from-orange-500 to-orange-400', hex: '#f97316' }
+  if (name.includes('ashkenazi')) return { bg: 'bg-purple-500/20', bar: 'bg-linear-to-r from-purple-500 to-purple-400', hex: '#a855f7' }
+  // Sub-European regions (1000G-derived)
+  if (name.includes('central') && name.includes('european')) return { bg: 'bg-blue-500/20', bar: 'bg-linear-to-r from-blue-500 to-blue-400', hex: '#3b82f6' }
+  if (name.includes('british')) return { bg: 'bg-indigo-500/20', bar: 'bg-linear-to-r from-indigo-500 to-indigo-400', hex: '#6366f1' }
+  if (name.includes('iberian')) return { bg: 'bg-rose-500/20', bar: 'bg-linear-to-r from-rose-500 to-rose-400', hex: '#f43f5e' }
+  if (name.includes('italian')) return { bg: 'bg-pink-500/20', bar: 'bg-linear-to-r from-pink-500 to-pink-400', hex: '#ec4899' }
+  // Super-population fallbacks
+  if (name.includes('europe')) return { bg: 'bg-blue-500/20', bar: 'bg-linear-to-r from-blue-500 to-blue-400', hex: '#3b82f6' }
+  if (name.includes('africa')) return { bg: 'bg-amber-500/20', bar: 'bg-linear-to-r from-amber-500 to-amber-400', hex: '#f59e0b' }
+  if (name.includes('east asia')) return { bg: 'bg-red-500/20', bar: 'bg-linear-to-r from-red-500 to-red-400', hex: '#ef4444' }
+  if (name.includes('south asia')) return { bg: 'bg-orange-500/20', bar: 'bg-linear-to-r from-orange-500 to-orange-400', hex: '#f97316' }
+  if (name.includes('america')) return { bg: 'bg-green-500/20', bar: 'bg-linear-to-r from-green-500 to-green-400', hex: '#22c55e' }
+  return { bg: 'bg-teal-500/20', bar: 'bg-linear-to-r from-teal-500 to-teal-400', hex: '#14b8a6' }
 }
 
 function AncestryMap({ composition, isDarkMode }: { composition: AncestryRegion[]; isDarkMode: boolean }) {
-  // Build {popKey → percentage} lookup
+  // Build {popKey → percentage} lookup, aggregating sub-European into "european" for map fill
   const popPct = useMemo(() => {
     const m: Record<string, number> = {}
     for (const r of composition) {
-      m[getRegionKey(r.region)] = r.percentage
+      const key = getRegionKey(r.region)
+      m[key] = (m[key] || 0) + r.percentage
     }
     return m
   }, [composition])
