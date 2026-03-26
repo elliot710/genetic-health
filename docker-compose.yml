@@ -5,7 +5,7 @@ services:
     environment:
       POSTGRES_DB: genetic_health_db
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     shm_size: 1gb
@@ -50,7 +50,7 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/genetic_health_db
+      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/genetic_health_db
       - NCBI_API_KEY=${NCBI_API_KEY}
       - ALPHA_MISSENSE_DATA_DIR=/app/data_sources/alpha_missense
       - CLINVAR_DATA_DIR=/app/data_sources/clinvar
@@ -140,7 +140,7 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/genetic_health_db
+      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/genetic_health_db
       - NCBI_API_KEY=${NCBI_API_KEY}
       - ALPHA_MISSENSE_DATA_DIR=/app/data_sources/alpha_missense
       - CLINVAR_DATA_DIR=/app/data_sources/clinvar
