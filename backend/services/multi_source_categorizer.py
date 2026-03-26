@@ -886,52 +886,64 @@ async def enrich_generic_mappings(
         rsids = {m.key for m in target_mappings}
         genes = {m.data.get("gene", "") for m in target_mappings if m.data.get("gene")}
 
+        # Helper: batch IN queries to avoid exceeding PG bind param limit
+        BATCH = 30000
+
         # Source 1: ClinVar variant-level conditions
         cv_map: Dict[str, str] = {}
         if rsids:
-            result = await session.execute(
-                select(ClinVarVariant.rsid, ClinVarVariant.conditions)
-                .where(ClinVarVariant.rsid.in_(rsids))
-                .where(ClinVarVariant.conditions.isnot(None))
-            )
-            for rsid, raw_conds in result.all():
-                if rsid in cv_map:
-                    continue
-                if raw_conds:
-                    # Clean pipe-separated conditions
-                    parts = raw_conds.replace(";", "|").split("|")
-                    for part in parts:
-                        cleaned = part.strip()
-                        if cleaned and cleaned.lower() not in _GARBAGE:
-                            cv_map[rsid] = cleaned
-                            break
+            rsid_list = list(rsids)
+            for i in range(0, len(rsid_list), BATCH):
+                batch = rsid_list[i:i + BATCH]
+                result = await session.execute(
+                    select(ClinVarVariant.rsid, ClinVarVariant.conditions)
+                    .where(ClinVarVariant.rsid.in_(batch))
+                    .where(ClinVarVariant.conditions.isnot(None))
+                )
+                for rsid, raw_conds in result.all():
+                    if rsid in cv_map:
+                        continue
+                    if raw_conds:
+                        # Clean pipe-separated conditions
+                        parts = raw_conds.replace(";", "|").split("|")
+                        for part in parts:
+                            cleaned = part.strip()
+                            if cleaned and cleaned.lower() not in _GARBAGE:
+                                cv_map[rsid] = cleaned
+                                break
 
         # Source 2: ClinVar gene-level conditions
         gene_cond_map: Dict[str, str] = {}
         if genes:
-            result = await session.execute(
-                select(ClinVarGeneCondition.gene, ClinVarGeneCondition.disease_name)
-                .where(ClinVarGeneCondition.gene.in_(genes))
-            )
-            for gene_sym, disease in result.all():
-                if gene_sym in gene_cond_map:
-                    continue
-                if disease and disease.lower().strip() not in _GARBAGE:
-                    gene_cond_map[gene_sym] = disease.strip()
+            gene_list = list(genes)
+            for i in range(0, len(gene_list), BATCH):
+                batch = gene_list[i:i + BATCH]
+                result = await session.execute(
+                    select(ClinVarGeneCondition.gene, ClinVarGeneCondition.disease_name)
+                    .where(ClinVarGeneCondition.gene.in_(batch))
+                )
+                for gene_sym, disease in result.all():
+                    if gene_sym in gene_cond_map:
+                        continue
+                    if disease and disease.lower().strip() not in _GARBAGE:
+                        gene_cond_map[gene_sym] = disease.strip()
 
         # Source 3: Ensembl gene descriptions
         gene_desc_map: Dict[str, str] = {}
         if genes:
-            result = await session.execute(
-                select(EnsemblGene.gene_symbol, EnsemblGene.description)
-                .where(EnsemblGene.gene_symbol.in_(genes))
-                .distinct()
-            )
-            for gene_sym, desc in result.all():
-                if desc and gene_sym not in gene_desc_map:
-                    clean = desc.split("[")[0].strip()
-                    if clean:
-                        gene_desc_map[gene_sym] = f"{clean.title()} variant"
+            gene_list = list(genes)
+            for i in range(0, len(gene_list), BATCH):
+                batch = gene_list[i:i + BATCH]
+                result = await session.execute(
+                    select(EnsemblGene.gene_symbol, EnsemblGene.description)
+                    .where(EnsemblGene.gene_symbol.in_(batch))
+                    .distinct()
+                )
+                for gene_sym, desc in result.all():
+                    if desc and gene_sym not in gene_desc_map:
+                        clean = desc.split("[")[0].strip()
+                        if clean:
+                            gene_desc_map[gene_sym] = f"{clean.title()} variant"
 
         # Apply enrichment
         for mapping in target_mappings:

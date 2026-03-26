@@ -42,6 +42,7 @@ const REGION_COLORS: Record<string, string> = {
   'nordic': '#06b6d4',
   'finnish & baltic': '#f97316',
   'ashkenazi jewish': '#a855f7',
+  'other european': '#64748b',
   // European sub-regions (1000G-derived)
   'central & western european': '#3b82f6',
   'british & northwestern': '#6366f1',
@@ -275,6 +276,7 @@ function getRegionColor(region: string) {
   if (name.includes('nordic')) return { bg: 'bg-cyan-500/20', bar: 'bg-linear-to-r from-cyan-500 to-cyan-400', hex: '#06b6d4' }
   if (name.includes('finnish') || name.includes('baltic')) return { bg: 'bg-orange-500/20', bar: 'bg-linear-to-r from-orange-500 to-orange-400', hex: '#f97316' }
   if (name.includes('ashkenazi')) return { bg: 'bg-purple-500/20', bar: 'bg-linear-to-r from-purple-500 to-purple-400', hex: '#a855f7' }
+  if (name.includes('other european')) return { bg: 'bg-slate-500/20', bar: 'bg-linear-to-r from-slate-500 to-slate-400', hex: '#64748b' }
   // Sub-European regions (1000G-derived)
   if (name.includes('central') && name.includes('european')) return { bg: 'bg-blue-500/20', bar: 'bg-linear-to-r from-blue-500 to-blue-400', hex: '#3b82f6' }
   if (name.includes('british')) return { bg: 'bg-indigo-500/20', bar: 'bg-linear-to-r from-indigo-500 to-indigo-400', hex: '#6366f1' }

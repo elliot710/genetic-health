@@ -76,6 +76,11 @@ EUR_SUBPOP_GNOMAD: Dict[str, Dict[str, str]] = {
         "origin": "Northern Europe",
         "description": "Swedish, Norwegian, Danish",
     },
+    "nfe_onf": {
+        "label": "Other European",
+        "origin": "Europe",
+        "description": "Other non-Finnish European",
+    },
     "fin": {
         "label": "Finnish & Baltic",
         "origin": "Northern Europe",
