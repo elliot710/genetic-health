@@ -721,6 +721,10 @@ export function cleanCondition(raw?: string | null): string {
     if (cleaned === cleaned.toLowerCase()) {
       return toTitleCase(cleaned)
     }
+    // Title-case if the string is entirely uppercase (e.g. ClinVar condition names)
+    if (cleaned === cleaned.toUpperCase() && cleaned.length > 3) {
+      return toTitleCase(cleaned)
+    }
     return cleaned
   }
   const parts = cleaned.replace(/;/g, '|').split('|')

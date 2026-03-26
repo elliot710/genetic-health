@@ -216,7 +216,7 @@ def _category_extra_fields(category: str, data: Dict[str, Any], conf: float) -> 
         }
     if category == "physical":
         return {
-            "result": f"Variant associated with {condition}",
+            "result": "Variant detected",
             "confidence": level,
             "description": f"Genetic variant in {gene} linked to {data.get('trait', 'physical trait')}",
         }

@@ -208,9 +208,15 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                   className={`${theme.glass} border ${theme.border} rounded-xl p-5 hover:border-green-500/50 transition-all duration-300 cursor-pointer`}
                   onClick={() => setExpandedGene(isExpanded ? null : key)}
                 >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3 flex-wrap">
-                      <h4 className={`font-bold text-base ${theme.textPrimary}`}>{item.gene}</h4>
+                  <div className="flex items-start justify-between mb-2 gap-2">
+                    <div className="flex-1 min-w-0">
+                      {Array.isArray(item.support_recommendations) && item.support_recommendations[0] ? (
+                        <p className={`text-sm font-semibold ${theme.textPrimary} leading-snug`}>{item.support_recommendations[0]}</p>
+                      ) : (
+                        <h4 className={`font-bold text-base ${theme.textPrimary}`}>{item.gene}</h4>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
                       <StatusBadge
                         label={formatLabel(capacity)}
                         severity={capacityToSeverity(capacity)}
@@ -222,24 +228,19 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                           showIcon={false}
                         />
                       )}
+                      <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                     </div>
-                    <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                   </div>
 
-                  {item.associated_variants?.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mt-2">
-                      {item.associated_variants.map((v: string) => (
-                        <React.Fragment key={v}>
-                          <Badge variant="secondary" className="text-xs font-mono">{v}{data?.genotype_map?.[v] ? ` ${data.genotype_map[v]}` : ''}</Badge>
-                          <ZygosityBadge genotype={data?.genotype_map?.[v]} />
-                        </React.Fragment>
-                      ))}
-                    </div>
-                  )}
-
-                  {Array.isArray(item.support_recommendations) && item.support_recommendations[0] && (
-                    <p className={`text-sm ${theme.textSecondary} mt-2 line-clamp-2`}>{item.support_recommendations[0]}</p>
-                  )}
+                  <div className="flex flex-wrap gap-1.5">
+                    <Badge variant="secondary" className="text-xs font-medium">{item.gene}</Badge>
+                    {item.associated_variants?.length > 0 && item.associated_variants.map((v: string) => (
+                      <React.Fragment key={v}>
+                        <Badge variant="secondary" className="text-xs font-mono">{v}{data?.genotype_map?.[v] ? ` ${data.genotype_map[v]}` : ''}</Badge>
+                        <ZygosityBadge genotype={data?.genotype_map?.[v]} />
+                      </React.Fragment>
+                    ))}
+                  </div>
 
                   {isExpanded && (
                     <div className={`mt-4 pt-4 border-t ${theme.border} space-y-4`}>

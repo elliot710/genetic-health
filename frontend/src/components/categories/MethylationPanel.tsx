@@ -176,27 +176,32 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
                 className={`${theme.glass} border ${theme.border} rounded-xl p-5 hover:border-purple-500/50 transition-all duration-300 cursor-pointer`}
                 onClick={() => setSelectedGene(isExpanded ? null : geneKey)}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-3">
-                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{item.gene}</h4>
+                <div className="flex items-start justify-between mb-2 gap-2">
+                  <div className="flex-1 min-w-0">
+                    {description ? (
+                      <p className={`text-sm font-semibold ${theme.textPrimary} leading-snug`}>{description}</p>
+                    ) : (
+                      <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{item.gene}</h4>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
                     <StatusBadge
                       label={formatLabel(capacity)}
                       severity={capacityToSeverity(capacity)}
                     />
+                    <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                   </div>
-                  <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
-                {rsid && (
-                  <>
-                    <Badge variant="secondary" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>
-                    <ZygosityBadge genotype={data?.genotype_map?.[rsid]} />
-                  </>
-                )}
-
-                {description && (
-                  <p className={`text-sm ${theme.textSecondary} mt-2 line-clamp-2`}>{description}</p>
-                )}
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  <Badge variant="secondary" className="text-xs font-medium">{item.gene}</Badge>
+                  {rsid && (
+                    <>
+                      <Badge variant="secondary" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>
+                      <ZygosityBadge genotype={data?.genotype_map?.[rsid]} />
+                    </>
+                  )}
+                </div>
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>

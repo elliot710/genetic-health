@@ -182,26 +182,27 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
                 className={`${theme.glass} border ${theme.border} rounded-xl p-5 cursor-pointer hover:border-blue-500/50 transition-all duration-300`}
                 onClick={() => setSelectedItem(isExpanded ? null : itemKey)}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-3">
-                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{mutation.gene}</h4>
+                <div className="flex items-start justify-between mb-2 gap-2">
+                  <div className="flex-1 min-w-0">
+                    <h4 className={`font-bold text-base ${theme.textPrimary} leading-snug`}>
+                      {cleanCondition(mutation.effect) || mutation.gene}
+                    </h4>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
                     <StatusBadge
                       label={formatLabel(mutation.clinical_relevance || 'unknown')}
                       severity={clinicalSignificanceToSeverity(mutation.clinical_relevance)}
                     />
+                    <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                   </div>
-                  <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
                 <div className="flex flex-wrap gap-1.5">
-                  {mutation.rsid && <Badge variant="secondary" className="text-xs font-mono">{mutation.rsid}{data?.genotype_map?.[mutation.rsid] ? ` ${data.genotype_map[mutation.rsid]}` : ''}</Badge>}
+                  {mutation.gene && <Badge variant="secondary" className="text-xs font-medium">{mutation.gene}</Badge>}
+                  {mutation.rsid && <Badge variant="outline" className="text-xs font-mono">{mutation.rsid}{data?.genotype_map?.[mutation.rsid] ? ` ${data.genotype_map[mutation.rsid]}` : ''}</Badge>}
                   {mutation.rsid && <ZygosityBadge genotype={data?.genotype_map?.[mutation.rsid]} />}
                   {mutation.effect_size && <Badge variant="outline" className="text-xs">Effect: {mutation.effect_size}</Badge>}
                 </div>
-
-                {mutation.effect && (
-                  <p className={`text-sm ${theme.textSecondary} mt-2 line-clamp-2`}>{cleanCondition(mutation.effect)}</p>
-                )}
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>

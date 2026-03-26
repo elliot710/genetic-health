@@ -124,22 +124,35 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
                 elif 'risk' in raw_sig:
                     clinical_significance = 'risk_factor'
 
-            gene_conditions = cv_local.get('gene_conditions', [])
-            if gene_conditions:
-                diseases = [gc.get('disease', '') for gc in gene_conditions
-                            if gc.get('disease') and gc.get('disease', '').lower() != 'not provided']
-                disease_association = '; '.join(diseases[:3]) if diseases else ''
+            # ClinVar local stores conditions as a flat list of strings under
+            # 'conditions' (not 'gene_conditions' which is a different legacy format).
+            raw_conditions = cv_local.get('conditions', [])
+            # Fallback: legacy dict-list format [{"disease": "..."}]
+            if not raw_conditions:
+                raw_conditions = [gc.get('disease', '') for gc in cv_local.get('gene_conditions', [])
+                                  if gc.get('disease')]
+            if raw_conditions:
+                _skip = {'not provided', 'not specified', 'see cases', 'not applicable', 'none', ''}
+                # Each condition string may itself be semicolon-separated (multiple conditions in one entry)
+                flat_conditions: list[str] = []
+                for raw_c in raw_conditions:
+                    for part in raw_c.split(';'):
+                        p = part.strip()
+                        if p and p.lower() not in _skip:
+                            flat_conditions.append(p)
+                if flat_conditions:
+                    disease_association = '; '.join(flat_conditions[:3])
 
-                # Infer inheritance from disease name
-                for gc in gene_conditions:
-                    d = gc.get('disease', '').lower()
-                    if 'dominant' in d:
+                # Infer inheritance pattern from condition names
+                for d in flat_conditions:
+                    dl = d.lower()
+                    if 'dominant' in dl:
                         inheritance_pattern = 'autosomal_dominant'
                         break
-                    elif 'recessive' in d:
+                    elif 'recessive' in dl:
                         inheritance_pattern = 'autosomal_recessive'
                         break
-                    elif 'x-linked' in d:
+                    elif 'x-linked' in dl:
                         inheritance_pattern = 'x_linked'
                         break
 

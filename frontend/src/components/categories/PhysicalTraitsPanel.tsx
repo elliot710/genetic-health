@@ -190,15 +190,15 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
                 className={`${theme.glass} border ${theme.border} rounded-xl p-5 cursor-pointer hover:border-purple-500/50 transition-all duration-300`}
                 onClick={() => setSelectedItem(isExpanded ? null : itemKey)}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-3">
-                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{cleanCondition(trait.category)}</h4>
+                <div className="flex items-start justify-between mb-2 gap-2">
+                  <h4 className={`font-bold text-base ${theme.textPrimary} leading-snug flex-1 min-w-0`}>{cleanCondition(trait.category)}</h4>
+                  <div className="flex items-center gap-2 shrink-0">
                     <StatusBadge
-                      label={formatLabel(trait.trait || 'Detected')}
+                      label={formatLabel(trait.confidence || 'moderate')}
                       severity={advantageToSeverity(trait.confidence || 'moderate')}
                     />
+                    <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                   </div>
-                  <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
                 <div className="flex flex-wrap gap-1.5">
