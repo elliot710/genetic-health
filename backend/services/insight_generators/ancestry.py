@@ -161,8 +161,15 @@ async def _load_aims_panel() -> Tuple[
             rsid = row[0]
             super_cache[rsid] = (row[1], row[2], row[3], row[4], row[5])
             spf = row[6]
-            if spf and isinstance(spf, dict):
-                subpop_cache[rsid] = spf
+            if spf:
+                if isinstance(spf, str):
+                    import json as _json
+                    try:
+                        spf = _json.loads(spf)
+                    except Exception:
+                        spf = None
+                if isinstance(spf, dict):
+                    subpop_cache[rsid] = spf
 
     # Detect which sub-population system is loaded
     if subpop_cache:

@@ -760,6 +760,7 @@ async def generate_from_maps(
     build_from_rsid: Callable,
     build_from_gene: Callable,
     filter_benign: bool = False,
+    skip_benign_filter: bool = False,
 ) -> int:
     """
     Generic loop shared by most category generators.
@@ -769,8 +770,11 @@ async def generate_from_maps(
         dedup_field: key inside the info dict used to avoid duplicates.
         build_from_rsid(analysis_id, rsid, genotype, info) -> model | None
         build_from_gene(analysis_id, rsid, gene, consequence, info) -> model | None
-        filter_benign: deprecated — benign filtering is now applied universally
-            via the composite pathogenicity score.  Kept for backward compat.
+        filter_benign: deprecated — kept for backward compat.
+        skip_benign_filter: set True for lifestyle/functional panels (sports,
+            nutrition, wellness, etc.) where ACMG-style pathogenicity scoring
+            does not apply.  Common functional variants legitimately score near
+            zero and must not be excluded by the benign composite threshold.
     """
     items = []
     seen: set = set()
@@ -864,13 +868,13 @@ async def generate_from_maps(
                     )
                 )
                 info_with_ref = {**info, '_ref_allele': effective_ref, '_pathogenicity_score': _path_score}
-                # Filter benign/likely_benign variants from ALL panels when
-                # the composite pathogenicity score (which integrates ClinVar,
-                # gnomAD, AlphaMissense, CADD, VEP) classifies the variant as
-                # benign.  Previously gated behind filter_benign=True (only
-                # health), but a variant that scores benign with low evidence
-                # should not appear in any panel (nutrition, sports, etc.).
-                if (settings.analysis.exclude_benign_from_panels
+                # Filter benign/likely_benign variants when the composite
+                # pathogenicity score classifies them as benign — but ONLY
+                # for disease/clinical panels.  Lifestyle/functional panels
+                # (sports, nutrition, wellness, etc.) use skip_benign_filter=True
+                # because common functional variants legitimately score near 0.
+                if (not skip_benign_filter
+                        and settings.analysis.exclude_benign_from_panels
                         and isinstance(_path_score, dict)
                         and _path_score.get('classification') in _BENIGN_CLASSIFICATIONS):
                     continue
@@ -932,9 +936,8 @@ async def generate_from_maps(
                     )
                 )
                 info_with_gt = {**info, '_ref_allele': effective_ref, '_genotype': genotype or '', '_pathogenicity_score': _path_score}
-                # Filter benign/likely_benign variants from ALL panels (see
-                # rsid-path comment above for rationale).
-                if (settings.analysis.exclude_benign_from_panels
+                if (not skip_benign_filter
+                        and settings.analysis.exclude_benign_from_panels
                         and isinstance(_path_score, dict)
                         and _path_score.get('classification') in _BENIGN_CLASSIFICATIONS):
                     continue
