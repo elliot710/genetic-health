@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { ExternalLink, Dna, FlaskConical, BookOpen, Activity, X, ChevronDown, ChevronUp, AlertTriangle, Pill, Shield, Atom, RefreshCw, Bookmark } from 'lucide-react'
 import { Badge } from '../ui/badge'
@@ -227,8 +227,9 @@ function impactColor(impact?: string): string {
 function clinSigColor(sig: string): string {
   const s = sig.toLowerCase()
   if (s.includes('conflicting')) return 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+  // Check likely_pathogenic BEFORE pathogenic — "likely_pathogenic" contains "pathogenic"
+  if (s.includes('likely_pathogenic') || s.includes('likely pathogenic')) return 'bg-orange-500/15 text-orange-400 border-orange-500/30'
   if (s.includes('pathogenic') && !s.includes('benign')) return 'bg-red-500/15 text-red-400 border-red-500/30'
-  if (s.includes('likely_pathogenic')) return 'bg-orange-500/15 text-orange-400 border-orange-500/30'
   if (s.includes('uncertain')) return 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30'
   if (s.includes('benign')) return 'bg-green-500/15 text-green-400 border-green-500/30'
   if (s.includes('drug') && s.includes('response')) return 'bg-purple-500/15 text-purple-400 border-purple-500/30'
@@ -261,7 +262,6 @@ function formatPopName(name: string): string {
     .replace('remaining', 'Other')
     .replace('ami', 'Amish')
     .replace('eur', 'European')
-    .replace('sas', 'South Asian')
 }
 
 function classificationColor(cls: string): string {
@@ -321,6 +321,10 @@ export default function VariantDetailDialog({
   const [isSaved, setIsSaved] = useState(false)
   const [saveBusy, setSaveBusy] = useState(false)
 
+  // Keep a ref so fetchDetails always reads the latest details without stale closure issues
+  const detailsRef = useRef<VariantDetails | null>(null)
+  useEffect(() => { detailsRef.current = details }, [details])
+
   // Check if this variant is already saved when the dialog opens
   useEffect(() => {
     if (!open || !rsid) return
@@ -359,7 +363,7 @@ export default function VariantDetailDialog({
     finally { setSaveBusy(false) }
   }
 
-  const fetchDetails = (forceRefresh = false) => {
+  const fetchDetails = useCallback((forceRefresh = false) => {
     if (!rsid || !token) return
     if (forceRefresh) {
       setRefreshing(true)
@@ -375,11 +379,10 @@ export default function VariantDetailDialog({
     })
       .then((res) => res.json())
       .then((data) => {
-        // If the refreshed response is missing user_genotype (e.g. the DB lookup
-        // silently failed), carry forward the value from the previous load so the
-        // genotype card never disappears after a refresh.
-        if (forceRefresh && !data?.user_genotype && details?.user_genotype) {
-          data = { ...data, user_genotype: details.user_genotype }
+        // Use detailsRef (not details state) so we always read the latest value,
+        // even when this callback is called from a setTimeout (stale closure fix).
+        if (forceRefresh && !data?.user_genotype && detailsRef.current?.user_genotype) {
+          data = { ...data, user_genotype: detailsRef.current.user_genotype }
         }
         setDetails(data)
         // First-time open: if data was served from DB cache, kick off a silent
@@ -409,12 +412,23 @@ export default function VariantDetailDialog({
         setLoading(false)
         setRefreshing(false)
       })
-  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rsid, token])
 
   useEffect(() => {
     if (!open || !rsid || !token) return
     fetchDetails(false)
-  }, [open, rsid, token])
+  }, [open, rsid, token, fetchDetails])
+
+  // Close on Escape key
+  useEffect(() => {
+    if (!open) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onOpenChange(false)
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [open, onOpenChange])
 
   const bg = isDarkMode ? 'bg-gray-900/95' : 'bg-white'
   const border = isDarkMode ? 'border-white/10' : 'border-gray-200'
@@ -439,14 +453,15 @@ export default function VariantDetailDialog({
         aria-modal="true"
         className="fixed inset-0 z-50 overflow-y-auto overscroll-contain"
       >
-        <div className="flex min-h-full items-center justify-center py-8 px-4">
+        <div className="flex min-h-full items-center justify-center py-8 px-4" onClick={() => onOpenChange(false)}>
           <div
             className={`relative w-full max-w-6xl flex flex-col gap-6 p-6 ${bg} ${border} border rounded-2xl`}
+            onClick={(e) => e.stopPropagation()}
           >
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-gradient-to-br from-blue-500/20 to-purple-500/20 border border-blue-500/30">
+              <div className="p-2 rounded-lg bg-linear-to-br from-blue-500/20 to-purple-500/20 border border-blue-500/30">
                 <Dna className="h-5 w-5 text-blue-400" />
               </div>
               <div>
@@ -491,6 +506,14 @@ export default function VariantDetailDialog({
         {loading && (
           <div className="flex items-center justify-center py-12">
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent" />
+          </div>
+        )}
+
+        {/* Subtle banner shown during background auto-refresh (data still visible) */}
+        {refreshing && !loading && (
+          <div className={`flex items-center gap-2 text-[11px] ${textSecondary} px-1`}>
+            <div className="h-3 w-3 rounded-full border border-blue-400 border-t-transparent animate-spin shrink-0" />
+            Refreshing from external APIs…
           </div>
         )}
 
@@ -745,11 +768,12 @@ export default function VariantDetailDialog({
 
             {/* ── Data Source Availability ── */}
             {(() => {
+              const psKeys = Object.keys(details.pathogenicity_score?.sources ?? {})
               const sources = [
-                { key: 'clinvar', label: 'ClinVar', available: !!(details.clinvar?.found || (details.clinical_significance && details.clinical_significance.length > 0)) },
-                { key: 'ensembl', label: 'Ensembl VEP', available: !!(details.transcripts && details.transcripts.length > 0) },
-                { key: 'gnomad', label: 'gnomAD', available: !!details.gnomad?.found },
-                { key: 'alpha_missense', label: 'AlphaMissense', available: !!details.alpha_missense?.found },
+                { key: 'clinvar', label: 'ClinVar', available: !!(details.clinvar?.found || (details.clinical_significance && details.clinical_significance.length > 0) || psKeys.includes('clinvar')) },
+                { key: 'ensembl', label: 'Ensembl VEP', available: !!(details.transcripts && details.transcripts.length > 0) || psKeys.includes('ensembl_vep') },
+                { key: 'gnomad', label: 'gnomAD', available: !!details.gnomad?.found || psKeys.includes('gnomad') },
+                { key: 'alpha_missense', label: 'AlphaMissense', available: !!details.alpha_missense?.found || psKeys.includes('alpha_missense') },
                 { key: 'snpedia', label: 'SNPedia', available: !!details.snpedia?.found },
                 { key: 'publications', label: 'Literature', available: !!(details.publications && details.publications.count > 0) },
               ]
@@ -824,7 +848,7 @@ export default function VariantDetailDialog({
                       if (hasPathogenic && hasBenign) {
                         return (
                           <div className={`flex items-start gap-1.5 text-[10px] ${textSecondary} leading-relaxed mt-2 pt-2 border-t ${border}`}>
-                            <AlertTriangle className="h-3 w-3 text-amber-400 mt-0.5 flex-shrink-0" />
+                            <AlertTriangle className="h-3 w-3 text-amber-400 mt-0.5 shrink-0" />
                             <span>
                               This variant has <span className="text-red-400 font-medium">pathogenic</span> and <span className="text-green-400 font-medium">benign</span> reports
                               from different submitters. The clinical significance depends on the specific condition and the submitting laboratory&apos;s evidence.
@@ -1116,7 +1140,7 @@ export default function VariantDetailDialog({
                           {details.alpha_missense.am_pathogenicity.toFixed(4)}
                         </span>
                       </div>
-                      <div className="relative h-2 rounded-full bg-gradient-to-r from-green-500 via-amber-500 to-red-500 overflow-hidden">
+                      <div className="relative h-2 rounded-full bg-linear-to-r from-green-500 via-amber-500 to-red-500 overflow-hidden">
                         <div
                           className="absolute top-0 h-full w-1 bg-white rounded-full shadow-md"
                           style={{ left: `${Math.min(details.alpha_missense.am_pathogenicity * 100, 100)}%` }}
@@ -1167,7 +1191,7 @@ export default function VariantDetailDialog({
                       <div className="mt-1 space-y-1">
                         {details.alpha_missense.isoforms.slice(0, 5).map((iso, i) => (
                           <div key={i} className={`flex items-center gap-2 text-[11px] ${cardBg} rounded px-2 py-1`}>
-                            <span className={`font-mono ${textSecondary} truncate max-w-[140px]`} title={iso.transcript_id}>{iso.transcript_id}</span>
+                            <span className={`font-mono ${textSecondary} truncate max-w-35`} title={iso.transcript_id}>{iso.transcript_id}</span>
                             <span className={`font-mono ${textSecondary}`}>{iso.protein_variant}</span>
                             <span className={`font-mono ${
                               iso.am_pathogenicity > 0.564 ? 'text-red-400' :
@@ -1192,7 +1216,7 @@ export default function VariantDetailDialog({
                   )}
                   {/* Disclaimer */}
                   <div className={`flex items-start gap-1.5 pt-1.5 border-t ${border}`}>
-                    <AlertTriangle className="h-3 w-3 text-amber-400 mt-0.5 flex-shrink-0" />
+                    <AlertTriangle className="h-3 w-3 text-amber-400 mt-0.5 shrink-0" />
                     <p className={`text-[10px] ${textSecondary} leading-relaxed`}>
                       {details.alpha_missense.disclaimer || 'AlphaMissense predictions are AI-generated (DeepMind) and have NOT been clinically validated. Do not use for clinical decision-making.'}
                     </p>
