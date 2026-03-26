@@ -370,7 +370,8 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
 
   // Utility state
   const [autoCategorizing, setAutoCategorizing] = useState(false)
-  const [enrichingMappings, setEnrichingMappings] = useState(false)
+  const [autoCatStatus, setAutoCatStatus] = useState<string | null>(null)
+  const [enrichingMappings, setEnrichingMappings] = useState<'dry_run' | 'apply' | null>(null)
   const [enrichReviseAll, setEnrichReviseAll] = useState(false)
   const [purgingDeleted, setPurgingDeleted] = useState(false)
   const [purgeOlderThanDays, setPurgeOlderThanDays] = useState('0')
@@ -1121,23 +1122,50 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   // --- Utility actions ---
   const runAutoCategorize = async () => {
     setAutoCategorizing(true)
+    setAutoCatStatus('Queuing job…')
     setUtilityFeedback(null)
     try {
       const res = await authFetch(`${API}/auto-categorize`, { method: 'POST', headers })
-      if (res.ok) {
-        const data = await res.json()
-        setUtilityFeedback({ message: data.detail || JSON.stringify(data), type: 'success' })
-      } else {
-        const err = await res.json().catch(() => ({ detail: 'Failed' }))
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Failed to queue job' }))
         setUtilityFeedback({ message: err.detail, type: 'error' })
+        setAutoCategorizing(false)
+        setAutoCatStatus(null)
+        return
+      }
+      const { job_id } = await res.json()
+      setAutoCatStatus(`Job #${job_id} running…`)
+      // Poll until complete
+      const startTime = Date.now()
+      while (true) {
+        await new Promise(r => setTimeout(r, 3000))
+        try {
+          const pollRes = await authFetch(`${API}/worker-jobs/${job_id}`, { headers })
+          if (!pollRes.ok) break
+          const job = await pollRes.json()
+          if (job.status === 'completed') {
+            const r = job.result || {}
+            const total = r.total_new_mappings ?? 0
+            const elapsed = r.total_elapsed_s != null ? ` in ${r.total_elapsed_s}s` : ''
+            setUtilityFeedback({ message: `Auto-categorize complete: ${total} new mappings${elapsed}`, type: 'success' })
+            fetchWorkerJobs()
+            break
+          } else if (job.status === 'failed') {
+            setUtilityFeedback({ message: `Auto-categorize failed: ${job.error || 'Unknown error'}`, type: 'error' })
+            break
+          }
+          const elapsed = Math.round((Date.now() - startTime) / 1000)
+          setAutoCatStatus(`Job #${job_id} running… (${elapsed}s)`)
+        } catch { break }
       }
     } catch { setUtilityFeedback({ message: 'Network error', type: 'error' }) }
     setAutoCategorizing(false)
-    setTimeout(() => setUtilityFeedback(null), 10000)
+    setAutoCatStatus(null)
+    setTimeout(() => setUtilityFeedback(null), 15000)
   }
 
   const runEnrichMappings = async (dryRun: boolean = false) => {
-    setEnrichingMappings(true)
+    setEnrichingMappings(dryRun ? 'dry_run' : 'apply')
     setUtilityFeedback(null)
     try {
       const params = new URLSearchParams()
@@ -1146,17 +1174,22 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
       const res = await authFetch(`${API}/enrich-mappings?${params}`, { method: 'POST', headers })
       if (res.ok) {
         const data = await res.json()
+        const breakdown = Object.entries(data.by_source || {})
+          .filter(([, n]) => (n as number) > 0)
+          .map(([src, n]) => `${src}: ${n}`)
+          .join(', ')
+        const detail = breakdown ? ` (${breakdown})` : ''
         const msg = dryRun
-          ? `[Dry run] Would update ${data.total_updated}/${data.total_checked} mappings`
-          : `Updated ${data.total_updated}/${data.total_checked} mappings`
+          ? `[Dry run] Would update ${data.total_updated} of ${data.total_checked} checked mappings${detail}`
+          : `Enriched ${data.total_updated} of ${data.total_checked} mappings${detail}`
         setUtilityFeedback({ message: msg, type: 'success' })
       } else {
         const err = await res.json().catch(() => ({ detail: 'Failed' }))
         setUtilityFeedback({ message: err.detail, type: 'error' })
       }
     } catch { setUtilityFeedback({ message: 'Network error', type: 'error' }) }
-    setEnrichingMappings(false)
-    setTimeout(() => setUtilityFeedback(null), 10000)
+    setEnrichingMappings(null)
+    setTimeout(() => setUtilityFeedback(null), 15000)
   }
 
   const runPurgeDeleted = async () => {
@@ -2271,7 +2304,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                     onClick={runAutoCategorize}
                   >
                     {autoCategorizing
-                      ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Running...</>
+                      ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> {autoCatStatus || 'Running…'}</>
                       : <><Zap className="h-3 w-3 mr-1" /> Run</>}
                   </Button>
                 </div>
@@ -2288,20 +2321,20 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                     <div className="flex items-center gap-2">
                       <Button
                         size="sm" variant="outline"
-                        disabled={enrichingMappings}
+                        disabled={enrichingMappings !== null}
                         onClick={() => runEnrichMappings(true)}
                       >
-                        {enrichingMappings
-                          ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Running...</>
+                        {enrichingMappings === 'dry_run'
+                          ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Running…</>
                           : <><Sparkles className="h-3 w-3 mr-1" /> Dry Run</>}
                       </Button>
                       <Button
                         size="sm" variant="default"
-                        disabled={enrichingMappings}
+                        disabled={enrichingMappings !== null}
                         onClick={() => runEnrichMappings(false)}
                       >
-                        {enrichingMappings
-                          ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Running...</>
+                        {enrichingMappings === 'apply'
+                          ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Running…</>
                           : <><Sparkles className="h-3 w-3 mr-1" /> Apply</>}
                       </Button>
                     </div>
