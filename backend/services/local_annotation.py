@@ -360,7 +360,7 @@ async def run_all_lookups(
         t0 = time.monotonic()
         tx_variants = [
             (str(v.rsid), str(v.chromosome).replace('chr', ''), int(v.position),
-             str(v.ref_allele or ''), str(v.alt_alleles or ''))
+             str(v.ref_allele or ''), str(v.alt_allele or ''))
             for v in rsid_to_variant.values()
             if v.rsid and v.chromosome and v.position
         ]
