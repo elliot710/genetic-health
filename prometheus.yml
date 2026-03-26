@@ -18,6 +18,21 @@ scrape_configs:
   - job_name: cadvisor
     static_configs:
       - targets: ['cadvisor:8080']
+    metric_relabel_configs:
+      # Overwrite container ID hash in `name` with the image short name (e.g. nginx, grafana, backend)
+      - source_labels: [image]
+        regex: '(?:.*/)([^:/]+)(?::.*)?'
+        target_label: name
+        replacement: '${1}'
+      # Strip registry prefix from image label (docker.io/library/nginx:alpine → nginx:alpine)
+      - source_labels: [image]
+        regex: '(?:.*/)([^/]+)'
+        target_label: image
+        replacement: '${1}'
+
+  - job_name: grafana
+    static_configs:
+      - targets: ['grafana:3000']
 
   - job_name: prometheus
     static_configs:
