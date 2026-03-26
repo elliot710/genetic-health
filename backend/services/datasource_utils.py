@@ -260,6 +260,9 @@ def scan_data_source_availability(base_dir: Optional[Path] = None) -> Dict[str, 
         "alpha_missense": base_dir / "alpha_missense",
     }
 
+    # Sources whose data lives in subdirectories — scan recursively one level
+    _RECURSE: set[str] = {"clinvar"}
+
     result: Dict[str, Any] = {}
     for name, path in source_dirs.items():
         info: Dict[str, Any] = {
@@ -272,9 +275,18 @@ def scan_data_source_availability(base_dir: Optional[Path] = None) -> Dict[str, 
         }
         if path.exists():
             try:
-                for f in sorted(path.iterdir()):
-                    if not f.is_file():
-                        continue
+                # For sources with subdirectories, collect files one level deep
+                if name in _RECURSE:
+                    candidates = [
+                        f
+                        for d in [path, *[sub for sub in path.iterdir() if sub.is_dir()]]
+                        for f in d.iterdir()
+                        if f.is_file()
+                    ]
+                else:
+                    candidates = [f for f in path.iterdir() if f.is_file()]
+
+                for f in sorted(candidates):
                     # Skip index files themselves in the count
                     if f.name.endswith(('.tbi', '.csi', '.bai')):
                         continue
