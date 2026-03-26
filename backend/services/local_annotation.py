@@ -322,22 +322,19 @@ async def run_all_lookups(
         logger.info(f"  1000G: starting lookup for {len(tkg_rsids)} RSIDs...")
         results.thousand_genomes = await sources.thousand_genomes.lookup_batch(tkg_rsids)
         tkg_found = sum(1 for v in results.thousand_genomes.values() if v and v.get('found'))
-        # Position fallback for rsid misses — capped at 5000 to avoid sequential tabix
-        # I/O over a 1.6 GB VCF for low-hit-rate datasets.
+        # Position fallback for rsid misses — VCF tabix is fast for this (sequential
+        # seeks via pysam, not a full scan). No cap needed.
         tkg_misses = [
             r for r in tkg_rsids
             if not (results.thousand_genomes.get(r) and results.thousand_genomes[r].get('found'))
         ]
-        _TKG_TABIX_LIMIT = 5000
-        if tkg_misses and len(tkg_misses) <= _TKG_TABIX_LIMIT and hasattr(sources.thousand_genomes, 'lookup_batch_by_position'):
+        if tkg_misses and hasattr(sources.thousand_genomes, 'lookup_batch_by_position'):
             pos_tuples = _build_pos_tuples(tkg_misses, rsid_to_variant)
             if pos_tuples:
                 pos_results = await sources.thousand_genomes.lookup_batch_by_position(pos_tuples)
                 for rsid, data in pos_results.items():
                     if data and data.get('found'):
                         results.thousand_genomes[rsid] = data
-        elif tkg_misses and len(tkg_misses) > _TKG_TABIX_LIMIT:
-            logger.info(f"  1000G: skipping pos fallback ({len(tkg_misses)} misses > {_TKG_TABIX_LIMIT} limit)")
         total_found = sum(1 for v in results.thousand_genomes.values() if v and v.get('found'))
         logger.info(f"  1000G: {total_found}/{len(tkg_rsids)} found "
                     f"(rsid: {tkg_found}, pos fallback: {total_found - tkg_found}) "
@@ -357,12 +354,23 @@ async def run_all_lookups(
         logger.info(f"  AlphaMissense: {found}/{len(am_rsids)} found ({time.monotonic() - t0:.1f}s)")
         await asyncio.sleep(0)
 
-    # gnomAD-tx: skipped during bulk analysis — 6.7 GB tabix file causes
-    # heavy sequential I/O through Docker/macOS filesystem that blocks the
-    # system.  Tissue/transcript data is display-only (no insight generators
-    # consume it); individual variant lookups in annotation_routes.py still
-    # fetch it on demand.
-    logger.info("  gnomAD-tx: skipped in bulk analysis (on-demand via annotation API)")
+    # gnomAD-tx: bulk batch via chromosome-range scans — NOT per-variant tabix seeks.
+    # _lookup_batch_sync reads one range per chromosome, so 609K variants = ~25 fetches.
+    if sources.gnomad_tx:
+        t0 = time.monotonic()
+        tx_variants = [
+            (str(v.rsid), str(v.chromosome).replace('chr', ''), int(v.position),
+             str(v.ref_allele or ''), str(v.alt_alleles or ''))
+            for v in rsid_to_variant.values()
+            if v.rsid and v.chromosome and v.position
+        ]
+        if tx_variants:
+            logger.info(f"  gnomAD-tx: starting lookup for {len(tx_variants)} variants...")
+            tx_results = await sources.gnomad_tx.lookup_batch(tx_variants)
+            results.gnomad_tx = tx_results
+            found_tx = sum(1 for v in tx_results.values() if v and v.get('found'))
+            logger.info(f"  gnomAD-tx: {found_tx}/{len(tx_variants)} found ({time.monotonic() - t0:.1f}s)")
+            await asyncio.sleep(0)
 
     logger.info(f"  All source lookups: {time.monotonic() - t_total:.1f}s total")
     return results
