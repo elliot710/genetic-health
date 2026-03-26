@@ -247,7 +247,10 @@ class GnomadCacheService:
                     self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE, cache_size_mb=32)
                     row = self._db.execute("SELECT COUNT(*) FROM gnomad_data").fetchone()
                     self._variant_count = row[0] if row else 0
-                    self._full_scan_done = True
+                    # Do NOT set _full_scan_done=True here. The disk cache was built
+                    # incrementally and covers only a subset of current markers.
+                    # Leaving it False allows tabix fallback to run for uncached variants
+                    # and grow the SQLite cache with new hits over time.
                     logger.info("gnomAD: opened SQLite cache with %d variants in %.1fs",
                                 self._variant_count, time.time() - t0)
                     return
@@ -663,6 +666,7 @@ class GnomadLocalService:
         self._variant_count: Optional[int] = None
         self._constraint_count: Optional[int] = None
         self._available: Optional[bool] = None
+        self._pg_has_rsids: bool = True   # False when rsid column has no data (ETL gap)
         self._cache = get_gnomad_cache_service()
 
     # ------------------------------------------------------------------
@@ -708,6 +712,19 @@ class GnomadLocalService:
                     select(func.count()).select_from(GnomadGeneConstraint)
                 )
                 self._constraint_count = result.scalar() or 0
+
+                # Detect whether rsid column is actually populated (ETL may skip it).
+                # Use EXISTS for a fast O(1) check instead of a full COUNT.
+                if self._variant_count > 0:
+                    r_rsid = await session.execute(sa_text(
+                        "SELECT EXISTS(SELECT 1 FROM gnomad_variants WHERE rsid IS NOT NULL LIMIT 1)"
+                    ))
+                    self._pg_has_rsids = bool(r_rsid.scalar())
+                    if not self._pg_has_rsids:
+                        logger.info(
+                            "gnomAD PG: rsid column is empty — "
+                            "rsid batch lookups will skip PG and go directly to tabix"
+                        )
 
             self._available = (self._variant_count > 0
                                or self._cache.is_loaded
@@ -809,8 +826,11 @@ class GnomadLocalService:
         if not remaining:
             return results
 
-        # PERF-01: Skip PG lookup entirely when gnomAD PG table is empty.
-        pg_skip = self._variant_count is not None and self._variant_count == 0
+        # PERF-01: Skip PG rsid lookup when table is empty or rsid column has no data.
+        pg_skip = (
+            (self._variant_count is not None and self._variant_count == 0)
+            or not self._pg_has_rsids
+        )
 
         if not pg_skip:
             # 2) Fallback to PG for anything not in cache
@@ -928,10 +948,14 @@ class GnomadLocalService:
         found_count = 0
         t0 = _time.monotonic()
 
-        # PERF-01: Skip PG lookup entirely when gnomAD PG table is empty.
-        pg_skip = self._variant_count is not None and self._variant_count == 0
+        # PERF-01: Skip PG pos lookup when table is empty or gnomAD is GRCh38
+        # (user's genetic_markers positions are GRCh37 — assembly mismatch → never matches).
+        pg_skip = (
+            (self._variant_count is not None and self._variant_count == 0)
+            or self._cache._is_grch38
+        )
         if pg_skip:
-            logger.debug("gnomAD pos lookup: skipping PG (table empty)")
+            logger.debug("gnomAD pos lookup: skipping PG (table empty or GRCh38/GRCh37 mismatch)")
         else:
             async with async_session_factory() as session:
                 for i in range(0, len(entries), batch_size):
