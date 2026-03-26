@@ -163,6 +163,54 @@ services:
     restart: unless-stopped
     command: ["uv", "run", "python", "-m", "backend.worker"]
 
+  # Grafana — dashboards over Prometheus (RED metrics + host/container stats) and Jaeger traces.
+  # Access via https://grafana.epigenic.xyz (proxied by nginx)
+  grafana:
+    image: grafana/grafana:11.5.2
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_SERVER_ROOT_URL=https://grafana.epigenic.xyz
+      - GF_SERVER_DOMAIN=grafana.epigenic.xyz
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # node-exporter — host-level metrics (CPU, RAM, disk, network I/O) → Prometheus
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    restart: unless-stopped
+
+  # cAdvisor — per-container resource usage metrics → Prometheus
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.2
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /cgroup:/cgroup:ro
+    restart: unless-stopped
+
   # Nginx reverse proxy — routes epigenic.xyz → frontend:3000, api.epigenic.xyz → backend:8000
   nginx:
     image: nginx:alpine
@@ -194,3 +242,4 @@ volumes:
   postgres_data:
   jaeger_data:
   prometheus_data:
+  grafana_data:
