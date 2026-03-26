@@ -257,6 +257,7 @@ def scan_data_source_availability(base_dir: Optional[Path] = None) -> Dict[str, 
         "1000G": base_dir / "1000G",
         "ensembl_vep": base_dir / "ensembl" / "homo_sapiens" / "variation" / "vcf_vep",
         "gnomad": base_dir / "gnomad",
+        "gnomad_v2": base_dir / "gnomad_v2",
         "alpha_missense": base_dir / "alpha_missense",
     }
 

@@ -270,18 +270,21 @@ async def run_all_lookups(
         logger.info(f"  gnomAD: starting lookup for {len(gn_rsids)} RSIDs...")
         results.gnomad = await sources.gnomad.lookup_batch(gn_rsids)
         gn_found = sum(1 for v in results.gnomad.values() if v and v.get('found'))
-        # Position fallback for rsid misses
+        # Position fallback for rsid misses — skipped when lookup_batch already
+        # exhausted tabix (same GRCh38 bridge + same files → identical results).
         gn_misses = [
             r for r in gn_rsids
             if not (results.gnomad.get(r) and results.gnomad[r].get('found'))
         ]
-        if gn_misses:
+        if gn_misses and not getattr(sources.gnomad, 'lookup_batch_uses_tabix', False):
             pos_tuples = build_gnomad_pos_tuples(gn_misses, rsid_to_variant)
             if pos_tuples:
                 pos_results = await sources.gnomad.lookup_batch_by_position(pos_tuples)
                 for rsid, data in pos_results.items():
                     if data and data.get('found'):
                         results.gnomad[rsid] = data
+        elif gn_misses and getattr(sources.gnomad, 'lookup_batch_uses_tabix', False):
+            logger.info(f"  gnomAD: skipping pos fallback — tabix already queried in rsid lookup ({len(gn_misses)} misses)")
         total_found = sum(1 for v in results.gnomad.values() if v and v.get('found'))
         logger.info(f"  gnomAD: {total_found}/{len(gn_rsids)} found "
                      f"(rsid: {gn_found}, pos fallback: {total_found - gn_found}) "

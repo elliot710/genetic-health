@@ -378,6 +378,10 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const [utilityFeedback, setUtilityFeedback] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
   const [resettingSentinels, setResettingSentinels] = useState<string | null>(null)
   const [sentinelFeedback, setSentinelFeedback] = useState<{ source: string; message: string; type: 'success' | 'error' } | null>(null)
+  const [gnomadCacheJobId, setGnomadCacheJobId] = useState<number | null>(null)
+  const [gnomadCacheStatus, setGnomadCacheStatus] = useState<string | null>(null)
+  const [gnomadAncestryJobId, setGnomadAncestryJobId] = useState<number | null>(null)
+  const [gnomadAncestryStatus, setGnomadAncestryStatus] = useState<string | null>(null)
 
   const headers = useMemo(() => ({ 'Content-Type': 'application/json' }), [])
   // Wrap fetch to always send HttpOnly auth cookie
@@ -1212,6 +1216,97 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     } catch { setUtilityFeedback({ message: 'Network error', type: 'error' }) }
     setPurgingDeleted(false)
     setTimeout(() => setUtilityFeedback(null), 10000)
+  }
+
+  const pollWorkerJob = async (
+    jobId: number,
+    onStatus: (msg: string) => void,
+    onComplete: (result: Record<string, unknown>) => void,
+    onError: (msg: string) => void,
+  ) => {
+    const startTime = Date.now()
+    while (true) {
+      await new Promise(r => setTimeout(r, 4000))
+      try {
+        const pollRes = await authFetch(`${API}/worker-jobs/${jobId}`, { headers })
+        if (!pollRes.ok) break
+        const job = await pollRes.json()
+        if (job.status === 'completed') { onComplete(job.result || {}); fetchWorkerJobs(); return }
+        if (job.status === 'failed') { onError(job.error || 'Unknown error'); return }
+        const elapsed = Math.round((Date.now() - startTime) / 1000)
+        onStatus(`Job #${jobId} running… (${elapsed}s)`)
+      } catch { break }
+    }
+    onError('Polling failed')
+  }
+
+  const runBuildCaddCache = async () => {
+    if (gnomadCacheJobId) return
+    setGnomadCacheStatus('Queuing…')
+    setUtilityFeedback(null)
+    try {
+      const res = await authFetch(`${API}/gnomad/build-cadd-cache`, { method: 'POST', headers })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Failed' }))
+        setUtilityFeedback({ message: err.detail, type: 'error' })
+        setGnomadCacheStatus(null)
+        return
+      }
+      const { job_id } = await res.json()
+      setGnomadCacheJobId(job_id)
+      await pollWorkerJob(
+        job_id,
+        msg => setGnomadCacheStatus(msg),
+        result => {
+          const n = result.variant_count as number ?? 0
+          const s = result.elapsed_s as number ?? 0
+          setUtilityFeedback({ message: `CADD cache built: ${n.toLocaleString()} variants cached in ${s}s`, type: 'success' })
+          setGnomadCacheJobId(null)
+          setGnomadCacheStatus(null)
+        },
+        err => {
+          setUtilityFeedback({ message: `CADD cache build failed: ${err}`, type: 'error' })
+          setGnomadCacheJobId(null)
+          setGnomadCacheStatus(null)
+        },
+      )
+    } catch { setUtilityFeedback({ message: 'Network error', type: 'error' }); setGnomadCacheStatus(null) }
+    setTimeout(() => setUtilityFeedback(null), 20000)
+  }
+
+  const runRefreshAncestryAfs = async (indexFirst: boolean = false) => {
+    if (gnomadAncestryJobId) return
+    setGnomadAncestryStatus('Queuing…')
+    setUtilityFeedback(null)
+    try {
+      const res = await authFetch(`${API}/gnomad/refresh-ancestry-afs?index_first=${indexFirst}`, { method: 'POST', headers })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Failed' }))
+        setUtilityFeedback({ message: err.detail, type: 'error' })
+        setGnomadAncestryStatus(null)
+        return
+      }
+      const { job_id } = await res.json()
+      setGnomadAncestryJobId(job_id)
+      await pollWorkerJob(
+        job_id,
+        msg => setGnomadAncestryStatus(msg),
+        result => {
+          const updated = result.updated as number ?? 0
+          const total = result.total as number ?? 0
+          const s = result.elapsed_s as number ?? 0
+          setUtilityFeedback({ message: `Ancestry AFs refreshed: ${updated}/${total} AIMs updated in ${s}s`, type: 'success' })
+          setGnomadAncestryJobId(null)
+          setGnomadAncestryStatus(null)
+        },
+        err => {
+          setUtilityFeedback({ message: `Ancestry AF refresh failed: ${err}`, type: 'error' })
+          setGnomadAncestryJobId(null)
+          setGnomadAncestryStatus(null)
+        },
+      )
+    } catch { setUtilityFeedback({ message: 'Network error', type: 'error' }); setGnomadAncestryStatus(null) }
+    setTimeout(() => setUtilityFeedback(null), 20000)
   }
 
   const resetSentinels = async (sourceName: string) => {
@@ -2377,6 +2472,57 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                         ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Purging...</>
                         : <><Trash2 className="h-3 w-3 mr-1" /> Purge</>}
                     </Button>
+                  </div>
+                </div>
+
+                {/* gnomAD CADD Cache Build */}
+                <div className={`rounded-lg border p-4 flex items-center justify-between ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-gray-200 bg-gray-50'}`}>
+                  <div>
+                    <span className={`font-medium ${theme.text.primary}`}>Build gnomAD CADD Cache</span>
+                    <p className={`text-sm mt-0.5 ${theme.text.muted}`}>
+                      Sequential chromosome scan of CADD TSV files → SQLite. Run once to make gnomAD annotation sub-second (instead of ~14 min per analysis).
+                    </p>
+                  </div>
+                  <Button
+                    size="sm" variant="outline"
+                    disabled={gnomadCacheJobId !== null}
+                    onClick={runBuildCaddCache}
+                  >
+                    {gnomadCacheJobId !== null
+                      ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> {gnomadCacheStatus || 'Running…'}</>
+                      : <><Zap className="h-3 w-3 mr-1" /> Build Cache</>}
+                  </Button>
+                </div>
+
+                {/* gnomAD v2 Ancestry AF Refresh */}
+                <div className={`rounded-lg border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-gray-200 bg-gray-50'}`}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className={`font-medium ${theme.text.primary}`}>Refresh Ancestry AFs (gnomAD v2)</span>
+                      <p className={`text-sm mt-0.5 ${theme.text.muted}`}>
+                        Update ancestry_aims_panel with population AFs from local gnomAD v2.1.1 GRCh37 VCF files (no network needed).
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm" variant="outline"
+                        disabled={gnomadAncestryJobId !== null}
+                        onClick={() => runRefreshAncestryAfs(true)}
+                      >
+                        {gnomadAncestryJobId !== null
+                          ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> {gnomadAncestryStatus || 'Running…'}</>
+                          : <><Zap className="h-3 w-3 mr-1" /> Index + Refresh</>}
+                      </Button>
+                      <Button
+                        size="sm" variant="default"
+                        disabled={gnomadAncestryJobId !== null}
+                        onClick={() => runRefreshAncestryAfs(false)}
+                      >
+                        {gnomadAncestryJobId !== null
+                          ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> {gnomadAncestryStatus || 'Running…'}</>
+                          : <><Sparkles className="h-3 w-3 mr-1" /> Refresh</>}
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </div>

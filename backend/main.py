@@ -90,6 +90,20 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_preload_gnomad_cache())
     print("⏳ gnomAD cache: preloading CADD TSV cache in background...")
 
+    # Initialize gnomAD v2 (ancestry population AFs — GRCh37 VCFs)
+    try:
+        from .services.gnomad_v2_local import get_gnomad_v2_service
+        gnomad_v2_svc = get_gnomad_v2_service()
+        await gnomad_v2_svc.ensure_loaded()
+        if gnomad_v2_svc.is_loaded:
+            print(f"✅ gnomAD v2: {gnomad_v2_svc.file_count} VCF files, {gnomad_v2_svc.indexed_count} tabix-indexed")
+            if gnomad_v2_svc.indexed_count == 0:
+                print("  ↳ Run admin → gnomAD → Refresh ancestry AFs (with index_first=true) to index them")
+        else:
+            print("ℹ️ gnomAD v2: no VCF files found in data_sources/gnomad_v2/")
+    except Exception as e:
+        print(f"⚠️ gnomAD v2 init failed: {e}")
+
     # Check gnomAD BigQuery availability
     try:
         from .services.gnomad_bigquery import get_gnomad_bigquery_service

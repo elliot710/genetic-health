@@ -268,6 +268,56 @@ class GnomadCacheService:
             )
         return
 
+    async def build_full_cache(self, *, progress_callback=None) -> Dict[str, Any]:
+        """Build (or rebuild) the SQLite cache with a sequential chromosome scan.
+
+        This is far faster than per-variant tabix seeks for large marker sets:
+        - Sequential scan: read 19 GB once per file (~38s at 500 MB/s)
+        - Random seeks:    609 K seeks × ~0.5 ms = ~5 min per file
+
+        After this completes, all analysis lookups hit SQLite (sub-second).
+        Called by the admin worker job 'gnomad_build_cadd_cache'.
+        """
+        if not self._tsv_files:
+            raise RuntimeError("No gnomAD CADD TSV files found — cannot build cache")
+
+        t0 = time.time()
+        logger.info("gnomAD CADD cache build: loading marker positions from database…")
+        if self._is_grch38:
+            pos_map = await self._load_grch38_positions_from_ensembl()
+        else:
+            pos_map = await self._load_known_positions(genome_build=None)
+
+        total_markers = sum(len(v) for v in pos_map.values())
+        logger.info(
+            "gnomAD CADD cache build: %d unique positions / %d marker-allele pairs",
+            len(pos_map), total_markers,
+        )
+        if progress_callback:
+            progress_callback("positions_loaded", len(pos_map), time.time() - t0)
+
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        variant_count = await asyncio.to_thread(
+            self._scan_tabix_to_sqlite, self._tsv_files, pos_map,
+        )
+
+        # Persist metadata so _load_cache() opens this cache on next startup.
+        file_fp = get_multi_file_fingerprint(self._tsv_files)
+        save_cache_meta(_META_FILE, marker_fp="full_build", file_fp=file_fp, count=variant_count)
+
+        # Hot-reload the freshly built cache into memory.
+        self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE, cache_size_mb=64)
+        self._variant_count = variant_count
+        self._full_scan_done = True
+        elapsed = time.time() - t0
+        logger.info(
+            "gnomAD CADD cache build complete: %d variants cached in %.1fs",
+            variant_count, elapsed,
+        )
+        if progress_callback:
+            progress_callback("complete", variant_count, elapsed)
+        return {"variant_count": variant_count, "positions_scanned": len(pos_map), "elapsed_s": round(elapsed, 1)}
+
     def _scan_tabix_to_sqlite(
         self, tsv_files: List[Path], pos_map: Dict[Tuple[str, int], List[Tuple[str, str, str]]]
     ) -> int:
@@ -691,6 +741,28 @@ class GnomadLocalService:
     @property
     def constraint_count(self) -> int:
         return self._constraint_count or 0
+
+    @property
+    def lookup_batch_uses_tabix(self) -> bool:
+        """True when lookup_batch() already queries tabix for all unfound rsids.
+
+        When True, lookup_batch_by_position() would produce identical results
+        (same GRCh38 bridge + same tabix files) and can be skipped entirely.
+        This happens when:
+          - tabix files are available, AND
+          - full_scan_done is False (meaning tabix is used per-lookup, not a complete cache)
+        """
+        return self._cache.has_tabix_files and not self._cache._full_scan_done
+
+    async def build_cadd_cache(self, *, progress_callback=None) -> Dict[str, Any]:
+        """Trigger a full sequential scan of CADD TSV files to build the SQLite cache.
+
+        Call once from the admin panel. After completion, all analysis lookups
+        hit SQLite (sub-second) instead of doing per-variant tabix seeks.
+        """
+        if not self._cache._tsv_files:
+            await self._cache.ensure_loaded()
+        return await self._cache.build_full_cache(progress_callback=progress_callback)
 
     # ------------------------------------------------------------------
     # Startup check

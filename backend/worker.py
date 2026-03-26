@@ -182,6 +182,22 @@ async def _execute_job(job_id: int, job_type: str, params: dict) -> dict:
     elif job_type == "etl_gnomad":
         from backend.services.gnomad_etl import GnomadETL
         return await GnomadETL().run_full_import()
+    elif job_type == "gnomad_build_cadd_cache":
+        from backend.services.gnomad_local import get_gnomad_service
+        svc = get_gnomad_service()
+        if not svc.is_loaded:
+            await svc.ensure_loaded()
+        return await svc.build_cadd_cache()
+    elif job_type == "gnomad_refresh_ancestry_afs":
+        from backend.services.gnomad_v2_local import get_gnomad_v2_service
+        svc = get_gnomad_v2_service()
+        if not svc.is_loaded:
+            await svc.ensure_loaded()
+        p = params or {}
+        if p.get("index_first"):
+            index_result = await svc.index_all_files()
+            logger.info("gnomAD v2 indexing: %s", index_result)
+        return await svc.bulk_refresh_ancestry_panel(fst_threshold=p.get("fst_threshold", 0.70))
     elif job_type == "etl_ensembl":
         from backend.services.ensembl_etl import EnsemblETL
         return await EnsemblETL().run_full_import()
@@ -490,6 +506,14 @@ async def _preload_local_services() -> None:
         logger.info(f"gnomAD CADD: {len(gc._tsv_files or [])} indexed TSV file(s) available — tabix queries enabled")
     else:
         logger.info("gnomAD cache: no CADD TSV files found — position queries unavailable")
+
+    from backend.services.gnomad_v2_local import get_gnomad_v2_service
+    gn2 = get_gnomad_v2_service()
+    await gn2.ensure_loaded()
+    if gn2.is_loaded:
+        logger.info(f"gnomAD v2: {gn2.file_count} VCF files, {gn2.indexed_count} tabix-indexed")
+    else:
+        logger.info("gnomAD v2: no VCF files found")
 
     from backend.services.thousand_genomes_local import get_thousand_genomes_service
     tkg = get_thousand_genomes_service()

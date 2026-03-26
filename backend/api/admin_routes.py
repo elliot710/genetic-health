@@ -2045,6 +2045,67 @@ async def gnomad_etl_import(
     return {"job_id": job.id, "status": "pending", "detail": f"gnomAD ETL queued as worker job #{job.id} — monitor via Worker Jobs"}
 
 
+@router.post("/gnomad/build-cadd-cache")
+async def gnomad_build_cadd_cache(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+):
+    """Queue a worker job to build the gnomAD CADD SQLite cache via sequential scan.
+
+    After this completes, all analysis gnomAD lookups hit SQLite (sub-second)
+    instead of doing 609K per-variant tabix seeks (~14 min).
+    """
+    from ..db.models import WorkerJob
+    job = WorkerJob(job_type="gnomad_build_cadd_cache", status="pending", params={}, requested_by=admin.id)
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    logger.info(f"gnomAD CADD cache build job {job.id} queued by admin {admin.id}")
+    return {"job_id": job.id, "status": "pending", "detail": f"gnomAD CADD cache build queued as worker job #{job.id}"}
+
+
+@router.post("/gnomad/refresh-ancestry-afs")
+async def gnomad_refresh_ancestry_afs(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+    fst_threshold: float = 0.70,
+    index_first: bool = False,
+):
+    """Queue a worker job to refresh ancestry_aims_panel with gnomAD v2 AFs.
+
+    Reads from local GRCh37 VCF files — no network calls needed.
+    Replaces the data previously loaded via the gnomAD GraphQL API.
+
+    index_first=true will create .tbi indexes for any unindexed VCF files first.
+    """
+    from ..db.models import WorkerJob
+    job = WorkerJob(
+        job_type="gnomad_refresh_ancestry_afs",
+        status="pending",
+        params={"fst_threshold": fst_threshold, "index_first": index_first},
+        requested_by=admin.id,
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    logger.info(f"gnomAD ancestry AF refresh job {job.id} queued by admin {admin.id}")
+    return {"job_id": job.id, "status": "pending", "detail": f"gnomAD ancestry AF refresh queued as worker job #{job.id}"}
+
+
+@router.get("/gnomad/v2-status")
+async def gnomad_v2_status(admin: User = Depends(require_admin)):
+    """Get gnomAD v2 VCF file availability and index status."""
+    from ..services.gnomad_v2_local import get_gnomad_v2_service
+    svc = get_gnomad_v2_service()
+    if not svc.is_loaded:
+        await svc.ensure_loaded()
+    return {
+        "file_count": svc.file_count,
+        "indexed_count": svc.indexed_count,
+        "ready": svc.indexed_count > 0,
+    }
+
+
 @router.get("/ensembl-etl/status")
 async def ensembl_etl_status(admin: User = Depends(require_admin)):
     """Get current Ensembl gene model import status (row counts + file availability)."""
