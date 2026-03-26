@@ -207,7 +207,7 @@ class HealthRisk(Base):
     analysis_id = Column(Integer, ForeignKey("genetic_analyses.id", ondelete="CASCADE"), nullable=False)
     condition = Column(String, nullable=False)
     risk_level = Column(String, nullable=False)  # 'low', 'moderate', 'high'
-    risk_score = Column(String)
+    risk_score = Column(Float, nullable=True)
     associated_variants = Column(JSON)  # List of variant IDs
     recommendations = Column(JSON)  # List of recommendations
     gene = Column(String(100))  # Gene symbol (FE-01)

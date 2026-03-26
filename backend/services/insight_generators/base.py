@@ -242,6 +242,9 @@ def get_annotation_allele_parts(annotation_result) -> tuple:
     annotations = annotation_result.annotation_data.get('annotations', {})
 
     # Ensembl VEP — allele_string format: "REF/ALT" or "REF/ALT1,ALT2"
+    # For multi-allelic sites (REF/ALT1,ALT2) we return ALL alts joined so
+    # callers can check if the user carries ANY of the risk alleles at this
+    # position, not just the arbitrarily-first one.
     ensembl = annotations.get('ensembl', {})
     data_list = ensembl.get('data', [])
     if data_list:
@@ -249,11 +252,11 @@ def get_annotation_allele_parts(annotation_result) -> tuple:
         if '/' in allele_str:
             parts = allele_str.split('/', 1)
             ref = parts[0].strip()
-            alt = parts[1].split(',')[0].strip()  # Take first alt for multi-allelic
+            alt = parts[1].strip()  # Keep full alt string, may be "A,T" for multi-allelic
             if ref and alt:
                 return (ref.upper(), alt.upper())
 
-    # gnomAD — has ref and alt columns
+    # gnomAD — has ref and alt columns (single alt)
     gnomad = annotations.get('gnomad', {})
     if gnomad and gnomad.get('found'):
         ref = gnomad.get('ref', '')
@@ -261,7 +264,7 @@ def get_annotation_allele_parts(annotation_result) -> tuple:
         if ref and alt:
             return (ref.strip().upper(), alt.strip().upper())
 
-    # ClinVar local — has explicit ref/alt alleles
+    # ClinVar local — has explicit ref/alt alleles (single alt)
     cv = annotations.get('clinvar_local', {})
     if cv and cv.get('found'):
         ref = cv.get('ref_allele') or cv.get('reference_allele') or ''
@@ -831,16 +834,21 @@ async def generate_from_maps(
                         "rsid %s: no allele data for SNP verification — skipping", rsid
                     )
                     continue
-                if len(ann_alt) == 1:
-                    gt_upper = genotype.upper()
-                    alleles = set(gt_upper.replace('/', '').replace('|', ''))
-                    carries = ann_alt in alleles
-                    if not carries:
-                        # Strand-flip fallback for minus-strand arrays
-                        _COMPLEMENT_MAP = str.maketrans('ACGT', 'TGCA')
-                        carries = ann_alt in {a.translate(_COMPLEMENT_MAP) for a in alleles}
+                # ann_alt may be a comma-separated list for multi-allelic sites
+                # (e.g. "A,T" for REF/A,T). Extract all single-base alts and
+                # check whether the user carries ANY of them.
+                _COMPLEMENT_MAP = str.maketrans('ACGT', 'TGCA')
+                gt_upper = genotype.upper()
+                alleles = set(gt_upper.replace('/', '').replace('|', ''))
+                alleles_flipped = {a.translate(_COMPLEMENT_MAP) for a in alleles}
+                ann_alts = [a.strip() for a in ann_alt.split(',') if a.strip()]
+                snp_alts = [a for a in ann_alts if len(a) == 1]
+                if snp_alts:
+                    carries = any(a in alleles or a in alleles_flipped for a in snp_alts)
                     if not carries:
                         continue
+                # If no single-base alt was extracted, fall through without allele
+                # filtering (multi-base alt or structural variant — handled elsewhere).
             elif genotype and is_indel_genotype(genotype):
                 # FIX-01: Verify consumer D/I indel codes against annotation allele
                 # lengths.  D = shorter allele, I = longer allele.  indel_d_is_ref()
@@ -868,6 +876,15 @@ async def generate_from_maps(
                     )
                 )
                 info_with_ref = {**info, '_ref_allele': effective_ref, '_pathogenicity_score': _path_score}
+                # Skip "Unknown variant" entries unless the composite pathogenicity
+                # score or ClinVar confirms meaningful evidence. Auto-categorization
+                # produces these when no condition name could be resolved (BUG-06).
+                _condition = info.get('condition', '')
+                if _condition.lower() in ('unknown variant', 'unknown') and not (
+                    isinstance(_path_score, dict) and _path_score.get('composite_score', 0) >= 0.60
+                ):
+                    logger.debug("rsid %s: skipping 'Unknown variant' mapping with no pathogenicity evidence", rsid)
+                    continue
                 # Filter benign/likely_benign variants when the composite
                 # pathogenicity score classifies them as benign — but ONLY
                 # for disease/clinical panels.  Lifestyle/functional panels

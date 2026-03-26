@@ -1,7 +1,6 @@
 """Uncommon mutations insight generator."""
 import asyncio
 import logging
-from typing import Optional
 from ...db.models import UncommonMutation
 from .base import (
     GeneratorContext, extract_gene_and_consequence, extract_frequency,
@@ -27,13 +26,13 @@ _FUNCTIONAL_CONSEQUENCES = {
 _MAX_UNCOMMON = 500
 
 
-def _get_alt_allele(annotations: dict) -> Optional[str]:
-    """Extract the alternate (risk) allele from annotation sources."""
-    cv = annotations.get('clinvar_local', {})
-    if cv and cv.get('found'):
-        alt = cv.get('alt_allele') or cv.get('alternate_allele')
-        if alt and alt not in ('N', '-', '.', ''):
-            return alt.strip().upper()
+def _get_alt_alleles(annotations: dict) -> list[str]:
+    """Extract alternate (risk) alleles from annotation sources.
+
+    For multi-allelic sites (Ensembl allele_string "REF/A,T") returns ALL
+    alternate alleles so callers can check if the user carries ANY of them.
+    """
+    # Ensembl VEP first — may have multiple alts e.g. "G/A,T"
     ensembl = annotations.get('ensembl', {})
     data_list = ensembl.get('data', [])
     if data_list:
@@ -41,15 +40,23 @@ def _get_alt_allele(annotations: dict) -> Optional[str]:
         if '/' in allele_str:
             parts = allele_str.split('/')
             if len(parts) >= 2:
-                alt = parts[1].strip()
-                if alt and alt not in ('N', '-', '.', ''):
-                    return alt.upper()
+                alts = [a.strip().upper() for a in parts[1].split(',')
+                        if a.strip() and a.strip() not in ('N', '-', '.')]
+                if alts:
+                    return alts
+    # ClinVar local — single alt
+    cv = annotations.get('clinvar_local', {})
+    if cv and cv.get('found'):
+        alt = cv.get('alt_allele') or cv.get('alternate_allele')
+        if alt and alt not in ('N', '-', '.', ''):
+            return [alt.strip().upper()]
+    # gnomAD — single alt
     gnomad = annotations.get('gnomad', {})
     if gnomad and gnomad.get('found'):
         alt = gnomad.get('alt')
         if alt and alt not in ('N', '-', '.', ''):
-            return alt.strip().upper()
-    return None
+            return [alt.strip().upper()]
+    return []
 
 
 async def generate_uncommon_mutations(ctx: GeneratorContext) -> int:
@@ -95,17 +102,19 @@ async def generate_uncommon_mutations(ctx: GeneratorContext) -> int:
 
         annotations = annotation_result.annotation_data.get('annotations', {})
 
-        # Allele verification: confirm the user actually carries the alternate allele.
-        # Applies strand-flip correction for arrays reporting on the minus strand.
-        alt_allele = _get_alt_allele(annotations)
-        if alt_allele and len(alt_allele) == 1:
+        # Allele verification: confirm the user actually carries at least one
+        # of the alternate alleles. Handles multi-allelic sites (e.g. G/A,T)
+        # and applies strand-flip correction for minus-strand arrays.
+        alt_alleles = _get_alt_alleles(annotations)
+        if alt_alleles:
             gt = user_gt.upper()
-            carries = alt_allele in set(gt)
-            if not carries:
-                # Try reverse complement
-                carries = alt_allele in set(gt.translate(_COMPLEMENT))
-            if not carries:
-                continue  # User does not carry the alternate allele
+            gt_set = set(gt)
+            gt_flipped = set(gt.translate(_COMPLEMENT))
+            snp_alts = [a for a in alt_alleles if len(a) == 1]
+            if snp_alts:
+                carries = any(a in gt_set or a in gt_flipped for a in snp_alts)
+                if not carries:
+                    continue  # User does not carry any alternate allele
 
         # Require functional consequence
         if consequence not in _FUNCTIONAL_CONSEQUENCES:

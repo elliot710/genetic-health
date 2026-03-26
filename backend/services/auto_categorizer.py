@@ -22,28 +22,12 @@ from ..db.models import (
     VariantMapping, GnomadVariant, GnomadGeneConstraint,
     SharedVariantAnnotation, GeneticMarker,
 )
-from .multi_source_categorizer import categorize_variant, CategorySuggestion
+from .multi_source_categorizer import categorize_variant, CategorySuggestion, _SEVERE_EXCLUSION_KW
 
 logger = logging.getLogger(__name__)
 
 # Upper limit on auto-generated mappings per category to keep the table manageable
 MAX_MAPPINGS_PER_CATEGORY = 500
-
-# ── Category-safety rules ──────────────────────────────────────────
-# Lifestyle/trait panels must NOT contain serious medical conditions.
-# If any of these keywords appear in the ClinVar condition, the mapping
-# is rejected for the listed categories.
-_SEVERE_EXCLUSION_KW = frozenset([
-    "cardiomyopathy", "dystrophy", "atrophy", "encephalopathy",
-    "cancer", "tumor", "lymphoma", "leukemia", "carcinoma", "neoplasm",
-    "neurodegenerat", "amyotrophic", "huntington", "parkinson",
-    "epilepsy", "seizure", "stroke", "aneurysm",
-    "failure", "fibrosis", "cirrhosis", "nephropathy",
-    "immunodeficiency", "periodic fever", "cryopyrin",
-    "congenital", "lethal", "fatal", "death",
-    "syndrome", "aplastic", "retinitis", "blindness",
-    "deafness", "hearing loss", "spasticity",
-])
 
 # Categories where severe-condition exclusion applies
 _LIFESTYLE_CATEGORIES = frozenset([

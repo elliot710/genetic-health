@@ -32,7 +32,7 @@ SOURCE_TO_COLUMN: Dict[str, str] = {
     'alphafold': 'alphafold',
 }
 
-# Sources that use external HTTP APIs (via OptimizedGeneticAPIService)
+# Sources that use external HTTP APIs (via OptimizedGeneticAPIService / GeneticAPIService)
 REMOTE_API_SOURCES: Set[str] = {'ensembl', 'clinvar', 'clinpgx', 'snpedia'}
 
 # Sources backed by local data (files, local DB tables, or SQLite cache)

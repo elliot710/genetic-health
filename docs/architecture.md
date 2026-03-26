@@ -1,7 +1,7 @@
 # Genetic Health Analysis Toolkit — Architecture
 
-> Last updated: 2025  
-> Status: Production-like development environment  
+> Last updated: March 2026  
+> Status: Active development, running in production on 204.168.200.44  
 > Stack: FastAPI · SQLAlchemy 2.0 async · PostgreSQL · Next.js 15 · Docker
 
 ---
@@ -33,11 +33,12 @@ A full-stack genomics analysis platform that ingests personal DNA data (VCF or C
 └───────────────────────────────────────────────────────────────┘
 ```
 
-**Current data scale (single user analysis):**
+**Current data scale (production DB, March 2026):**
 - 731,703 genetic markers stored
-- 714,586 shared variant annotations with Ensembl data
+- 609,346 shared variant annotations (Ensembl data: 609,178 found; ClinVar local: 30,364; AlphaMissense: 28,012; gnomAD: **2 found** — see Section 8)
 - ~4.5 GB shared annotation cache (16 GB with 1000 Genomes)
 - 237,000+ variant mappings across all categories
+- health_risks: 1,057 rows stored (262 very_high, 424 high, 328 moderate)
 
 ---
 
@@ -442,13 +443,13 @@ Used in `analysis_routes.py /api/analysis/dashboard-data` and `annotation_routes
 
 | Source | Storage | Size | Content |
 |--------|---------|------|---------|
-| ClinVar | PostgreSQL | 2.6 GB | Clinical significance for 2.6M variants |
-| gnomAD | PostgreSQL | varies | Population allele frequencies |
-| gnomAD CADD | SQLite | varies | CADD pathogenicity scores (tabix-indexed TSV) |
+| ClinVar | PostgreSQL | 2.6 GB | Clinical significance for 2.6M variants; provides ref/alt alleles for allele verification |
+| gnomAD (current) | flat TSV (`data_sources/gnomad/`) | varies | **CADD PHRED, conservation (PhyloP), SpliceAI scores only. No AF columns.** Allele frequency scoring via `gnomad_af` source is non-functional for 99.99% of variants (only 2/609K have `gnomad_data.found=true`). |
+| gnomAD v2.1.1 (downloading) | `data_sources/gnomad_v2/` exomes | ~35 GB | NFE sub-pop AFs (bgr, est, nwe, seu, swe, fin, asj). ETL pipeline not yet built. chr22 done. |
 | 1000 Genomes | PostgreSQL | 16 GB | Phase 3 allele frequencies across 26 populations |
-| Ensembl VEP | SQLite cache + VCF | varies | Variant consequence & gene annotations |
-| AlphaMissense | local file | varies | Missense variant pathogenicity predictions |
-| Ancestry AIMs | PostgreSQL | 123 MB | Ancestry Informative Markers panel |
+| Ensembl VEP | SQLite cache + VCF | varies | Variant consequence & gene annotations; `allele_string` is the primary allele verification source for 609K variants |
+| AlphaMissense | flat TSV (`data_sources/alpha_missense/`) | varies | Missense variant pathogenicity predictions (am_pathogenicity, am_class) |
+| Ancestry AIMs | PostgreSQL | 123 MB | 60,220 Ancestry Informative Markers; ~1,440 have gnomAD NFE subpop_freqs |
 
 ### Remote APIs (rate-limited)
 
@@ -463,7 +464,7 @@ Used in `analysis_routes.py /api/analysis/dashboard-data` and `annotation_routes
 ### Optional Cloud (BigQuery)
 
 Requires GOOGLE_APPLICATION_CREDENTIALS:
-- gnomAD BigQuery (fallback when local PG empty)
+- gnomAD BigQuery (fallback when local PG empty — practically used for most variants since local gnomAD has no AF data)
 - ChEMBL drug mechanisms
 - FDA drug interaction labels
 - AlphaFold protein structure data
@@ -515,3 +516,11 @@ Two separate insight systems exist:
 2. **Gemini AI summaries** (`insights_service.py`) — generate on-demand text summaries fetched by `SmartInsights.tsx`
 
 These systems are independent. The rule-based pipeline runs once per analysis; LLM summaries are generated lazily when the user opens a panel and cached in `ai_insight_cache`.
+
+### Known Code Duplication (DRY Violations)
+
+- **`GENE_CATEGORY_MAP`** — hardcoded gene→category map appears in `multi_source_categorizer.py` (authoritative), `auto_categorizer.py` (copy), and `discovery_service.py` (incompatible copy using wrong subcategory names like `pharmacogenomic` instead of `drug`).
+- **`_SEVERE_EXCLUSION_KW`** — 30 severe-disease exclusion keywords duplicated in `multi_source_categorizer.py` and `auto_categorizer.py`.
+- **`annotation_constants.py`** — `SOURCE_TO_COLUMN` maps `ensembl_vep → 'ensembl'` (same column as the `ensembl` source). When both are active, the second write silently overwrites the first.
+- **`GeneticAPIService` / `OptimizedGeneticAPIService`** — these are the **same class** in `genetic_api_service.py` exported under two names. Different import aliases are used across routes. Pick one name.
+- **`VariantLite` / `_MarkerLite`** — defined in `analysis_service.py` but imported from there by `variant_loader.py`. This creates a backwards dependency. These dataclasses should live in `variant_loader.py`.

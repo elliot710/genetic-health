@@ -1,6 +1,6 @@
 # Improvements & Known Issues
 
-> Audit date: 2025  
+> Audit date: March 2026 (live codebase + production DB queries)  
 > Coverage: Backend services, insight generators, database schema, frontend panels  
 > Priority levels: 🔴 Critical · 🟠 High · 🟡 Medium · 🔵 Low / Info
 
@@ -95,7 +95,32 @@ if risk_multiplier >= 1.7: base = 'moderate'  # downgraded from 'high'
 
 ---
 
-### 1.5 🔴 Gene-map drug matching skips benign filter
+### 1.5 🔴 Multi-allelic variants: only first alt allele verified
+
+**File:** `backend/services/insight_generators/base.py` — `get_annotation_allele_parts()` ~line 450  
+**DB evidence:** Ensembl VEP returns allele strings like `G/A,T` and `C/A,G,T` for multi-allelic sites; present in production annotations.
+
+```python
+def get_annotation_allele_parts(annotation_result) -> tuple[str, str]:
+    allele_string = ensembl.get('allele_string', '') or clinvar.get('ref_allele', '')
+    parts = allele_string.split('/')
+    ref = parts[0]
+    alt = parts[1].split(',')[0]   # ← TAKES FIRST ALT ONLY
+    return ref, alt
+```
+
+For a tri-allelic site like `G/A,T`: if the actual risk allele is `T` (the second alt), `ann_alt` will be `A`. A user carrying genotype `GT` will fail the allele check `if ann_alt in alleles` and their real risk allele will be **silently missed** (false negative).
+
+**Fix:** Return all alts and check if any of them is present in the user's alleles:
+
+```python
+alts = parts[1].split(',')
+user_carries_risk = any(a in user_alleles for a in alts)
+```
+
+---
+
+### 1.6 🔴 Gene-map drug matching skips benign filter
 
 **File:** `backend/services/insight_generators/drug_response.py` — line ~67  
 **Impact:** Benign variants in pharmacogenes (e.g., CYP2C9, CYP2D6) can trigger drug response warnings. A user with a confirmed-benign variant in CYP2C9 may be told they are a "poor metabolizer" for warfarin.
@@ -113,7 +138,80 @@ if is_clinvar_benign(annotation_result):
 
 ## 2. High Priority Bugs
 
-### 2.1 🟠 Silent exception swallowing in mapping enrichment
+### 2.0 🟠 gnomAD population AF data is non-functional
+
+**DB evidence:** `SELECT count(*) FROM shared_variant_annotations WHERE (gnomad_data->>'found')::bool = true` → **2 rows** out of 609,346 total  
+
+The gnomAD files on the server (`data_sources/gnomad/`) contain **CADD-annotation data only** (PHRED score, raw score, SpliceAI, PhyloP). There are no allele frequency columns. The `gnomad_af` source in `scoring_engine.py` (weight=0.10) and the population frequency extraction in `ancestry.py` and `rare_mutations.py` all depend on `gnomad_data.af` being populated — which it never is.
+
+**Impact:**
+- `gnomad_af` never contributes to pathogenicity scores (0.10 weight wasted, denominator still floored at MIN_WEIGHT_FLOOR=0.40)
+- Variant rarity is not considered in scoring for 99.99% of variants
+- `rare_mutations.py` frequency filter (`af < 0.01`) cannot work correctly without real AF data
+
+**Action required:** gnomAD v2.1.1 exomes download is in progress (chr22 done). After download, build ETL pipeline to load NFE sub-population AFs into `shared_variant_annotations.gnomad_data`. The ETL must map gnomAD NFE sub-populations (bgr, est, nwe, seu, swe, fin, asj, onf) to the expected JSON shape.
+
+---
+
+### 2.1 🟠 Corrupted condition data in variant_mappings — confirmed in production
+
+**DB evidence:** rs9939609 (FTO gene, obesity-associated) has the following mappings:
+
+| category | condition stored | multiplier |
+|----------|-----------------|-----------|
+| health   | "Obesity" | 1.3 |
+| nutrition | "Lethal polymalformative syndrome, Boissel type" | 1.1 |
+| wellness  | "Lethal polymalformative syndrome, Boissel type" | 1.1 |
+
+The nutrition and wellness entries were incorrectly assigned during auto-categorization. ClinVar contains a rare submission linking the rs9939609 position chromatin state to an unrelated lethal syndrome; the auto-categorizer picked up this submission for the same rsid.
+
+**DB fix (requires admin execution):**
+```sql
+UPDATE variant_mappings
+SET data = jsonb_set(data, '{condition}', '"Obesity / Body composition"')
+WHERE key = 'rs9939609'
+  AND category IN ('nutrition', 'wellness')
+  AND is_active = true;
+```
+
+**Structural fix:** The auto-categorizer's ClinVar pass must validate that the `gene` in the ClinVar submission matches the gene expected for the rsid. A mismatched gene is a strong signal of a wrong ClinVar record being attached to the rsid via position collision.
+
+---
+
+### 2.2 🟠 40% "Unknown variant" conditions in uncommon and health mappings
+
+**DB evidence:**
+- `uncommon`: 90,450 / 224,115 (40.4%) have `data->>'condition' = 'Unknown variant'`
+- `health`: 1,007 / 9,485 (10.6%) have `data->>'condition' = 'Unknown variant'`
+- `rare`: 572 / 4,974 (11.5%) have `data->>'condition' = 'Unknown variant'`
+
+These are real variants (with valid genotypes) but the auto-categorizer could not resolve a clinical condition from annotation data. They generate insight records with no clinically meaningful condition label.
+
+**Impact:** Users see insight cards with condition "Unknown variant" — which is confusing and clinically meaningless. The uncommon category has 90K of these.
+
+**Fix:** 
+- Filter out `condition = 'Unknown variant'` mappings from insight generation (skip unless consequence is MODERATE/HIGH)
+- Or: replace "Unknown variant" with a gene-level description (`f"{gene} variant"`) using the gene from annotation data
+
+---
+
+### 2.3 🟠 MTHFR rs1801133 has conflicting clinical_significance in mapping
+
+**DB evidence:** `variant_mappings` for rs1801133 (methylation category) stores:
+```
+clinical_significance: "benign, benign/likely benign; other, drug response, likely pathogenic"
+risk_multiplier: 1.95
+```
+
+`is_clinvar_benign()` in `base.py` returns `False` when there is ANY non-benign interpretation. So this variant correctly proceeds to insight generation. However, the stored `clinical_significance` string contains both "benign" and "likely pathogenic" — this is a real ClinVar conflict (multiple submitters disagree).
+
+**Impact:** User's methylation insight will flag rs1801133 as notable (multiplier 1.95) regardless of their actual allele. The insight will show the conflicting clinical_significance string in the detail view, which is misleading.
+
+**Fix:** When `clinical_significance` contains conflicting terms, set a `conflicting` flag in the mapping data and use the composite pathogenicity score to arbitrate. Score ≥ 0.60 → treat as likely pathogenic; score ≤ 0.30 → treat as uncertain; between → explicitly label "conflicting evidence" in the insight.
+
+---
+
+### 2.4 🟠 Silent exception swallowing in mapping enrichment
 
 **File:** `backend/services/analysis_service.py` — ~line 574  
 
@@ -136,7 +234,7 @@ except Exception as e:
 
 ---
 
-### 2.2 🟠 Analysis resume cannot distinguish interrupted from never-started
+### 2.5 🟠 Analysis resume cannot distinguish interrupted from never-started
 
 **File:** `backend/services/analysis_service.py` — ~line 240  
 
@@ -150,7 +248,7 @@ Both situations map to `last_completed_phase = 0`, causing a full restart and re
 
 ---
 
-### 2.3 🟠 Cognitive generator uses hardcoded flat percentile adjustments
+### 2.6 🟠 Cognitive generator uses hardcoded flat percentile adjustments
 
 **File:** `backend/services/insight_generators/cognitive.py`  
 
@@ -160,7 +258,7 @@ The cognitive generator applies a hardcoded ±10 percentile adjustment for hom-r
 
 ---
 
-### 2.4 🟠 boost_if_pathogenic() called before zygosity_adjust() in 6 generators
+### 2.7 🟠 boost_if_pathogenic() called before zygosity_adjust() in 6 generators
 
 **Files:** `wellness.py`, `sports.py`, `nutrition.py`, `detox.py`, `methylation.py`, `personality.py`  
 
@@ -316,7 +414,30 @@ Most JSON columns in insight tables have no schema validation — content shape 
 
 ## 5. DRY Violations
 
-### 5.1 Strand-flip complement map defined in 3 places
+### 5.0 GENE_CATEGORY_MAP duplicated in 3 incompatible versions
+
+- `multi_source_categorizer.py` — authoritative version, gene → `[list of category names]` e.g. `["health", "carrier"]`
+- `auto_categorizer.py` — copy of the same map
+- `discovery_service.py` — **incompatible** version, gene → subcategory strings like `"pharmacogenomic"`, `"antioxidant"`, `"transsulfuration"` that do NOT match any insight table category name
+
+The `discovery_service.py` version will never correctly route variants to existing insight tables because its category values don't match the valid category set.
+
+**Fix:** Define `GENE_CATEGORY_MAP` once in `annotation_constants.py` or a new `categorization_constants.py`. The discovery service should import and use the same map. Subcategory granularity should be a separate field, not the category key.
+
+---
+
+### 5.1 _SEVERE_EXCLUSION_KW duplicated in 2 places
+
+- `multi_source_categorizer.py` — 30 severe disease keywords (exact set)
+- `auto_categorizer.py` — identical set, copy-pasted
+
+These must stay in sync whenever new diseases are added to the exclusion list.
+
+**Fix:** Define once in `annotation_constants.py` and import in both files.
+
+---
+
+### 5.2 Strand-flip complement map defined in 3 places
 
 - `base.py` — `generate_from_maps()` inline
 - `rare_mutations.py` — line ~37
@@ -326,7 +447,7 @@ Most JSON columns in insight tables have no schema validation — content shape 
 
 ---
 
-### 5.2 Consequence severity filter duplicated
+### 5.3 Consequence severity filter duplicated
 
 - `uncommon_mutations.py` — lines ~29-37: list of functional consequence types
 - `generate_from_maps()` in `base.py` — lines ~858-877: same list maintained separately
@@ -337,7 +458,7 @@ Both need to stay in sync when new consequence types emerge from Ensembl VEP.
 
 ---
 
-### 5.3 ClinVar significance keyword matching duplicated
+### 5.4 ClinVar significance keyword matching duplicated
 
 The pattern `if 'pathogenic' in clinical_significance` (and variants with `likely_pathogenic`, `risk_factor`, etc.) appears in at least 4 files:
 - `health.py`, `carrier.py`, `rare_mutations.py`, `drug_response.py`
@@ -346,7 +467,7 @@ The pattern `if 'pathogenic' in clinical_significance` (and variants with `likel
 
 ---
 
-### 5.4 Population frequency extraction duplicated
+### 5.5 Population frequency extraction duplicated
 
 Both `ancestry.py` and `rare_mutations.py` independently parse gnomAD / 1000G frequency data from annotation dicts.
 
@@ -354,7 +475,7 @@ Both `ancestry.py` and `rare_mutations.py` independently parse gnomAD / 1000G fr
 
 ---
 
-### 5.5 Benign filtering condition duplicated before generator dispatch
+### 5.6 Benign filtering condition duplicated before generator dispatch
 
 `is_clinvar_benign()` is called:
 - Once in `generate_from_maps()` rsid path (all generators using generic method)
@@ -432,15 +553,76 @@ container.register_singleton('insight_dispatcher', InsightDispatcher)
 
 ### 7.4 Panel markers have no allele specificity
 
-`variant_mappings` stores mappings keyed by rsid alone (`map_type='rsid'`, `key='rs7903146'`). The specific pathogenic allele is not stored (and DB confirms: 0 rows have `risk_allele` populated).
+`variant_mappings` stores mappings keyed by rsid alone (`map_type='rsid'`, `key='rs7903146'`). The specific pathogenic allele is not stored (confirmed by DB: **0 rows across all 237K mappings have `risk_allele` populated**).
 
-**Impact:** Two users with the same rsid but different alleles (one carrying the risk allele `T`, one carrying only `G`) get the same mapping lookup, and allele discrimination relies entirely on the annotation API returning the correct alt allele. If annotation is unavailable, both are treated the same.
+**Impact:** Two users with the same rsid but different alleles (one carrying the risk allele `T`, one carrying only `G`) get the same mapping lookup, and allele discrimination relies entirely on the annotation API returning the correct alt allele. If annotation is unavailable, both are treated identically.
 
 **Fix:** Add optional `allele` column to `variant_mappings`:
 ```sql
 ALTER TABLE variant_mappings ADD COLUMN allele VARCHAR;
 ```
 Populate during ETL/discovery from ClinVar `ClinicalAllele` data. Filter in generator: skip if `profile.risk_allele != mapping.allele`.
+
+---
+
+### 7.5 discovery_service.py GENE_CATEGORY_MAP uses wrong category names
+
+`discovery_service.py` has its own `GENE_CATEGORY_MAP` that maps genes to values like `"pharmacogenomic"`, `"antioxidant"`, `"transsulfuration"`. None of these match the valid insight table category names (`drug`, `detox`, `health`, etc.).
+
+**Impact:** Any `PendingDiscovery` created via the discovery service will have an invalid `category` field. If an admin approves such a discovery and it becomes a `variant_mapping`, the insight dispatcher will find no matching generator for the category and silently skip it.
+
+**Fix:** Replace `discovery_service.py`'s `GENE_CATEGORY_MAP` with an import from the canonical source in `multi_source_categorizer.py` or `annotation_constants.py`.
+
+---
+
+### 7.6 VariantLite/_MarkerLite defined in wrong module
+
+`VariantLite` and `_MarkerLite` are dataclasses defined in `analysis_service.py` (the orchestrator) but imported **from there** by `variant_loader.py` (a lower-level module). This creates a backwards dependency: a service import depends on an orchestrator.
+
+**Fix:** Move `VariantLite` and `_MarkerLite` into `variant_loader.py` where they belong. `analysis_service.py` can then import them from there.
+
+---
+
+### 7.7 annotation_constants.py: ensembl_vep writes to same column as ensembl
+
+`SOURCE_TO_COLUMN` in `annotation_constants.py` maps both `'ensembl'` → `'ensembl_data'` and `'ensembl_vep'` → `'ensembl_data'`. When both sources run, the second write silently overwrites the first with no merge.
+
+**Fix:** If both sources are intended to write to the same column, ensure the later write merges rather than replaces. Or rename `ensembl_vep` to use a distinct column (`ensembl_vep_data`) and update all readers.
+
+---
+
+### 7.8 GeneticAPIService has two import aliases in the codebase
+
+`genetic_api_service.py` exports the same class as both `GeneticAPIService` (used in `variant_routes.py`, `annotation_routes.py`) and `OptimizedGeneticAPIService` (used in `analysis_service.py`, `admin_routes.py`, `container.py`). These are the same class.
+
+**Fix:** Pick one name. `GeneticAPIService` is more descriptive. Remove the `OptimizedGeneticAPIService` alias and update all import sites.
+
+---
+
+### 7.9 base.py at 1049 lines violates single-responsibility
+
+`insight_generators/base.py` contains:
+- Genotype helper functions (`is_indel_genotype`, `_parse_alleles`, `is_homozygous_reference`, etc.)
+- ClinVar annotation helpers (`is_clinvar_benign`, `get_annotation_allele_parts`, etc.)
+- Scoring helpers (`assess_risk_level`, `zygosity_adjust`, `boost_if_pathogenic`, etc.)
+- The core dispatch loop (`generate_from_maps`)
+- Boilerplate helpers (`get_health_recommendations`, `get_trait_description`)
+
+**Fix:** Split into:
+- `genotype_utils.py` — allele parsing, zygosity classification, indel detection
+- `scoring_helpers.py` — assess_risk_level, zygosity_adjust, boost_if_pathogenic
+- `generator_core.py` — generate_from_maps, annotation accessors, benign filtering
+- Keep `base.py` as a thin re-export shim for backward compatibility
+
+---
+
+### 7.10 Scoring engine MIN_WEIGHT_FLOOR inflates scores for single-source variants
+
+When only `clinvar_local` (weight=0.30) is present, the denominator is floored at `MIN_WEIGHT_FLOOR=0.40`. The resulting score is `clinvar_score * 0.30 / 0.40 = clinvar_score * 0.75` — meaning a ClinVar pathogenic classification (raw score=1.0) only reaches 0.75, below the `PATHOGENIC_THRESHOLD=0.80`.
+
+A single-source ClinVar-pathogenic variant will be classified as `likely_pathogenic` (0.60–0.80) rather than `pathogenic` (≥0.80), potentially underreporting serious variants when ClinVar is the only source available.
+
+**Fix:** When ClinVar is the sole source and its classification is unambiguously pathogenic (≥5 stars or P/LP consensus), bypass MIN_WEIGHT_FLOOR and return the score directly. The existing ClinVar authoritative override in `_aggregate()` already handles this partially but only for composite score > 0.80 and no benign conflict.
 
 ---
 
@@ -509,18 +691,37 @@ These ETL files are used during data import (admin ETL pipeline) but are not cal
 
 ## 10. Data Observations
 
-### Live DB State (as of audit)
+### Live DB State (March 2026 production audit)
 
 | Metric | Value |
 |--------|-------|
 | Users | 2 |
 | Completed analyses | 2 |
 | Total genetic markers | 731,703 |
-| Annotated variants (ensembl_data) | 714,586 |
+| Shared annotations total | 609,346 |
+| Annotations with Ensembl data | 609,178 (99.97%) |
+| Annotations with ClinVar local | 30,364 (5%) |
+| Annotations with AlphaMissense | 28,012 (4.6%) |
+| Annotations with gnomAD found | **2** (0.0003%) — broken |
 | Variant mappings total | ~237,000 |
-| `risk_allele` populated in mappings | **0** (confirms BUG 1.2 is active) |
+| `risk_allele` populated in mappings | **0** (confirms §1.2 is active) |
 | Health risks stored | 1,057 |
 | Uncommon mutations mappings | 224,115 (93% of non-health mappings) |
+| "Unknown variant" in uncommon | 90,450 (40.4%) |
+| "Unknown variant" in health | 1,007 (10.6%) |
+| "Unknown variant" in rare | 572 (11.5%) |
+
+### risk_multiplier Distribution in variant_mappings
+
+| category | min | max | avg | median |
+|----------|-----|-----|-----|--------|
+| health | 1.0 | 2.45 | 1.72 | 1.65 |
+| carrier | 1.0 | 2.45 | 1.56 | ~1.5 |
+| rare | 1.0 | 2.45 | 1.48 | ~1.4 |
+| cognitive | 1.0 | 2.0 | ~1.3 | ~1.2 |
+| sports/wellness/etc. | 1.0 | ~2.3 | ~1.1 | 1.1 |
+
+Note: For lifestyle categories (sports, nutrition, wellness, etc.) the `risk_multiplier` is stored but **not used by the generators** — these panels use `zygosity_adjust()` directly on the stored advantage string.
 
 ### Risk Score Distribution in health_risks
 
@@ -533,7 +734,15 @@ average      | 0.4        |    35
 low          | 0.2        |     8
 ```
 
-The distribution skews heavily toward `high` and `very_high`. Combined with the allele verification gaps (§1.1, §1.2), this suggests many of these 686 high/very-high results may not actually reflect the user's genotype accurately.
+The distribution skews heavily toward `high` and `very_high`. Combined with the allele verification gaps (§1.1, §1.2, §1.5), this suggests many of these 686 high/very-high results may not accurately reflect the user's genotype.
+
+### Known Bad Data (confirmed in production)
+
+| rsid | category | Stored condition | Should be |
+|------|----------|-----------------|-----------|
+| rs9939609 | nutrition | "Lethal polymalformative syndrome, Boissel type" | "Obesity / Body composition" |
+| rs9939609 | wellness | "Lethal polymalformative syndrome, Boissel type" | "Obesity / Body composition" |
+| rs1801133 | methylation | mixed "benign" + "likely pathogenic" in one field | Conflicting — needs resolution |
 
 ### Table Size Concerns
 
@@ -551,13 +760,18 @@ The distribution skews heavily toward `high` and `very_high`. Combined with the 
 
 | # | Issue | Effort | Impact |
 |---|-------|--------|--------|
-| 1 | §1.1 — Indel allele verification bypass | Medium | Eliminates false positives for all indel rsids |
-| 2 | §1.2 — risk_allele missing from mappings | Low (ETL addition) | Enables allele fallback verification |
-| 3 | §4.1 — risk_score as Float | Low (migration) | Enables numeric filtering and sorting |
-| 4 | §1.3 — zygosity_adjust with None ref | Low | Corrects risk underestimation in hom-alt |
-| 5 | §1.5 — drug_response gene-map benign bypass | Low | Eliminates false drug warnings |
-| 6 | §2.1 — Silent exception in mapping enrichment | Trivial | Restores observability |
-| 7 | §1.4 — Multiplier-only risk inflation | Low | Reduces false high-risk flags |
-| 8 | §5.1–5.5 — DRY violations | Medium | Reduces maintenance surface |
-| 9 | §4.5 — SharedVariantAnnotation bloat strategy | High | Long-term storage scalability |
-| 10 | §7.4 — Add allele column to variant_mappings | High effort | Foundational correctness improvement |
+| 1 | §2.1 — Fix rs9939609 wrong condition (SQL fix) | Trivial | Removes active data corruption for FTO variants |
+| 2 | §1.1 — Indel allele verification bypass | Medium | Eliminates false positives for all indel rsids |
+| 3 | §1.5 — Multi-allelic first-alt-only bug | Low | Fixes false negatives for secondary risk alleles |
+| 4 | §1.2 — risk_allele missing from mappings | Low (ETL) | Enables allele fallback verification |
+| 5 | §4.1 — risk_score as Float | Low (migration) | Enables numeric filtering and sorting |
+| 6 | §1.3 — zygosity_adjust with None ref | Low | Corrects risk underestimation for hom-alt |
+| 7 | §1.6 — drug_response gene-map benign bypass | Low | Eliminates false drug metabolizer warnings |
+| 8 | §2.0 — Build gnomAD v2.1.1 AF ETL pipeline | High | Enables population frequency scoring for all variants |
+| 9 | §2.2 — Filter "Unknown variant" from insights | Low | Removes 40% noise from uncommon category |
+| 10 | §2.4 — Silent exception in mapping enrichment | Trivial | Restores observability |
+| 11 | §1.4 — Multiplier-only risk inflation cap | Low | Reduces false high-risk flags |
+| 12 | §5.0–5.6 — DRY violations | Medium | Reduces maintenance surface |
+| 13 | §7.10 — Scoring engine MIN_WEIGHT_FLOOR | Low | Fixes pathogenic single-source ClinVar scoring |
+| 14 | §4.5 — SharedVariantAnnotation bloat strategy | High | Long-term storage scalability |
+| 15 | §7.4 — Add allele column to variant_mappings | High effort | Foundational correctness improvement |

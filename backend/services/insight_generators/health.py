@@ -28,7 +28,7 @@ async def generate_health_risks(ctx: GeneratorContext) -> int:
         _classification = _ps.get('classification') if isinstance(_ps, dict) else None
         return HealthRisk(
             analysis_id=aid, condition=info['condition'],
-            risk_level=risk_level, risk_score=str(risk_level_to_score(risk_level)),
+            risk_level=risk_level, risk_score=risk_level_to_score(risk_level),
             associated_variants=[rsid],
             recommendations=recommendations,
             gene=info.get('gene') or None,
@@ -44,7 +44,7 @@ async def generate_health_risks(ctx: GeneratorContext) -> int:
         _classification = _ps.get('classification') if isinstance(_ps, dict) else None
         return HealthRisk(
             analysis_id=aid, condition=info['condition'],
-            risk_level=risk_level, risk_score=str(risk_level_to_score(risk_level)),
+            risk_level=risk_level, risk_score=risk_level_to_score(risk_level),
             associated_variants=[rsid], recommendations=info['recommendations'],
             gene=gene or info.get('gene') or None,
             review_status=info.get('review_status') or None,
