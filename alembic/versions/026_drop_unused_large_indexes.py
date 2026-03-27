@@ -9,15 +9,15 @@ The active lookup pattern uses:
   - ix_1kg_chrom_pos (167 scans) — kept
   - gnomad chrom_pos_ref_alt / rsid — kept
 
-Revision ID: 024
-Revises: 023
+Revision ID: 026
+Revises: 025_risk_score_float
 Create Date: 2026-03-27
 """
 
 from alembic import op
 
-revision = '024'
-down_revision = '023_add_worker_jobs_refreshed_at'
+revision = '026_drop_unused_large_indexes'
+down_revision = '025_risk_score_float'
 branch_labels = None
 depends_on = None
 
