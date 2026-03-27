@@ -13,6 +13,7 @@ import {
   DisclaimerCard,
   VariantLinks,
   PathogenicityBar,
+  VariantInfoBox,
   ZygosityBadge,
   clinicalSignificanceToSeverity,
   formatLabel,
@@ -275,18 +276,16 @@ export default function RareMutationsPanel({ data, isDarkMode = false, token }: 
                 className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 cursor-pointer hover:border-red-500/50 transition-all duration-300`}
                 onClick={() => setSelectedMutation(isExpanded ? null : mutationId)}
               >
-                <div className="flex items-start justify-between mb-2 gap-2">
-                  <h4 className={`font-semibold text-base ${theme.textPrimary} leading-snug flex-1 min-w-0`}>{cleanCondition(title)}</h4>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <StatusBadge
-                      label={formatLabel(mutation.clinical_significance)}
-                      severity={clinicalSignificanceToSeverity(mutation.clinical_significance)}
-                    />
-                    <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
-                  </div>
+                <div className="flex items-start justify-between mb-1 gap-1">
+                  <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug flex-1 min-w-0`}>{cleanCondition(title)}</h4>
+                  <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
                 <div className="flex flex-wrap gap-1">
+                  <StatusBadge
+                    label={formatLabel(mutation.clinical_significance)}
+                    severity={clinicalSignificanceToSeverity(mutation.clinical_significance)}
+                  />
                   {gene && <Badge variant="secondary" className="text-xs">{gene}</Badge>}
                   {rsid && <Badge variant="outline" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>}
                   {rsid && <ZygosityBadge genotype={data?.genotype_map?.[rsid]} />}
@@ -376,8 +375,7 @@ export default function RareMutationsPanel({ data, isDarkMode = false, token }: 
                       )}
                     </div>
 
-                    {rsid && <PathogenicityBar rsid={rsid} pathogenicityMap={data?.pathogenicity_map} theme={theme} />}
-                    <VariantLinks rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} />
+                    <VariantInfoBox rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                   </div>
                 )}
               </div>

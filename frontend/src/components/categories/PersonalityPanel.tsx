@@ -12,6 +12,7 @@ import {
   DisclaimerCard,
   VariantLinks,
   PathogenicityBar,
+  VariantInfoBox,
   ZygosityBadge,
   advantageToSeverity,
   MasonryLayout,
@@ -210,23 +211,21 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
                 className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 cursor-pointer hover:border-pink-500/50 transition-all duration-300`}
                 onClick={() => setSelectedItem(isExpanded ? null : itemKey)}
               >
-                <div className="flex items-start justify-between mb-2 gap-2">
-                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                <div className="flex items-start justify-between mb-1 gap-1">
+                  <div className="flex items-start gap-1.5 flex-1 min-w-0">
                     <div className={`p-1.5 rounded-lg ${trait.bgColor} shrink-0`}>
                       <IconComponent className="h-4 w-4" />
                     </div>
-                    <h4 className={`font-semibold text-base ${theme.textPrimary} leading-snug`}>{cleanCondition(trait.trait)}</h4>
+                    <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug`}>{cleanCondition(trait.trait)}</h4>
                   </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <StatusBadge
-                      label={scoreDisplay}
-                      severity={advantageToSeverity(scoreLabel)}
-                    />
-                    <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
-                  </div>
+                  <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
                 <div className="flex flex-wrap gap-1">
+                  <StatusBadge
+                    label={scoreDisplay}
+                    severity={advantageToSeverity(scoreLabel)}
+                  />
                   {trait.gene?.startsWith('rs') && <Badge variant="secondary" className="text-xs font-mono">{trait.gene}{data?.genotype_map?.[trait.gene] ? ` ${data.genotype_map[trait.gene]}` : ''}</Badge>}
                   {trait.gene?.startsWith('rs') && <ZygosityBadge genotype={data?.genotype_map?.[trait.gene]} />}
                   {!trait.gene?.startsWith('rs') && trait.gene && trait.gene !== 'Multiple markers' && <Badge variant="outline" className="text-xs">{trait.gene}</Badge>}
@@ -248,8 +247,7 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
                       </div>
                     )}
 
-                    {trait.gene?.startsWith('rs') && <PathogenicityBar rsid={trait.gene} pathogenicityMap={data?.pathogenicity_map} theme={theme} />}
-                    <VariantLinks rsid={trait.gene?.startsWith('rs') ? trait.gene : undefined} gene={!trait.gene?.startsWith('rs') ? trait.gene : undefined} token={token} isDarkMode={isDarkMode} alphaMissense={trait.gene?.startsWith('rs') ? data?.alpha_missense_map?.[trait.gene] : undefined} clinvarCount={trait.gene?.startsWith('rs') ? data?.clinvar_count_map?.[trait.gene] : undefined} genotype={trait.gene?.startsWith('rs') ? data?.genotype_map?.[trait.gene] : undefined} />
+                    <VariantInfoBox rsid={trait.gene?.startsWith('rs') ? trait.gene : undefined} gene={!trait.gene?.startsWith('rs') ? trait.gene : undefined} token={token} isDarkMode={isDarkMode} alphaMissense={trait.gene?.startsWith('rs') ? data?.alpha_missense_map?.[trait.gene] : undefined} clinvarCount={trait.gene?.startsWith('rs') ? data?.clinvar_count_map?.[trait.gene] : undefined} genotype={trait.gene?.startsWith('rs') ? data?.genotype_map?.[trait.gene] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                   </div>
                 )}
               </div>

@@ -14,6 +14,7 @@ import {
   DisclaimerCard,
   VariantLinks,
   PathogenicityBar,
+  VariantInfoBox,
   ClickableRsidBadge,
   carrierStatusToSeverity,
   MasonryLayout,
@@ -388,19 +389,17 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
                 className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 cursor-pointer hover:border-teal-500/50 transition-all duration-300`}
                 onClick={() => setSelectedItem(isExpanded ? null : itemKey)}
               >
-                <div className="flex items-start justify-between mb-2 gap-2">
-                  <h4 className={`font-semibold text-base ${theme.textPrimary} leading-snug flex-1 min-w-0`}>{cleanCondition(carrier.condition)}</h4>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <StatusBadge
-                      label={statusLabel(carrier.status)}
-                      severity={carrierStatusToSeverity(carrier.status)}
-                    />
-                    <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
-                  </div>
+                <div className="flex items-start justify-between mb-1 gap-1">
+                  <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug flex-1 min-w-0`}>{cleanCondition(carrier.condition)}</h4>
+                  <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
-                {/* Badges: gene + clickable rsids */}
+                {/* Badges: status + gene + clickable rsids */}
                 <div className="flex flex-wrap gap-1 mb-1">
+                  <StatusBadge
+                    label={statusLabel(carrier.status)}
+                    severity={carrierStatusToSeverity(carrier.status)}
+                  />
                   {carrier.gene && <Badge variant="secondary" className="text-xs">{carrier.gene}</Badge>}
                   {carrier.rsids.map(rsid => (
                     <ClickableRsidBadge key={rsid} rsid={rsid} gene={carrier.gene} genotype={data?.genotype_map?.[rsid]} token={token} isDarkMode={isDarkMode} />
@@ -427,10 +426,7 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
                     
                     {carrier.rsids.length > 0 && carrier.rsids.map(rsid => (
                       <React.Fragment key={rsid}>
-                        <PathogenicityBar rsid={rsid} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
-                        <div className="mb-2 flex items-center gap-2">
-                          <VariantLinks rsid={rsid} gene={carrier.gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} />
-                        </div>
+                        <VariantInfoBox rsid={rsid} gene={carrier.gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                       </React.Fragment>
                     ))}
 

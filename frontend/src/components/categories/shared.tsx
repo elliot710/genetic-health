@@ -406,6 +406,48 @@ export function PathogenicityBar({ rsid, pathogenicityMap, theme }: Pathogenicit
   )
 }
 
+// ─── Variant Info Box (consistent across all panels) ──────────
+
+interface VariantInfoBoxProps {
+  rsid?: string
+  gene?: string
+  token?: string
+  isDarkMode?: boolean
+  alphaMissense?: { score?: number; classification?: string } | null
+  clinvarCount?: number
+  genotype?: string
+  pathogenicityMap?: Record<string, { score: number; classification: string; confidence: string; evidence_count: number }>
+  theme: ThemeClasses
+}
+
+/**
+ * Compact labeled "Associated Variants" box used in the expanded section
+ * of every category panel. Shows pathogenicity score + variant links.
+ */
+export function VariantInfoBox({
+  rsid, gene, token, isDarkMode = false, alphaMissense, clinvarCount, genotype, pathogenicityMap, theme,
+}: VariantInfoBoxProps) {
+  const validRsid = rsid && rsid.startsWith('rs')
+  if (!validRsid) return null
+  return (
+    <div>
+      <h5 className={`text-xs font-semibold ${theme.textSecondary} uppercase tracking-wide mb-1.5`}>Associated Variants</h5>
+      <div className={`rounded-lg p-2.5 border ${theme.border} ${theme.isDarkMode ? 'bg-white/[0.03]' : 'bg-gray-50/60'} space-y-2`}>
+        <PathogenicityBar rsid={rsid!} pathogenicityMap={pathogenicityMap} theme={theme} />
+        <VariantLinks
+          rsid={rsid}
+          gene={gene}
+          token={token}
+          isDarkMode={isDarkMode}
+          alphaMissense={alphaMissense}
+          clinvarCount={clinvarCount}
+          genotype={genotype}
+        />
+      </div>
+    </div>
+  )
+}
+
 // ─── Research Links (inline compact) ───────────────────────────
 
 const DB_LINKS: Record<string, (rsid: string) => string> = {

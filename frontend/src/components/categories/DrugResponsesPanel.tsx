@@ -11,6 +11,7 @@ import {
   DisclaimerCard,
   VariantLinks,
   PathogenicityBar,
+  VariantInfoBox,
   riskToSeverity,
   MasonryLayout,
   useGrouping,
@@ -188,18 +189,16 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
                 className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 cursor-pointer hover:border-blue-500/50 transition-all duration-300`}
                 onClick={() => setSelectedItem(isExpanded ? null : itemKey)}
               >
-                <div className="flex items-start justify-between mb-2 gap-2">
-                  <h4 className={`font-semibold text-base ${theme.textPrimary} leading-snug flex-1 min-w-0`}>{drug.drug}</h4>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <StatusBadge
-                      label={`${(drug.risk?.charAt(0).toUpperCase() + drug.risk?.slice(1)) || 'Unknown'} Risk`}
-                      severity={riskToSeverity(drug.risk)}
-                    />
-                    <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
-                  </div>
+                <div className="flex items-start justify-between mb-1 gap-1">
+                  <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug flex-1 min-w-0`}>{drug.drug}</h4>
+                  <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
                 <div className="flex flex-wrap gap-1">
+                  <StatusBadge
+                    label={`${(drug.risk?.charAt(0).toUpperCase() + drug.risk?.slice(1)) || 'Unknown'} Risk`}
+                    severity={riskToSeverity(drug.risk)}
+                  />
                   <Badge variant="secondary" className="text-xs">{drug.gene}</Badge>
                   <Badge variant="outline" className="text-xs">{drug.response}</Badge>
                 </div>
@@ -220,8 +219,7 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
                       </div>
                     )}
 
-                    {drug.variants?.[0] && <PathogenicityBar rsid={drug.variants[0]} pathogenicityMap={data?.pathogenicity_map} theme={theme} />}
-                    <VariantLinks rsid={drug.variants?.[0]} gene={drug.gene} token={token} isDarkMode={isDarkMode} alphaMissense={drug.variants?.[0] ? data?.alpha_missense_map?.[drug.variants[0]] : undefined} clinvarCount={drug.variants?.[0] ? data?.clinvar_count_map?.[drug.variants[0]] : undefined} genotype={drug.variants?.[0] ? data?.genotype_map?.[drug.variants[0]] : undefined} />
+                    <VariantInfoBox rsid={drug.variants?.[0]} gene={drug.gene} token={token} isDarkMode={isDarkMode} alphaMissense={drug.variants?.[0] ? data?.alpha_missense_map?.[drug.variants[0]] : undefined} clinvarCount={drug.variants?.[0] ? data?.clinvar_count_map?.[drug.variants[0]] : undefined} genotype={drug.variants?.[0] ? data?.genotype_map?.[drug.variants[0]] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                   </div>
                 )}
               </div>

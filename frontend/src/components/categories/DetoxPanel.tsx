@@ -16,6 +16,7 @@ import {
   sensitivityToSeverity,
   VariantLinks,
   PathogenicityBar,
+  VariantInfoBox,
   ZygosityBadge,
   formatLabel,
   MasonryLayout,
@@ -208,31 +209,29 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                   className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 hover:border-green-500/50 transition-all duration-300 cursor-pointer`}
                   onClick={() => setExpandedGene(isExpanded ? null : key)}
                 >
-                  <div className="flex items-start justify-between mb-2 gap-2">
+                  <div className="flex items-start justify-between mb-1 gap-1">
                     <div className="flex-1 min-w-0">
                       {Array.isArray(item.support_recommendations) && item.support_recommendations[0] ? (
                         <p className={`text-sm font-semibold ${theme.textPrimary} leading-snug`}>{item.support_recommendations[0]}</p>
                       ) : (
-                        <h4 className={`font-bold text-base ${theme.textPrimary}`}>{item.gene}</h4>
+                        <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug`}>{item.gene}</h4>
                       )}
                     </div>
-                    <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-                      <StatusBadge
-                        label={formatLabel(capacity)}
-                        severity={capacityToSeverity(capacity)}
-                      />
-                      {sensitivity && (
-                        <StatusBadge
-                          label={`Sensitivity: ${formatLabel(sensitivity)}`}
-                          severity={sensitivityToSeverity(sensitivity)}
-                          showIcon={false}
-                        />
-                      )}
-                      <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
-                    </div>
+                    <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                   </div>
 
                   <div className="flex flex-wrap gap-1">
+                    <StatusBadge
+                      label={formatLabel(capacity)}
+                      severity={capacityToSeverity(capacity)}
+                    />
+                    {sensitivity && (
+                      <StatusBadge
+                        label={`Sensitivity: ${formatLabel(sensitivity)}`}
+                        severity={sensitivityToSeverity(sensitivity)}
+                        showIcon={false}
+                      />
+                    )}
                     <Badge variant="secondary" className="text-xs font-medium">{item.gene}</Badge>
                     {item.associated_variants?.length > 0 && item.associated_variants.map((v: string) => (
                       <React.Fragment key={v}>
@@ -258,8 +257,7 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                         </div>
                       )}
 
-                      {item.associated_variants?.[0] && <PathogenicityBar rsid={item.associated_variants[0]} pathogenicityMap={data?.pathogenicity_map} theme={theme} />}
-                      <VariantLinks
+                      <VariantInfoBox
                         rsid={item.associated_variants?.[0]}
                         gene={item.gene}
                         token={token}
@@ -267,6 +265,8 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                         alphaMissense={item.associated_variants?.[0] ? data?.alpha_missense_map?.[item.associated_variants[0]] : undefined}
                         clinvarCount={item.associated_variants?.[0] ? data?.clinvar_count_map?.[item.associated_variants[0]] : undefined}
                         genotype={item.associated_variants?.[0] ? data?.genotype_map?.[item.associated_variants[0]] : undefined}
+                        pathogenicityMap={data?.pathogenicity_map}
+                        theme={theme}
                       />
                     </div>
                   )}

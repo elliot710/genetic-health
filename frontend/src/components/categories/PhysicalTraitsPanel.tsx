@@ -12,6 +12,7 @@ import {
   DisclaimerCard,
   VariantLinks,
   PathogenicityBar,
+  VariantInfoBox,
   ZygosityBadge,
   advantageToSeverity,
   formatLabel,
@@ -190,18 +191,16 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
                 className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 cursor-pointer hover:border-purple-500/50 transition-all duration-300`}
                 onClick={() => setSelectedItem(isExpanded ? null : itemKey)}
               >
-                <div className="flex items-start justify-between mb-2 gap-2">
-                  <h4 className={`font-bold text-base ${theme.textPrimary} leading-snug flex-1 min-w-0`}>{cleanCondition(trait.category)}</h4>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <StatusBadge
-                      label={formatLabel(trait.confidence || 'moderate')}
-                      severity={advantageToSeverity(trait.confidence || 'moderate')}
-                    />
-                    <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
-                  </div>
+                <div className="flex items-start justify-between mb-1 gap-1">
+                  <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug flex-1 min-w-0`}>{cleanCondition(trait.category)}</h4>
+                  <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
                 <div className="flex flex-wrap gap-1">
+                  <StatusBadge
+                    label={formatLabel(trait.confidence || 'moderate')}
+                    severity={advantageToSeverity(trait.confidence || 'moderate')}
+                  />
                   {rsid && <Badge variant="secondary" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>}
                   {rsid && <ZygosityBadge genotype={data?.genotype_map?.[rsid]} />}
                   {gene && <Badge variant="outline" className="text-xs">{gene}</Badge>}
@@ -210,8 +209,7 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
                     <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{cleanCondition(trait.description)}</p>
-                    {rsid && <PathogenicityBar rsid={rsid} pathogenicityMap={data?.pathogenicity_map} theme={theme} />}
-                    <VariantLinks rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} />
+                    <VariantInfoBox rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                   </div>
                 )}
               </div>

@@ -12,6 +12,7 @@ import {
   DisclaimerCard,
   VariantLinks,
   PathogenicityBar,
+  VariantInfoBox,
   ZygosityBadge,
   clinicalSignificanceToSeverity,
   formatLabel,
@@ -182,22 +183,18 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
                 className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 cursor-pointer hover:border-blue-500/50 transition-all duration-300`}
                 onClick={() => setSelectedItem(isExpanded ? null : itemKey)}
               >
-                <div className="flex items-start justify-between mb-2 gap-2">
-                  <div className="flex-1 min-w-0">
-                    <h4 className={`font-bold text-base ${theme.textPrimary} leading-snug`}>
-                      {cleanCondition(mutation.effect) || mutation.gene}
-                    </h4>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <StatusBadge
-                      label={formatLabel(mutation.clinical_relevance || 'unknown')}
-                      severity={clinicalSignificanceToSeverity(mutation.clinical_relevance)}
-                    />
-                    <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
-                  </div>
+                <div className="flex items-start justify-between mb-1 gap-1">
+                  <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug flex-1 min-w-0`}>
+                    {cleanCondition(mutation.effect) || mutation.gene}
+                  </h4>
+                  <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
                 <div className="flex flex-wrap gap-1">
+                  <StatusBadge
+                    label={formatLabel(mutation.clinical_relevance || 'unknown')}
+                    severity={clinicalSignificanceToSeverity(mutation.clinical_relevance)}
+                  />
                   {mutation.gene && <Badge variant="secondary" className="text-xs font-medium">{mutation.gene}</Badge>}
                   {mutation.rsid && <Badge variant="outline" className="text-xs font-mono">{mutation.rsid}{data?.genotype_map?.[mutation.rsid] ? ` ${data.genotype_map[mutation.rsid]}` : ''}</Badge>}
                   {mutation.rsid && <ZygosityBadge genotype={data?.genotype_map?.[mutation.rsid]} />}
@@ -230,8 +227,7 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
                       )}
                     </div>
 
-                    <PathogenicityBar rsid={mutation.rsid} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
-                    <VariantLinks rsid={mutation.rsid} gene={mutation.gene} token={token} isDarkMode={isDarkMode} alphaMissense={mutation.rsid ? data?.alpha_missense_map?.[mutation.rsid] : undefined} clinvarCount={mutation.rsid ? data?.clinvar_count_map?.[mutation.rsid] : undefined} genotype={mutation.rsid ? data?.genotype_map?.[mutation.rsid] : undefined} />
+                    <VariantInfoBox rsid={mutation.rsid} gene={mutation.gene} token={token} isDarkMode={isDarkMode} alphaMissense={mutation.rsid ? data?.alpha_missense_map?.[mutation.rsid] : undefined} clinvarCount={mutation.rsid ? data?.clinvar_count_map?.[mutation.rsid] : undefined} genotype={mutation.rsid ? data?.genotype_map?.[mutation.rsid] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                   </div>
                 )}
               </div>

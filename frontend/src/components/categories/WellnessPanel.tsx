@@ -12,6 +12,7 @@ import {
   DisclaimerCard,
   VariantLinks,
   PathogenicityBar,
+  VariantInfoBox,
   ZygosityBadge,
   capacityToSeverity,
   formatLabel,
@@ -215,18 +216,16 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
                 className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 cursor-pointer hover:border-green-500/50 transition-all duration-300`}
                 onClick={() => setSelectedItem(isExpanded ? null : itemKey)}
               >
-                <div className="flex items-start justify-between mb-2 gap-2">
-                  <h4 className={`font-semibold text-base ${theme.textPrimary} leading-snug flex-1 min-w-0`}>{cleanCondition(trait.name)}</h4>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <StatusBadge
-                      label={formatLabel(trait.value)}
-                      severity={capacityToSeverity(trait.value)}
-                    />
-                    <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
-                  </div>
+                <div className="flex items-start justify-between mb-1 gap-1">
+                  <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug flex-1 min-w-0`}>{cleanCondition(trait.name)}</h4>
+                  <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
                 <div className="flex flex-wrap gap-1">
+                  <StatusBadge
+                    label={formatLabel(trait.value)}
+                    severity={capacityToSeverity(trait.value)}
+                  />
                   {trait.associated_variants && trait.associated_variants.length > 0
                     ? trait.associated_variants.map((v, i) => (
                         <React.Fragment key={i}>
@@ -259,8 +258,7 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
                       </div>
                     )}
 
-                    {trait.associated_variants?.[0] && <PathogenicityBar rsid={trait.associated_variants[0]} pathogenicityMap={data?.pathogenicity_map} theme={theme} />}
-                    <VariantLinks rsid={trait.associated_variants?.[0]} gene={trait.gene !== 'Multiple' ? trait.gene : undefined} token={token} isDarkMode={isDarkMode} alphaMissense={trait.associated_variants?.[0] ? data?.alpha_missense_map?.[trait.associated_variants[0]] : undefined} clinvarCount={trait.associated_variants?.[0] ? data?.clinvar_count_map?.[trait.associated_variants[0]] : undefined} genotype={trait.associated_variants?.[0] ? data?.genotype_map?.[trait.associated_variants[0]] : undefined} />
+                    <VariantInfoBox rsid={trait.associated_variants?.[0]} gene={trait.gene !== 'Multiple' ? trait.gene : undefined} token={token} isDarkMode={isDarkMode} alphaMissense={trait.associated_variants?.[0] ? data?.alpha_missense_map?.[trait.associated_variants[0]] : undefined} clinvarCount={trait.associated_variants?.[0] ? data?.clinvar_count_map?.[trait.associated_variants[0]] : undefined} genotype={trait.associated_variants?.[0] ? data?.genotype_map?.[trait.associated_variants[0]] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                   </div>
                 )}
               </div>

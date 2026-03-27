@@ -11,6 +11,7 @@ import {
   StatusBadge,
   ScoreBar,
   PathogenicityBar,
+  VariantInfoBox,
   DisclaimerCard,
   VariantLinks,
   ZygosityBadge,
@@ -190,23 +191,21 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
                 className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 cursor-pointer hover:border-purple-500/50 transition-all duration-300`}
                 onClick={() => setSelectedItem(isExpanded ? null : itemKey)}
               >
-                <div className="flex items-start justify-between mb-2 gap-2">
-                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                <div className="flex items-start justify-between mb-1 gap-1">
+                  <div className="flex items-start gap-1.5 flex-1 min-w-0">
                     <div className="p-1.5 rounded-lg bg-purple-500/10 shrink-0">
                       <Icon className="h-4 w-4 text-purple-400" />
                     </div>
-                    <h4 className={`font-semibold text-base ${theme.textPrimary} leading-snug`}>{cleanCondition(trait.trait)}</h4>
+                    <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug`}>{cleanCondition(trait.trait)}</h4>
                   </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <StatusBadge
-                      label={formatLabel(trait.result)}
-                      severity={advantageToSeverity(trait.result)}
-                    />
-                    <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
-                  </div>
+                  <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
                 <div className="flex flex-wrap gap-1">
+                  <StatusBadge
+                    label={formatLabel(trait.result)}
+                    severity={advantageToSeverity(trait.result)}
+                  />
                   {rsid && <Badge variant="secondary" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>}
                   {rsid && <ZygosityBadge genotype={data?.genotype_map?.[rsid]} />}
                   {gene && <Badge variant="outline" className="text-xs">{gene}</Badge>}
@@ -237,8 +236,7 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
                       </div>
                     )}
 
-                    {rsid && <PathogenicityBar rsid={rsid} pathogenicityMap={data?.pathogenicity_map} theme={theme} />}
-                    <VariantLinks rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} />
+                    <VariantInfoBox rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                   </div>
                 )}
               </div>

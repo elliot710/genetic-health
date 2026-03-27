@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react'
+import React, { useState, useMemo, useCallback } from 'react'
 import { Heart, AlertTriangle, ChevronRight, CheckCircle, Search, Filter, Shield, FlaskConical } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import {
@@ -9,8 +9,8 @@ import {
   StatusBadge,
   ScoreBar,
   PathogenicityBar,
+  VariantInfoBox,
   DisclaimerCard,
-  VariantLinks,
   ZygosityBadge,
   EvidenceBadge,
   reviewStatusStars,
@@ -26,20 +26,6 @@ import { getThemeClass } from '../../utils/theme'
 import { RiskDistributionChart } from './GenomicCharts'
 import SmartInsights from '../SmartInsights'
 import type { CategoryPanelProps, HealthRisk } from './types'
-import { apiUrl } from '@/lib/api'
-
-interface VariantAnnotation {
-  clinical_significance?: string
-  allele_frequency?: string
-  consequence?: string
-  alpha_missense?: {
-    found: boolean
-    am_pathogenicity?: number
-    am_class?: string
-    protein_variant?: string
-    disclaimer?: string
-  }
-}
 
 interface MappedHealthRisk {
   condition: string
@@ -64,69 +50,6 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
   const [evidenceFilter, setEvidenceFilter] = useState<number>(0)  // min ClinVar stars (FE-03)
   const [pathFilter, setPathFilter] = useState<string>('non-benign')
   const [groupBy, setGroupBy] = useState('none')
-
-  const [variantAnnotations, setVariantAnnotations] = useState<Record<string, VariantAnnotation>>({})
-
-
-
-  const getVariantDescription = (rsid: string, condition: string, gene: string) => {
-    const variantDescriptions: {[key: string]: string} = {
-      'rs369162678': 'This variant in the RELN gene affects neuronal migration and synaptic function. It is associated with increased susceptibility to epilepsy, particularly temporal lobe epilepsy, and may influence cognitive development and neurological health.',
-      'rs143577179': 'A protein-affecting variant that modifies enzyme function or protein structure, potentially impacting cellular processes and metabolic pathways related to health conditions.',
-      'rs185185944': 'This variant requires further research to establish clinical significance. Current data suggests potential involvement in cellular mechanisms, but more studies are needed to determine health implications.',
-    }
-
-    if (variantDescriptions[rsid]) {
-      return variantDescriptions[rsid]
-    }
-
-    if (gene && gene !== 'Unknown' && condition) {
-      return `This genetic variant in the ${gene} gene has been associated with ${condition.toLowerCase()}. The variant may influence gene expression, protein function, or cellular processes that contribute to disease risk or therapeutic response.`
-    }
-
-    return `This genetic variant has been identified in your analysis and may contribute to your genetic risk profile for ${condition.toLowerCase()}. Further research may provide more specific information about its biological mechanisms and health implications.`
-  }
-
-  const getVariantAnnotations = async (rsid: string) => {
-    if (!token || !rsid || rsid === 'Unknown' || variantAnnotations[rsid]) return null
-
-    try {
-      const response = await fetch(apiUrl(`/api/annotations/clinical-summary`), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({ rsid })
-      })
-
-      if (response.ok) {
-        const annotationData = await response.json()
-        setVariantAnnotations(prev => ({ ...prev, [rsid]: annotationData }))
-        return annotationData
-      }
-    } catch {
-      // silently handle annotation fetch errors
-    }
-    return null
-  }
-
-
-
-  // Fetch variant annotations when data is available
-  useEffect(() => {
-    if (!token || !data?.health_risks) return
-    const risks = Array.isArray(data.health_risks) ? data.health_risks as HealthRisk[] : []
-    risks.forEach((risk: HealthRisk) => {
-      if (risk.associated_variants && risk.associated_variants.length > 0) {
-        risk.associated_variants.forEach((variant: string) => {
-          if (variant && variant !== 'Unknown') {
-            getVariantAnnotations(variant)
-          }
-        })
-      }
-    })
-  }, [token, data?.health_risks])
 
   const getRiskLevel = (level: string) => {
     return level.charAt(0).toUpperCase() + level.slice(1)
@@ -386,18 +309,16 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                 className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 cursor-pointer hover:border-red-500/50 transition-all duration-300`}
                 onClick={() => setSelectedItem(isExpanded ? null : itemKey)}
               >
-                <div className="flex items-start justify-between mb-2 gap-2">
-                  <h4 className={`font-semibold text-base ${theme.textPrimary} leading-snug flex-1 min-w-0`}>{risk.condition}</h4>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <StatusBadge
-                      label={`${risk.risk} Risk`}
-                      severity={riskToSeverity(risk.riskLevel)}
-                    />
-                    <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
-                  </div>
+                <div className="flex items-start justify-between mb-1 gap-1">
+                  <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug flex-1 min-w-0`}>{risk.condition}</h4>
+                  <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
                 <div className="flex flex-wrap gap-1">
+                  <StatusBadge
+                    label={`${risk.risk} Risk`}
+                    severity={riskToSeverity(risk.riskLevel)}
+                  />
                   {/* Gene symbol (FE-01) */}
                   {risk.geneSymbol && (
                     <Badge variant="secondary" className="text-xs font-medium">
@@ -430,66 +351,21 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                     />
 
                     {risk.variantInfo && risk.variantInfo.length > 0 && (
-                      <div>
-                        <h5 className={`text-sm font-medium ${theme.textPrimary} mb-2`}>Associated Variants</h5>
-                        <div className="space-y-2">
-                          {risk.variantInfo.map((variant: string, variantIndex: number) => {
-                            const annotation = variantAnnotations[variant]
-                            const description = getVariantDescription(variant, risk.condition, risk.gene)
-
-                            return (
-                              <div key={variantIndex} className={`${getThemeClass('bg-gray-50', isDarkMode)} rounded-lg p-3 border ${getThemeClass('border-gray-200', isDarkMode)}`}>
-                                <p className={`text-xs ${theme.textSecondary} leading-relaxed mb-2`}>{description}</p>
-
-                                {annotation && (
-                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs mb-2">
-                                    {annotation.clinical_significance && annotation.clinical_significance !== 'unknown' && (
-                                      <div>
-                                        <span className={`font-medium ${theme.textPrimary}`}>Significance:</span>
-                                        <div className={theme.textSecondary}>{annotation.clinical_significance.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())}</div>
-                                      </div>
-                                    )}
-                                    {annotation.allele_frequency && (
-                                      <div>
-                                        <span className={`font-medium ${theme.textPrimary}`}>Frequency:</span>
-                                        <div className={theme.textSecondary}>{annotation.allele_frequency}</div>
-                                      </div>
-                                    )}
-                                    {annotation.consequence && (
-                                      <div>
-                                        <span className={`font-medium ${theme.textPrimary}`}>Effect:</span>
-                                        <div className={theme.textSecondary}>{annotation.consequence}</div>
-                                      </div>
-                                    )}
-                                    {annotation.alpha_missense?.found && (
-                                      <div>
-                                        <span className={`font-medium ${theme.textPrimary}`}>AI Pathogenicity:</span>
-                                        <div className="flex items-center gap-1.5">
-                                          <span className={`font-mono ${
-                                            (annotation.alpha_missense.am_pathogenicity ?? 0) > 0.564 ? 'text-red-400' :
-                                            (annotation.alpha_missense.am_pathogenicity ?? 0) < 0.34 ? 'text-green-400' : 'text-amber-400'
-                                          }`}>
-                                            {annotation.alpha_missense.am_pathogenicity?.toFixed(3)}
-                                          </span>
-                                          <Badge variant="outline" className={`text-[10px] px-1 py-0 ${
-                                            annotation.alpha_missense.am_class === 'likely_pathogenic' ? 'bg-red-500/15 text-red-400 border-red-500/30' :
-                                            annotation.alpha_missense.am_class === 'likely_benign' ? 'bg-green-500/15 text-green-400 border-green-500/30' :
-                                            'bg-amber-500/15 text-amber-400 border-amber-500/30'
-                                          }`}>
-                                            {annotation.alpha_missense.am_class?.replace(/_/g, ' ')}
-                                          </Badge>
-                                        </div>
-                                        <div className={`text-[10px] ${theme.textSecondary} mt-0.5 italic`}>AI prediction — not clinically validated</div>
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-
-                                <VariantLinks rsid={variant} gene={risk.gene} token={token} isDarkMode={isDarkMode} alphaMissense={variant ? data?.alpha_missense_map?.[variant] : undefined} clinvarCount={variant ? data?.clinvar_count_map?.[variant] : undefined} genotype={variant ? data?.genotype_map?.[variant] : undefined} />
-                              </div>
-                            )
-                          })}
-                        </div>
+                      <div className="space-y-2">
+                        {risk.variantInfo.map((variant: string, variantIndex: number) => (
+                          <VariantInfoBox
+                            key={variantIndex}
+                            rsid={variant}
+                            gene={risk.geneSymbol || (risk.gene?.startsWith('rs') ? undefined : risk.gene)}
+                            token={token}
+                            isDarkMode={isDarkMode}
+                            alphaMissense={variant ? data?.alpha_missense_map?.[variant] : undefined}
+                            clinvarCount={variant ? data?.clinvar_count_map?.[variant] : undefined}
+                            genotype={variant ? data?.genotype_map?.[variant] : undefined}
+                            pathogenicityMap={data?.pathogenicity_map}
+                            theme={theme}
+                          />
+                        ))}
                       </div>
                     )}
 

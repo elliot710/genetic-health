@@ -15,6 +15,7 @@ import {
   capacityToSeverity,
   VariantLinks,
   PathogenicityBar,
+  VariantInfoBox,
   ZygosityBadge,
   formatLabel,
   MasonryLayout,
@@ -176,24 +177,22 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
                 className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 hover:border-purple-500/50 transition-all duration-300 cursor-pointer`}
                 onClick={() => setSelectedGene(isExpanded ? null : geneKey)}
               >
-                <div className="flex items-start justify-between mb-2 gap-2">
+                <div className="flex items-start justify-between mb-1 gap-1">
                   <div className="flex-1 min-w-0">
                     {description ? (
                       <p className={`text-sm font-semibold ${theme.textPrimary} leading-snug`}>{description}</p>
                     ) : (
-                      <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{item.gene}</h4>
+                      <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug`}>{item.gene}</h4>
                     )}
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <StatusBadge
-                      label={formatLabel(capacity)}
-                      severity={capacityToSeverity(capacity)}
-                    />
-                    <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
-                  </div>
+                  <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
                 <div className="flex flex-wrap gap-1 mb-2">
+                  <StatusBadge
+                    label={formatLabel(capacity)}
+                    severity={capacityToSeverity(capacity)}
+                  />
                   <Badge variant="secondary" className="text-xs font-medium">{item.gene}</Badge>
                   {rsid && (
                     <>
@@ -216,8 +215,7 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
                         ))}
                       </div>
                     )}
-                    {rsid && <PathogenicityBar rsid={rsid} pathogenicityMap={data?.pathogenicity_map} theme={theme} />}
-                    <VariantLinks rsid={rsid} gene={item.gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} />
+                    <VariantInfoBox rsid={rsid} gene={item.gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                   </div>
                 )}
               </div>
