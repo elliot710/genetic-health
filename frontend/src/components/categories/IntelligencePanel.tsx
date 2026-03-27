@@ -187,24 +187,26 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
             return (
               <div
                 key={index}
-                className={`${theme.glass} border ${theme.border} rounded-xl p-5 cursor-pointer hover:border-purple-500/50 transition-all duration-300`}
+                className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 cursor-pointer hover:border-purple-500/50 transition-all duration-300`}
                 onClick={() => setSelectedItem(isExpanded ? null : itemKey)}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-lg bg-purple-500/10">
-                      <Icon className="h-5 w-5 text-purple-400" />
+                <div className="flex items-start justify-between mb-2 gap-2">
+                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <div className="p-1.5 rounded-lg bg-purple-500/10 shrink-0">
+                      <Icon className="h-4 w-4 text-purple-400" />
                     </div>
-                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{cleanCondition(trait.trait)}</h4>
+                    <h4 className={`font-semibold text-base ${theme.textPrimary} leading-snug`}>{cleanCondition(trait.trait)}</h4>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
                     <StatusBadge
                       label={formatLabel(trait.result)}
                       severity={advantageToSeverity(trait.result)}
                     />
+                    <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                   </div>
-                  <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap gap-1">
                   {rsid && <Badge variant="secondary" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>}
                   {rsid && <ZygosityBadge genotype={data?.genotype_map?.[rsid]} />}
                   {gene && <Badge variant="outline" className="text-xs">{gene}</Badge>}

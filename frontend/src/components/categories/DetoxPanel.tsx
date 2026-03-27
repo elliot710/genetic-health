@@ -205,7 +205,7 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
               return (
                 <div
                   key={key}
-                  className={`${theme.glass} border ${theme.border} rounded-xl p-5 hover:border-green-500/50 transition-all duration-300 cursor-pointer`}
+                  className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 hover:border-green-500/50 transition-all duration-300 cursor-pointer`}
                   onClick={() => setExpandedGene(isExpanded ? null : key)}
                 >
                   <div className="flex items-start justify-between mb-2 gap-2">
@@ -232,7 +232,7 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="flex flex-wrap gap-1">
                     <Badge variant="secondary" className="text-xs font-medium">{item.gene}</Badge>
                     {item.associated_variants?.length > 0 && item.associated_variants.map((v: string) => (
                       <React.Fragment key={v}>

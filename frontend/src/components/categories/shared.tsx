@@ -556,7 +556,7 @@ export function ZygosityBadge({ genotype }: { genotype?: string }) {
       variant="outline"
       className={`text-xs ${isHomo ? 'bg-red-500/10 text-red-500 border-red-500/20' : 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20'}`}
     >
-      {isHomo ? 'Homozygous' : 'Heterozygous'}
+      {isHomo ? 'Homo' : 'Het'}
     </Badge>
   )
 }

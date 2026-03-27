@@ -272,21 +272,21 @@ export default function RareMutationsPanel({ data, isDarkMode = false, token }: 
             return (
               <div
                 key={index}
-                className={`${theme.glass} border ${theme.border} rounded-xl p-5 cursor-pointer hover:border-red-500/50 transition-all duration-300`}
+                className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 cursor-pointer hover:border-red-500/50 transition-all duration-300`}
                 onClick={() => setSelectedMutation(isExpanded ? null : mutationId)}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-3">
-                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{cleanCondition(title)}</h4>
+                <div className="flex items-start justify-between mb-2 gap-2">
+                  <h4 className={`font-semibold text-base ${theme.textPrimary} leading-snug flex-1 min-w-0`}>{cleanCondition(title)}</h4>
+                  <div className="flex items-center gap-1.5 shrink-0">
                     <StatusBadge
                       label={formatLabel(mutation.clinical_significance)}
                       severity={clinicalSignificanceToSeverity(mutation.clinical_significance)}
                     />
+                    <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                   </div>
-                  <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap gap-1">
                   {gene && <Badge variant="secondary" className="text-xs">{gene}</Badge>}
                   {rsid && <Badge variant="outline" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>}
                   {rsid && <ZygosityBadge genotype={data?.genotype_map?.[rsid]} />}

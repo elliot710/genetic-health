@@ -173,7 +173,7 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
             return (
               <div
                 key={geneKey}
-                className={`${theme.glass} border ${theme.border} rounded-xl p-5 hover:border-purple-500/50 transition-all duration-300 cursor-pointer`}
+                className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 hover:border-purple-500/50 transition-all duration-300 cursor-pointer`}
                 onClick={() => setSelectedGene(isExpanded ? null : geneKey)}
               >
                 <div className="flex items-start justify-between mb-2 gap-2">
@@ -193,7 +193,7 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
                   </div>
                 </div>
 
-                <div className="flex flex-wrap gap-1.5 mb-2">
+                <div className="flex flex-wrap gap-1 mb-2">
                   <Badge variant="secondary" className="text-xs font-medium">{item.gene}</Badge>
                   {rsid && (
                     <>

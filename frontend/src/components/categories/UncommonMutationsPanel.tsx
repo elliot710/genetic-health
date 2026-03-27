@@ -179,7 +179,7 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
             return (
               <div
                 key={mutation.rsid || index}
-                className={`${theme.glass} border ${theme.border} rounded-xl p-5 cursor-pointer hover:border-blue-500/50 transition-all duration-300`}
+                className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 cursor-pointer hover:border-blue-500/50 transition-all duration-300`}
                 onClick={() => setSelectedItem(isExpanded ? null : itemKey)}
               >
                 <div className="flex items-start justify-between mb-2 gap-2">
@@ -197,7 +197,7 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
                   </div>
                 </div>
 
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap gap-1">
                   {mutation.gene && <Badge variant="secondary" className="text-xs font-medium">{mutation.gene}</Badge>}
                   {mutation.rsid && <Badge variant="outline" className="text-xs font-mono">{mutation.rsid}{data?.genotype_map?.[mutation.rsid] ? ` ${data.genotype_map[mutation.rsid]}` : ''}</Badge>}
                   {mutation.rsid && <ZygosityBadge genotype={data?.genotype_map?.[mutation.rsid]} />}

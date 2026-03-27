@@ -212,21 +212,21 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
             return (
               <div
                 key={index}
-                className={`${theme.glass} border ${theme.border} rounded-xl p-5 cursor-pointer hover:border-green-500/50 transition-all duration-300`}
+                className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 cursor-pointer hover:border-green-500/50 transition-all duration-300`}
                 onClick={() => setSelectedItem(isExpanded ? null : itemKey)}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-3">
-                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{cleanCondition(trait.name)}</h4>
+                <div className="flex items-start justify-between mb-2 gap-2">
+                  <h4 className={`font-semibold text-base ${theme.textPrimary} leading-snug flex-1 min-w-0`}>{cleanCondition(trait.name)}</h4>
+                  <div className="flex items-center gap-1.5 shrink-0">
                     <StatusBadge
                       label={formatLabel(trait.value)}
                       severity={capacityToSeverity(trait.value)}
                     />
+                    <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                   </div>
-                  <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap gap-1">
                   {trait.associated_variants && trait.associated_variants.length > 0
                     ? trait.associated_variants.map((v, i) => (
                         <React.Fragment key={i}>
