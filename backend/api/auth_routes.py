@@ -456,6 +456,42 @@ async def unsave_variant(
     return {"detail": "Variant removed"}
 
 
+class UpdateSavedVariantRequest(BaseModel):
+    note: Optional[str] = None
+
+
+@router.patch("/saved-variants/{rsid}", response_model=SavedVariantResponse)
+async def update_saved_variant(
+    rsid: str,
+    body: UpdateSavedVariantRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Update the note on a saved variant."""
+    result = await db.execute(
+        select(SavedVariant).where(
+            SavedVariant.user_id == current_user.id,
+            SavedVariant.rsid == rsid,
+        )
+    )
+    sv = result.scalar_one_or_none()
+    if not sv:
+        raise HTTPException(status_code=404, detail="Variant not found in saved list")
+    sv.note = body.note
+    await db.commit()
+    await db.refresh(sv)
+    return SavedVariantResponse(
+        id=sv.id,
+        rsid=sv.rsid,
+        gene=sv.gene,
+        genotype=sv.genotype,
+        most_severe_consequence=sv.most_severe_consequence,
+        clinical_significance=sv.clinical_significance,
+        note=sv.note,
+        created_at=sv.created_at.isoformat() if sv.created_at else "",
+    )
+
+
 # ─── Forgot / Reset Password ──────────────────────────────────────────────────
 
 @router.post("/forgot-password", status_code=202)
