@@ -453,9 +453,9 @@ export default function VariantDetailDialog({
         aria-modal="true"
         className="fixed inset-0 z-50 overflow-y-auto overscroll-contain"
       >
-        <div className="flex min-h-full items-center justify-center py-8 px-4" onClick={() => onOpenChange(false)}>
+        <div className="flex min-h-full items-center justify-center py-4 sm:py-8 px-2 sm:px-4" onClick={() => onOpenChange(false)}>
           <div
-            className={`relative w-full max-w-6xl flex flex-col gap-6 p-6 ${bg} ${border} border rounded-2xl`}
+            className={`relative w-full max-w-6xl flex flex-col gap-4 sm:gap-6 p-4 sm:p-6 ${bg} ${border} border rounded-2xl`}
             onClick={(e) => e.stopPropagation()}
           >
         <div className="flex flex-col gap-2">
@@ -692,7 +692,7 @@ export default function VariantDetailDialog({
               const sourceEntries = Object.entries(ps.sources).sort(([,a], [,b]) => b.weight - a.weight)
               return (
                 <div className={`${cardBg} rounded-xl p-4 border ${border}`}>
-                  <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-3 flex items-center gap-1.5`}>
+                  <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-3 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
                     <Activity className="h-3.5 w-3.5" /> Composite Pathogenicity Score
                     <Badge variant="outline" className={`${confidenceBadge(ps.confidence)} text-[10px] ml-1`}>
                       {ps.confidence} confidence
@@ -725,17 +725,17 @@ export default function VariantDetailDialog({
                   <div className="space-y-1.5 mt-2">
                     {sourceEntries.map(([src, info]) => (
                       <div key={src} className="flex items-center gap-2 text-xs">
-                        <span className={`w-28 truncate ${textSecondary}`}>{src.replace(/_/g, ' ')}</span>
+                        <span className={`w-20 sm:w-28 shrink-0 truncate ${textSecondary}`}>{src.replace(/_/g, ' ')}</span>
                         <div className="flex-1 h-1.5 rounded-full bg-gray-700/40 overflow-hidden">
                           <div
                             className={`h-full rounded-full ${scoreBarColor(info.score)}`}
                             style={{ width: `${Math.round(info.score * 100)}%` }}
                           />
                         </div>
-                        <span className={`w-10 text-right font-mono ${textSecondary}`}>
+                        <span className={`w-8 sm:w-10 text-right font-mono ${textSecondary}`}>
                           {(info.score * 100).toFixed(0)}%
                         </span>
-                        <span className={`w-8 text-right font-mono text-[10px] ${textSecondary}`}>
+                        <span className={`w-7 sm:w-8 text-right font-mono text-[10px] ${textSecondary}`}>
                           ×{info.weight}
                         </span>
                       </div>
@@ -795,7 +795,7 @@ export default function VariantDetailDialog({
             {/* ── Clinical Significance ── */}
             {details.clinical_significance && details.clinical_significance.length > 0 && (
               <div>
-                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
                   <Activity className="h-3.5 w-3.5" /> Clinical Significance
                   {details.clinvar?.count ? (
                     <Badge variant="outline" className="bg-orange-500/10 text-orange-400 border-orange-500/20 text-[10px] ml-1">
@@ -919,7 +919,7 @@ export default function VariantDetailDialog({
               const uniqueConsequences = [...new Set(tcs.flatMap(t => t.consequence_terms || []))]
               return (
                 <div>
-                  <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
+                  <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
                     <Dna className="h-3.5 w-3.5" /> Ensembl VEP
                     <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/20 text-[10px] ml-1">
                       {details.total_transcripts || tcs.length} transcripts
@@ -1033,7 +1033,7 @@ export default function VariantDetailDialog({
             {/* ── Transcript Consequences ── */}
             {details.transcripts && details.transcripts.length > 0 && (
               <div>
-                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
                   <Dna className="h-3.5 w-3.5" /> Transcript Consequences
                   <span className={`text-xs font-normal ${textSecondary}`}>
                     ({details.transcripts.length}{details.total_transcripts && details.total_transcripts > details.transcripts.length ? ` of ${details.total_transcripts}` : ''})
@@ -1101,7 +1101,7 @@ export default function VariantDetailDialog({
             {/* ── Pharmacogenomics ── */}
             {details.pharmacogenomics?.found && (
               <div>
-                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
                   <FlaskConical className="h-3.5 w-3.5" /> Pharmacogenomics
                 </h4>
                 <div className={`${cardBg} rounded-xl p-3 border ${border}`}>
@@ -1121,7 +1121,7 @@ export default function VariantDetailDialog({
             {/* ── AlphaMissense AI Prediction ── */}
             {details.alpha_missense?.found && (
               <div>
-                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
                   <AlertTriangle className="h-3.5 w-3.5 text-amber-400" /> AlphaMissense AI Prediction
                   <Badge variant="outline" className="bg-amber-500/15 text-amber-400 border-amber-500/30 text-[10px] px-1.5 py-0 ml-1">
                     AI
@@ -1154,7 +1154,7 @@ export default function VariantDetailDialog({
                   )}
                   {/* Classification badge */}
                   {details.alpha_missense.am_class && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <span className={`text-xs ${textSecondary}`}>Classification:</span>
                       <Badge variant="outline" className={`text-xs ${
                         details.alpha_missense.am_class === 'likely_pathogenic' ? 'bg-red-500/15 text-red-400 border-red-500/30' :
@@ -1167,14 +1167,14 @@ export default function VariantDetailDialog({
                   )}
                   {/* Protein variant */}
                   {details.alpha_missense.protein_variant && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <span className={`text-xs ${textSecondary}`}>Protein change:</span>
                       <span className={`text-xs font-mono ${textPrimary}`}>{details.alpha_missense.protein_variant}</span>
                     </div>
                   )}
                   {/* Gene-level mean pathogenicity */}
                   {details.alpha_missense.gene_mean_pathogenicity != null && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <span className={`text-xs ${textSecondary}`}>Gene avg pathogenicity:</span>
                       <span className={`text-xs font-mono ${
                         details.alpha_missense.gene_mean_pathogenicity > 0.564 ? 'text-red-400' :
@@ -1228,7 +1228,7 @@ export default function VariantDetailDialog({
             {/* ── gnomAD Population Frequencies ── */}
             {details.gnomad?.found && (
               <div>
-                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
                   <Activity className="h-3.5 w-3.5" /> gnomAD
                   {details.gnomad.source && (
                     <Badge variant="outline" className="text-[10px] px-1.5 py-0">
@@ -1504,7 +1504,7 @@ export default function VariantDetailDialog({
             {/* ── 1000 Genomes Phase 3 Population Frequencies ── */}
             {details.thousand_genomes?.found && (
               <div>
-                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
                   <Activity className="h-3.5 w-3.5" /> 1000 Genomes
                   <Badge variant="outline" className="text-[10px] px-1.5 py-0">
                     Phase 3
@@ -1609,7 +1609,7 @@ export default function VariantDetailDialog({
             {/* ── ChEMBL Drug Mechanisms ── */}
             {details.chembl?.found && details.chembl.drugs && details.chembl.drugs.length > 0 && (
               <div>
-                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
                   <Pill className="h-3.5 w-3.5" /> Drug Mechanisms
                   <Badge variant="outline" className="bg-indigo-500/10 text-indigo-400 border-indigo-500/20 text-[10px] ml-1">
                     ChEMBL
@@ -1686,7 +1686,7 @@ export default function VariantDetailDialog({
             {/* ── FDA Drug Interactions ── */}
             {details.fda_drug?.found && details.fda_drug.items && details.fda_drug.items.length > 0 && (
               <div>
-                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
                   <Shield className="h-3.5 w-3.5" /> FDA Drug Interactions
                   <Badge variant="outline" className="bg-rose-500/10 text-rose-400 border-rose-500/20 text-[10px] ml-1">
                     FDA
@@ -1731,7 +1731,7 @@ export default function VariantDetailDialog({
             {/* ── AlphaFold Protein Structure ── */}
             {details.alphafold?.found && (
               <div>
-                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
                   <Atom className="h-3.5 w-3.5" /> Protein Structure Confidence
                   <Badge variant="outline" className="bg-teal-500/10 text-teal-400 border-teal-500/20 text-[10px] ml-1">
                     AlphaFold
@@ -1826,7 +1826,7 @@ export default function VariantDetailDialog({
             {/* ── SNPedia ── */}
             {details.snpedia?.found && details.snpedia.summary && (
               <div>
-                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
                   <BookOpen className="h-3.5 w-3.5" /> SNPedia
                 </h4>
                 <div className={`${cardBg} rounded-xl p-3 border ${border}`}>
@@ -1846,7 +1846,7 @@ export default function VariantDetailDialog({
             {/* ── Publications ── */}
             {details.publications && details.publications.count > 0 && (
               <div>
-                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex items-center gap-1.5`}>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
                   <BookOpen className="h-3.5 w-3.5" /> Publications
                   <Badge variant="outline" className="text-[10px] px-1.5 py-0">
                     {details.publications.count}
