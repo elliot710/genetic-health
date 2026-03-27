@@ -779,6 +779,25 @@ async def get_variant_details(
     # Generate natural language variant description from combined sources (after all processing)
     response["description"] = _build_variant_description(rsid, response)
 
+    # Backfill clinical_significance from ClinVar entries when Ensembl colocated_variants
+    # didn't return clin_sig (e.g. stale cached Ensembl data without colocated annotations).
+    if not response.get("clinical_significance"):
+        cv = response.get("clinvar", {})
+        sigs: list[str] = []
+        for entry in cv.get("entries", []):
+            for sig in entry.get("clinical_significance", []):
+                if sig and sig not in sigs:
+                    sigs.append(sig)
+        # Also check clinvar_local clinical_significances
+        if not sigs:
+            cv_local = annotation.clinvar_local_data
+            if cv_local and isinstance(cv_local, dict):
+                for sig in cv_local.get("clinical_significances", []):
+                    if sig and sig not in sigs:
+                        sigs.append(sig)
+        if sigs:
+            response["clinical_significance"] = sigs
+
     # Composite pathogenicity scoring (aggregates all evidence sources)
     from backend.services.scoring_engine import get_scoring_engine
     scoring_annotations = {}

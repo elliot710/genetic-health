@@ -321,6 +321,13 @@ def log_data_source_availability(base_dir: Optional[Path] = None) -> None:
         elif info['file_count'] == 0:
             logger.warning("📂 %-20s empty directory", name)
         else:
-            status = f"{info['file_count']} files, {info['indexed_count']} indexed, {info['total_size_mb']} MB"
+            vcf_indexed = info['indexed_count']
+            # Distinguish "indexed" (has .tbi) from total — TSV files don't use tabix
+            vcf_files = sum(1 for f in info['files'] if f['name'].endswith(('.vcf.gz', '.bcf.gz')))
+            tsv_files = info['file_count'] - vcf_files
+            if vcf_files and tsv_files:
+                status = f"{info['file_count']} files ({tsv_files} TSV/text, {vcf_files} VCF), {vcf_indexed}/{vcf_files} VCF indexed, {info['total_size_mb']} MB"
+            else:
+                status = f"{info['file_count']} files, {info['indexed_count']} indexed, {info['total_size_mb']} MB"
             logger.info("📂 %-20s %s", name, status)
 
