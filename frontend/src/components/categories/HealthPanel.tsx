@@ -7,7 +7,6 @@ import {
   EmptyState,
   SectionCard,
   StatusBadge,
-  ScoreBar,
   PathogenicityBar,
   VariantInfoBox,
   DisclaimerCard,
@@ -15,7 +14,6 @@ import {
   EvidenceBadge,
   reviewStatusStars,
   riskToSeverity,
-  getRiskBarColor,
   MasonryLayout,
   cleanCondition,
   useGrouping,
@@ -342,13 +340,6 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
                     <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{risk.description}</p>
-
-                    <ScoreBar
-                      label="Pathogenicity Score"
-                      value={risk.riskScore}
-                      colorClass={getRiskBarColor(risk.riskScore)}
-                      theme={theme}
-                    />
 
                     {risk.variantInfo && risk.variantInfo.length > 0 && (
                       <div className="space-y-2">
