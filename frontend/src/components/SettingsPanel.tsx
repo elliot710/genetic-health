@@ -121,40 +121,107 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
     finally { setNoteSaving(false) }
   }
 
-  const printVariants = () => {
+  const [printLoading, setPrintLoading] = useState(false)
+
+  const printVariants = async () => {
+    setPrintLoading(true)
     const date = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
-    const rows = savedVariants.map(v => `
+
+    // Fetch full annotation details for all variants in parallel (served from cache)
+    const details = await Promise.all(
+      savedVariants.map(v =>
+        fetch(apiUrl(`/api/annotations/variant-details/${v.rsid}`), { credentials: 'include' })
+          .then(r => r.ok ? r.json() : null)
+          .catch(() => null)
+      )
+    )
+
+    const rows = savedVariants.map((v, i) => {
+      const d = details[i]
+      const desc = d?.description || ''
+      // Collect unique conditions from ClinVar entries
+      const conditions = d?.clinvar?.entries
+        ? [...new Set(d.clinvar.entries.flatMap((e: { conditions: string[] }) => e.conditions).filter(Boolean))] as string[]
+        : []
+      // Pathogenicity
+      const ps = d?.pathogenicity_score
+      const pathLabel = ps
+        ? `${Math.round(ps.composite_score * 100)}% — ${ps.classification.replace(/_/g, ' ')}`
+        : ''
+      // ClinVar entry links
+      const cvLinks = d?.clinvar?.entries
+        ? (d.clinvar.entries as { uid: string; accession: string; clinical_significance: string[] }[])
+            .map(e => `<a href="https://www.ncbi.nlm.nih.gov/clinvar/variation/${e.uid}" target="_blank" rel="noopener noreferrer">${e.accession || e.uid}</a> (${e.clinical_significance.join(', ')})`)
+            .join('<br/>')
+        : ''
+      const noteHtml = v.note ? `<em class="note">${v.note.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</em>` : ''
+
+      return `
       <tr>
-        <td><strong>${v.rsid}</strong>${v.gene ? `<br/><span class="muted">${v.gene}</span>` : ''}</td>
-        <td>${v.genotype || '—'}</td>
-        <td>${v.clinical_significance || '—'}</td>
-        <td>${v.most_severe_consequence ? v.most_severe_consequence.replace(/_/g, ' ') : '—'}</td>
-        <td>${v.note ? `<em>${v.note.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</em>` : ''}</td>
-      </tr>`).join('')
+        <td class="variant-cell">
+          <strong class="rsid">${v.rsid}</strong>${v.gene ? `<br/><span class="muted">${v.gene}</span>` : ''}
+          ${v.genotype ? `<br/><span class="genotype">${v.genotype}</span>` : ''}
+        </td>
+        <td>${v.clinical_significance || '—'}${cvLinks ? `<br/><div class="cv-links">${cvLinks}</div>` : ''}</td>
+        <td>${conditions.length > 0 ? conditions.map(c => `<div class="condition">${c}</div>`).join('') : (desc ? '<span class="muted">See description</span>' : '—')}</td>
+        <td class="desc-cell">${desc || '—'}</td>
+        <td>${ps ? `<span class="${ps.classification.includes('pathogenic') && !ps.classification.includes('benign') ? 'path-high' : ps.classification.includes('uncertain') ? 'path-uncertain' : 'path-benign'}">${pathLabel}</span>` : (v.most_severe_consequence ? v.most_severe_consequence.replace(/_/g, ' ') : '—')}</td>
+        <td>${noteHtml}</td>
+      </tr>`
+    }).join('')
+
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
-      <title>Saved Variants — Epigenic</title>
-      <style>
-        body { font-family: Georgia, serif; max-width: 900px; margin: 40px auto; color: #1a1a1a; font-size: 13px; }
-        h1 { font-size: 20px; margin-bottom: 4px; }
-        .meta { color: #555; font-size: 12px; margin-bottom: 24px; }
-        table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
-        th { background: #f0f0f0; text-align: left; padding: 8px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 2px solid #ccc; }
-        td { padding: 8px 10px; border-bottom: 1px solid #e0e0e0; vertical-align: top; }
-        tr:last-child td { border-bottom: none; }
-        .muted { color: #666; font-size: 11px; }
-        .disclaimer { border-top: 1px solid #ccc; padding-top: 12px; color: #888; font-size: 11px; font-style: italic; }
-        @media print { body { margin: 20px; } button { display: none; } }
-      </style>
-    </head><body>
-      <h1>Saved Variants — Genetic Health Summary</h1>
-      <p class="meta">Generated: ${date} &nbsp;&middot;&nbsp; Patient: ${profile.full_name || profile.username || profile.email} &nbsp;&middot;&nbsp; Total variants: ${savedVariants.length}</p>
-      <table>
-        <thead><tr><th>Variant / Gene</th><th>Genotype</th><th>Clinical Significance</th><th>Consequence</th><th>Your Notes</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-      <p class="disclaimer">This report was generated from the Epigenic platform for informational purposes only. It is not a clinical diagnosis. Please discuss these findings with a qualified healthcare professional or genetic counselor.</p>
-      <script>window.onload=function(){window.print()}<\/script>
-    </body></html>`
+        <title>Saved Variants — Epigenic</title>
+        <style>
+          * { box-sizing: border-box; }
+          body { font-family: Georgia, serif; max-width: 1050px; margin: 40px auto; color: #1a1a1a; font-size: 12.5px; line-height: 1.5; }
+          h1 { font-size: 22px; margin-bottom: 4px; }
+          .meta { color: #555; font-size: 12px; margin-bottom: 28px; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 28px; }
+          th { background: #f0f0f0; text-align: left; padding: 7px 9px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 2px solid #bbb; }
+          td { padding: 8px 9px; border-bottom: 1px solid #e0e0e0; vertical-align: top; }
+          tr:last-child td { border-bottom: none; }
+          .rsid { font-size: 13px; }
+          .muted { color: #777; font-size: 11px; }
+          .genotype { font-family: monospace; color: #333; font-size: 11.5px; }
+          .variant-cell { min-width: 90px; }
+          .desc-cell { max-width: 240px; font-size: 11.5px; color: #333; }
+          .condition { margin-bottom: 2px; }
+          .cv-links { font-size: 10.5px; margin-top: 4px; color: #666; }
+          .cv-links a { color: #c35e00; text-decoration: none; }
+          .cv-links a:hover { text-decoration: underline; }
+          .note { color: #444; display: block; margin-top: 3px; font-size: 11.5px; }
+          .path-high { color: #c00; font-weight: bold; }
+          .path-uncertain { color: #b56800; font-weight: bold; }
+          .path-benign { color: #1a7a1a; font-weight: bold; }
+          .disclaimer { border-top: 1px solid #ccc; padding-top: 12px; color: #888; font-size: 11px; font-style: italic; margin-top: 8px; }
+          @media print {
+            body { margin: 14mm; font-size: 11px; }
+            .cv-links a { color: #c35e00; }
+            button { display: none; }
+          }
+        </style>
+      </head><body>
+        <h1>Saved Variants — Genetic Health Summary</h1>
+        <p class="meta">Generated: ${date} &nbsp;&middot;&nbsp; Patient: ${profile.full_name || profile.username || profile.email} &nbsp;&middot;&nbsp; Total variants: ${savedVariants.length}</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Variant / Gene<br/>Genotype</th>
+              <th>Clinical Significance<br/>ClinVar Reports</th>
+              <th>Associated Conditions</th>
+              <th>Description</th>
+              <th>Pathogenicity</th>
+              <th>Your Notes</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <p class="disclaimer">This report was generated from the Epigenic platform for informational purposes only. It is not a clinical diagnosis. Please discuss these findings with a qualified healthcare professional or genetic counselor.</p>
+        <script>window.onload=function(){window.print()}<\/script>
+      </body></html>`
+
+    setPrintLoading(false)
     const w = window.open('', '_blank')
     if (w) { w.document.write(html); w.document.close() }
   }
@@ -715,11 +782,14 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
               <button
                 type="button"
                 onClick={printVariants}
+                disabled={printLoading}
                 title="Export for doctor (print)"
-                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-blue-500/30 text-blue-400 hover:bg-blue-500/10 transition-colors shrink-0 mt-1"
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-blue-500/30 text-blue-400 hover:bg-blue-500/10 transition-colors shrink-0 mt-1 disabled:opacity-50"
               >
-                <Printer className="h-3.5 w-3.5" />
-                Print / Export
+                {printLoading
+                  ? <><div className="h-3.5 w-3.5 rounded-full border border-blue-400 border-t-transparent animate-spin" /> Preparing…</>
+                  : <><Printer className="h-3.5 w-3.5" /> Print / Export</>
+                }
               </button>
             )}
           </div>
