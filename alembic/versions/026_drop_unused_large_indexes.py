@@ -23,15 +23,15 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # 1000G indexes — 0 scans, 9.7 GB combined
-    op.drop_index('ix_thousand_genomes_variants_rsid', table_name='thousand_genomes_variants', if_exists=True, postgresql_concurrently=True)
-    op.drop_index('ix_1kg_chrom_pos_ref_alt', table_name='thousand_genomes_variants', if_exists=True, postgresql_concurrently=True)
-    op.drop_index('ix_1kg_maf', table_name='thousand_genomes_variants', if_exists=True, postgresql_concurrently=True)
+    # 1000G indexes — 0 scans, 9.7 GB combined (already dropped manually 2026-03-27)
+    op.drop_index('ix_thousand_genomes_variants_rsid', table_name='thousand_genomes_variants', if_exists=True)
+    op.drop_index('ix_1kg_chrom_pos_ref_alt', table_name='thousand_genomes_variants', if_exists=True)
+    op.drop_index('ix_1kg_maf', table_name='thousand_genomes_variants', if_exists=True)
 
-    # gnomAD indexes — 0 scans, 7.4 GB combined
-    op.drop_index('ix_gnomad_variants_variant_id', table_name='gnomad_variants', if_exists=True, postgresql_concurrently=True)
-    op.drop_index('ix_gnomad_variants_cadd_phred', table_name='gnomad_variants', if_exists=True, postgresql_concurrently=True)
-    op.drop_index('ix_gnomad_variants_gene', table_name='gnomad_variants', if_exists=True, postgresql_concurrently=True)
+    # gnomAD indexes — 0 scans, 7.4 GB combined (already dropped manually 2026-03-27)
+    op.drop_index('ix_gnomad_variants_variant_id', table_name='gnomad_variants', if_exists=True)
+    op.drop_index('ix_gnomad_variants_cadd_phred', table_name='gnomad_variants', if_exists=True)
+    op.drop_index('ix_gnomad_variants_gene', table_name='gnomad_variants', if_exists=True)
 
 
 def downgrade() -> None:
