@@ -17,6 +17,7 @@ import {
   VariantInfoBox,
   ClickableRsidBadge,
   GeneContextBox,
+  AlphaFoldDetailBox,
   GeneBurdenStrip,
   carrierStatusToSeverity,
   MasonryLayout,
@@ -451,6 +452,13 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
                         isDarkMode={isDarkMode}
                         open={true}
                         onOpenChange={open => { if (!open) setOpenDialogRsid(null) }}
+                      />
+                    )}
+                    {item.associated_variants?.[0] && data?.alphafold_map?.[item.associated_variants?.[0]] && (
+                      <AlphaFoldDetailBox
+                        rsid={item.associated_variants?.[0]}
+                        alphafoldData={data.alphafold_map[item.associated_variants?.[0]]}
+                        theme={theme}
                       />
                     )}
                   </div>

@@ -14,6 +14,7 @@ import {
   PathogenicityBar,
   VariantInfoBox,
   GeneContextBox,
+  AlphaFoldDetailBox,
   GeneBurdenStrip,
   ZygosityBadge,
   sensitivityToSeverity,
@@ -229,6 +230,13 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
                     )}
                     <VariantInfoBox rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                     <GeneContextBox gene={gene} stats={gene ? data?.gene_stats_map?.[gene] : undefined} theme={theme} />
+                    {rsid && data?.alphafold_map?.[rsid] && (
+                      <AlphaFoldDetailBox
+                        rsid={rsid}
+                        alphafoldData={data.alphafold_map[rsid]}
+                        theme={theme}
+                      />
+                    }
                   </div>
             )}
           </div>

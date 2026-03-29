@@ -601,7 +601,109 @@ export function GeneBurdenStrip({ gene, stats, theme }: GeneContextBoxProps) {
   )
 }
 
+// ─── AlphaFold Structural Detail Box ───────────────────────────
+
+interface AlphaFoldDetailBoxProps {
+  rsid?: string
+  alphafoldData?: {
+    confidence?: number | null
+    high_confidence_pct?: number
+    low_confidence_pct?: number
+    protein_name?: string
+  } | null
+  theme: ThemeClasses
+}
+
+/**
+ * Expanded section: full AlphaFold protein structure confidence breakdown.
+ * Shows pLDDT score visually with per-region breakdown and clinical interpretation.
+ * High confidence (≥70%) = reliable structure prediction → variant likely disrupts real domain.
+ * Low confidence (<50%) = intrinsically disordered region → variant effect harder to predict.
+ */
+export function AlphaFoldDetailBox({ rsid, alphafoldData, theme }: AlphaFoldDetailBoxProps) {
+  if (!alphafoldData || alphafoldData.confidence == null) return null
+
+  const pct = Math.round(alphafoldData.confidence)
+  const highPct = alphafoldData.high_confidence_pct ?? 0
+  const lowPct = alphafoldData.low_confidence_pct ?? 0
+  const proteinName = alphafoldData.protein_name
+
+  const confidenceColor =
+    pct >= 70 ? 'text-green-400' : pct >= 50 ? 'text-amber-400' : 'text-red-400'
+  const barColor =
+    pct >= 70 ? 'bg-green-500' : pct >= 50 ? 'bg-amber-500' : 'bg-red-500'
+
+  const interpretation =
+    pct >= 90 ? 'Very high confidence — structure is highly reliable. Variant likely disrupts a well-defined structural domain.' :
+    pct >= 70 ? 'Confident structure. Variant falls in a region with reliable 3D prediction — functional impact is assessable.' :
+    pct >= 50 ? 'Low confidence — this region may be partially disordered. Structural impact harder to predict.' :
+                'Very low confidence — intrinsically disordered region. AlphaFold structure not reliable here.'
+
+  return (
+    <div>
+      <h5 className={`text-xs font-semibold ${theme.textSecondary} uppercase tracking-wide mb-1.5`}>
+        AlphaFold Protein Structure
+      </h5>
+      <div className={`rounded-lg p-2.5 border ${theme.border} ${theme.isDarkMode ? 'bg-white/[0.03]' : 'bg-gray-50/60'} space-y-2`}>
+        {/* Protein name */}
+        {proteinName && (
+          <p className={`text-xs font-medium ${theme.textPrimary} truncate`} title={proteinName}>
+            {proteinName}
+          </p>
+        )}
+        {/* Global confidence bar */}
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <span className={`text-xs ${theme.textSecondary}`}>Global model confidence (pLDDT)</span>
+            <span className={`text-sm font-bold font-mono ${confidenceColor}`}>{pct}%</span>
+          </div>
+          <div className={`h-2 rounded-full ${theme.isDarkMode ? 'bg-white/10' : 'bg-gray-200'} overflow-hidden`}>
+            <div className={`h-full rounded-full ${barColor} transition-all`} style={{ width: `${pct}%` }} />
+          </div>
+        </div>
+        {/* pLDDT region breakdown */}
+        {(highPct > 0 || lowPct > 0) && (
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div className={`rounded px-1.5 py-1 ${theme.isDarkMode ? 'bg-green-500/10' : 'bg-green-50'}`}>
+              <div className="text-[10px] text-green-400 font-semibold">{highPct}%</div>
+              <div className={`text-[9px] ${theme.textSecondary}`}>Very high</div>
+              <div className={`text-[9px] ${theme.textSecondary}`}>(pLDDT ≥90)</div>
+            </div>
+            <div className={`rounded px-1.5 py-1 ${theme.isDarkMode ? 'bg-amber-500/10' : 'bg-amber-50'}`}>
+              <div className="text-[10px] text-amber-400 font-semibold">{Math.max(0, 100 - highPct - lowPct)}%</div>
+              <div className={`text-[9px] ${theme.textSecondary}`}>Confident</div>
+              <div className={`text-[9px] ${theme.textSecondary}`}>(50–89)</div>
+            </div>
+            <div className={`rounded px-1.5 py-1 ${theme.isDarkMode ? 'bg-red-500/10' : 'bg-red-50'}`}>
+              <div className="text-[10px] text-red-400 font-semibold">{lowPct}%</div>
+              <div className={`text-[9px] ${theme.textSecondary}`}>Disordered</div>
+              <div className={`text-[9px] ${theme.textSecondary}`}>(pLDDT &lt;50)</div>
+            </div>
+          </div>
+        )}
+        {/* Clinical interpretation */}
+        <p className={`text-[10px] ${theme.textSecondary} leading-relaxed`}>
+          {interpretation}
+        </p>
+        {/* Link to AlphaFold DB */}
+        {rsid && (
+          <a
+            href={`https://alphafold.ebi.ac.uk/search/text/${rsid}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={e => e.stopPropagation()}
+            className="inline-flex items-center gap-1 text-[10px] text-blue-400 hover:text-blue-300 transition-colors"
+          >
+            View in AlphaFold DB ↗
+          </a>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── Research Links (inline compact) ───────────────────────────
+
 
 const DB_LINKS: Record<string, (rsid: string) => string> = {
   dbSNP: (rsid) => `https://www.ncbi.nlm.nih.gov/snp/${rsid}`,

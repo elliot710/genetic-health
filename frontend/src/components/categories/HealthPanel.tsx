@@ -10,6 +10,7 @@ import {
   PathogenicityBar,
   VariantInfoBox,
   GeneContextBox,
+  AlphaFoldDetailBox,
   GeneBurdenStrip,
   AlphaFoldBadge,
   DisclaimerCard,
@@ -391,6 +392,13 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                       <GeneContextBox
                         gene={risk.geneSymbol}
                         stats={data.gene_stats_map[risk.geneSymbol]}
+                        theme={theme}
+                      />
+                    )}
+                    {risk.geneSymbol && data?.alphafold_map?.[risk.geneSymbol] && (
+                      <AlphaFoldDetailBox
+                        rsid={variant}
+                        alphafoldData={data.alphafold_map[risk.geneSymbol]}
                         theme={theme}
                       />
                     )}

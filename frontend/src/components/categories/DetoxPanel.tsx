@@ -18,6 +18,7 @@ import {
   PathogenicityBar,
   VariantInfoBox,
   GeneContextBox,
+  AlphaFoldDetailBox,
   GeneBurdenStrip,
   ZygosityBadge,
   formatLabel,
@@ -232,6 +233,13 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                         label={`Sensitivity: ${formatLabel(sensitivity)}`}
                         severity={sensitivityToSeverity(sensitivity)}
                         showIcon={false}
+                      />
+                    )}
+                    {rsid && data?.alphafold_map?.[rsid] && (
+                      <AlphaFoldDetailBox
+                        rsid={rsid}
+                        alphafoldData={data.alphafold_map[rsid]}
+                        theme={theme}
                       />
                     )}
                     <Badge variant="secondary" className="text-xs font-medium">{item.gene}</Badge>

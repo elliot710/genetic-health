@@ -14,6 +14,7 @@ import {
   VariantInfoBox,
   AlphaFoldBadge,
   GeneContextBox,
+  AlphaFoldDetailBox,
   GeneBurdenStrip,
   riskToSeverity,
   MasonryLayout,
@@ -209,6 +210,13 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
                       confidence={data.alphafold_map[drug.variants[0]].confidence}
                       highPct={data.alphafold_map[drug.variants[0]].high_confidence_pct}
                       lowPct={data.alphafold_map[drug.variants[0]].low_confidence_pct}
+                      theme={theme}
+                    />
+                  )}
+                  {drug.variants?.[0] && data?.alphafold_map?.[drug.variants?.[0]] && (
+                    <AlphaFoldDetailBox
+                      rsid={drug.variants?.[0]}
+                      alphafoldData={data.alphafold_map[drug.variants?.[0]]}
                       theme={theme}
                     />
                   )}

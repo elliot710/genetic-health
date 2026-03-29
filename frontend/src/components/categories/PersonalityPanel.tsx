@@ -14,6 +14,7 @@ import {
   PathogenicityBar,
   VariantInfoBox,
   GeneContextBox,
+  AlphaFoldDetailBox,
   GeneBurdenStrip,
   ZygosityBadge,
   advantageToSeverity,
@@ -251,6 +252,13 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
 
                     <VariantInfoBox rsid={trait.gene?.startsWith('rs') ? trait.gene : undefined} gene={!trait.gene?.startsWith('rs') ? trait.gene : undefined} token={token} isDarkMode={isDarkMode} alphaMissense={trait.gene?.startsWith('rs') ? data?.alpha_missense_map?.[trait.gene] : undefined} clinvarCount={trait.gene?.startsWith('rs') ? data?.clinvar_count_map?.[trait.gene] : undefined} genotype={trait.gene?.startsWith('rs') ? data?.genotype_map?.[trait.gene] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                     <GeneContextBox gene={!trait.gene?.startsWith('rs') ? trait.gene : undefined} stats={trait.gene && !trait.gene.startsWith('rs') ? data?.gene_stats_map?.[trait.gene] : undefined} theme={theme} />
+                    {rsid && data?.alphafold_map?.[rsid] && (
+                      <AlphaFoldDetailBox
+                        rsid={rsid}
+                        alphafoldData={data.alphafold_map[rsid]}
+                        theme={theme}
+                      />
+                    }
                   </div>
                 )}
               </div>

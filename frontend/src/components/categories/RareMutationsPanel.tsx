@@ -16,6 +16,7 @@ import {
   VariantInfoBox,
   ZygosityBadge,
   GeneContextBox,
+  AlphaFoldDetailBox,
   GeneBurdenStrip,
   clinicalSignificanceToSeverity,
   formatLabel,
@@ -386,7 +387,14 @@ export default function RareMutationsPanel({ data, isDarkMode = false, token }: 
                       <GeneContextBox gene={gene} stats={data.gene_stats_map[gene]} theme={theme} />
                     )}
 
-                    <VariantInfoBox rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
+                    
+                        {mutation.rsid && data?.alphafold_map?.[mutation.rsid] && (
+                          <AlphaFoldDetailBox
+                            rsid={mutation.rsid}
+                            alphafoldData={data.alphafold_map[mutation.rsid]}
+                            theme={theme}
+                          />
+                        )}<VariantInfoBox rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                   </div>
                 )}
               </div>

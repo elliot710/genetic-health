@@ -14,6 +14,7 @@ import {
   PathogenicityBar,
   VariantInfoBox,
   GeneContextBox,
+  AlphaFoldDetailBox,
   GeneBurdenStrip,
   ZygosityBadge,
   clinicalSignificanceToSeverity,
@@ -231,6 +232,13 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
 
                     <VariantInfoBox rsid={mutation.rsid} gene={mutation.gene} token={token} isDarkMode={isDarkMode} alphaMissense={mutation.rsid ? data?.alpha_missense_map?.[mutation.rsid] : undefined} clinvarCount={mutation.rsid ? data?.clinvar_count_map?.[mutation.rsid] : undefined} genotype={mutation.rsid ? data?.genotype_map?.[mutation.rsid] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                     <GeneContextBox gene={mutation.gene} stats={mutation.gene ? data?.gene_stats_map?.[mutation.gene] : undefined} theme={theme} />
+                    {mutation.rsid && data?.alphafold_map?.[mutation.rsid] && (
+                      <AlphaFoldDetailBox
+                        rsid={mutation.rsid}
+                        alphafoldData={data.alphafold_map[mutation.rsid]}
+                        theme={theme}
+                      />
+                    }
                   </div>
                 )}
               </div>

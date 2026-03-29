@@ -13,6 +13,7 @@ import {
   PathogenicityBar,
   VariantInfoBox,
   GeneContextBox,
+  AlphaFoldDetailBox,
   GeneBurdenStrip,
   DisclaimerCard,
   VariantLinks,
@@ -222,6 +223,13 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
                         label="Percentile"
                         value={trait.score}
                         colorClass="bg-gradient-to-r from-purple-500 to-blue-500"
+                        theme={theme}
+                      />
+                    )}
+                    {rsid && data?.alphafold_map?.[rsid] && (
+                      <AlphaFoldDetailBox
+                        rsid={rsid}
+                        alphafoldData={data.alphafold_map[rsid]}
                         theme={theme}
                       />
                     )}

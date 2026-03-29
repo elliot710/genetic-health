@@ -17,6 +17,7 @@ import {
   PathogenicityBar,
   VariantInfoBox,
   GeneContextBox,
+  AlphaFoldDetailBox,
   GeneBurdenStrip,
   ZygosityBadge,
   formatLabel,
@@ -219,6 +220,13 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
                     )}
                     <VariantInfoBox rsid={rsid} gene={item.gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                     <GeneContextBox gene={item.gene} stats={item.gene ? data?.gene_stats_map?.[item.gene] : undefined} theme={theme} />
+                    {rsid && data?.alphafold_map?.[rsid] && (
+                      <AlphaFoldDetailBox
+                        rsid={rsid}
+                        alphafoldData={data.alphafold_map[rsid]}
+                        theme={theme}
+                      />
+                    }
                   </div>
         </MasonryLayout>
             )}
