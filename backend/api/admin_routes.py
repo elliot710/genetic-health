@@ -2102,8 +2102,76 @@ async def gnomad_v2_status(admin: User = Depends(require_admin)):
     return {
         "file_count": svc.file_count,
         "indexed_count": svc.indexed_count,
-        "ready": svc.indexed_count > 0,
+        "pg_rows": svc._pg_count,
+        "ready": svc.has_pg_data or svc.indexed_count > 0,
     }
+
+
+# ======================================================================
+# gnomAD v2 exome ETL endpoints
+# ======================================================================
+
+@router.get("/gnomad-v2-etl/status")
+async def gnomad_v2_etl_status(admin: User = Depends(require_admin)):
+    """Get current gnomAD v2 exome import status (row counts + file availability)."""
+    from ..services.gnomad_v2_etl import GnomadV2ETL
+    etl = GnomadV2ETL()
+    return await etl.get_import_status()
+
+
+@router.post("/gnomad-v2-etl/import")
+async def gnomad_v2_etl_import(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+):
+    """Dispatch gnomAD v2 exome ETL to the background worker and return immediately."""
+    from ..db.models import WorkerJob
+    job = WorkerJob(job_type="etl_gnomad_v2", status="pending", params={}, requested_by=admin.id)
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    logger.info(f"gnomAD v2 ETL job {job.id} queued by admin {admin.id}")
+    return {"job_id": job.id, "status": "pending", "detail": f"gnomAD v2 ETL queued as worker job #{job.id} — monitor via Worker Jobs"}
+
+
+# ======================================================================
+# AlphaFold ETL endpoints
+# ======================================================================
+
+@router.get("/alphafold-etl/status")
+async def alphafold_etl_status(admin: User = Depends(require_admin)):
+    """Get AlphaFold local data status (SQLite DB protein count)."""
+    from ..services.alphafold_local import get_alphafold_local_service
+    svc = get_alphafold_local_service()
+    if not svc.available:
+        svc.ensure_loaded()
+    return {
+        "alphafold_proteins": svc.protein_count,
+        "loaded": svc.available,
+        "db_exists": svc._db_path.exists(),
+        "db_path": str(svc._db_path),
+    }
+
+
+@router.post("/alphafold-etl/import")
+async def alphafold_etl_import(
+    force: bool = Query(False, description="Rebuild even if DB already exists"),
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+):
+    """Dispatch AlphaFold ETL (download + build SQLite) to the background worker."""
+    from ..db.models import WorkerJob
+    job = WorkerJob(
+        job_type="etl_alphafold",
+        status="pending",
+        params={"force": force},
+        requested_by=admin.id,
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    logger.info(f"AlphaFold ETL job {job.id} queued by admin {admin.id}")
+    return {"job_id": job.id, "status": "pending", "detail": f"AlphaFold ETL queued as worker job #{job.id} — monitor via Worker Jobs"}
 
 
 @router.get("/ensembl-etl/status")

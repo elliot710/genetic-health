@@ -890,6 +890,28 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
         arrayKeys: [] as string[],
       },
     },
+    {
+      key: 'gnomad_v2', label: 'gnomAD v2 Exome',
+      statusEndpoint: '/gnomad-v2-etl/status', importEndpoint: '/gnomad-v2-etl/import',
+      description: 'v2.1.1 exome population AFs — GRCh37 (VCF → PostgreSQL)',
+      displayConfig: {
+        primaryKey: 'gnomad_v2_variants',
+        countKeys: ['with_rsid'] as string[],
+        fileKeys: [] as string[],
+        arrayKeys: ['vcf_files'] as string[],
+      },
+    },
+    {
+      key: 'alphafold', label: 'AlphaFold',
+      statusEndpoint: '/alphafold-etl/status', importEndpoint: '/alphafold-etl/import',
+      description: 'Protein structure confidence (EBI tar → SQLite)',
+      displayConfig: {
+        primaryKey: 'alphafold_proteins',
+        countKeys: [] as string[],
+        fileKeys: ['loaded', 'db_exists'] as string[],
+        arrayKeys: [] as string[],
+      },
+    },
   ]
 
   const fetchEtlStatus = useCallback(async (key: string, endpoint: string) => {

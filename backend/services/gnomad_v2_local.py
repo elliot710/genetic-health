@@ -53,21 +53,24 @@ class GnomadV2Service:
     rsID is stored in the VCF ID column.
 
     Lookup strategy:
-    1. For single / small-batch rsID lookups: uses pysam to scan by position
-       derived from the ID-indexed lookup table (built at startup if rsid_index
-       is available) or falls back to a sequential per-chromosome search.
-    2. For bulk ETL (ancestry_aims_panel refresh): uses a per-chromosome
-       sequential scan to extract AFs for all requested rsids efficiently.
+    1. PG batch lookup (fast) — use gnomad_v2_variants table if populated
+    2. Tabix position lookup (fallback) — per-variant tabix queries on VCF files
+    3. Sequential VCF scan (bulk) — for ancestry panel refresh
     """
 
     def __init__(self):
         self._vcf_files: Dict[str, Path] = {}   # chrom → path (e.g. "1" → Path)
         self._loaded = False
         self._lock = asyncio.Lock()
+        self._pg_count: int = 0  # rows in gnomad_v2_variants table
 
     @property
     def is_loaded(self) -> bool:
         return self._loaded and bool(self._vcf_files)
+
+    @property
+    def has_pg_data(self) -> bool:
+        return self._pg_count > 0
 
     @property
     def file_count(self) -> int:
@@ -87,20 +90,36 @@ class GnomadV2Service:
                 await asyncio.to_thread(self._discover_files)
             except Exception as e:
                 logger.error("gnomAD v2: failed to discover VCF files: %s", e)
+            # Check PG row count
+            try:
+                await self._check_pg_count()
+            except Exception as e:
+                logger.debug("gnomAD v2: PG count check failed: %s", e)
             self._loaded = True
         if self._vcf_files:
             indexed = self.indexed_count
             logger.info(
-                "gnomAD v2: %d chromosome VCF files found, %d tabix-indexed",
-                len(self._vcf_files), indexed,
+                "gnomAD v2: %d chromosome VCF files found, %d tabix-indexed, PG: %d rows",
+                len(self._vcf_files), indexed, self._pg_count,
             )
-            if indexed == 0:
+            if indexed == 0 and self._pg_count == 0:
                 logger.warning(
-                    "gnomAD v2: no .tbi index files found — run index_all_files() first"
+                    "gnomAD v2: no .tbi index files and no PG data — run ETL or index_all_files()"
                 )
         else:
             logger.warning("gnomAD v2: no VCF files found in %s", _GNOMAD_V2_DIR)
         return self.is_loaded
+
+    async def _check_pg_count(self):
+        """Check how many rows are in gnomad_v2_variants table."""
+        from ..db.database import async_session_factory
+        from sqlalchemy import text as sa_text
+        try:
+            async with async_session_factory() as session:
+                result = await session.execute(sa_text("SELECT COUNT(*) FROM gnomad_v2_variants"))
+                self._pg_count = result.scalar() or 0
+        except Exception:
+            self._pg_count = 0
 
     def _discover_files(self):
         """Find per-chromosome bgz VCF files and build chrom → path mapping."""
@@ -198,6 +217,55 @@ class GnomadV2Service:
             return {}
 
         return await asyncio.to_thread(self._tabix_batch_by_position, tuples)
+
+    async def batch_lookup_pg(self, rsids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Fast PG batch lookup — queries gnomad_v2_variants by rsid.
+
+        Returns {rsid: {af_afr, af_amr, af_eas, af_nfe, af_sas, subpop_freqs, ...}}
+        in the same format as tabix/VCF lookups.
+        """
+        if not rsids or self._pg_count == 0:
+            return {}
+
+        from ..db.database import async_session_factory
+        from sqlalchemy import text as sa_text
+
+        results: Dict[str, Dict[str, Any]] = {}
+        BATCH = 10_000
+
+        async with async_session_factory() as session:
+            for i in range(0, len(rsids), BATCH):
+                batch = [r for r in rsids[i:i + BATCH] if r and r.startswith("rs")]
+                if not batch:
+                    continue
+                # Use parameterized ANY() query for safety
+                rows = await session.execute(
+                    sa_text(
+                        "SELECT rsid, af, af_afr, af_amr, af_eas, af_nfe, af_sas, af_fin, af_asj "
+                        "FROM gnomad_v2_variants WHERE rsid = ANY(:rsids)"
+                    ),
+                    {"rsids": batch},
+                )
+                for row in rows:
+                    afs: Dict[str, Any] = {}
+                    for pop in ("afr", "amr", "eas", "nfe", "sas"):
+                        val = getattr(row, f"af_{pop}", None)
+                        if val is not None:
+                            afs[f"af_{pop}"] = val
+                    if not afs:
+                        continue
+                    # Build subpop_freqs
+                    subpop: Dict[str, Any] = {}
+                    for sp in ("fin", "asj"):
+                        val = getattr(row, f"af_{sp}", None)
+                        if val is not None:
+                            subpop[sp] = val
+                    if subpop:
+                        subpop["subpop_system"] = "gnomad"
+                        afs["subpop_freqs"] = subpop
+                    results[row.rsid] = afs
+
+        return results
 
     async def bulk_refresh_ancestry_panel(
         self,

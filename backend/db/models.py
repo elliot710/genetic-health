@@ -905,6 +905,36 @@ class ThousandGenomesVariant(Base):
     )
 
 
+class GnomadV2Variant(Base):
+    """gnomAD v2.1.1 exome variant — population AFs from per-chromosome VCFs (GRCh37).
+    Primary lookup table for gnomAD population frequency data."""
+    __tablename__ = "gnomad_v2_variants"
+
+    id = Column(BigInteger, primary_key=True)
+    chrom = Column(String, nullable=False)
+    pos = Column(Integer, nullable=False)
+    ref = Column(String, nullable=False)
+    alt = Column(String, nullable=False)
+    rsid = Column(String)
+    af = Column(Float)
+    af_afr = Column(Float)
+    af_amr = Column(Float)
+    af_eas = Column(Float)
+    af_nfe = Column(Float)
+    af_sas = Column(Float)
+    af_fin = Column(Float)
+    af_asj = Column(Float)
+    ac = Column(Integer)
+    an = Column(Integer)
+    data_source = Column(String, default='gnomad_v2_vcf')
+    imported_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index('ix_gnomad_v2_rsid', 'rsid'),
+        Index('ix_gnomad_v2_chrom_pos', 'chrom', 'pos'),
+    )
+
+
 class DashboardCache(Base):
     """Pre-computed dashboard JSON per user.
 

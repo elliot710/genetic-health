@@ -204,6 +204,14 @@ async def _execute_job(job_id: int, job_type: str, params: dict) -> dict:
     elif job_type == "etl_1kg":
         from backend.services.thousand_genomes_etl import ThousandGenomesETL
         return await ThousandGenomesETL().run_full_import()
+    elif job_type == "etl_gnomad_v2":
+        from backend.services.gnomad_v2_etl import GnomadV2ETL
+        return await GnomadV2ETL().run_full_import()
+    elif job_type == "etl_alphafold":
+        from backend.scripts.build_alphafold_local import run_etl
+        p = params or {}
+        result_path = await asyncio.to_thread(run_etl, force=p.get("force", False))
+        return {"db_path": str(result_path)}
     else:
         raise ValueError(f"Unknown job type: {job_type}")
 

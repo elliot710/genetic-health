@@ -139,7 +139,7 @@ async def load_local_sources(enabled_sources: Optional[List[str]]) -> LoadedSour
         svc = get_gnomad_v2_service()
         if not svc.is_loaded:
             await svc.ensure_loaded()
-        if svc.is_loaded and svc.indexed_count > 0:
+        if svc.is_loaded and (svc.has_pg_data or svc.indexed_count > 0):
             sources.gnomad_v2 = svc
 
     return sources
@@ -327,14 +327,23 @@ async def run_all_lookups(
         ]
         if v2_candidates:
             t0 = time.monotonic()
-            # Use fast position-based tabix lookup (O(log N) per query)
-            pos_tuples = _build_pos_tuples(v2_candidates, rsid_to_variant)
-            logger.info(f"  gnomAD v2: starting position lookup for {len(pos_tuples)} variants "
-                        f"({len(v2_candidates)} unfound RSIDs)...")
-            if pos_tuples:
-                v2_afs = await sources.gnomad_v2.batch_lookup_by_position(pos_tuples)
+            v2_afs: Dict[str, Any] = {}
+
+            # Strategy 1: PG batch lookup (fast — indexed rsid query)
+            if sources.gnomad_v2.has_pg_data:
+                logger.info(f"  gnomAD v2: PG batch lookup for {len(v2_candidates)} RSIDs...")
+                v2_afs = await sources.gnomad_v2.batch_lookup_pg(v2_candidates)
+                pg_found = len(v2_afs)
+                logger.info(f"  gnomAD v2: PG found {pg_found}/{len(v2_candidates)} "
+                            f"({time.monotonic() - t0:.1f}s)")
             else:
-                v2_afs = {}
+                # Strategy 2: tabix position lookup (slower — per-variant seeks)
+                pos_tuples = _build_pos_tuples(v2_candidates, rsid_to_variant)
+                logger.info(f"  gnomAD v2: tabix position lookup for {len(pos_tuples)} variants "
+                            f"({len(v2_candidates)} unfound RSIDs)...")
+                if pos_tuples:
+                    v2_afs = await sources.gnomad_v2.batch_lookup_by_position(pos_tuples)
+
             v2_found = 0
             for rsid, afs in v2_afs.items():
                 if afs:
@@ -352,7 +361,7 @@ async def run_all_lookups(
                         "subpop_freqs": afs.get("subpop_freqs", {}),
                     }
                     v2_found += 1
-            logger.info(f"  gnomAD v2: {v2_found}/{len(v2_candidates)} found "
+            logger.info(f"  gnomAD v2: {v2_found}/{len(v2_candidates)} found total "
                         f"({time.monotonic() - t0:.1f}s)")
             await asyncio.sleep(0)
 
