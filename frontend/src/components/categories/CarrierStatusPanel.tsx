@@ -12,12 +12,11 @@ import {
   SectionCard,
   StatusBadge,
   DisclaimerCard,
-  VariantLinks,
-  PathogenicityBar,
   VariantInfoBox,
   ClickableRsidBadge,
   GeneContextBox,
   AlphaFoldDetailBox,
+  AlphaFoldBadge,
   GeneBurdenStrip,
   carrierStatusToSeverity,
   MasonryLayout,
@@ -407,6 +406,11 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
                   {carrier.rsids.map(rsid => (
                     <ClickableRsidBadge key={rsid} rsid={rsid} gene={carrier.gene} genotype={data?.genotype_map?.[rsid]} token={token} isDarkMode={isDarkMode} />
                   ))}
+                  <AlphaFoldBadge
+                    confidence={data?.alphafold_map?.[carrier.rsids?.[0]]?.confidence}
+                    highPct={data?.alphafold_map?.[carrier.rsids?.[0]]?.high_confidence_pct}
+                    lowPct={data?.alphafold_map?.[carrier.rsids?.[0]]?.low_confidence_pct}
+                  />
                 </div>
 
                 {/* Collapsed description */}
@@ -454,10 +458,10 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
                         onOpenChange={open => { if (!open) setOpenDialogRsid(null) }}
                       />
                     )}
-                    {item.associated_variants?.[0] && data?.alphafold_map?.[item.associated_variants?.[0]] && (
+                    {carrier.rsids?.[0] && data?.alphafold_map?.[carrier.rsids[0]] && (
                       <AlphaFoldDetailBox
-                        rsid={item.associated_variants?.[0]}
-                        alphafoldData={data.alphafold_map[item.associated_variants?.[0]]}
+                        rsid={carrier.rsids[0]}
+                        alphafoldData={data.alphafold_map[carrier.rsids[0]]}
                         theme={theme}
                       />
                     )}

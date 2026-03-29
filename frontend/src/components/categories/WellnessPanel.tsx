@@ -10,11 +10,10 @@ import {
   SectionCard,
   StatusBadge,
   DisclaimerCard,
-  VariantLinks,
-  PathogenicityBar,
   VariantInfoBox,
   GeneContextBox,
   AlphaFoldDetailBox,
+  AlphaFoldBadge,
   GeneBurdenStrip,
   ZygosityBadge,
   capacityToSeverity,
@@ -245,7 +244,6 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
                     confidence={data?.alphafold_map?.[trait.associated_variants?.[0]]?.confidence}
                     highPct={data?.alphafold_map?.[trait.associated_variants?.[0]]?.high_confidence_pct}
                     lowPct={data?.alphafold_map?.[trait.associated_variants?.[0]]?.low_confidence_pct}
-                    theme={theme}
                   />
                 </div>
                 {trait.gene && trait.gene !== 'Multiple' && data?.gene_stats_map?.[trait.gene] && (

@@ -7,7 +7,6 @@ import {
   EmptyState,
   SectionCard,
   StatusBadge,
-  PathogenicityBar,
   VariantInfoBox,
   GeneContextBox,
   AlphaFoldDetailBox,
@@ -357,7 +356,6 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                       confidence={data.alphafold_map[risk.variantInfo[0]].confidence}
                       highPct={data.alphafold_map[risk.variantInfo[0]].high_confidence_pct}
                       lowPct={data.alphafold_map[risk.variantInfo[0]].low_confidence_pct}
-                      theme={theme}
                     />
                   )}
                 </div>

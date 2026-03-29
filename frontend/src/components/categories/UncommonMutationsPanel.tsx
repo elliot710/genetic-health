@@ -10,11 +10,10 @@ import {
   SectionCard,
   StatusBadge,
   DisclaimerCard,
-  VariantLinks,
-  PathogenicityBar,
   VariantInfoBox,
   GeneContextBox,
   AlphaFoldDetailBox,
+  AlphaFoldBadge,
   GeneBurdenStrip,
   ZygosityBadge,
   clinicalSignificanceToSeverity,
@@ -206,7 +205,6 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
                     confidence={data?.alphafold_map?.[mutation.rsid]?.confidence}
                     highPct={data?.alphafold_map?.[mutation.rsid]?.high_confidence_pct}
                     lowPct={data?.alphafold_map?.[mutation.rsid]?.low_confidence_pct}
-                    theme={theme}
                   />
                 </div>
                 {mutation.gene && data?.gene_stats_map?.[mutation.gene] && (

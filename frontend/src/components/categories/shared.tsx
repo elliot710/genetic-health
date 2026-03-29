@@ -464,7 +464,6 @@ interface AlphaFoldBadgeProps {
   confidence?: number | null
   highPct?: number
   lowPct?: number
-  theme: ThemeClasses
 }
 
 /**

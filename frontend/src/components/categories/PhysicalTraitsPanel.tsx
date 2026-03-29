@@ -10,11 +10,10 @@ import {
   SectionCard,
   StatusBadge,
   DisclaimerCard,
-  VariantLinks,
-  PathogenicityBar,
   VariantInfoBox,
   GeneContextBox,
   AlphaFoldDetailBox,
+  AlphaFoldBadge,
   GeneBurdenStrip,
   ZygosityBadge,
   advantageToSeverity,
@@ -211,7 +210,6 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
                     confidence={data?.alphafold_map?.[rsid]?.confidence}
                     highPct={data?.alphafold_map?.[rsid]?.high_confidence_pct}
                     lowPct={data?.alphafold_map?.[rsid]?.low_confidence_pct}
-                    theme={theme}
                   />
                 </div>
                 {gene && data?.gene_stats_map?.[gene] && (

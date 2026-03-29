@@ -10,13 +10,12 @@ import {
   SectionCard,
   StatusBadge,
   ScoreBar,
-  PathogenicityBar,
   VariantInfoBox,
   GeneContextBox,
   AlphaFoldDetailBox,
+  AlphaFoldBadge,
   GeneBurdenStrip,
   DisclaimerCard,
-  VariantLinks,
   ZygosityBadge,
   advantageToSeverity,
   formatLabel,
@@ -216,7 +215,6 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
                     confidence={data?.alphafold_map?.[rsid]?.confidence}
                     highPct={data?.alphafold_map?.[rsid]?.high_confidence_pct}
                     lowPct={data?.alphafold_map?.[rsid]?.low_confidence_pct}
-                    theme={theme}
                   />
                 </div>
                 {gene && data?.gene_stats_map?.[gene] && (
@@ -235,13 +233,6 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
                         theme={theme}
                       />
                     )}
-                    {rsid && data?.alphafold_map?.[rsid] && (
-                      <AlphaFoldDetailBox
-                        rsid={rsid}
-                        alphafoldData={data.alphafold_map[rsid]}
-                        theme={theme}
-                      />
-                    )}
 
                     {trait.suggestions.length > 0 && (
                       <div className="space-y-2">
@@ -257,6 +248,13 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
 
                     <VariantInfoBox rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                     <GeneContextBox gene={gene} stats={gene ? data?.gene_stats_map?.[gene] : undefined} theme={theme} />
+                    {rsid && data?.alphafold_map?.[rsid] && (
+                      <AlphaFoldDetailBox
+                        rsid={rsid}
+                        alphafoldData={data.alphafold_map[rsid]}
+                        theme={theme}
+                      />
+                    )}
                   </div>
             )}
           </div>

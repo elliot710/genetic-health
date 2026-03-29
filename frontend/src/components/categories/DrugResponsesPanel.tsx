@@ -9,8 +9,6 @@ import {
   SectionCard,
   StatusBadge,
   DisclaimerCard,
-  VariantLinks,
-  PathogenicityBar,
   VariantInfoBox,
   AlphaFoldBadge,
   GeneContextBox,
@@ -210,17 +208,12 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
                       confidence={data.alphafold_map[drug.variants[0]].confidence}
                       highPct={data.alphafold_map[drug.variants[0]].high_confidence_pct}
                       lowPct={data.alphafold_map[drug.variants[0]].low_confidence_pct}
-                      theme={theme}
-                    />
-                  )}
-                  {drug.variants?.[0] && data?.alphafold_map?.[drug.variants?.[0]] && (
-                    <AlphaFoldDetailBox
-                      rsid={drug.variants?.[0]}
-                      alphafoldData={data.alphafold_map[drug.variants?.[0]]}
-                      theme={theme}
                     />
                   )}
                 </div>
+                {drug.gene && data?.gene_stats_map?.[drug.gene] && (
+                  <GeneBurdenStrip gene={drug.gene} stats={data.gene_stats_map[drug.gene]} theme={theme} />
+                )}
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
@@ -275,6 +268,13 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
 
                     <VariantInfoBox rsid={drug.variants?.[0]} gene={drug.gene} token={token} isDarkMode={isDarkMode} alphaMissense={drug.variants?.[0] ? data?.alpha_missense_map?.[drug.variants[0]] : undefined} clinvarCount={drug.variants?.[0] ? data?.clinvar_count_map?.[drug.variants[0]] : undefined} genotype={drug.variants?.[0] ? data?.genotype_map?.[drug.variants[0]] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                     <GeneContextBox gene={drug.gene} stats={data?.gene_stats_map?.[drug.gene]} theme={theme} />
+                    {drug.variants?.[0] && data?.alphafold_map?.[drug.variants[0]] && (
+                      <AlphaFoldDetailBox
+                        rsid={drug.variants[0]}
+                        alphafoldData={data.alphafold_map[drug.variants[0]]}
+                        theme={theme}
+                      />
+                    )}
                   </div>
                 )}
               </div>

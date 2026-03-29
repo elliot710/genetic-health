@@ -11,12 +11,11 @@ import {
   SectionCard,
   StatusBadge,
   DisclaimerCard,
-  VariantLinks,
-  PathogenicityBar,
   VariantInfoBox,
   ZygosityBadge,
   GeneContextBox,
   AlphaFoldDetailBox,
+  AlphaFoldBadge,
   GeneBurdenStrip,
   clinicalSignificanceToSeverity,
   formatLabel,
@@ -295,6 +294,11 @@ export default function RareMutationsPanel({ data, isDarkMode = false, token }: 
                   {mutation.mutation_type && (
                     <Badge variant="outline" className="text-xs">{formatLabel(mutation.mutation_type)}</Badge>
                   )}
+                  <AlphaFoldBadge
+                    confidence={data?.alphafold_map?.[rsid]?.confidence}
+                    highPct={data?.alphafold_map?.[rsid]?.high_confidence_pct}
+                    lowPct={data?.alphafold_map?.[rsid]?.low_confidence_pct}
+                  />
                 </div>
 
                 {/* Show disease as description only when it wasn't used as the title */}
@@ -387,14 +391,14 @@ export default function RareMutationsPanel({ data, isDarkMode = false, token }: 
                       <GeneContextBox gene={gene} stats={data.gene_stats_map[gene]} theme={theme} />
                     )}
 
-                    
-                        {mutation.rsid && data?.alphafold_map?.[mutation.rsid] && (
-                          <AlphaFoldDetailBox
-                            rsid={mutation.rsid}
-                            alphafoldData={data.alphafold_map[mutation.rsid]}
-                            theme={theme}
-                          />
-                        )}<VariantInfoBox rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
+                    <VariantInfoBox rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
+                    {mutation.rsid && data?.alphafold_map?.[mutation.rsid] && (
+                      <AlphaFoldDetailBox
+                        rsid={mutation.rsid}
+                        alphafoldData={data.alphafold_map[mutation.rsid]}
+                        theme={theme}
+                      />
+                    )}
                   </div>
                 )}
               </div>
