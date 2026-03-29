@@ -385,22 +385,6 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                       <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{risk.description}</p>
                     )}
 
-                    {/* Gene Context — burden + known diseases */}
-                    {risk.geneSymbol && data?.gene_stats_map?.[risk.geneSymbol] && (
-                      <GeneContextBox
-                        gene={risk.geneSymbol}
-                        stats={data.gene_stats_map[risk.geneSymbol]}
-                        theme={theme}
-                      />
-                    )}
-                    {risk.geneSymbol && data?.alphafold_map?.[risk.variantInfo?.[0]] && (
-                      <AlphaFoldDetailBox
-                        rsid={risk.variantInfo?.[0]}
-                        alphafoldData={data.alphafold_map[risk.variantInfo?.[0]]}
-                        theme={theme}
-                      />
-                    )}
-
                     {risk.variantInfo && risk.variantInfo.length > 0 && (
                       <div className="space-y-2">
                         {risk.variantInfo.map((variant: string, variantIndex: number) => (
@@ -418,6 +402,22 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                           />
                         ))}
                       </div>
+                    )}
+
+                    {/* Gene Context — burden + known diseases */}
+                    {risk.geneSymbol && data?.gene_stats_map?.[risk.geneSymbol] && (
+                      <GeneContextBox
+                        gene={risk.geneSymbol}
+                        stats={data.gene_stats_map[risk.geneSymbol]}
+                        theme={theme}
+                      />
+                    )}
+                    {risk.variantInfo?.[0] && data?.alphafold_map?.[risk.variantInfo[0]] && (
+                      <AlphaFoldDetailBox
+                        rsid={risk.variantInfo[0]}
+                        alphafoldData={data.alphafold_map[risk.variantInfo[0]]}
+                        theme={theme}
+                      />
                     )}
 
                     {risk.prevention.length > 0 && (
