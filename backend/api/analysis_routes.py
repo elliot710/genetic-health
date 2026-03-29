@@ -979,18 +979,11 @@ async def get_dashboard_data(
         dashboard_data["clinvar_count_map"] = cv_count_map
 
         # Build alphafold_map: rsid → {confidence, high_confidence_pct, low_confidence_pct, protein_name}
-        # Used by panel cards to surface protein stability context inline
+        # Built at dashboard time from gene_symbol_map + AlphaFold local DB (20k proteins),
+        # not from pre-stored annotation data (which requires re-analysis to populate).
         alphafold_map: Dict[str, Any] = {}
         pharmgkb_map: Dict[str, Any] = {}
         for row in annotation_rows:
-            af = row.alphafold_data
-            if isinstance(af, dict) and af.get('found'):
-                alphafold_map[row.rsid] = {
-                    "confidence": af.get('global_confidence'),
-                    "high_confidence_pct": af.get('plddt_very_high', 0) or 0,
-                    "low_confidence_pct": af.get('plddt_very_low', 0) or 0,
-                    "protein_name": af.get('protein_name'),
-                }
             pgkb = row.pharmgkb_data
             if isinstance(pgkb, dict) and pgkb.get('found'):
                 # Extract most clinically relevant PharmGKB fields for panel display
@@ -1012,7 +1005,6 @@ async def get_dashboard_data(
                     pgkb_entry['phenotype'] = top.get('phenotype') or top.get('function') or ''
                     pgkb_entry['star_allele'] = top.get('star_allele') or top.get('haplotype') or ''
                 pharmgkb_map[row.rsid] = pgkb_entry
-        dashboard_data["alphafold_map"] = alphafold_map
         dashboard_data["pharmgkb_map"] = pharmgkb_map
 
         # Build rsid → genotype map only for variants referenced in panel data
@@ -1065,6 +1057,31 @@ async def get_dashboard_data(
             for row in gs_query.all():
                 gene_symbol_map[row.rsid] = row.gene_symbol
         dashboard_data["gene_symbol_map"] = gene_symbol_map
+
+        # Build alphafold_map live from gene_symbol_map + AlphaFold local DB.
+        # This avoids requiring re-analysis — AlphaFold data is gene-based and
+        # the local DB has 20k proteins that can be looked up instantly.
+        try:
+            from ..services.alphafold_local import get_alphafold_local_service
+            af_svc = get_alphafold_local_service()
+            if af_svc.available and gene_symbol_map:
+                # Only look up genes for rsids that are actually used in panels
+                panel_gene_rsids = {r: g for r, g in gene_symbol_map.items() if r in panel_rsids}
+                unique_genes = list(set(panel_gene_rsids.values()))
+                if unique_genes:
+                    gene_results = af_svc.bulk_lookup_genes(unique_genes)
+                    for rsid, gene in panel_gene_rsids.items():
+                        af_data = gene_results.get(gene)
+                        if af_data and af_data.get('found'):
+                            alphafold_map[rsid] = {
+                                "confidence": af_data.get('global_confidence'),
+                                "high_confidence_pct": af_data.get('plddt_very_high', 0) or 0,
+                                "low_confidence_pct": af_data.get('plddt_very_low', 0) or 0,
+                                "protein_name": af_data.get('protein_name'),
+                            }
+        except Exception:
+            logger.warning("Failed to build alphafold_map from local DB")
+        dashboard_data["alphafold_map"] = alphafold_map
 
         # Build pathogenicity_map: rsid → {score, classification, confidence, evidence_count}
         # Uses the same ScoringEngine as VariantDetailDialog for consistency
