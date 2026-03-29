@@ -80,7 +80,7 @@ class AutoCategorizer:
 
         # ── Phase 2: Multi-source annotation pass ───────────────────
         # Process shared_variant_annotations through the multi-source engine
-        annotation_stats = await self._run_annotation_pass(categories=categories)
+        annotation_stats = await self._run_annotation_pass(categories=categories, min_confidence=0.5)
         stats["annotation_pass"] = annotation_stats
 
         stats["total_elapsed_s"] = round(time.time() - start, 1)
@@ -665,6 +665,15 @@ class AutoCategorizer:
             logger.warning("Invalid AF threshold: %s", af_threshold_str)
             return {}
 
+        # Only index clinically meaningful rare variants — exclude MODIFIER/LOW
+        # consequence types (intron, intergenic, synonymous, UTR, etc.) which
+        # produce 100K+ noise entries with no disease relevance.
+        _EXCLUDE_GNOMAD_CONSEQUENCES = (
+            'intron_variant', 'intergenic_variant', 'upstream_gene_variant',
+            'downstream_gene_variant', 'synonymous_variant', '3_prime_utr_variant',
+            '5_prime_utr_variant', 'non_coding_transcript_exon_variant',
+            'regulatory_region_variant', 'TF_binding_site_variant',
+        )
         result = await session.execute(
             select(
                 GnomadVariant.rsid,
@@ -677,6 +686,8 @@ class AutoCategorizer:
             .where(GnomadVariant.af > 0)
             .where(GnomadVariant.rsid.isnot(None))
             .where(GnomadVariant.gene.isnot(None))
+            .where(GnomadVariant.impact.in_(['HIGH', 'MODERATE']))
+            .where(GnomadVariant.consequence.notin_(_EXCLUDE_GNOMAD_CONSEQUENCES))
             .distinct(GnomadVariant.rsid)
             .limit(MAX_MAPPINGS_PER_CATEGORY)
         )

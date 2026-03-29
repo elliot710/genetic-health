@@ -628,10 +628,26 @@ def categorize_variant(
                 applicable_categories.add(cat)
                 break
 
-    # 4. Rare / uncommon based on allele frequency
+    # 4. Rare / uncommon based on allele frequency.
+    # Require MODERATE or HIGH VEP impact to exclude MODIFIER intron/intergenic noise.
+    # Also require at least one piece of clinical evidence (ClinVar sig OR MODERATE impact)
+    # so we don't populate these panels with generic frequency-only entries.
     afs = [ev.allele_frequency for ev in evidence_list if ev.allele_frequency is not None]
     min_af = min(afs) if afs else None
-    if min_af is not None:
+    _MODIFIER_IMPACTS = frozenset(('modifier', 'low'))
+    _MODIFIER_CONSEQUENCES = frozenset((
+        'intron_variant', 'intergenic_variant', 'upstream_gene_variant',
+        'downstream_gene_variant', 'synonymous_variant', '3_prime_utr_variant',
+        '5_prime_utr_variant', 'non_coding_transcript_exon_variant',
+        'regulatory_region_variant', 'TF_binding_site_variant',
+    ))
+    _af_impact_ok = (
+        impact and impact.upper() not in ('MODIFIER', 'LOW')
+        and (not consequence or consequence not in _MODIFIER_CONSEQUENCES)
+    )
+    # Clinical evidence = ClinVar has any significance OR VEP says MODERATE/HIGH
+    _af_has_evidence = bool(sig_set) or (impact and impact.upper() in ('HIGH', 'MODERATE'))
+    if min_af is not None and _af_impact_ok and _af_has_evidence:
         if min_af < 0.001:
             applicable_categories.add("rare")
         elif min_af < 0.05:
@@ -658,8 +674,12 @@ def categorize_variant(
         _impact_ok = impact and impact.lower() not in _NON_CODING_IMPACTS
         _consequence_ok = not consequence or consequence not in _REQUIRES_CLINVAR_SIGS
         _has_clinvar = bool(sig_set)  # any ClinVar significance data
-        _multi_source = len([ev for ev in evidence_list if ev.source_name != 'alpha_missense']) > 0
-        if path_scores and max(path_scores) >= 0.5 and _impact_ok and _consequence_ok and (_has_clinvar or _multi_source):
+        # Require ClinVar evidence OR HIGH (not just MODERATE) VEP impact.
+        # Previously _multi_source (any non-AM source) was accepted — this was too
+        # weak because gnomAD is always present, so AM + gnomAD would falsely
+        # trigger health categorisation with no disease name.
+        _clinvar_or_high_impact = _has_clinvar or impact == "HIGH"
+        if path_scores and max(path_scores) >= 0.5 and _impact_ok and _consequence_ok and _clinvar_or_high_impact:
             applicable_categories.add("health")
 
     # If still nothing, skip

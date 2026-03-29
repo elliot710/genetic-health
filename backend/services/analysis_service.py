@@ -569,7 +569,7 @@ class ComprehensiveAnalysisService:
                     condition_hints=condition_hints,
                 )
                 for s in suggestions:
-                    if s.confidence < 0.4:
+                    if s.confidence < 0.5:
                         continue
                     stmt = pg_insert(VariantMapping).values(
                         category=s.category,
