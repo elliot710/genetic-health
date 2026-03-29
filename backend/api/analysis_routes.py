@@ -807,7 +807,8 @@ async def get_dashboard_data(
             {"condition": _clean_trait_name(r.condition), "carrier_status": r.carrier_status,
              "inheritance_pattern": r.inheritance_pattern,
              "associated_variants": r.associated_variants or [],
-             "genetic_counseling_recommended": r.genetic_counseling_recommended}
+             "genetic_counseling_recommended": r.genetic_counseling_recommended,
+             "gene": r.gene or ""}
             for r in carrier_rows
         ], "condition")
 
@@ -1164,12 +1165,22 @@ async def get_dashboard_data(
                 if item.get("gene"):
                     panel_genes.add(item["gene"])
             for item in dashboard_data.get("carrier_status", []):
-                # Extract gene from parenthetical in condition name, e.g. "Dilated Cardiomyopathy (TTN)"
-                import re as _re
-                condition_str = item.get("condition", "")
-                gene_match = _re.search(r'\(([A-Z][A-Z0-9]{1,9})\)\s*$', condition_str)
-                if gene_match:
-                    panel_genes.add(gene_match.group(1))
+                # Use gene field directly (populated by carrier generator)
+                if item.get("gene"):
+                    panel_genes.add(item["gene"])
+                else:
+                    # Fallback: extract gene from parenthetical in condition name
+                    import re as _re
+                    condition_str = item.get("condition", "")
+                    gene_match = _re.search(r'\(([A-Z][A-Z0-9]{1,9})\)\s*$', condition_str)
+                    if gene_match:
+                        panel_genes.add(gene_match.group(1))
+                # Also resolve via gene_symbol_map using the associated_variants
+                for v in (item.get("associated_variants") or []):
+                    if isinstance(v, str) and v in gene_symbol_map:
+                        panel_genes.add(gene_symbol_map[v])
+                        if not item.get("gene"):
+                            item["gene"] = gene_symbol_map[v]
 
             # Also add all gene symbols resolved via rsid → gene_symbol_map
             panel_genes.update(gene_symbol_map.values())

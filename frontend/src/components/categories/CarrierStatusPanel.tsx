@@ -84,14 +84,24 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
   // Map raw API data to our display model, deduplicating by rsid set
   const allCarriers: MappedCarrier[] = useMemo(() => {
     if (!hasRealData) return []
-    const raw = carrierData.map((c) => ({
-      condition: c.condition,
-      gene: c.gene || extractGene(c.condition),
-      rsids: c.associated_variants || [],
-      status: c.carrier_status || c.status || 'Unknown',
-      inheritance: c.inheritance_pattern || c.inheritance || 'Unknown',
-      counselingRecommended: c.genetic_counseling_recommended ?? false,
-    }))
+    const raw = carrierData.map((c) => {
+      // Resolve gene: API field → extract from condition → gene_symbol_map fallback
+      let gene = c.gene || extractGene(c.condition)
+      if (!gene && c.associated_variants?.length) {
+        for (const v of c.associated_variants) {
+          const mapped = data?.gene_symbol_map?.[v]
+          if (mapped) { gene = mapped; break }
+        }
+      }
+      return {
+        condition: c.condition,
+        gene,
+        rsids: c.associated_variants || [],
+        status: c.carrier_status || c.status || 'Unknown',
+        inheritance: c.inheritance_pattern || c.inheritance || 'Unknown',
+        counselingRecommended: c.genetic_counseling_recommended ?? false,
+      }
+    })
 
     // Deduplicate: merge entries that share the same rsid set
     const byRsidKey = new Map<string, MappedCarrier>()

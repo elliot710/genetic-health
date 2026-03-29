@@ -120,13 +120,19 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
                 if actual_status == 'unaffected':
                     seen_conditions.discard(cond)
                     continue
+                # Resolve gene symbol from registry info, annotation, or marker
+                reg_gene = info.get('gene', '')
+                if not reg_gene:
+                    mkr = getattr(variant, 'marker', None)
+                    reg_gene = getattr(mkr, 'gene_symbol', '') or ''
                 carrier_results.append(CarrierStatus(
                     analysis_id=ctx.analysis_id,
                     condition=cond,
                     carrier_status=actual_status,
                     inheritance_pattern=info.get('inheritance', 'autosomal_recessive'),
                     associated_variants=[variant_rsid],
-                    genetic_counseling_recommended=info.get('counseling', False)
+                    genetic_counseling_recommended=info.get('counseling', False),
+                    gene=reg_gene or None,
                 ))
 
         # ClinVar-local annotation-based discovery
@@ -193,7 +199,8 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
             carrier_status=status,
             inheritance_pattern=inheritance,
             associated_variants=[variant_rsid],
-            genetic_counseling_recommended=needs_counseling
+            genetic_counseling_recommended=needs_counseling,
+            gene=gene_name or None,
         ))
 
     # Prioritize counseling-recommended conditions

@@ -446,14 +446,22 @@ async def run_all_lookups(
             logger.info(f"  gnomAD-tx: {found_tx}/{len(tx_variants)} found ({time.monotonic() - t0:.1f}s)")
             await asyncio.sleep(0)
 
-    # AlphaFold local: gene-keyed lookup. Extract gene symbols from Ensembl/ClinVar
-    # annotation results that are available so far, then batch-look up by gene.
+    # AlphaFold local: gene-keyed lookup. Extract gene symbols from genetic_markers
+    # table first (best coverage), then fall back to annotation results.
     if sources.alphafold:
         t0 = time.monotonic()
-        # Build rsid → gene_symbol map from available annotation data
+        # Build rsid → gene_symbol map — try marker.gene_symbol first (363k+ coverage),
+        # then fall back to annotation results for any gaps.
         rsid_gene: Dict[str, str] = {}
         for rsid in (rsids or list(rsid_to_variant.keys())):
-            # Try Ensembl VEP first
+            # Primary: marker.gene_symbol from genetic_markers table
+            v = rsid_to_variant.get(rsid)
+            if v:
+                marker = getattr(v, 'marker', None)
+                if marker and getattr(marker, 'gene_symbol', None):
+                    rsid_gene[rsid] = marker.gene_symbol
+                    continue
+            # Fallback: Ensembl VEP transcript_consequences
             ens = results.ensembl.get(rsid) or {}
             if ens.get('found'):
                 ens_data = ens.get('data', {})
@@ -463,14 +471,14 @@ async def run_all_lookups(
                 if tcs and tcs[0].get('gene_symbol'):
                     rsid_gene[rsid] = tcs[0]['gene_symbol']
                     continue
-            # Fallback to ClinVar gene
+            # Fallback: ClinVar gene
             cv = results.clinvar.get(rsid) or {}
             if cv.get('found'):
                 gene = cv.get('gene_symbol') or cv.get('gene')
                 if gene:
                     rsid_gene[rsid] = gene
                     continue
-            # Fallback to gnomAD gene
+            # Fallback: gnomAD gene
             gn = results.gnomad.get(rsid) or {}
             if gn.get('found') and gn.get('gene'):
                 rsid_gene[rsid] = gn['gene']

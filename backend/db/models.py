@@ -307,6 +307,7 @@ class CarrierStatus(Base):
     inheritance_pattern = Column(String)  # 'autosomal_recessive', 'x-linked', etc.
     associated_variants = Column(JSON)
     genetic_counseling_recommended = Column(Boolean, default=False)
+    gene = Column(String, nullable=True)
 
 class WellnessMetric(Base):
     __tablename__ = "wellness_metrics"
