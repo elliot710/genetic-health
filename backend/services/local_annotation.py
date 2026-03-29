@@ -327,8 +327,14 @@ async def run_all_lookups(
         ]
         if v2_candidates:
             t0 = time.monotonic()
-            logger.info(f"  gnomAD v2: starting lookup for {len(v2_candidates)} unfound RSIDs...")
-            v2_afs = await sources.gnomad_v2.batch_get_population_afs(v2_candidates)
+            # Use fast position-based tabix lookup (O(log N) per query)
+            pos_tuples = _build_pos_tuples(v2_candidates, rsid_to_variant)
+            logger.info(f"  gnomAD v2: starting position lookup for {len(pos_tuples)} variants "
+                        f"({len(v2_candidates)} unfound RSIDs)...")
+            if pos_tuples:
+                v2_afs = await sources.gnomad_v2.batch_lookup_by_position(pos_tuples)
+            else:
+                v2_afs = {}
             v2_found = 0
             for rsid, afs in v2_afs.items():
                 if afs:

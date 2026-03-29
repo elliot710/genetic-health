@@ -179,6 +179,26 @@ class GnomadV2Service:
         rsid_set = set(rsids)
         return await asyncio.to_thread(self._scan_vcfs_for_rsids, rsid_set)
 
+    async def batch_lookup_by_position(
+        self,
+        tuples: List[tuple],
+    ) -> Dict[str, Dict[str, Any]]:
+        """Fast position-based tabix lookup for gnomAD v2 population AFs.
+
+        Takes list of (rsid, chrom, pos, ref, alt) tuples with GRCh37 coords.
+        Uses tabix index for O(log N) per-query access instead of full VCF scan.
+
+        Returns {rsid: {af_afr, af_amr, af_eas, af_nfe, af_sas, subpop_freqs, ...}}
+        """
+        if not tuples:
+            return {}
+        if not self._loaded:
+            await self.ensure_loaded()
+        if not self._vcf_files:
+            return {}
+
+        return await asyncio.to_thread(self._tabix_batch_by_position, tuples)
+
     async def bulk_refresh_ancestry_panel(
         self,
         *,
@@ -278,6 +298,84 @@ class GnomadV2Service:
     # ------------------------------------------------------------------
     # Internal VCF scanning
     # ------------------------------------------------------------------
+
+    def _tabix_batch_by_position(
+        self, tuples: List[tuple],
+    ) -> Dict[str, Dict[str, Any]]:
+        """Position-based tabix lookup — O(log N) per query.
+
+        Groups (rsid, chrom, pos, ref, alt) tuples by chromosome, then does
+        targeted tabix.fetch(chrom, pos-1, pos) for each position.
+        Much faster than full VCF scan for large variant sets.
+        """
+        import pysam
+
+        # Group by chromosome
+        by_chrom: Dict[str, List[tuple]] = {}
+        for tup in tuples:
+            rsid, chrom, pos, ref, alt = tup
+            chrom_clean = str(chrom).replace("chr", "")
+            by_chrom.setdefault(chrom_clean, []).append(tup)
+
+        results: Dict[str, Dict[str, Any]] = {}
+        total_queries = 0
+        total_found = 0
+
+        for chrom_key, chrom_tuples in sorted(by_chrom.items()):
+            vcf_path = self._vcf_files.get(chrom_key)
+            if not vcf_path:
+                continue
+            tbi_path = Path(str(vcf_path) + ".tbi")
+            if not tbi_path.exists():
+                continue
+
+            try:
+                tbx = pysam.TabixFile(str(vcf_path))
+                found_this_chr = 0
+                try:
+                    for rsid, chrom, pos, ref, alt in chrom_tuples:
+                        total_queries += 1
+                        try:
+                            # tabix uses 0-based half-open intervals
+                            for row in tbx.fetch(chrom_key, int(pos) - 1, int(pos)):
+                                fields = row.split("\t", 8)
+                                if len(fields) < 8:
+                                    continue
+                                vcf_pos = fields[1]
+                                vcf_ref = fields[3]
+                                vcf_id = fields[2]
+                                # Match by position + ref allele, or by rsid
+                                if str(pos) == vcf_pos and (
+                                    ref == vcf_ref or vcf_id == rsid
+                                    or (
+                                        ";" in vcf_id
+                                        and rsid in vcf_id.split(";")
+                                    )
+                                ):
+                                    info_str = fields[7]
+                                    afs = _parse_info_afs(info_str)
+                                    if afs:
+                                        results[rsid] = afs
+                                        found_this_chr += 1
+                                        break
+                        except ValueError:
+                            continue  # position out of range for this contig
+                finally:
+                    tbx.close()
+                if found_this_chr:
+                    logger.debug(
+                        "gnomAD v2 pos: chr%s — %d/%d found",
+                        chrom_key, found_this_chr, len(chrom_tuples),
+                    )
+                total_found += found_this_chr
+            except Exception as e:
+                logger.warning("gnomAD v2 pos: failed to open chr%s: %s", chrom_key, e)
+
+        logger.info(
+            "gnomAD v2 pos: %d/%d found across %d chromosomes",
+            total_found, total_queries, len(by_chrom),
+        )
+        return results
 
     def _scan_vcfs_for_rsids(
         self, rsid_set: set,
