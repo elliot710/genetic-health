@@ -12,6 +12,7 @@ import {
   VariantLinks,
   PathogenicityBar,
   VariantInfoBox,
+  AlphaFoldBadge,
   riskToSeverity,
   MasonryLayout,
   useGrouping,
@@ -201,6 +202,14 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
                   />
                   <Badge variant="secondary" className="text-xs">{drug.gene}</Badge>
                   <Badge variant="outline" className="text-xs">{drug.response}</Badge>
+                  {drug.variants?.[0] && data?.alphafold_map?.[drug.variants[0]] && (
+                    <AlphaFoldBadge
+                      confidence={data.alphafold_map[drug.variants[0]].confidence}
+                      highPct={data.alphafold_map[drug.variants[0]].high_confidence_pct}
+                      lowPct={data.alphafold_map[drug.variants[0]].low_confidence_pct}
+                      theme={theme}
+                    />
+                  )}
                 </div>
 
                 {isExpanded && (
@@ -208,6 +217,41 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
                     <div className={`text-sm ${theme.textSecondary}`}>
                       <span className="font-medium">Genotype:</span> <span className="font-mono">{drug.genotype}</span>
                     </div>
+
+                    {/* PharmGKB / ClinPGx detail */}
+                    {drug.variants?.length && (() => {
+                      const pgkb = drug.variants.map(v => data?.pharmgkb_map?.[v]).find(Boolean)
+                      if (!pgkb) return null
+                      return (
+                        <div className={`rounded-lg p-2.5 border ${theme.border} ${theme.isDarkMode ? 'bg-white/3' : 'bg-blue-50/40'} space-y-1.5`}>
+                          <h5 className={`text-xs font-semibold ${theme.textSecondary} uppercase tracking-wide`}>PharmGKB / CPIC Data</h5>
+                          {pgkb.phenotype && (
+                            <p className={`text-xs ${theme.textPrimary}`}><span className={`font-medium ${theme.textSecondary}`}>Phenotype: </span>{pgkb.phenotype}</p>
+                          )}
+                          {pgkb.star_allele && (
+                            <p className={`text-xs ${theme.textPrimary}`}><span className={`font-medium ${theme.textSecondary}`}>Star allele: </span><span className="font-mono">{pgkb.star_allele}</span></p>
+                          )}
+                          {pgkb.haplotypes && pgkb.haplotypes.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              <span className={`text-xs font-medium ${theme.textSecondary}`}>Haplotypes:</span>
+                              {pgkb.haplotypes.map((h: string, i: number) => (
+                                <Badge key={i} variant="outline" className="text-[10px] font-mono">{h}</Badge>
+                              ))}
+                            </div>
+                          )}
+                          {pgkb.cpic_guideline && (
+                            <p className={`text-xs ${theme.textSecondary}`}>
+                              <span className="font-medium">CPIC: </span>
+                              {pgkb.cpic_guideline.startsWith('http') ? (
+                                <a href={pgkb.cpic_guideline} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline">
+                                  View guideline ↗
+                                </a>
+                              ) : pgkb.cpic_guideline}
+                            </p>
+                          )}
+                        </div>
+                      )
+                    })()}
 
                     {drug.recommendation && (
                       <div className="space-y-2">

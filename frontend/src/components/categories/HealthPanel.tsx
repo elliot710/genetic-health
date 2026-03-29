@@ -9,6 +9,9 @@ import {
   StatusBadge,
   PathogenicityBar,
   VariantInfoBox,
+  GeneContextBox,
+  GeneBurdenStrip,
+  AlphaFoldBadge,
   DisclaimerCard,
   ZygosityBadge,
   EvidenceBadge,
@@ -309,7 +312,17 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
               >
                 <div className="flex items-start justify-between mb-1 gap-1">
                   <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug flex-1 min-w-0`}>{risk.condition}</h4>
-                  <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
+                  <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
+                    {/* Inline pathogenicity % for quick scan */}
+                    {risk.riskScore > 0 && (
+                      <span className={`text-xs font-mono font-semibold tabular-nums ${
+                        risk.riskScore >= 70 ? 'text-red-400' :
+                        risk.riskScore >= 45 ? 'text-orange-400' :
+                        risk.riskScore >= 25 ? 'text-yellow-400' : 'text-green-400'
+                      }`}>{risk.riskScore}%</span>
+                    )}
+                    <ChevronRight className={`h-4 w-4 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
+                  </div>
                 </div>
 
                 <div className="flex flex-wrap gap-1">
@@ -317,29 +330,70 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                     label={`${risk.risk} Risk`}
                     severity={riskToSeverity(risk.riskLevel)}
                   />
-                  {/* Gene symbol (FE-01) */}
                   {risk.geneSymbol && (
                     <Badge variant="secondary" className="text-xs font-medium">
                       {risk.geneSymbol}
                     </Badge>
                   )}
-                  {/* rsid + genotype (FE-01) */}
                   {risk.gene && risk.gene !== 'Unknown' && risk.gene.startsWith('rs') && (
                     <Badge variant="outline" className="text-xs font-mono">
                       {risk.gene}{data?.genotype_map?.[risk.gene] ? ` · ${data.genotype_map[risk.gene]}` : ''}
                     </Badge>
                   )}
                   {risk.gene?.startsWith('rs') && <ZygosityBadge genotype={data?.genotype_map?.[risk.gene]} />}
-                  {/* Evidence badge (FE-02) */}
                   <EvidenceBadge reviewStatus={risk.reviewStatus} />
                   {risk.clinicalSignificance && risk.clinicalSignificance !== 'Under research' && (
                     <Badge variant="outline" className="text-xs">{risk.clinicalSignificance}</Badge>
                   )}
+                  {risk.pathogenicityClassification && ['pathogenic', 'likely_pathogenic'].includes(risk.pathogenicityClassification) && (
+                    <Badge variant="outline" className={`text-xs ${risk.pathogenicityClassification === 'pathogenic' ? 'bg-red-500/15 text-red-400 border-red-500/30' : 'bg-orange-500/15 text-orange-400 border-orange-500/30'}`}>
+                      {risk.pathogenicityClassification.replace(/_/g, ' ')}
+                    </Badge>
+                  )}
+                  {/* AlphaFold protein confidence badge */}
+                  {risk.gene?.startsWith('rs') && data?.alphafold_map?.[risk.gene] && (
+                    <AlphaFoldBadge
+                      confidence={data.alphafold_map[risk.gene].confidence}
+                      highPct={data.alphafold_map[risk.gene].high_confidence_pct}
+                      lowPct={data.alphafold_map[risk.gene].low_confidence_pct}
+                      theme={theme}
+                    />
+                  )}
                 </div>
+
+                {/* Compact gene burden strip — only when collapsed */}
+                {!isExpanded && risk.geneSymbol && data?.gene_stats_map?.[risk.geneSymbol] && (
+                  <GeneBurdenStrip gene={risk.geneSymbol} stats={data.gene_stats_map[risk.geneSymbol]} theme={theme} />
+                )}
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
-                    <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{risk.description}</p>
+                    {/* Description — replaced generic text with clinical significance details when available */}
+                    {risk.clinicalSignificance && risk.clinicalSignificance !== 'Under research' ? (
+                      <div className={`text-sm ${theme.textSecondary} leading-relaxed`}>
+                        <span className="font-medium">ClinVar classification:</span>{' '}
+                        {risk.clinicalSignificance}
+                        {risk.pathogenicityClassification && (
+                          <span className={`ml-1.5 text-xs font-medium ${
+                            risk.pathogenicityClassification === 'pathogenic' ? 'text-red-400' :
+                            risk.pathogenicityClassification === 'likely_pathogenic' ? 'text-orange-400' :
+                            risk.pathogenicityClassification === 'uncertain' ? 'text-yellow-400' :
+                            'text-green-400'
+                          }`}>({risk.pathogenicityClassification.replace(/_/g, ' ')})</span>
+                        )}
+                      </div>
+                    ) : (
+                      <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{risk.description}</p>
+                    )}
+
+                    {/* Gene Context — burden + known diseases */}
+                    {risk.geneSymbol && data?.gene_stats_map?.[risk.geneSymbol] && (
+                      <GeneContextBox
+                        gene={risk.geneSymbol}
+                        stats={data.gene_stats_map[risk.geneSymbol]}
+                        theme={theme}
+                      />
+                    )}
 
                     {risk.variantInfo && risk.variantInfo.length > 0 && (
                       <div className="space-y-2">

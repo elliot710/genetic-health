@@ -1,5 +1,23 @@
 import { LucideIcon } from 'lucide-react'
 
+// ─── Gene-level ClinVar statistics ────────────────────────────
+
+export interface GeneCondition {
+  disease_name: string
+  disease_mim?: string | null
+  source_id?: string | null
+}
+
+export interface GeneStats {
+  pathogenic_lp: number         // Pathogenic + Likely Pathogenic submissions
+  vus: number                   // Variants of Uncertain Significance
+  total_submissions: number     // Total ClinVar submissions for this gene
+  total_alleles: number
+  with_conflicts: number
+  gene_mim?: string | null      // OMIM gene number
+  conditions: GeneCondition[]   // Known disease associations
+}
+
 // ─── API Response Types ────────────────────────────────────────
 
 export interface HealthRisk {
@@ -9,9 +27,9 @@ export interface HealthRisk {
   associated_variants: string[]
   recommendations: string[]
   clinical_significance?: string
-  gene?: string         // Gene symbol (FE-01)
-  review_status?: string // ClinVar review status (FE-02/03)
-  pathogenicity_classification?: string // benign, likely_benign, uncertain, likely_pathogenic, pathogenic
+  gene?: string
+  review_status?: string
+  pathogenicity_classification?: string
 }
 
 export interface DrugResponse {
@@ -237,6 +255,9 @@ export interface DashboardData {
   clinvar_count_map?: Record<string, number>
   genotype_map?: Record<string, string>
   pathogenicity_map?: Record<string, { score: number; classification: string; confidence: string; evidence_count: number }>
+  gene_stats_map?: Record<string, GeneStats>
+  alphafold_map?: Record<string, { confidence: number; high_confidence_pct: number; low_confidence_pct: number; protein_name?: string }>
+  pharmgkb_map?: Record<string, { gene: string; haplotypes?: string[]; cpic_guideline?: string; phenotype?: string; star_allele?: string }>
   real_data?: {
     variants?: { rsid?: string; chromosome?: string; position?: number; genotype?: string }[]
     analysis?: Record<string, unknown>

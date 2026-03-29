@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional, List
 from pydantic import BaseModel
 
 from ..db.database import get_session, async_session_factory
-from ..db.models import GeneticAnalysis, HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait, SportsPerformance, CognitiveProfile, PersonalityTrait, AncestryResult, CarrierStatus, WellnessMetric, MethylationProfile, DetoxificationProfile, RareMutation, UncommonMutation, DashboardCache
+from ..db.models import GeneticAnalysis, HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait, SportsPerformance, CognitiveProfile, PersonalityTrait, AncestryResult, CarrierStatus, WellnessMetric, MethylationProfile, DetoxificationProfile, RareMutation, UncommonMutation, DashboardCache, ClinVarGeneStats, ClinVarGeneCondition
 from .auth_routes import get_current_user
 from ..services.notification_service import get_notification_service
 
@@ -944,13 +944,16 @@ async def get_dashboard_data(
             for r in uncommon_rows
         ], "mutation_name") if uncommon_rows else []
 
-        # AlphaMissense + ClinVar maps: rsid → data for all annotated variants
+        # AlphaMissense + ClinVar + AlphaFold + PharmGKB maps: rsid → data for all annotated variants
         from ..db.models import AnalysisVariant, GeneticMarker, SharedVariantAnnotation
         annotation_rows = (await db.execute(
             select(
                 GeneticMarker.rsid,
                 SharedVariantAnnotation.alpha_missense_data,
                 SharedVariantAnnotation.clinvar_data,
+                SharedVariantAnnotation.clinvar_local_data,
+                SharedVariantAnnotation.alphafold_data,
+                SharedVariantAnnotation.pharmgkb_data,
             )
             .select_from(AnalysisVariant)
             .join(GeneticMarker, AnalysisVariant.marker_id == GeneticMarker.id)
@@ -973,6 +976,43 @@ async def get_dashboard_data(
                     cv_count_map[row.rsid] = count
         dashboard_data["alpha_missense_map"] = am_map
         dashboard_data["clinvar_count_map"] = cv_count_map
+
+        # Build alphafold_map: rsid → {confidence, high_confidence_pct, low_confidence_pct, protein_name}
+        # Used by panel cards to surface protein stability context inline
+        alphafold_map: Dict[str, Any] = {}
+        pharmgkb_map: Dict[str, Any] = {}
+        for row in annotation_rows:
+            af = row.alphafold_data
+            if isinstance(af, dict) and af.get('found'):
+                alphafold_map[row.rsid] = {
+                    "confidence": af.get('global_confidence'),
+                    "high_confidence_pct": af.get('plddt_very_high', 0) or 0,
+                    "low_confidence_pct": af.get('plddt_very_low', 0) or 0,
+                    "protein_name": af.get('protein_name'),
+                }
+            pgkb = row.pharmgkb_data
+            if isinstance(pgkb, dict) and pgkb.get('found'):
+                # Extract most clinically relevant PharmGKB fields for panel display
+                pgkb_entry: Dict[str, Any] = {"gene": pgkb.get('gene', '')}
+                # Haplotypes / star alleles
+                variants_data = pgkb.get('variants', [])
+                if isinstance(variants_data, list):
+                    haplotypes = [v.get('haplotype') or v.get('star_allele') for v in variants_data if v.get('haplotype') or v.get('star_allele')]
+                    if haplotypes:
+                        pgkb_entry['haplotypes'] = haplotypes[:4]
+                # CPIC guideline URL / name
+                guidelines = pgkb.get('guidelines', [])
+                if isinstance(guidelines, list) and guidelines:
+                    g = guidelines[0]
+                    pgkb_entry['cpic_guideline'] = g.get('name') or g.get('url') or ''
+                # Phenotype from top variant
+                if isinstance(variants_data, list) and variants_data:
+                    top = variants_data[0]
+                    pgkb_entry['phenotype'] = top.get('phenotype') or top.get('function') or ''
+                    pgkb_entry['star_allele'] = top.get('star_allele') or top.get('haplotype') or ''
+                pharmgkb_map[row.rsid] = pgkb_entry
+        dashboard_data["alphafold_map"] = alphafold_map
+        dashboard_data["pharmgkb_map"] = pharmgkb_map
 
         # Build rsid → genotype map only for variants referenced in panel data
         panel_rsids: set = set()
@@ -1058,6 +1098,87 @@ async def get_dashboard_data(
             except Exception:
                 logger.warning("Failed to compute pathogenicity_map – skipping")
         dashboard_data["pathogenicity_map"] = pathogenicity_map
+
+        # ── Clinical significance backfill ───────────────────────────────────
+        # Populate clinical_significance on health_risks from clinvar_local_data
+        # (the HealthRisk DB row has no such column, so we derive it from annotations)
+        try:
+            clinvar_sig_map: Dict[str, str] = {}
+            for row in annotation_rows:
+                cv_local = row.clinvar_local_data
+                if isinstance(cv_local, dict):
+                    sigs: list = []
+                    for entry in cv_local.get("entries", []):
+                        for sig in entry.get("clinical_significance", []):
+                            if sig and sig not in sigs:
+                                sigs.append(sig)
+                    if sigs:
+                        clinvar_sig_map[row.rsid] = "; ".join(sigs)
+                    elif cv_local.get("clinical_significance"):
+                        raw = cv_local["clinical_significance"]
+                        clinvar_sig_map[row.rsid] = raw if isinstance(raw, str) else "; ".join(raw)
+            # Patch health_risks in-place
+            for hr_item in dashboard_data.get("health_risks", []):
+                variants = hr_item.get("associated_variants") or []
+                for v in variants:
+                    sig = clinvar_sig_map.get(v)
+                    if sig:
+                        hr_item["clinical_significance"] = sig
+                        break
+        except Exception:
+            logger.warning("Failed to backfill clinical_significance – skipping")
+
+        # ── Gene stats enrichment ────────────────────────────────────────────
+        # Collect all gene symbols from clinical panels
+        try:
+            panel_genes: set = set()
+            for item in dashboard_data.get("health_risks", []):
+                if item.get("gene"):
+                    panel_genes.add(item["gene"])
+            for item in dashboard_data.get("rare_mutations", []):
+                if item.get("gene"):
+                    panel_genes.add(item["gene"])
+            for item in dashboard_data.get("drug_responses", []):
+                if item.get("gene"):
+                    panel_genes.add(item["gene"])
+            for item in dashboard_data.get("carrier_status", []):
+                # carrier items don't have a "gene" key in current mapping; skip
+                pass
+
+            gene_stats_map: Dict[str, Any] = {}
+            if panel_genes:
+                stats_rows_q = await db.execute(
+                    select(ClinVarGeneStats).where(ClinVarGeneStats.gene.in_(panel_genes))
+                )
+                stats_by_gene = {s.gene: s for s in stats_rows_q.scalars().all()}
+
+                cond_rows_q = await db.execute(
+                    select(ClinVarGeneCondition).where(ClinVarGeneCondition.gene.in_(panel_genes))
+                )
+                conditions_by_gene: Dict[str, list] = {}
+                for c in cond_rows_q.scalars().all():
+                    conditions_by_gene.setdefault(c.gene, []).append({
+                        "disease_name": c.disease_name,
+                        "disease_mim": c.disease_mim,
+                        "source_id": c.source_id,
+                    })
+
+                for gene in panel_genes:
+                    stats = stats_by_gene.get(gene)
+                    if stats:
+                        gene_stats_map[gene] = {
+                            "pathogenic_lp": stats.pathogenic_likely_pathogenic or 0,
+                            "vus": stats.uncertain_significance or 0,
+                            "total_submissions": stats.total_submissions or 0,
+                            "total_alleles": stats.total_alleles or 0,
+                            "with_conflicts": stats.with_conflicts or 0,
+                            "gene_mim": stats.gene_mim,
+                            "conditions": conditions_by_gene.get(gene, []),
+                        }
+            dashboard_data["gene_stats_map"] = gene_stats_map
+        except Exception:
+            logger.warning("Failed to build gene_stats_map – skipping")
+            dashboard_data["gene_stats_map"] = {}
 
         # Persist to dashboard cache
         try:

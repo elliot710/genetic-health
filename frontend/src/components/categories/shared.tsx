@@ -448,6 +448,159 @@ export function VariantInfoBox({
   )
 }
 
+// ─── Gene Context Box ──────────────────────────────────────────
+
+import type { GeneStats } from './types'
+
+interface GeneContextBoxProps {
+  gene: string
+  stats: GeneStats
+  theme: ThemeClasses
+}
+
+// ─── AlphaFold Protein Confidence Badge ────────────────────────
+
+interface AlphaFoldBadgeProps {
+  confidence?: number | null
+  highPct?: number
+  lowPct?: number
+  theme: ThemeClasses
+}
+
+/**
+ * Compact inline badge showing AlphaFold global confidence for the protein.
+ * Green ≥ 70%, amber 50–69%, red < 50%.
+ */
+export function AlphaFoldBadge({ confidence, highPct, lowPct, theme }: AlphaFoldBadgeProps) {
+  if (confidence == null) return null
+  const pct = Math.round(confidence)
+  const color = pct >= 70 ? 'text-green-400 border-green-500/30 bg-green-500/10' :
+                pct >= 50 ? 'text-amber-400 border-amber-500/30 bg-amber-500/10' :
+                            'text-red-400 border-red-500/30 bg-red-500/10'
+  return (
+    <span
+      title={`AlphaFold protein structure confidence: ${pct}% global${highPct ? ` · ${highPct}% very high confidence residues` : ''}${lowPct ? ` · ${lowPct}% very low confidence (disordered)` : ''}`}
+      className={`inline-flex items-center gap-1 text-[10px] font-medium rounded px-1.5 py-0.5 border ${color}`}
+    >
+      <svg className="h-2.5 w-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+      </svg>
+      AF {pct}%
+    </span>
+  )
+}
+
+/**
+ * Expanded section: gene-level ClinVar burden + known disease associations.
+ * Shows how many pathogenic variants are known for this gene and what diseases
+ * are associated, with OMIM links.
+ */
+export function GeneContextBox({ gene, stats, theme }: GeneContextBoxProps) {
+  const [showAll, setShowAll] = React.useState(false)
+  const conditions = stats.conditions || []
+  const visible = showAll ? conditions : conditions.slice(0, 4)
+  const hasMore = conditions.length > 4
+
+  const burdenColor =
+    stats.pathogenic_lp >= 100 ? 'text-red-400' :
+    stats.pathogenic_lp >= 20  ? 'text-orange-400' :
+    stats.pathogenic_lp > 0    ? 'text-yellow-400' : 'text-gray-400'
+
+  return (
+    <div>
+      <h5 className={`text-xs font-semibold ${theme.textSecondary} uppercase tracking-wide mb-1.5`}>
+        Gene Context
+      </h5>
+      <div className={`rounded-lg p-2.5 border ${theme.border} ${theme.isDarkMode ? 'bg-white/[0.03]' : 'bg-gray-50/60'} space-y-2`}>
+        {/* Burden stats row */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+          <span className={`font-semibold ${theme.textPrimary}`}>{gene}</span>
+          {stats.pathogenic_lp > 0 && (
+            <span className={`font-medium ${burdenColor}`}>
+              {stats.pathogenic_lp.toLocaleString()} pathogenic/LP
+            </span>
+          )}
+          {stats.vus > 0 && (
+            <span className={`${theme.textSecondary}`}>
+              {stats.vus.toLocaleString()} VUS
+            </span>
+          )}
+          {stats.total_submissions > 0 && (
+            <span className={`${theme.textSecondary}`}>
+              {stats.total_submissions.toLocaleString()} submissions
+            </span>
+          )}
+          {stats.gene_mim && (
+            <a
+              href={`https://omim.org/entry/${stats.gene_mim}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-400 hover:text-blue-300 transition-colors"
+              onClick={e => e.stopPropagation()}
+            >
+              OMIM:{stats.gene_mim} ↗
+            </a>
+          )}
+        </div>
+        {/* Disease associations */}
+        {conditions.length > 0 && (
+          <div>
+            <span className={`text-[10px] font-semibold ${theme.textSecondary} uppercase tracking-wide`}>
+              Known associations ({conditions.length})
+            </span>
+            <div className="flex flex-wrap gap-1 mt-1">
+              {visible.map((c, i) => (
+                <span
+                  key={i}
+                  className={`inline-flex items-center gap-1 text-[10px] rounded px-1.5 py-0.5 border ${theme.border} ${theme.isDarkMode ? 'bg-white/5' : 'bg-gray-100/80'} ${theme.textSecondary}`}
+                >
+                  {c.disease_name}
+                  {c.disease_mim && (
+                    <a
+                      href={`https://omim.org/entry/${c.disease_mim}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-400 hover:text-blue-300"
+                      onClick={e => e.stopPropagation()}
+                    >
+                      ↗
+                    </a>
+                  )}
+                </span>
+              ))}
+              {hasMore && !showAll && (
+                <button
+                  className={`text-[10px] ${theme.textSecondary} hover:${theme.textPrimary} underline`}
+                  onClick={e => { e.stopPropagation(); setShowAll(true) }}
+                >
+                  +{conditions.length - 4} more
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Compact single-line gene burden strip for collapsed cards.
+ * Shows "153 pathogenic · 5 diseases" in secondary text under the badges.
+ */
+export function GeneBurdenStrip({ gene, stats, theme }: GeneContextBoxProps) {
+  if (!stats) return null
+  const parts: string[] = []
+  if (stats.pathogenic_lp > 0) parts.push(`${stats.pathogenic_lp.toLocaleString()} pathogenic`)
+  if (stats.conditions.length > 0) parts.push(`${stats.conditions.length} known disease${stats.conditions.length !== 1 ? 's' : ''}`)
+  if (parts.length === 0) return null
+  return (
+    <p className={`text-[10px] ${theme.textSecondary} mt-1`}>
+      {gene} · {parts.join(' · ')}
+    </p>
+  )
+}
+
 // ─── Research Links (inline compact) ───────────────────────────
 
 const DB_LINKS: Record<string, (rsid: string) => string> = {
