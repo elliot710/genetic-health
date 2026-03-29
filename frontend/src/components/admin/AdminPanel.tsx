@@ -232,14 +232,15 @@ interface AdminPanelProps {
 
 export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps) {
   // --- Tab routing via URL hash ---
-  const VALID_TABS = ['users', 'registry', 'discoveries', 'sources', 'data', 'rules', 'annotations', 'jobs'] as const
+  const VALID_TABS = ['users', 'registry', 'discoveries', 'data', 'rules', 'annotations', 'jobs'] as const
   type AdminTab = typeof VALID_TABS[number]
 
   const [activeTab, setActiveTab] = useState<AdminTab>(() => {
     if (typeof window !== 'undefined') {
       const hash = window.location.hash.slice(1) // e.g. "admin/data"
       const sub = hash.startsWith('admin/') ? hash.slice(6) : ''
-      if (VALID_TABS.includes(sub as AdminTab)) return sub as AdminTab
+      const resolvedSub = sub === 'sources' ? 'data' : sub
+      if (VALID_TABS.includes(resolvedSub as AdminTab)) return resolvedSub as AdminTab
     }
     return 'users'
   })
@@ -257,8 +258,9 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     const onHashChange = () => {
       const hash = window.location.hash.slice(1)
       if (hash.startsWith('admin/')) {
-        const sub = hash.slice(6) as AdminTab
-        if (VALID_TABS.includes(sub)) setActiveTab(sub)
+        const sub = hash.slice(6)
+        const resolvedSub = sub === 'sources' ? 'data' : sub
+        if (VALID_TABS.includes(resolvedSub as AdminTab)) setActiveTab(resolvedSub as AdminTab)
       }
     }
     window.addEventListener('hashchange', onHashChange)
@@ -1415,19 +1417,15 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
               </Badge>
             )}
           </TabsTrigger>
-          <TabsTrigger value="sources" className="gap-2">
-            <Zap className="h-4 w-4" />
-            Sources
-          </TabsTrigger>
           <TabsTrigger value="data" className="gap-2">
             <HardDrive className="h-4 w-4" />
-            Data
+            Ingestion
           </TabsTrigger>
           <TabsTrigger value="rules" className="gap-2">
             <Scale className="h-4 w-4" />
             Rules
           </TabsTrigger>
-          <TabsTrigger value="annotations" className="gap-2 relative">
+          <TabsTrigger value="annotations" className="gap-2 relative" title="Annotation quality monitor — incomplete and failed annotations">
             <AlertTriangle className="h-4 w-4" />
             Incomplete
             {incompleteSummary && (incompleteSummary.partial + incompleteSummary.failed) > 0 && (
@@ -1849,9 +1847,9 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
           </Card>
         </TabsContent>
 
-        {/* ===== INCOMPLETE ANNOTATIONS TAB ===== */}
-        {/* ===== SOURCES TAB ===== */}
-        <TabsContent value="sources" className="mt-6">
+        {/* ===== INGESTION TAB (API Sources + Local ETL + BigQuery + Maintenance) ===== */}
+        <TabsContent value="data" className="mt-6">
+          {/* ───── API Sources & AI Insights ───── */}
           <Card className="glass-card">
             <CardHeader>
               <div className="flex items-center justify-between">
@@ -2088,10 +2086,8 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
               )}
             </CardContent>
           </Card>
-        </TabsContent>
 
-        {/* ===== DATA / ETL TAB ===== */}
-        <TabsContent value="data" className="mt-6">
+          {/* ───── Local ETL, BigQuery & Maintenance ───── */}
           {/* ETL Import Sources */}
           <Card className="glass-card">
             <CardHeader>
@@ -2671,6 +2667,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
           </Card>
         </TabsContent>
 
+        {/* ===== QUALITY TAB ===== */}
         <TabsContent value="annotations" className="mt-6">
           <Card className="glass-card">
             <CardHeader>
@@ -2678,7 +2675,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                 <div>
                   <CardTitle className="flex items-center gap-2">
                     <AlertTriangle className="h-5 w-5" />
-                    Incomplete Annotations
+                    Annotation Quality
                   </CardTitle>
                   <CardDescription>
                     Variants with missing data from external API sources
