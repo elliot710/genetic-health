@@ -6,8 +6,8 @@ Revises: 027
 from alembic import op
 import sqlalchemy as sa
 
-revision = "028"
-down_revision = "027"
+revision = "028_add_gene_to_carrier_status"
+down_revision = "027_create_gnomad_v2_variants"
 branch_labels = None
 depends_on = None
 
