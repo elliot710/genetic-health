@@ -212,6 +212,7 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
           {items.map((trait, index) => {
             const itemKey = `wellness-${index}`
             const isExpanded = selectedItem === itemKey
+            const resolvedGene = (trait.gene && trait.gene !== 'Multiple') ? trait.gene : (trait.associated_variants?.[0] ? data?.gene_symbol_map?.[trait.associated_variants[0]] : undefined)
             return (
               <div
                 key={index}
@@ -246,8 +247,8 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
                     lowPct={data?.alphafold_map?.[trait.associated_variants?.[0]]?.low_confidence_pct}
                   />
                 </div>
-                {trait.gene && trait.gene !== 'Multiple' && data?.gene_stats_map?.[trait.gene] && (
-                  <GeneBurdenStrip gene={trait.gene} stats={data.gene_stats_map[trait.gene]} theme={theme} />
+                {resolvedGene && data?.gene_stats_map?.[resolvedGene] && (
+                  <GeneBurdenStrip gene={resolvedGene} stats={data.gene_stats_map[resolvedGene]} theme={theme} />
                 )}
 
                 {isExpanded && (
@@ -268,8 +269,8 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
                       </div>
                     )}
 
-                    <VariantInfoBox rsid={trait.associated_variants?.[0]} gene={trait.gene !== 'Multiple' ? trait.gene : undefined} token={token} isDarkMode={isDarkMode} alphaMissense={trait.associated_variants?.[0] ? data?.alpha_missense_map?.[trait.associated_variants[0]] : undefined} clinvarCount={trait.associated_variants?.[0] ? data?.clinvar_count_map?.[trait.associated_variants[0]] : undefined} genotype={trait.associated_variants?.[0] ? data?.genotype_map?.[trait.associated_variants[0]] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
-                    <GeneContextBox gene={trait.gene !== 'Multiple' ? trait.gene : undefined} stats={trait.gene && trait.gene !== 'Multiple' ? data?.gene_stats_map?.[trait.gene] : undefined} theme={theme} />
+                    <VariantInfoBox rsid={trait.associated_variants?.[0]} gene={resolvedGene} token={token} isDarkMode={isDarkMode} alphaMissense={trait.associated_variants?.[0] ? data?.alpha_missense_map?.[trait.associated_variants[0]] : undefined} clinvarCount={trait.associated_variants?.[0] ? data?.clinvar_count_map?.[trait.associated_variants[0]] : undefined} genotype={trait.associated_variants?.[0] ? data?.genotype_map?.[trait.associated_variants[0]] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
+                    <GeneContextBox gene={resolvedGene} stats={resolvedGene ? data?.gene_stats_map?.[resolvedGene] : undefined} theme={theme} />
                     {trait.associated_variants?.[0] && data?.alphafold_map?.[trait.associated_variants?.[0]] && (
                       <AlphaFoldDetailBox
                         rsid={trait.associated_variants?.[0]}

@@ -186,7 +186,7 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
             const itemKey = `intelligence-${index}`
             const isExpanded = selectedItem === itemKey
             const rsid = trait.gene?.startsWith('rs') ? trait.gene : undefined
-            const gene = !trait.gene?.startsWith('rs') ? trait.gene : undefined
+            const gene = !trait.gene?.startsWith('rs') ? trait.gene : (rsid ? data?.gene_symbol_map?.[rsid] : undefined)
             return (
               <div
                 key={index}

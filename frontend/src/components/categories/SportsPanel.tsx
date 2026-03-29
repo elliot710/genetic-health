@@ -175,7 +175,7 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
             const itemKey = `sport-${index}`
             const isExpanded = selectedItem === itemKey
             const rsid = trait.gene?.startsWith('rs') ? trait.gene : undefined
-            const gene = !trait.gene?.startsWith('rs') ? trait.gene : undefined
+            const gene = !trait.gene?.startsWith('rs') ? trait.gene : (rsid ? data?.gene_symbol_map?.[rsid] : undefined)
             return (
               <div
                 key={index}

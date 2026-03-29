@@ -1052,6 +1052,19 @@ async def get_dashboard_data(
                 genotype_map[row.rsid] = row.genotype
         dashboard_data["genotype_map"] = genotype_map
 
+        # Build rsid → gene symbol map from genetic_markers table
+        gene_symbol_map: Dict[str, str] = {}
+        if panel_rsids:
+            gs_query = await db.execute(
+                select(GeneticMarker.rsid, GeneticMarker.gene_symbol)
+                .where(GeneticMarker.rsid.in_(panel_rsids))
+                .where(GeneticMarker.gene_symbol.isnot(None))
+                .where(GeneticMarker.gene_symbol != '')
+            )
+            for row in gs_query.all():
+                gene_symbol_map[row.rsid] = row.gene_symbol
+        dashboard_data["gene_symbol_map"] = gene_symbol_map
+
         # Build pathogenicity_map: rsid → {score, classification, confidence, evidence_count}
         # Uses the same ScoringEngine as VariantDetailDialog for consistency
         pathogenicity_map: Dict[str, Any] = {}
@@ -1141,6 +1154,15 @@ async def get_dashboard_data(
             for item in dashboard_data.get("drug_responses", []):
                 if item.get("gene"):
                     panel_genes.add(item["gene"])
+            for item in dashboard_data.get("uncommon_mutations", []):
+                if item.get("gene"):
+                    panel_genes.add(item["gene"])
+            for item in dashboard_data.get("methylation_profiles", []):
+                if item.get("gene"):
+                    panel_genes.add(item["gene"])
+            for item in dashboard_data.get("detoxification_profiles", []):
+                if item.get("gene"):
+                    panel_genes.add(item["gene"])
             for item in dashboard_data.get("carrier_status", []):
                 # Extract gene from parenthetical in condition name, e.g. "Dilated Cardiomyopathy (TTN)"
                 import re as _re
@@ -1148,6 +1170,9 @@ async def get_dashboard_data(
                 gene_match = _re.search(r'\(([A-Z][A-Z0-9]{1,9})\)\s*$', condition_str)
                 if gene_match:
                     panel_genes.add(gene_match.group(1))
+
+            # Also add all gene symbols resolved via rsid → gene_symbol_map
+            panel_genes.update(gene_symbol_map.values())
 
             gene_stats_map: Dict[str, Any] = {}
             if panel_genes:
