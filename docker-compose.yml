@@ -183,6 +183,7 @@ services:
     volumes:
       - .:/app
       - /app/.venv
+      - ./data_sources:/app/data_sources
     cap_drop:
       - NET_RAW
       - NET_ADMIN
