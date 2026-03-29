@@ -4,6 +4,7 @@ insight generator modules.
 """
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Any
 
@@ -884,6 +885,28 @@ async def generate_from_maps(
                     isinstance(_path_score, dict) and _path_score.get('composite_score', 0) >= 0.60
                 ):
                     logger.debug("rsid %s: skipping 'Unknown variant' mapping with no pathogenicity evidence", rsid)
+                    continue
+                # Skip generic "Gene Name variant" conditions that have no ClinVar
+                # clinical significance. These are auto-generated fallback names
+                # (e.g. "UBR4 variant") created when no real disease association
+                # exists — usually caused by AlphaMissense coordinate mismatches
+                # with MODIFIER/intergenic VEP consequences. Require either:
+                #   a) non-empty clinical_significance from ClinVar, OR
+                #   b) strong composite pathogenicity score (≥ 0.75)
+                _is_generic_variant_condition = (
+                    not skip_benign_filter
+                    and bool(re.search(r'\bvariant\s*$', _condition, re.IGNORECASE))
+                    and _condition.lower() not in ('unknown variant',)
+                    and not info.get('clinical_significance', '').strip()
+                )
+                if _is_generic_variant_condition and not (
+                    isinstance(_path_score, dict) and _path_score.get('composite_score', 0) >= 0.75
+                    and _path_score.get('evidence_count', 0) >= 2
+                ):
+                    logger.debug(
+                        "rsid %s: skipping generic '%s' — no ClinVar significance and insufficient multi-source evidence",
+                        rsid, _condition,
+                    )
                     continue
                 # Filter benign/likely_benign variants when the composite
                 # pathogenicity score classifies them as benign — but ONLY

@@ -641,11 +641,25 @@ def categorize_variant(
     if impact == "HIGH" and "health" not in applicable_categories:
         applicable_categories.add("health")
 
-    # If nothing matched, and we have pathogenicity evidence, default to health
+    # If nothing matched, and we have pathogenicity evidence, default to health.
+    # GUARD: only apply for coding variants with MODERATE or HIGH VEP impact AND
+    # at least one non-AlphaMissense source. AlphaMissense alone is insufficient
+    # because it sometimes assigns high scores to positions that Ensembl VEP
+    # classifies as intergenic/MODIFIER (genome build or annotation version
+    # mismatch), producing false-positive health flags with no disease name.
+    _NON_CODING_IMPACTS = frozenset(('modifier', 'low'))
+    _REQUIRES_CLINVAR_SIGS = frozenset(('intergenic_variant', 'upstream_gene_variant',
+                                        'downstream_gene_variant', 'non_coding_transcript_exon_variant',
+                                        'intron_variant', 'synonymous_variant',
+                                        '3_prime_utr_variant', '5_prime_utr_variant'))
     if not applicable_categories:
         path_scores = [ev.pathogenicity_score for ev in evidence_list
                        if ev.pathogenicity_score is not None]
-        if path_scores and max(path_scores) >= 0.5:
+        _impact_ok = impact and impact.lower() not in _NON_CODING_IMPACTS
+        _consequence_ok = not consequence or consequence not in _REQUIRES_CLINVAR_SIGS
+        _has_clinvar = bool(sig_set)  # any ClinVar significance data
+        _multi_source = len([ev for ev in evidence_list if ev.source_name != 'alpha_missense']) > 0
+        if path_scores and max(path_scores) >= 0.5 and _impact_ok and _consequence_ok and (_has_clinvar or _multi_source):
             applicable_categories.add("health")
 
     # If still nothing, skip
