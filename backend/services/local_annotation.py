@@ -44,6 +44,7 @@ class LoadedSources:
     """Holds references to all loaded local annotation services."""
     clinvar: Any = None
     gnomad: Any = None
+    gnomad_v2: Any = None
     ensembl_vep: Any = None
     thousand_genomes: Any = None
     alpha_missense: Any = None
@@ -57,6 +58,8 @@ class LoadedSources:
             names.append('clinvar_local')
         if self.gnomad:
             names.append('gnomad')
+        if self.gnomad_v2:
+            names.append('gnomad_v2')
         if self.ensembl_vep:
             names.append('ensembl')
         if self.thousand_genomes:
@@ -127,6 +130,17 @@ async def load_local_sources(enabled_sources: Optional[List[str]]) -> LoadedSour
         svc = get_alphafold_local_service()
         if svc.available:
             sources.alphafold = svc
+
+    # gnomAD v2 exome data (GRCh37, per-population AFs) — always load when
+    # gnomad is enabled. Used as a fallback for SNPs that the CADD indel file
+    # can't cover.
+    if enabled_sources is None or 'gnomad' in enabled_sources:
+        from .gnomad_v2_local import get_gnomad_v2_service
+        svc = get_gnomad_v2_service()
+        if not svc.is_loaded:
+            await svc.ensure_loaded()
+        if svc.is_loaded and svc.indexed_count > 0:
+            sources.gnomad_v2 = svc
 
     return sources
 
@@ -301,6 +315,40 @@ async def run_all_lookups(
                      f"(rsid: {gn_found}, pos fallback: {total_found - gn_found}) "
                      f"({time.monotonic() - t0:.1f}s)")
         await asyncio.sleep(0)
+
+    # gnomAD v2 exome fallback — GRCh37 per-population AFs for rsids not found
+    # in the main gnomAD CADD data (which is typically indel-only on GRCh38).
+    gn_rsids_v2 = _rsids_for('gnomad')
+    if sources.gnomad_v2 and gn_rsids_v2:
+        # Only look up rsids that weren't already found by main gnomAD
+        v2_candidates = [
+            r for r in gn_rsids_v2
+            if not (results.gnomad.get(r) and results.gnomad[r].get('found'))
+        ]
+        if v2_candidates:
+            t0 = time.monotonic()
+            logger.info(f"  gnomAD v2: starting lookup for {len(v2_candidates)} unfound RSIDs...")
+            v2_afs = await sources.gnomad_v2.batch_get_population_afs(v2_candidates)
+            v2_found = 0
+            for rsid, afs in v2_afs.items():
+                if afs:
+                    # Wrap v2 population AFs in the standard gnomAD result format
+                    results.gnomad[rsid] = {
+                        "found": True,
+                        "source": "gnomad_v2_exome",
+                        "rsid": rsid,
+                        "af": afs.get("af_nfe"),  # Use NFE (European) as default AF
+                        "population_afs": {
+                            pop: afs.get(f"af_{pop}")
+                            for pop in ("afr", "amr", "eas", "nfe", "sas")
+                            if afs.get(f"af_{pop}") is not None
+                        },
+                        "subpop_freqs": afs.get("subpop_freqs", {}),
+                    }
+                    v2_found += 1
+            logger.info(f"  gnomAD v2: {v2_found}/{len(v2_candidates)} found "
+                        f"({time.monotonic() - t0:.1f}s)")
+            await asyncio.sleep(0)
 
     ens_rsids = _rsids_for('ensembl')
     if sources.ensembl_vep and ens_rsids:

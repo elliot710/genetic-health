@@ -73,6 +73,7 @@ class GnomadCacheService:
         self._tsv_files: Optional[List[Path]] = None
         self._genome_build: Optional[str] = None
         self._is_grch38: bool = False
+        self._is_indel_only: bool = False
         # True after a full tabix→SQLite scan was completed (or loaded from disk).
         # When True, any rsid not in the SQLite cache is guaranteed NOT to be in
         # gnomAD — no need to re-run the expensive tabix fallback path.
@@ -229,6 +230,9 @@ class GnomadCacheService:
             logger.warning("No tabix-indexed gnomAD TSV files found in %s", _GNOMAD_DATA_DIR)
             return
         self._tsv_files = tsv_files
+        # Detect whether available files are indel-only (e.g. gnomAD CADD indel TSV).
+        # When True, tabix lookups for SNP variants are skipped — they can never match.
+        self._is_indel_only = all('indel' in f.name.lower() for f in tsv_files)
         build = self._detect_genome_build(tsv_files[0])
         is_grch38 = build is not None and 'GRCh38' in build
         self._genome_build = build
@@ -236,6 +240,8 @@ class GnomadCacheService:
         if is_grch38:
             logger.info("gnomAD CADD file '%s' is %s — will bridge via Ensembl VEP GRCh38 positions",
                         tsv_files[0].name, build)
+        if self._is_indel_only:
+            logger.info("gnomAD CADD: indel-only data — SNP tabix lookups will be skipped")
         file_fp = get_multi_file_fingerprint(tsv_files)
 
         # Use existing cache if TSV files are unchanged (marker_fp not required).
@@ -1165,6 +1171,19 @@ class GnomadLocalService:
 
         if not tuples:
             return {}
+
+        # PERF: When CADD data is indel-only, filter out SNPs (ref & alt are
+        # single nucleotides) — they can never match and the GRCh38 bridge +
+        # tabix scan would waste 20+ minutes for zero hits.
+        if self._cache._is_indel_only:
+            before = len(tuples)
+            tuples = [t for t in tuples if len(t[3]) > 1 or len(t[4]) > 1]
+            skipped = before - len(tuples)
+            if skipped:
+                logger.info("gnomAD CADD: skipped %d SNPs (indel-only data), %d indels remain",
+                            skipped, len(tuples))
+            if not tuples:
+                return {}
 
         # GRCh38 coordinate translation if needed
         if self._cache._is_grch38:
