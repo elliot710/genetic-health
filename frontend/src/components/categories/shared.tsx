@@ -550,23 +550,29 @@ export function GeneContextBox({ gene, stats, theme }: GeneContextBoxProps) {
             </span>
             <div className="flex flex-wrap gap-1 mt-1">
               {visible.map((c, i) => (
-                <span
-                  key={i}
-                  className={`inline-flex items-center gap-1 text-[10px] rounded px-1.5 py-0.5 border ${theme.border} ${theme.isDarkMode ? 'bg-white/5' : 'bg-gray-100/80'} ${theme.textSecondary}`}
-                >
-                  {c.disease_name}
-                  {c.disease_mim && (
-                    <a
-                      href={`https://omim.org/entry/${c.disease_mim}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-400 hover:text-blue-300"
-                      onClick={e => e.stopPropagation()}
-                    >
-                      ↗
-                    </a>
-                  )}
-                </span>
+                c.disease_mim ? (
+                  <a
+                    key={i}
+                    href={`https://omim.org/entry/${c.disease_mim}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`inline-flex items-center gap-1 text-[10px] rounded px-1.5 py-0.5 border ${theme.border} ${theme.isDarkMode ? 'bg-white/5 hover:bg-white/10' : 'bg-gray-100/80 hover:bg-gray-200/80'} ${theme.textSecondary} hover:text-blue-400 transition-colors`}
+                    onClick={e => e.stopPropagation()}
+                  >
+                    {c.disease_name} ↗
+                  </a>
+                ) : (
+                  <a
+                    key={i}
+                    href={`https://omim.org/search?search=${encodeURIComponent(c.disease_name)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`inline-flex items-center gap-1 text-[10px] rounded px-1.5 py-0.5 border ${theme.border} ${theme.isDarkMode ? 'bg-white/5 hover:bg-white/10' : 'bg-gray-100/80 hover:bg-gray-200/80'} ${theme.textSecondary} hover:text-blue-400 transition-colors`}
+                    onClick={e => e.stopPropagation()}
+                  >
+                    {c.disease_name}
+                  </a>
+                )
               ))}
               {hasMore && !showAll && (
                 <button

@@ -395,10 +395,10 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                         theme={theme}
                       />
                     )}
-                    {risk.geneSymbol && data?.alphafold_map?.[risk.geneSymbol] && (
+                    {risk.geneSymbol && data?.alphafold_map?.[risk.variantInfo?.[0]] && (
                       <AlphaFoldDetailBox
-                        rsid={variant}
-                        alphafoldData={data.alphafold_map[risk.geneSymbol]}
+                        rsid={risk.variantInfo?.[0]}
+                        alphafoldData={data.alphafold_map[risk.variantInfo?.[0]]}
                         theme={theme}
                       />
                     )}
