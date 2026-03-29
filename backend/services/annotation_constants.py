@@ -37,10 +37,11 @@ REMOTE_API_SOURCES: Set[str] = {'ensembl', 'clinvar', 'clinpgx', 'snpedia'}
 
 # Sources backed by local data (files, local DB tables, or SQLite cache)
 # 'ensembl' is hybrid — uses local VEP VCF when loaded, falls back to API
-LOCAL_SOURCES: Set[str] = {'clinvar_local', 'gnomad', 'gnomad_tx', 'alpha_missense', 'ensembl', 'thousand_genomes', 'ensembl_vep'}
+# 'alphafold' uses local SQLite built from EBI FTP tar when available
+LOCAL_SOURCES: Set[str] = {'clinvar_local', 'gnomad', 'gnomad_tx', 'alpha_missense', 'ensembl', 'thousand_genomes', 'ensembl_vep', 'alphafold'}
 
-# Sources backed by BigQuery public datasets
-BQ_SOURCES: Set[str] = {'chembl', 'fda_drug', 'alphafold'}
+# Sources backed by BigQuery public datasets (alphafold moved to LOCAL_SOURCES)
+BQ_SOURCES: Set[str] = {'chembl', 'fda_drug'}
 
 
 def source_status(data) -> str:

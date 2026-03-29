@@ -48,6 +48,7 @@ class LoadedSources:
     thousand_genomes: Any = None
     alpha_missense: Any = None
     gnomad_tx: Any = None
+    alphafold: Any = None
 
     @property
     def active_names(self) -> List[str]:
@@ -64,6 +65,8 @@ class LoadedSources:
             names.append('alpha_missense')
         if self.gnomad_tx:
             names.append('gnomad_tx')
+        if self.alphafold:
+            names.append('alphafold')
         return names
 
 
@@ -118,6 +121,12 @@ async def load_local_sources(enabled_sources: Optional[List[str]]) -> LoadedSour
         svc = get_gnomad_tx_service()
         if svc.available:
             sources.gnomad_tx = svc
+
+    if enabled_sources is None or 'alphafold' in enabled_sources:
+        from .alphafold_local import get_alphafold_local_service
+        svc = get_alphafold_local_service()
+        if svc.available:
+            sources.alphafold = svc
 
     return sources
 
@@ -217,6 +226,7 @@ class LookupResults:
     thousand_genomes: Dict[str, Optional[Dict]] = field(default_factory=dict)
     alpha_missense: Dict[str, Optional[Dict]] = field(default_factory=dict)
     gnomad_tx: Dict[str, Optional[Dict]] = field(default_factory=dict)
+    alphafold: Dict[str, Optional[Dict]] = field(default_factory=dict)  # rsid → AF data (gene-keyed internally)
 
     def items(self):
         """Iterate (source_name, results_dict) for all sources."""
@@ -226,6 +236,7 @@ class LookupResults:
         yield 'thousand_genomes', self.thousand_genomes
         yield 'alpha_missense', self.alpha_missense
         yield 'gnomad_tx', self.gnomad_tx
+        yield 'alphafold', self.alphafold
 
 
 async def run_all_lookups(
@@ -370,6 +381,48 @@ async def run_all_lookups(
             results.gnomad_tx = tx_results
             found_tx = sum(1 for v in tx_results.values() if v and v.get('found'))
             logger.info(f"  gnomAD-tx: {found_tx}/{len(tx_variants)} found ({time.monotonic() - t0:.1f}s)")
+            await asyncio.sleep(0)
+
+    # AlphaFold local: gene-keyed lookup. Extract gene symbols from Ensembl/ClinVar
+    # annotation results that are available so far, then batch-look up by gene.
+    if sources.alphafold:
+        t0 = time.monotonic()
+        # Build rsid → gene_symbol map from available annotation data
+        rsid_gene: Dict[str, str] = {}
+        for rsid in (rsids or list(rsid_to_variant.keys())):
+            # Try Ensembl VEP first
+            ens = results.ensembl.get(rsid) or {}
+            if ens.get('found'):
+                ens_data = ens.get('data', {})
+                if isinstance(ens_data, list) and ens_data:
+                    ens_data = ens_data[0]
+                tcs = ens_data.get('transcript_consequences', [])
+                if tcs and tcs[0].get('gene_symbol'):
+                    rsid_gene[rsid] = tcs[0]['gene_symbol']
+                    continue
+            # Fallback to ClinVar gene
+            cv = results.clinvar.get(rsid) or {}
+            if cv.get('found'):
+                gene = cv.get('gene_symbol') or cv.get('gene')
+                if gene:
+                    rsid_gene[rsid] = gene
+                    continue
+            # Fallback to gnomAD gene
+            gn = results.gnomad.get(rsid) or {}
+            if gn.get('found') and gn.get('gene'):
+                rsid_gene[rsid] = gn['gene']
+
+        unique_genes = list(set(rsid_gene.values()))
+        if unique_genes:
+            logger.info(f"  AlphaFold: looking up {len(unique_genes)} unique genes for {len(rsid_gene)} RSIDs...")
+            gene_results = sources.alphafold.bulk_lookup_genes(unique_genes)
+            # Map results back to rsids
+            for rsid, gene in rsid_gene.items():
+                af_data = gene_results.get(gene)
+                if af_data and af_data.get('found'):
+                    results.alphafold[rsid] = af_data
+            found_af = sum(1 for v in results.alphafold.values() if v and v.get('found'))
+            logger.info(f"  AlphaFold: {found_af}/{len(rsid_gene)} RSIDs enriched ({time.monotonic() - t0:.1f}s)")
             await asyncio.sleep(0)
 
     logger.info(f"  All source lookups: {time.monotonic() - t_total:.1f}s total")

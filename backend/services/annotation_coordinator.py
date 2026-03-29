@@ -170,6 +170,7 @@ async def annotate_variants_efficiently(
             tkg_val = _found(results.thousand_genomes.get(rsid))
             am_val  = _found(results.alpha_missense.get(rsid))
             gtx_val = _found(results.gnomad_tx.get(rsid))
+            af_val  = _found(results.alphafold.get(rsid))
             first_v = rsid_to_variants[rsid][0]
 
             row: Dict[str, Any] = dict(
@@ -183,6 +184,7 @@ async def annotate_variants_efficiently(
                 ensembl_data=ens_val,
                 thousand_genomes_data=tkg_val,
                 alpha_missense_data=am_val,
+                alphafold_data=af_val,
             )
             mid = getattr(first_v, 'marker_id', None)
             if mid is not None:
@@ -202,6 +204,7 @@ async def annotate_variants_efficiently(
             'ensembl':          ('ensembl_data',          sources.ensembl_vep),
             'thousand_genomes': ('thousand_genomes_data', sources.thousand_genomes),
             'alpha_missense':   ('alpha_missense_data',   sources.alpha_missense),
+            'alphafold':        ('alphafold_data',        sources.alphafold),
         }
         stmt = insert(SharedVariantAnnotation).values(batch_rows)
         for _src, (col, svc) in local_col_map.items():
@@ -250,6 +253,7 @@ async def annotate_variants_efficiently(
             tkg_val = _found(results.thousand_genomes.get(rsid))
             am_val  = _found(results.alpha_missense.get(rsid))
             gtx_val = _found(results.gnomad_tx.get(rsid))
+            af_val  = _found(results.alphafold.get(rsid))
             remote  = remote_data.get(rsid, {})
 
             ann: Dict[str, Any] = {
@@ -265,6 +269,7 @@ async def annotate_variants_efficiently(
                 ('thousand_genomes', tkg_val),
                 ('alpha_missense', am_val),
                 ('gnomad_tx',     gtx_val),
+                ('alphafold',     af_val),
                 ('clinvar',       remote.get('clinvar')),
                 ('clinpgx',       remote.get('clinpgx')),
                 ('snpedia',       remote.get('snpedia')),
@@ -697,13 +702,23 @@ async def bulk_enrich_bigquery(
     check_cancelled_fn: Optional[Callable] = None,
     update_progress_fn: Optional[Callable] = None,
 ):
-    """Bulk-enrich annotations with BigQuery data (ChEMBL, FDA Drug, AlphaFold)."""
+    """Bulk-enrich annotations with BigQuery data (ChEMBL, FDA Drug).
+    AlphaFold is handled locally via alphafold_local.py when the DB is available.
+    """
     from .variant_loader import load_enabled_sources as _load_enabled_sources
 
     if enabled_sources is None:
         enabled_sources = await _load_enabled_sources()
 
-    bq_source_names = {'chembl', 'fda_drug', 'alphafold'}
+    bq_source_names = {'chembl', 'fda_drug'}  # alphafold moved to local
+    # If alphafold was explicitly requested and local DB is not present, fall back to BQ
+    if 'alphafold' in (enabled_sources or []):
+        from .alphafold_local import get_alphafold_local_service
+        af_svc = get_alphafold_local_service()
+        if not af_svc.available:
+            logger.info("AlphaFold local DB not available — adding to BigQuery fallback")
+            bq_source_names = bq_source_names | {'alphafold'}
+
     enabled_bq = bq_source_names & set(enabled_sources) if enabled_sources else bq_source_names
     if not enabled_bq:
         return
