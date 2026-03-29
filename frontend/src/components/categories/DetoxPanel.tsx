@@ -17,6 +17,8 @@ import {
   VariantLinks,
   PathogenicityBar,
   VariantInfoBox,
+  GeneContextBox,
+  GeneBurdenStrip,
   ZygosityBadge,
   formatLabel,
   MasonryLayout,
@@ -268,6 +270,7 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                         pathogenicityMap={data?.pathogenicity_map}
                         theme={theme}
                       />
+                      <GeneContextBox gene={item.gene} stats={item.gene ? data?.gene_stats_map?.[item.gene] : undefined} theme={theme} />
                     </div>
                   )}
                 </div>

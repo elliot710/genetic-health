@@ -13,6 +13,8 @@ import {
   VariantLinks,
   PathogenicityBar,
   VariantInfoBox,
+  GeneContextBox,
+  GeneBurdenStrip,
   ZygosityBadge,
   capacityToSeverity,
   formatLabel,
@@ -259,6 +261,7 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
                     )}
 
                     <VariantInfoBox rsid={trait.associated_variants?.[0]} gene={trait.gene !== 'Multiple' ? trait.gene : undefined} token={token} isDarkMode={isDarkMode} alphaMissense={trait.associated_variants?.[0] ? data?.alpha_missense_map?.[trait.associated_variants[0]] : undefined} clinvarCount={trait.associated_variants?.[0] ? data?.clinvar_count_map?.[trait.associated_variants[0]] : undefined} genotype={trait.associated_variants?.[0] ? data?.genotype_map?.[trait.associated_variants[0]] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
+                    <GeneContextBox gene={trait.gene !== 'Multiple' ? trait.gene : undefined} stats={trait.gene && trait.gene !== 'Multiple' ? data?.gene_stats_map?.[trait.gene] : undefined} theme={theme} />
                   </div>
                 )}
               </div>

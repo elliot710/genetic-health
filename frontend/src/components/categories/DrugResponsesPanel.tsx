@@ -13,6 +13,8 @@ import {
   PathogenicityBar,
   VariantInfoBox,
   AlphaFoldBadge,
+  GeneContextBox,
+  GeneBurdenStrip,
   riskToSeverity,
   MasonryLayout,
   useGrouping,
@@ -264,6 +266,7 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
                     )}
 
                     <VariantInfoBox rsid={drug.variants?.[0]} gene={drug.gene} token={token} isDarkMode={isDarkMode} alphaMissense={drug.variants?.[0] ? data?.alpha_missense_map?.[drug.variants[0]] : undefined} clinvarCount={drug.variants?.[0] ? data?.clinvar_count_map?.[drug.variants[0]] : undefined} genotype={drug.variants?.[0] ? data?.genotype_map?.[drug.variants[0]] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
+                    <GeneContextBox gene={drug.gene} stats={data?.gene_stats_map?.[drug.gene]} theme={theme} />
                   </div>
                 )}
               </div>
