@@ -16,6 +16,8 @@ import {
   PathogenicityBar,
   VariantInfoBox,
   ClickableRsidBadge,
+  GeneContextBox,
+  GeneBurdenStrip,
   carrierStatusToSeverity,
   MasonryLayout,
   cleanCondition,
@@ -411,6 +413,10 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
                   {carrier.inheritance !== 'Unknown' ? `${carrier.inheritance.replace(/_/g, ' ')} inheritance` : 'Inheritance pattern not specified'}
                   {carrier.counselingRecommended ? ' · Genetic counseling recommended' : ''}
                 </p>
+                {/* Gene burden strip when collapsed */}
+                {!isExpanded && carrier.gene && data?.gene_stats_map?.[carrier.gene] && (
+                  <GeneBurdenStrip gene={carrier.gene} stats={data.gene_stats_map[carrier.gene]} theme={theme} />
+                )}
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
@@ -429,6 +435,11 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
                         <VariantInfoBox rsid={rsid} gene={carrier.gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                       </React.Fragment>
                     ))}
+
+                    {/* Gene context: ClinVar burden + known diseases */}
+                    {carrier.gene && data?.gene_stats_map?.[carrier.gene] && (
+                      <GeneContextBox gene={carrier.gene} stats={data.gene_stats_map[carrier.gene]} theme={theme} />
+                    )}
 
                     {/* Single dialog for the open rsid */}
                     {openDialogRsid && carrier.rsids.includes(openDialogRsid) && (

@@ -15,6 +15,8 @@ import {
   PathogenicityBar,
   VariantInfoBox,
   ZygosityBadge,
+  GeneContextBox,
+  GeneBurdenStrip,
   clinicalSignificanceToSeverity,
   formatLabel,
   MasonryLayout,
@@ -301,6 +303,10 @@ export default function RareMutationsPanel({ data, isDarkMode = false, token }: 
                 {(!mutation.disease_association || mutation.disease_association === 'Under investigation') && mutation.effect && (
                   <p className={`text-sm ${theme.textSecondary} mt-2 line-clamp-2`}>{cleanCondition(mutation.effect)}</p>
                 )}
+                {/* Gene burden strip when collapsed */}
+                {!isExpanded && gene && data?.gene_stats_map?.[gene] && (
+                  <GeneBurdenStrip gene={gene} stats={data.gene_stats_map[gene]} theme={theme} />
+                )}
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
@@ -374,6 +380,11 @@ export default function RareMutationsPanel({ data, isDarkMode = false, token }: 
                         </Badge>
                       )}
                     </div>
+
+                    {/* Gene context: ClinVar burden + known diseases */}
+                    {gene && data?.gene_stats_map?.[gene] && (
+                      <GeneContextBox gene={gene} stats={data.gene_stats_map[gene]} theme={theme} />
+                    )}
 
                     <VariantInfoBox rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                   </div>

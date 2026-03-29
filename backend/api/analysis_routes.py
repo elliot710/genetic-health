@@ -1142,8 +1142,12 @@ async def get_dashboard_data(
                 if item.get("gene"):
                     panel_genes.add(item["gene"])
             for item in dashboard_data.get("carrier_status", []):
-                # carrier items don't have a "gene" key in current mapping; skip
-                pass
+                # Extract gene from parenthetical in condition name, e.g. "Dilated Cardiomyopathy (TTN)"
+                import re as _re
+                condition_str = item.get("condition", "")
+                gene_match = _re.search(r'\(([A-Z][A-Z0-9]{1,9})\)\s*$', condition_str)
+                if gene_match:
+                    panel_genes.add(gene_match.group(1))
 
             gene_stats_map: Dict[str, Any] = {}
             if panel_genes:
