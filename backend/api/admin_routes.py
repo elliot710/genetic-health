@@ -2126,6 +2126,16 @@ async def gnomad_v2_etl_import(
 ):
     """Dispatch gnomAD v2 exome ETL to the background worker and return immediately."""
     from ..db.models import WorkerJob
+    # Prevent duplicate pending/processing jobs
+    existing = (await db.execute(
+        select(WorkerJob).where(
+            WorkerJob.job_type == "etl_gnomad_v2",
+            WorkerJob.status.in_(["pending", "processing"]),
+        )
+    )).scalars().first()
+    if existing:
+        return {"job_id": existing.id, "status": existing.status,
+                "detail": f"gnomAD v2 ETL already {existing.status} (job #{existing.id})"}
     job = WorkerJob(job_type="etl_gnomad_v2", status="pending", params={}, requested_by=admin.id)
     db.add(job)
     await db.commit()
@@ -2161,6 +2171,16 @@ async def alphafold_etl_import(
 ):
     """Dispatch AlphaFold ETL (download + build SQLite) to the background worker."""
     from ..db.models import WorkerJob
+    # Prevent duplicate pending/processing jobs
+    existing = (await db.execute(
+        select(WorkerJob).where(
+            WorkerJob.job_type == "etl_alphafold",
+            WorkerJob.status.in_(["pending", "processing"]),
+        )
+    )).scalars().first()
+    if existing:
+        return {"job_id": existing.id, "status": existing.status,
+                "detail": f"AlphaFold ETL already {existing.status} (job #{existing.id})"}
     job = WorkerJob(
         job_type="etl_alphafold",
         status="pending",

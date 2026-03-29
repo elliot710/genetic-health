@@ -206,7 +206,11 @@ async def _execute_job(job_id: int, job_type: str, params: dict) -> dict:
         return await ThousandGenomesETL().run_full_import()
     elif job_type == "etl_gnomad_v2":
         from backend.services.gnomad_v2_etl import GnomadV2ETL
-        return await GnomadV2ETL().run_full_import()
+        result = await GnomadV2ETL().run_full_import()
+        # Refresh PG count in the singleton so next analysis uses PG path
+        from backend.services.gnomad_v2_local import get_gnomad_v2_service
+        await get_gnomad_v2_service().refresh_pg_count()
+        return result
     elif job_type == "etl_alphafold":
         from backend.scripts.build_alphafold_local import run_etl
         p = params or {}

@@ -121,6 +121,11 @@ class GnomadV2Service:
         except Exception:
             self._pg_count = 0
 
+    async def refresh_pg_count(self):
+        """Re-check PG row count (call after ETL completes)."""
+        await self._check_pg_count()
+        logger.info("gnomAD v2: PG row count refreshed — %d rows", self._pg_count)
+
     def _discover_files(self):
         """Find per-chromosome bgz VCF files and build chrom → path mapping."""
         if not _GNOMAD_V2_DIR.exists():
