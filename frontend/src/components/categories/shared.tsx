@@ -1075,8 +1075,8 @@ export function MasonryLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex flex-col md:flex-row gap-4">
-      <div className="flex-1 space-y-4">{col1}</div>
-      <div className="flex-1 space-y-4">{col2}</div>
+      <div className="flex-1 min-w-0 space-y-4">{col1}</div>
+      <div className="flex-1 min-w-0 space-y-4">{col2}</div>
     </div>
   )
 }

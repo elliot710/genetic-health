@@ -212,7 +212,7 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
             return (
               <div
                 key={index}
-                className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 cursor-pointer hover:border-pink-500/50 transition-all duration-300`}
+                className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 cursor-pointer hover:border-pink-500/50 transition-all duration-300 overflow-hidden`}
                 onClick={() => setSelectedItem(isExpanded ? null : itemKey)}
               >
                 <div className="flex items-start justify-between mb-1 gap-1">
