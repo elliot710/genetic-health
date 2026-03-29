@@ -203,7 +203,16 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
                       <ZygosityBadge genotype={data?.genotype_map?.[rsid]} />
                     </>
                   )}
+                  <AlphaFoldBadge
+                    confidence={data?.alphafold_map?.[rsid]?.confidence}
+                    highPct={data?.alphafold_map?.[rsid]?.high_confidence_pct}
+                    lowPct={data?.alphafold_map?.[rsid]?.low_confidence_pct}
+                    theme={theme}
+                  />
                 </div>
+                {item.gene && data?.gene_stats_map?.[item.gene] && (
+                  <GeneBurdenStrip gene={item.gene} stats={data.gene_stats_map[item.gene]} theme={theme} />
+                )}
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
@@ -226,7 +235,7 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
                         alphafoldData={data.alphafold_map[rsid]}
                         theme={theme}
                       />
-                    }
+                    )}
                   </div>
         </MasonryLayout>
             )}

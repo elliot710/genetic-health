@@ -205,6 +205,7 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
               const isExpanded = expandedGene === key
               const capacity = item.detox_capacity || 'normal'
               const sensitivity = item.toxin_sensitivity
+              const rsid = item.associated_variants?.[0]
 
               return (
                 <div
@@ -235,13 +236,6 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                         showIcon={false}
                       />
                     )}
-                    {rsid && data?.alphafold_map?.[rsid] && (
-                      <AlphaFoldDetailBox
-                        rsid={rsid}
-                        alphafoldData={data.alphafold_map[rsid]}
-                        theme={theme}
-                      />
-                    )}
                     <Badge variant="secondary" className="text-xs font-medium">{item.gene}</Badge>
                     {item.associated_variants?.length > 0 && item.associated_variants.map((v: string) => (
                       <React.Fragment key={v}>
@@ -249,7 +243,16 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                         <ZygosityBadge genotype={data?.genotype_map?.[v]} />
                       </React.Fragment>
                     ))}
+                    <AlphaFoldBadge
+                      confidence={data?.alphafold_map?.[rsid]?.confidence}
+                      highPct={data?.alphafold_map?.[rsid]?.high_confidence_pct}
+                      lowPct={data?.alphafold_map?.[rsid]?.low_confidence_pct}
+                      theme={theme}
+                    />
                   </div>
+                  {item.gene && data?.gene_stats_map?.[item.gene] && (
+                    <GeneBurdenStrip gene={item.gene} stats={data.gene_stats_map[item.gene]} theme={theme} />
+                  )}
 
                   {isExpanded && (
                     <div className={`mt-4 pt-4 border-t ${theme.border} space-y-4`}>
@@ -279,6 +282,13 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                         theme={theme}
                       />
                       <GeneContextBox gene={item.gene} stats={item.gene ? data?.gene_stats_map?.[item.gene] : undefined} theme={theme} />
+                      {rsid && data?.alphafold_map?.[rsid] && (
+                        <AlphaFoldDetailBox
+                          rsid={rsid}
+                          alphafoldData={data.alphafold_map[rsid]}
+                          theme={theme}
+                        />
+                      )}
                     </div>
                   )}
                 </div>

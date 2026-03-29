@@ -241,7 +241,16 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
                       )
                   }
                   <Badge variant="outline" className="text-xs">{trait.category}</Badge>
+                  <AlphaFoldBadge
+                    confidence={data?.alphafold_map?.[trait.associated_variants?.[0]]?.confidence}
+                    highPct={data?.alphafold_map?.[trait.associated_variants?.[0]]?.high_confidence_pct}
+                    lowPct={data?.alphafold_map?.[trait.associated_variants?.[0]]?.low_confidence_pct}
+                    theme={theme}
+                  />
                 </div>
+                {trait.gene && trait.gene !== 'Multiple' && data?.gene_stats_map?.[trait.gene] && (
+                  <GeneBurdenStrip gene={trait.gene} stats={data.gene_stats_map[trait.gene]} theme={theme} />
+                )}
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
@@ -269,7 +278,7 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
                         alphafoldData={data.alphafold_map[trait.associated_variants?.[0]]}
                         theme={theme}
                       />
-                    }
+                    )}
                   </div>
                 )}
               </div>

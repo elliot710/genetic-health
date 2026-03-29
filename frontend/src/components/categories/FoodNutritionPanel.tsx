@@ -212,7 +212,16 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
                   {rsid && <Badge variant="secondary" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>}
                   {rsid && <ZygosityBadge genotype={data?.genotype_map?.[rsid]} />}
                   {gene && <Badge variant="outline" className="text-xs">{gene}</Badge>}
+                  <AlphaFoldBadge
+                    confidence={data?.alphafold_map?.[rsid]?.confidence}
+                    highPct={data?.alphafold_map?.[rsid]?.high_confidence_pct}
+                    lowPct={data?.alphafold_map?.[rsid]?.low_confidence_pct}
+                    theme={theme}
+                  />
                 </div>
+                {gene && data?.gene_stats_map?.[gene] && (
+                  <GeneBurdenStrip gene={gene} stats={data.gene_stats_map[gene]} theme={theme} />
+                )}
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
@@ -236,7 +245,7 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
                         alphafoldData={data.alphafold_map[rsid]}
                         theme={theme}
                       />
-                    }
+                    )}
                   </div>
             )}
           </div>

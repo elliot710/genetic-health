@@ -202,7 +202,16 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
                   {mutation.rsid && <Badge variant="outline" className="text-xs font-mono">{mutation.rsid}{data?.genotype_map?.[mutation.rsid] ? ` ${data.genotype_map[mutation.rsid]}` : ''}</Badge>}
                   {mutation.rsid && <ZygosityBadge genotype={data?.genotype_map?.[mutation.rsid]} />}
                   {mutation.effect_size && <Badge variant="outline" className="text-xs">Effect: {mutation.effect_size}</Badge>}
+                  <AlphaFoldBadge
+                    confidence={data?.alphafold_map?.[mutation.rsid]?.confidence}
+                    highPct={data?.alphafold_map?.[mutation.rsid]?.high_confidence_pct}
+                    lowPct={data?.alphafold_map?.[mutation.rsid]?.low_confidence_pct}
+                    theme={theme}
+                  />
                 </div>
+                {mutation.gene && data?.gene_stats_map?.[mutation.gene] && (
+                  <GeneBurdenStrip gene={mutation.gene} stats={data.gene_stats_map[mutation.gene]} theme={theme} />
+                )}
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
@@ -238,7 +247,7 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
                         alphafoldData={data.alphafold_map[mutation.rsid]}
                         theme={theme}
                       />
-                    }
+                    )}
                   </div>
                 )}
               </div>

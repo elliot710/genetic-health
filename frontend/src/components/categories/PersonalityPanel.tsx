@@ -208,6 +208,8 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
             const isExpanded = selectedItem === itemKey
             const scoreLabel = trait.score >= 75 ? 'high' : trait.score >= 50 ? 'moderate' : 'low'
             const scoreDisplay = scoreLabel.charAt(0).toUpperCase() + scoreLabel.slice(1)
+            const rsid = trait.gene?.startsWith('rs') ? trait.gene : undefined
+            const gene = !trait.gene?.startsWith('rs') ? trait.gene : undefined
             return (
               <div
                 key={index}
@@ -232,7 +234,16 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
                   {trait.gene?.startsWith('rs') && <Badge variant="secondary" className="text-xs font-mono">{trait.gene}{data?.genotype_map?.[trait.gene] ? ` ${data.genotype_map[trait.gene]}` : ''}</Badge>}
                   {trait.gene?.startsWith('rs') && <ZygosityBadge genotype={data?.genotype_map?.[trait.gene]} />}
                   {!trait.gene?.startsWith('rs') && trait.gene && trait.gene !== 'Multiple markers' && <Badge variant="outline" className="text-xs">{trait.gene}</Badge>}
+                  <AlphaFoldBadge
+                    confidence={data?.alphafold_map?.[rsid]?.confidence}
+                    highPct={data?.alphafold_map?.[rsid]?.high_confidence_pct}
+                    lowPct={data?.alphafold_map?.[rsid]?.low_confidence_pct}
+                    theme={theme}
+                  />
                 </div>
+                {gene && data?.gene_stats_map?.[gene] && (
+                  <GeneBurdenStrip gene={gene} stats={data.gene_stats_map[gene]} theme={theme} />
+                )}
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
@@ -258,7 +269,7 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
                         alphafoldData={data.alphafold_map[rsid]}
                         theme={theme}
                       />
-                    }
+                    )}
                   </div>
                 )}
               </div>
