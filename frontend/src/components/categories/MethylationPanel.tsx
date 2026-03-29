@@ -237,6 +237,10 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
                       />
                     )}
                   </div>
+                )}
+              </div>
+            )
+          })}
         </MasonryLayout>
             )}
           </div>

@@ -233,6 +233,11 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
                   </div>
             )}
           </div>
+            )
+          })}
+        </MasonryLayout>
+            )}
+          </div>
         ))}
       </SectionCard>
 

@@ -260,6 +260,11 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
                   </div>
             )}
           </div>
+            )
+          })}
+        </MasonryLayout>
+            )}
+          </div>
         ))}
       </SectionCard>
 

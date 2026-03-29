@@ -249,6 +249,11 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
                   </div>
             )}
           </div>
+            )
+          })}
+        </MasonryLayout>
+            )}
+          </div>
         ))}
       </SectionCard>
 
