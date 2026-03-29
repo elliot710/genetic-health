@@ -352,11 +352,11 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                     </Badge>
                   )}
                   {/* AlphaFold protein confidence badge */}
-                  {risk.gene?.startsWith('rs') && data?.alphafold_map?.[risk.gene] && (
+                  {risk.variantInfo?.[0] && data?.alphafold_map?.[risk.variantInfo[0]] && (
                     <AlphaFoldBadge
-                      confidence={data.alphafold_map[risk.gene].confidence}
-                      highPct={data.alphafold_map[risk.gene].high_confidence_pct}
-                      lowPct={data.alphafold_map[risk.gene].low_confidence_pct}
+                      confidence={data.alphafold_map[risk.variantInfo[0]].confidence}
+                      highPct={data.alphafold_map[risk.variantInfo[0]].high_confidence_pct}
+                      lowPct={data.alphafold_map[risk.variantInfo[0]].low_confidence_pct}
                       theme={theme}
                     />
                   )}

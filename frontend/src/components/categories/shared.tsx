@@ -61,7 +61,7 @@ export function CategoryHeader({
       <CardHeader>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className={`p-3 rounded-xl bg-gradient-to-br ${gradientFrom} ${gradientTo} border ${borderColor}`}>
+            <div className={`p-3 rounded-xl bg-linear-to-br ${gradientFrom} ${gradientTo} border ${borderColor}`}>
               <Icon className={`h-6 w-6 ${iconColorClass}`} />
             </div>
             <div>
@@ -105,7 +105,7 @@ export function EmptyState({
     <Card className={`${theme.glass} border ${theme.border} ring-0`}>
       <CardContent className="py-12">
         <div className="flex flex-col items-center gap-4 text-center">
-          <div className={`p-4 rounded-xl bg-gradient-to-br ${gradientFrom} ${gradientTo} border ${borderColor}`}>
+          <div className={`p-4 rounded-xl bg-linear-to-br ${gradientFrom} ${gradientTo} border ${borderColor}`}>
             <Icon className={`h-8 w-8 ${iconColorClass}`} />
           </div>
           <div>
@@ -432,7 +432,7 @@ export function VariantInfoBox({
   return (
     <div>
       <h5 className={`text-xs font-semibold ${theme.textSecondary} uppercase tracking-wide mb-1.5`}>Associated Variants</h5>
-      <div className={`rounded-lg p-2.5 border ${theme.border} ${theme.isDarkMode ? 'bg-white/[0.03]' : 'bg-gray-50/60'} space-y-2`}>
+      <div className={`rounded-lg p-2.5 border ${theme.border} ${theme.isDarkMode ? 'bg-white/3' : 'bg-gray-50/60'} space-y-2`}>
         <PathogenicityBar rsid={rsid!} pathogenicityMap={pathogenicityMap} theme={theme} />
         <VariantLinks
           rsid={rsid}
@@ -471,7 +471,7 @@ interface AlphaFoldBadgeProps {
  * Compact inline badge showing AlphaFold global confidence for the protein.
  * Green ≥ 70%, amber 50–69%, red < 50%.
  */
-export function AlphaFoldBadge({ confidence, highPct, lowPct, theme }: AlphaFoldBadgeProps) {
+export function AlphaFoldBadge({ confidence, highPct, lowPct }: AlphaFoldBadgeProps) {
   if (confidence == null) return null
   const pct = Math.round(confidence)
   const color = pct >= 70 ? 'text-green-400 border-green-500/30 bg-green-500/10' :
@@ -479,7 +479,7 @@ export function AlphaFoldBadge({ confidence, highPct, lowPct, theme }: AlphaFold
                             'text-red-400 border-red-500/30 bg-red-500/10'
   return (
     <span
-      title={`AlphaFold protein structure confidence: ${pct}% global${highPct ? ` · ${highPct}% very high confidence residues` : ''}${lowPct ? ` · ${lowPct}% very low confidence (disordered)` : ''}`}
+      title={`AlphaFold protein structure confidence: ${pct}% global${highPct ? ` · ${Math.round(highPct * 100)}% very high confidence residues` : ''}${lowPct ? ` · ${Math.round(lowPct * 100)}% very low confidence (disordered)` : ''}`}
       className={`inline-flex items-center gap-1 text-[10px] font-medium rounded px-1.5 py-0.5 border ${color}`}
     >
       <svg className="h-2.5 w-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -497,6 +497,7 @@ export function AlphaFoldBadge({ confidence, highPct, lowPct, theme }: AlphaFold
  */
 export function GeneContextBox({ gene, stats, theme }: GeneContextBoxProps) {
   const [showAll, setShowAll] = React.useState(false)
+  if (!stats) return null
   const conditions = stats.conditions || []
   const visible = showAll ? conditions : conditions.slice(0, 4)
   const hasMore = conditions.length > 4
@@ -511,7 +512,7 @@ export function GeneContextBox({ gene, stats, theme }: GeneContextBoxProps) {
       <h5 className={`text-xs font-semibold ${theme.textSecondary} uppercase tracking-wide mb-1.5`}>
         Gene Context
       </h5>
-      <div className={`rounded-lg p-2.5 border ${theme.border} ${theme.isDarkMode ? 'bg-white/[0.03]' : 'bg-gray-50/60'} space-y-2`}>
+      <div className={`rounded-lg p-2.5 border ${theme.border} ${theme.isDarkMode ? 'bg-white/3' : 'bg-gray-50/60'} space-y-2`}>
         {/* Burden stats row */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
           <span className={`font-semibold ${theme.textPrimary}`}>{gene}</span>
@@ -630,9 +631,12 @@ export function AlphaFoldDetailBox({ rsid, alphafoldData, theme }: AlphaFoldDeta
   if (!alphafoldData || alphafoldData.confidence == null) return null
 
   const pct = Math.round(alphafoldData.confidence)
-  const highPct = alphafoldData.high_confidence_pct ?? 0
-  const lowPct = alphafoldData.low_confidence_pct ?? 0
-  const proteinName = alphafoldData.protein_name
+  const highPct = Math.round((alphafoldData.high_confidence_pct ?? 0) * 100)
+  const lowPct = Math.round((alphafoldData.low_confidence_pct ?? 0) * 100)
+  const rawProteinName = alphafoldData.protein_name
+  const proteinName = Array.isArray(rawProteinName)
+    ? rawProteinName[0] || null
+    : rawProteinName || null
 
   const confidenceColor =
     pct >= 70 ? 'text-green-400' : pct >= 50 ? 'text-amber-400' : 'text-red-400'
@@ -650,7 +654,7 @@ export function AlphaFoldDetailBox({ rsid, alphafoldData, theme }: AlphaFoldDeta
       <h5 className={`text-xs font-semibold ${theme.textSecondary} uppercase tracking-wide mb-1.5`}>
         AlphaFold Protein Structure
       </h5>
-      <div className={`rounded-lg p-2.5 border ${theme.border} ${theme.isDarkMode ? 'bg-white/[0.03]' : 'bg-gray-50/60'} space-y-2`}>
+      <div className={`rounded-lg p-2.5 border ${theme.border} ${theme.isDarkMode ? 'bg-white/3' : 'bg-gray-50/60'} space-y-2`}>
         {/* Protein name */}
         {proteinName && (
           <p className={`text-xs font-medium ${theme.textPrimary} truncate`} title={proteinName}>
@@ -1018,7 +1022,7 @@ const SKIP_CONDITIONS = new Set([
 export function cleanCondition(raw?: string | null): string {
   if (!raw) return 'Unknown'
   // Convert snake_case to spaced words first
-  let cleaned = raw.replace(/[_]+/g, ' ').trim()
+  const cleaned = raw.replace(/[_]+/g, ' ').trim()
   if (!cleaned.includes('|') && !cleaned.includes(';')) {
     // Title-case if it looks like a slug (all lowercase, no capitals)
     if (cleaned === cleaned.toLowerCase()) {
@@ -1110,7 +1114,7 @@ export function useGrouping<T>(
   const toggleGroup = (key: string) => {
     setCollapsedGroups(prev => {
       const next = new Set(prev)
-      next.has(key) ? next.delete(key) : next.add(key)
+      if (next.has(key)) { next.delete(key) } else { next.add(key) }
       return next
     })
   }
