@@ -196,11 +196,6 @@ interface VariantDetails {
   cache_hit?: boolean
 }
 
-// ─── Session-level set of rsids that have been refreshed from external APIs
-// this session (resets on page reload). Ensures first open auto-refreshes
-// while subsequent opens are served instantly from the DB cache.
-const sessionRefreshedRsids = new Set<string>()
-
 // ─── Props ──────────────────────────────────────────────────────
 
 interface VariantDetailDialogProps {
@@ -385,14 +380,6 @@ export default function VariantDetailDialog({
           data = { ...data, user_genotype: detailsRef.current.user_genotype }
         }
         setDetails(data)
-        // First-time open: if data was served from DB cache, kick off a silent
-        // background refresh so the user always sees up-to-date information
-        // without having to click the refresh button manually.
-        if (!forceRefresh && data?.found && data?.cache_hit && !sessionRefreshedRsids.has(rsid)) {
-          sessionRefreshedRsids.add(rsid)
-          // Small delay lets React finish rendering the cached data first
-          setTimeout(() => fetchDetails(true), 100)
-        }
         // Broadcast updated pathogenicity score so panel cards can sync
         if (forceRefresh && data?.pathogenicity_score) {
           const ps = data.pathogenicity_score
