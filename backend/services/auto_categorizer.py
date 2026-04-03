@@ -764,317 +764,38 @@ class AutoCategorizer:
 
 
 # ------------------------------------------------------------------
-# Default category rules — seeded once
+# CategoryRule management — rules live in Alembic migrations
 # ------------------------------------------------------------------
 
-DEFAULT_CATEGORY_RULES: List[dict] = [
-    # ===================================================================
-    # HEALTH — dedup_field='condition'
-    # from_rsid needs: condition(matcher), risk_multiplier
-    # from_gene needs: condition, risk_level, risk_score, recommendations
-    # ===================================================================
-    {"category": "health", "rule_type": "clinvar_significance", "rule_value": "Pathogenic",
-     "priority": 10, "mapping_data_template": {"risk_level": "high", "risk_score": "3.0x", "risk_multiplier": 3.0,
-                                                "recommendations": ["Consult genetic counselor", "Regular screening recommended"]}},
-    {"category": "health", "rule_type": "clinvar_significance", "rule_value": "Likely_pathogenic",
-     "priority": 20, "mapping_data_template": {"risk_level": "moderate", "risk_score": "2.0x", "risk_multiplier": 2.0,
-                                                "recommendations": ["Discuss with healthcare provider", "Consider additional testing"]}},
-    {"category": "health", "rule_type": "clinvar_condition_keyword", "rule_value": "cancer",
-     "priority": 30, "mapping_data_template": {"risk_level": "high", "risk_score": "2.5x", "risk_multiplier": 2.5,
-                                                "recommendations": ["Cancer risk screening", "Genetic counseling recommended"]}},
-    {"category": "health", "rule_type": "clinvar_condition_keyword", "rule_value": "cardiomyopathy",
-     "priority": 30, "mapping_data_template": {"risk_level": "high", "risk_score": "2.5x", "risk_multiplier": 2.5,
-                                                "recommendations": ["Cardiology evaluation", "Echocardiogram recommended"]}},
-    {"category": "health", "rule_type": "clinvar_condition_keyword", "rule_value": "diabetes",
-     "priority": 40, "mapping_data_template": {"risk_level": "moderate", "risk_score": "1.5x", "risk_multiplier": 1.5,
-                                                "recommendations": ["Monitor blood glucose", "Healthy diet and exercise"]}},
-    {"category": "health", "rule_type": "clinvar_condition_keyword", "rule_value": "Alzheimer",
-     "priority": 40, "mapping_data_template": {"risk_level": "moderate", "risk_score": "2.0x", "risk_multiplier": 2.0,
-                                                "recommendations": ["Cognitive health monitoring", "Brain-healthy lifestyle"]}},
+async def seed_category_rules(*, force: bool = False) -> Dict[str, Any]:
+    """Report existing category rules.
 
-    # ===================================================================
-    # DRUG RESPONSES — custom generator
-    # gene_map needs: gene(matcher), drugs (list of [drug_name, response, recommendation])
-    # rsid_map needs: gene(matcher), drugs (list of drug name strings)
-    # ===================================================================
-    {"category": "drug", "rule_type": "gene_list",
-     "rule_value": "CYP2D6,CYP2C19,CYP2C9,CYP3A4,CYP3A5,CYP1A2,CYP2B6,DPYD,TPMT,UGT1A1,NUDT15,SLCO1B1,VKORC1,NAT2,ABCB1,CYP2A6,CYP4F2,G6PD,IFNL3,RYR1",
-     "priority": 10, "mapping_data_template": {"drugs": [["Substrate medications", "variable", "Pharmacogenomic testing recommended for dosage adjustments"]]}},
-    {"category": "drug", "rule_type": "clinvar_condition_keyword", "rule_value": "drug response",
-     "priority": 30, "mapping_data_template": {"drugs": ["Associated medication"]}},
-    {"category": "drug", "rule_type": "clinvar_condition_keyword", "rule_value": "pharmacokinetic",
-     "priority": 30, "mapping_data_template": {"drugs": ["Associated medication"]}},
-    {"category": "drug", "rule_type": "clinvar_condition_keyword", "rule_value": "drug metabolism",
-     "priority": 30, "mapping_data_template": {"drugs": ["Associated medication"]}},
-    {"category": "drug", "rule_type": "clinvar_condition_keyword", "rule_value": "drug sensitivity",
-     "priority": 30, "mapping_data_template": {"drugs": ["Associated medication"]}},
-    {"category": "drug", "rule_type": "clinvar_condition_keyword", "rule_value": "warfarin",
-     "priority": 20, "mapping_data_template": {"drugs": ["Warfarin"]}},
-    {"category": "drug", "rule_type": "clinvar_condition_keyword", "rule_value": "statin",
-     "priority": 20, "mapping_data_template": {"drugs": ["Statins"]}},
-    {"category": "drug", "rule_type": "clinvar_condition_keyword", "rule_value": "metformin",
-     "priority": 20, "mapping_data_template": {"drugs": ["Metformin"]}},
+    Rules are seeded via Alembic migrations (029_add_autism_gene_mappings and later).
+    Use the admin panel UI or new migrations to add/modify rules.
 
-    # ===================================================================
-    # PHYSICAL TRAITS — dedup_field='trait'
-    # from_rsid needs: trait(matcher), category, result, confidence
-    # from_gene needs: trait(matcher), category, result, confidence, description
-    # ===================================================================
-    {"category": "physical", "rule_type": "gene_list",
-     "rule_value": "MC1R,OCA2,HERC2,IRF4,SLC24A5,SLC45A2,KITLG,TYRP1,TYR,ASIP,BNC2,EDAR",
-     "priority": 20, "mapping_data_template": {"category": "appearance", "result": "Variant detected", "confidence": "high",
-                                                "description": "Gene associated with physical trait variation"}},
-    {"category": "physical", "rule_type": "clinvar_condition_keyword", "rule_value": "hair",
-     "priority": 30, "mapping_data_template": {"category": "appearance", "result": "Variant detected", "confidence": "moderate"}},
-    {"category": "physical", "rule_type": "clinvar_condition_keyword", "rule_value": "eye color",
-     "priority": 30, "mapping_data_template": {"category": "appearance", "result": "Variant detected", "confidence": "moderate"}},
-    {"category": "physical", "rule_type": "clinvar_condition_keyword", "rule_value": "skin",
-     "priority": 30, "mapping_data_template": {"category": "appearance", "result": "Variant detected", "confidence": "moderate"}},
-    {"category": "physical", "rule_type": "clinvar_condition_keyword", "rule_value": "height",
-     "priority": 30, "mapping_data_template": {"category": "anthropometric", "result": "Variant detected", "confidence": "moderate"}},
-    {"category": "physical", "rule_type": "clinvar_condition_keyword", "rule_value": "pigment",
-     "priority": 30, "mapping_data_template": {"category": "appearance", "result": "Variant detected", "confidence": "moderate"}},
-
-    # ===================================================================
-    # NUTRITION — dedup_field='nutrient'
-    # from_rsid/gene needs: nutrient(matcher), metabolism, recommendations, sensitivity
-    # ===================================================================
-    {"category": "nutrition", "rule_type": "gene_list",
-     "rule_value": "MTHFR,FUT2,LCT,MCM6,FADS1,FADS2,BCMO1,SLC23A1,GC,CYP2R1,VDR,TCN1,TCN2,NBPF3,HFE,TF,TMPRSS6,SLC30A8",
-     "priority": 10, "mapping_data_template": {"metabolism": "variable", "recommendations": ["Consider testing nutrient levels"],
-                                                "sensitivity": "moderate"}},
-    {"category": "nutrition", "rule_type": "clinvar_condition_keyword", "rule_value": "lactose",
-     "priority": 30, "mapping_data_template": {"nutrient": "Lactose", "metabolism": "intolerant",
-                                                "recommendations": ["Avoid dairy or use lactase supplements"], "sensitivity": "high"}},
-    {"category": "nutrition", "rule_type": "clinvar_condition_keyword", "rule_value": "celiac",
-     "priority": 30, "mapping_data_template": {"nutrient": "Gluten", "metabolism": "intolerant",
-                                                "recommendations": ["Strict gluten-free diet"], "sensitivity": "high"}},
-    {"category": "nutrition", "rule_type": "clinvar_condition_keyword", "rule_value": "vitamin D",
-     "priority": 30, "mapping_data_template": {"nutrient": "Vitamin D", "metabolism": "variable",
-                                                "recommendations": ["Monitor vitamin D levels", "Consider supplementation"], "sensitivity": "moderate"}},
-    {"category": "nutrition", "rule_type": "clinvar_condition_keyword", "rule_value": "iron",
-     "priority": 30, "mapping_data_template": {"nutrient": "Iron", "metabolism": "variable",
-                                                "recommendations": ["Monitor iron levels"], "sensitivity": "moderate"}},
-    {"category": "nutrition", "rule_type": "clinvar_condition_keyword", "rule_value": "folate",
-     "priority": 30, "mapping_data_template": {"nutrient": "Folate", "metabolism": "variable",
-                                                "recommendations": ["Consider methylfolate supplementation"], "sensitivity": "moderate"}},
-
-    # ===================================================================
-    # SPORTS / PERFORMANCE — dedup_field='category'
-    # from_rsid/gene needs: category(matcher), advantage, recommendations, advice
-    # ===================================================================
-    {"category": "sports", "rule_type": "gene_list",
-     "rule_value": "ACTN3,ACE,PPARGC1A,PPARA,ADRB2,ADRB3,NOS3,VEGFA,HIF1A,EPAS1,AMPD1,CKM,BDNF,IL6,TNF,COL1A1,COL5A1,GDF5,MMP3",
-     "priority": 10, "mapping_data_template": {"advantage": "Genetic variant associated with athletic performance",
-                                                "recommendations": ["Tailored training program recommended"],
-                                                "advice": "Consult sports medicine specialist for personalized program"}},
-    {"category": "sports", "rule_type": "clinvar_condition_keyword", "rule_value": "muscle",
-     "priority": 30, "mapping_data_template": {"advantage": "Muscle-related genetic variant",
-                                                "recommendations": ["Strength assessment recommended"],
-                                                "advice": "Consider consulting exercise physiologist"}},
-    {"category": "sports", "rule_type": "clinvar_condition_keyword", "rule_value": "myopathy",
-     "priority": 30, "mapping_data_template": {"advantage": "Variant affecting muscle function",
-                                                "recommendations": ["Medical evaluation before intense exercise"],
-                                                "advice": "Work with a specialist for safe exercise programming"}},
-    {"category": "sports", "rule_type": "clinvar_condition_keyword", "rule_value": "exercise intolerance",
-     "priority": 30, "mapping_data_template": {"advantage": "Exercise tolerance variant detected",
-                                                "recommendations": ["Gradual exercise progression"],
-                                                "advice": "Medical clearance recommended before starting exercise program"}},
-    {"category": "sports", "rule_type": "clinvar_condition_keyword", "rule_value": "rhabdomyolysis",
-     "priority": 20, "mapping_data_template": {"advantage": "Rhabdomyolysis risk variant",
-                                                "recommendations": ["Avoid extreme exertion", "Stay well-hydrated"],
-                                                "advice": "Medical supervision recommended for high-intensity training"}},
-
-    # ===================================================================
-    # COGNITIVE — dedup_field='domain'
-    # from_rsid/gene needs: domain(matcher), score, percentile, suggestions
-    # ===================================================================
-    {"category": "cognitive", "rule_type": "gene_list",
-     "rule_value": "COMT,BDNF,DRD2,DRD4,KIBRA,APOE,CHRNA4,NRXN1,DISC1,NRG1,DTNBP1,AKT1",
-     "priority": 10, "mapping_data_template": {"score": "variable", "percentile": 50,
-                                                "suggestions": ["Cognitive enrichment activities", "Brain-healthy lifestyle"]}},
-    {"category": "cognitive", "rule_type": "clinvar_condition_keyword", "rule_value": "intellectual disability",
-     "priority": 30, "mapping_data_template": {"score": "reduced", "percentile": 30,
-                                                "suggestions": ["Professional cognitive assessment recommended"]}},
-    {"category": "cognitive", "rule_type": "clinvar_condition_keyword", "rule_value": "memory",
-     "priority": 30, "mapping_data_template": {"score": "variable", "percentile": 50,
-                                                "suggestions": ["Memory exercises", "Cognitive training programs"]}},
-    {"category": "cognitive", "rule_type": "clinvar_condition_keyword", "rule_value": "learning disability",
-     "priority": 30, "mapping_data_template": {"score": "variable", "percentile": 40,
-                                                "suggestions": ["Educational assessment recommended", "Adaptive learning strategies"]}},
-    {"category": "cognitive", "rule_type": "clinvar_condition_keyword", "rule_value": "neurodegenerat",
-     "priority": 30, "mapping_data_template": {"score": "variable", "percentile": 45,
-                                                "suggestions": ["Cognitive monitoring", "Neuroprotective lifestyle habits"]}},
-
-    # ===================================================================
-    # PERSONALITY / BEHAVIOR — dedup_field='trait'
-    # from_rsid/gene needs: trait(matcher), tendency, confidence, insights
-    # ===================================================================
-    {"category": "personality", "rule_type": "gene_list",
-     "rule_value": "SLC6A4,DRD4,DRD2,MAOA,COMT,OXTR,AVPR1A,HTR2A,FKBP5,CRHR1,TPH2",
-     "priority": 10, "mapping_data_template": {"tendency": "variable", "confidence": "moderate",
-                                                "insights": ["Genetic variation may influence behavioral tendencies"]}},
-    {"category": "personality", "rule_type": "clinvar_condition_keyword", "rule_value": "anxiety",
-     "priority": 30, "mapping_data_template": {"tendency": "variable", "confidence": "low",
-                                                "insights": ["Genetic variant associated with anxiety-related traits"]}},
-    {"category": "personality", "rule_type": "clinvar_condition_keyword", "rule_value": "depression",
-     "priority": 30, "mapping_data_template": {"tendency": "variable", "confidence": "low",
-                                                "insights": ["Genetic variant associated with mood regulation"]}},
-    {"category": "personality", "rule_type": "clinvar_condition_keyword", "rule_value": "behavior",
-     "priority": 30, "mapping_data_template": {"tendency": "variable", "confidence": "low",
-                                                "insights": ["Genetic variant associated with behavioral phenotype"]}},
-    {"category": "personality", "rule_type": "clinvar_condition_keyword", "rule_value": "autism",
-     "priority": 30, "mapping_data_template": {"tendency": "variable", "confidence": "low",
-                                                "insights": ["Genetic variant associated with neurodevelopmental traits"]}},
-    {"category": "personality", "rule_type": "clinvar_condition_keyword", "rule_value": "schizophrenia",
-     "priority": 30, "mapping_data_template": {"tendency": "variable", "confidence": "low",
-                                                "insights": ["Genetic variant associated with neuropsychiatric traits"]}},
-
-    # ===================================================================
-    # CARRIER STATUS — custom generator
-    # needs: condition(matcher), status
-    # ===================================================================
-    {"category": "carrier", "rule_type": "clinvar_condition_keyword", "rule_value": "cystic fibrosis",
-     "priority": 10, "mapping_data_template": {"status": "carrier", "inheritance_pattern": "autosomal_recessive"}},
-    {"category": "carrier", "rule_type": "clinvar_condition_keyword", "rule_value": "sickle cell",
-     "priority": 10, "mapping_data_template": {"status": "carrier", "inheritance_pattern": "autosomal_recessive"}},
-    {"category": "carrier", "rule_type": "clinvar_condition_keyword", "rule_value": "thalassemia",
-     "priority": 10, "mapping_data_template": {"status": "carrier", "inheritance_pattern": "autosomal_recessive"}},
-    {"category": "carrier", "rule_type": "clinvar_condition_keyword", "rule_value": "Tay-Sachs",
-     "priority": 10, "mapping_data_template": {"status": "carrier", "inheritance_pattern": "autosomal_recessive"}},
-    {"category": "carrier", "rule_type": "clinvar_condition_keyword", "rule_value": "hemophilia",
-     "priority": 10, "mapping_data_template": {"status": "carrier", "inheritance_pattern": "x_linked"}},
-    {"category": "carrier", "rule_type": "clinvar_condition_keyword", "rule_value": "Gaucher",
-     "priority": 10, "mapping_data_template": {"status": "carrier", "inheritance_pattern": "autosomal_recessive"}},
-    {"category": "carrier", "rule_type": "clinvar_condition_keyword", "rule_value": "phenylketonuria",
-     "priority": 10, "mapping_data_template": {"status": "carrier", "inheritance_pattern": "autosomal_recessive"}},
-    {"category": "carrier", "rule_type": "clinvar_condition_keyword", "rule_value": "Duchenne",
-     "priority": 10, "mapping_data_template": {"status": "carrier", "inheritance_pattern": "x_linked"}},
-    {"category": "carrier", "rule_type": "clinvar_condition_keyword", "rule_value": "Wilson disease",
-     "priority": 10, "mapping_data_template": {"status": "carrier", "inheritance_pattern": "autosomal_recessive"}},
-    {"category": "carrier", "rule_type": "clinvar_condition_keyword", "rule_value": "spinal muscular atrophy",
-     "priority": 10, "mapping_data_template": {"status": "carrier", "inheritance_pattern": "autosomal_recessive"}},
-
-    # ===================================================================
-    # WELLNESS — dedup_field='metric'
-    # from_rsid/gene needs: metric(matcher), predisposition, score, recommendations
-    # ===================================================================
-    {"category": "wellness", "rule_type": "gene_list",
-     "rule_value": "CLOCK,PER2,PER3,CRY1,ADORA2A,ADA,DEC2,BHLHE41,NR1D1,TNF,IL6,IL10,CRP,LEPR,FTO,MC4R",
-     "priority": 10, "mapping_data_template": {"predisposition": "variable", "score": "50",
-                                                "recommendations": ["Monitor wellness indicators", "Healthy lifestyle habits"]}},
-    {"category": "wellness", "rule_type": "clinvar_condition_keyword", "rule_value": "sleep",
-     "priority": 30, "mapping_data_template": {"predisposition": "variable", "score": "50",
-                                                "recommendations": ["Sleep hygiene optimization", "Consider sleep study"]}},
-    {"category": "wellness", "rule_type": "clinvar_condition_keyword", "rule_value": "obesity",
-     "priority": 30, "mapping_data_template": {"predisposition": "elevated risk", "score": "40",
-                                                "recommendations": ["Regular physical activity", "Balanced nutrition plan"]}},
-    {"category": "wellness", "rule_type": "clinvar_condition_keyword", "rule_value": "inflammation",
-     "priority": 30, "mapping_data_template": {"predisposition": "variable", "score": "50",
-                                                "recommendations": ["Anti-inflammatory diet", "Monitor inflammatory markers"]}},
-    {"category": "wellness", "rule_type": "clinvar_condition_keyword", "rule_value": "circadian",
-     "priority": 30, "mapping_data_template": {"predisposition": "variable", "score": "50",
-                                                "recommendations": ["Consistent sleep schedule", "Light exposure management"]}},
-    {"category": "wellness", "rule_type": "clinvar_condition_keyword", "rule_value": "fatigue",
-     "priority": 30, "mapping_data_template": {"predisposition": "variable", "score": "45",
-                                                "recommendations": ["Energy management strategies", "Evaluate underlying causes"]}},
-
-    # ===================================================================
-    # METHYLATION — dedup_field='gene'
-    # from_rsid/gene needs: gene(matcher), capacity, supplements
-    # ===================================================================
-    {"category": "methylation", "rule_type": "gene_list",
-     "rule_value": "MTHFR,MTR,MTRR,COMT,CBS,BHMT,MAT1A,AHCY,SHMT1,SHMT2,FOLR1,FOLR2,DHFR,TYMS,TCN2,MTHFD1",
-     "priority": 10, "mapping_data_template": {"capacity": "variable",
-                                                "supplements": ["Consider methylfolate", "Monitor B12 levels"]}},
-    {"category": "methylation", "rule_type": "clinvar_condition_keyword", "rule_value": "methylation",
-     "priority": 30, "mapping_data_template": {"capacity": "reduced",
-                                                "supplements": ["Methylfolate supplementation", "B12 monitoring"]}},
-    {"category": "methylation", "rule_type": "clinvar_condition_keyword", "rule_value": "folate",
-     "priority": 30, "mapping_data_template": {"capacity": "reduced",
-                                                "supplements": ["Methylfolate", "Folinic acid consideration"]}},
-    {"category": "methylation", "rule_type": "clinvar_condition_keyword", "rule_value": "homocysteine",
-     "priority": 30, "mapping_data_template": {"capacity": "reduced",
-                                                "supplements": ["B6, B12, and folate supplementation", "Homocysteine monitoring"]}},
-    {"category": "methylation", "rule_type": "clinvar_condition_keyword", "rule_value": "neural tube",
-     "priority": 30, "mapping_data_template": {"capacity": "reduced",
-                                                "supplements": ["Adequate folate critical", "Prenatal supplementation"]}},
-
-    # ===================================================================
-    # DETOXIFICATION — dedup_field='gene'
-    # from_rsid/gene needs: gene(matcher), phase, capacity, sensitivity, recommendations
-    # ===================================================================
-    {"category": "detox", "rule_type": "gene_list",
-     "rule_value": "CYP1A1,CYP1A2,CYP1B1,CYP2E1,CYP2A6,GSTM1,GSTT1,GSTP1,NAT1,NAT2,NQO1,EPHX1,SOD2,CAT,GPX1,PON1,ALDH2",
-     "priority": 10, "mapping_data_template": {"phase": "variable", "capacity": "variable",
-                                                "sensitivity": "moderate",
-                                                "recommendations": ["Support detoxification pathways"]}},
-    {"category": "detox", "rule_type": "clinvar_condition_keyword", "rule_value": "glutathione",
-     "priority": 30, "mapping_data_template": {"phase": "phase2", "capacity": "variable",
-                                                "sensitivity": "moderate",
-                                                "recommendations": ["Support glutathione levels", "Cruciferous vegetables"]}},
-    {"category": "detox", "rule_type": "clinvar_condition_keyword", "rule_value": "oxidative stress",
-     "priority": 30, "mapping_data_template": {"phase": "antioxidant", "capacity": "variable",
-                                                "sensitivity": "elevated",
-                                                "recommendations": ["Antioxidant-rich diet", "Minimize toxin exposure"]}},
-    {"category": "detox", "rule_type": "clinvar_condition_keyword", "rule_value": "acetylation",
-     "priority": 30, "mapping_data_template": {"phase": "phase2", "capacity": "variable",
-                                                "sensitivity": "moderate",
-                                                "recommendations": ["Monitor for drug acetylation effects"]}},
-    {"category": "detox", "rule_type": "clinvar_condition_keyword", "rule_value": "chemical sensitivity",
-     "priority": 30, "mapping_data_template": {"phase": "variable", "capacity": "reduced",
-                                                "sensitivity": "elevated",
-                                                "recommendations": ["Minimize chemical exposures", "Air purification"]}},
-
-    # ===================================================================
-    # ANCESTRY — hard-coded generator, maps not used. Kept for potential future use.
-    # ===================================================================
-    {"category": "ancestry", "rule_type": "gene_list",
-     "rule_value": "SLC24A5,SLC45A2,HERC2,OCA2,MC1R,EDAR,ABCC11,LCT,ALDH2,ADH1B",
-     "priority": 30, "mapping_data_template": {"population": "various", "confidence": "low"}},
-
-    # ===================================================================
-    # gnomAD-based rules — rare variants and constrained genes
-    # ===================================================================
-    # Rare variants (AF < 0.1%) in health category
-    {"category": "health", "rule_type": "gnomad_rare_variant", "rule_value": "0.001",
-     "priority": 50, "mapping_data_template": {"risk_level": "review", "risk_score": "1.5x", "risk_multiplier": 1.5,
-                                                "recommendations": ["Rare variant — review clinical significance", "Genetic counseling may be beneficial"]}},
-    # Highly constrained genes (loss-of-function intolerant)
-    {"category": "health", "rule_type": "gnomad_constrained_gene", "rule_value": "pli:0.9",
-     "priority": 45, "mapping_data_template": {"risk_level": "moderate", "risk_score": "2.0x", "risk_multiplier": 2.0,
-                                                "recommendations": ["Gene highly intolerant to loss-of-function", "Variants in this gene warrant careful evaluation"]}},
-    # Constrained genes for drug response
-    {"category": "drug", "rule_type": "gnomad_constrained_gene", "rule_value": "pli:0.9",
-     "priority": 40, "mapping_data_template": {"drugs": [["Substrate medications", "variable", "Gene is highly constrained — dosing may need adjustment"]]}},
-]
-
-
-async def seed_category_rules(*, force: bool = False) -> Dict[str, int]:
-    """Insert default category rules into the database.
-    Returns count per category. If force=True, deletes all existing rules first."""
+    force=True: deletes ALL rules (use only for disaster recovery;
+                you must then re-run ``alembic upgrade head`` to restore them).
+    """
     async with async_session_factory() as session:
         if force:
             await session.execute(text("DELETE FROM category_rules"))
+            await session.commit()
+            return {
+                "status": "cleared",
+                "message": "All rules deleted. Re-run migrations to restore: alembic upgrade head",
+            }
 
-        existing = (await session.execute(
-            select(func.count()).select_from(CategoryRule)
-        )).scalar()
+        rows = (await session.execute(
+            select(CategoryRule.category, func.count().label("count"))
+            .where(CategoryRule.is_active.is_(True))
+            .group_by(CategoryRule.category)
+        )).all()
 
-        if existing and not force:
-            return {"skipped": existing, "message": "Rules already seeded. Use force=true to re-seed."}
-
-        inserted = 0
-        by_cat: Dict[str, int] = {}
-        for rule_def in DEFAULT_CATEGORY_RULES:
-            stmt = insert(CategoryRule).values(**rule_def).on_conflict_do_nothing()
-            result = await session.execute(stmt)
-            if result.rowcount > 0:
-                inserted += 1
-                cat = rule_def["category"]
-                by_cat[cat] = by_cat.get(cat, 0) + 1
-
-        await session.commit()
-
-    logger.info("Seeded %d category rules across %d categories", inserted, len(by_cat))
-    return {"inserted": inserted, "by_category": by_cat}
+    total = sum(r.count for r in rows)
+    logger.info("category_rules: %d active rules across %d categories", total, len(rows))
+    return {
+        "status": "ok",
+        "total": total,
+        "by_category": {r.category: r.count for r in rows},
+        "message": "Rules are seeded via Alembic migrations. Use admin panel to add individual rules.",
+    }

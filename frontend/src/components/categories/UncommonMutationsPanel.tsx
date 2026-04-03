@@ -15,7 +15,7 @@ import {
   AlphaFoldDetailBox,
   AlphaFoldBadge,
   GeneBurdenStrip,
-  ZygosityBadge,
+  ClickableRsidBadge,
   clinicalSignificanceToSeverity,
   formatLabel,
   MasonryLayout,
@@ -198,8 +198,7 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
                     severity={clinicalSignificanceToSeverity(mutation.clinical_relevance)}
                   />
                   {mutation.gene && <Badge variant="secondary" className="text-xs font-medium">{mutation.gene}</Badge>}
-                  {mutation.rsid && <Badge variant="outline" className="text-xs font-mono">{mutation.rsid}{data?.genotype_map?.[mutation.rsid] ? ` ${data.genotype_map[mutation.rsid]}` : ''}</Badge>}
-                  {mutation.rsid && <ZygosityBadge genotype={data?.genotype_map?.[mutation.rsid]} />}
+                  {mutation.rsid && <ClickableRsidBadge rsid={mutation.rsid} gene={mutation.gene} genotype={data?.genotype_map?.[mutation.rsid]} alleleString={data?.allele_string_map?.[mutation.rsid]} token={token} isDarkMode={isDarkMode} />}
                   {mutation.effect_size && <Badge variant="outline" className="text-xs">Effect: {mutation.effect_size}</Badge>}
                   <AlphaFoldBadge
                     confidence={data?.alphafold_map?.[mutation.rsid]?.confidence}

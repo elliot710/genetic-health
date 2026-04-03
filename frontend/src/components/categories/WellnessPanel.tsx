@@ -15,7 +15,7 @@ import {
   AlphaFoldDetailBox,
   AlphaFoldBadge,
   GeneBurdenStrip,
-  ZygosityBadge,
+  ClickableRsidBadge,
   capacityToSeverity,
   formatLabel,
   MasonryLayout,
@@ -231,10 +231,7 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
                   />
                   {trait.associated_variants && trait.associated_variants.length > 0
                     ? trait.associated_variants.map((v, i) => (
-                        <React.Fragment key={i}>
-                          <Badge variant="secondary" className="text-xs font-mono">{v}{data?.genotype_map?.[v] ? ` ${data.genotype_map[v]}` : ''}</Badge>
-                          <ZygosityBadge genotype={data?.genotype_map?.[v]} />
-                        </React.Fragment>
+                        <ClickableRsidBadge key={i} rsid={v} genotype={data?.genotype_map?.[v]} alleleString={data?.allele_string_map?.[v]} token={token} isDarkMode={isDarkMode} />
                       ))
                     : trait.gene && trait.gene !== 'Multiple' && (
                         <Badge variant="secondary" className="text-xs">{trait.gene}</Badge>

@@ -453,8 +453,8 @@ export function VariantInfoBox({
 import type { GeneStats } from './types'
 
 interface GeneContextBoxProps {
-  gene: string
-  stats: GeneStats
+  gene?: string
+  stats?: GeneStats
   theme: ThemeClasses
 }
 
@@ -917,12 +917,81 @@ export function reviewStatusStars(reviewStatus?: string | null): number {
   return 0
 }
 
+// ─── Genotype Allele Tiles ─────────────────────────────────────
+
+/**
+ * Renders per-allele colored boxes matching the VariantDetailDialog style.
+ * - Ref allele → green box
+ * - Alt allele → orange box
+ * - Unknown → gray box
+ * When `alleleString` is absent, tiles are shown without ref/alt coloring.
+ */
+export function GenotypeAlleleTiles({ genotype, alleleString }: { genotype?: string; alleleString?: string }) {
+  if (!genotype) return null
+
+  const gt = genotype.trim().toUpperCase()
+  const isIndel = /^[DI]{1,2}$/.test(gt)
+
+  // Parse allele_string ("REF/ALT" or "REF/ALT1,ALT2") when available
+  let ref: string | undefined
+  let alts: string[] = []
+  if (alleleString) {
+    const parts = alleleString.split('/')
+    ref = parts[0]?.toUpperCase()
+    alts = parts.slice(1).flatMap(p => p.split(',').map(a => a.trim().toUpperCase())).filter(Boolean)
+  }
+
+  // Split genotype into individual allele tokens
+  const rawAlleles = gt.includes('/') ? gt.split('/') : gt.split('')
+  const alleles = rawAlleles.filter(a => a && a !== '/')
+
+  // Determine D/I directionality for indels from ref/alt lengths
+  let dIsRef: boolean | null = null
+  if (isIndel && ref !== undefined && alts.length > 0) {
+    const refLen = ref === '-' || ref === '.' ? 0 : ref.length
+    const altLen = alts[0] === '-' || alts[0] === '.' ? 0 : alts[0].length
+    dIsRef = refLen <= altLen
+  }
+
+  return (
+    <span className="inline-flex items-center gap-0.5 font-mono">
+      {alleles.map((a, i) => {
+        let isRef = false
+        let isAlt = false
+        if (isIndel && dIsRef !== null) {
+          isRef = dIsRef ? a === 'D' : a === 'I'
+          isAlt = dIsRef ? a === 'I' : a === 'D'
+        } else if (!isIndel && ref) {
+          isRef = a === ref
+          isAlt = alts.includes(a)
+        }
+        return (
+          <span
+            key={i}
+            title={isRef ? 'Reference allele' : isAlt ? 'Alternate allele' : undefined}
+            className={`inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-bold border ${
+              isAlt
+                ? 'bg-orange-500/20 text-orange-300 border-orange-500/40'
+                : isRef
+                  ? 'bg-green-500/15 text-green-400 border-green-500/30'
+                  : 'bg-gray-500/10 text-gray-400 border-gray-500/20'
+            }`}
+          >
+            {a}
+          </span>
+        )
+      })}
+    </span>
+  )
+}
+
 // ─── Clickable Rsid Badge (with zygosity) ──────────────────────
 
 interface ClickableRsidBadgeProps {
   rsid: string
   gene?: string
   genotype?: string
+  alleleString?: string
   token?: string
   isDarkMode?: boolean
 }
@@ -931,7 +1000,7 @@ interface ClickableRsidBadgeProps {
  * A mono-font rsid badge that opens the VariantDetailDialog on click.
  * Reusable across any panel that displays rsids.
  */
-export function ClickableRsidBadge({ rsid, gene, genotype, token, isDarkMode = false }: ClickableRsidBadgeProps) {
+export function ClickableRsidBadge({ rsid, gene, genotype, alleleString, token, isDarkMode = false }: ClickableRsidBadgeProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const validRsid = rsid && rsid !== 'Unknown' && rsid.startsWith('rs')
 
@@ -939,10 +1008,11 @@ export function ClickableRsidBadge({ rsid, gene, genotype, token, isDarkMode = f
     <>
       <Badge
         variant="outline"
-        className={`text-xs font-mono ${validRsid && token ? 'cursor-pointer hover:bg-blue-500/10 hover:border-blue-500/40 transition-colors' : ''}`}
+        className={`inline-flex items-center gap-1 text-xs font-mono ${validRsid && token ? 'cursor-pointer hover:bg-blue-500/10 hover:border-blue-500/40 transition-colors' : ''}`}
         onClick={validRsid && token ? (e: React.MouseEvent) => { e.stopPropagation(); setDialogOpen(true) } : undefined}
       >
-        {rsid}{genotype ? ` ${genotype}` : ''}
+        <span>{rsid}</span>
+        {genotype && <GenotypeAlleleTiles genotype={genotype} alleleString={alleleString} />}
       </Badge>
       <ZygosityBadge genotype={genotype} />
       {validRsid && token && (

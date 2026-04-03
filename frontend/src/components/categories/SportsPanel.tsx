@@ -16,6 +16,7 @@ import {
   AlphaFoldBadge,
   GeneBurdenStrip,
   ZygosityBadge,
+  ClickableRsidBadge,
   advantageToSeverity,
   formatLabel,
   MasonryLayout,
@@ -192,8 +193,7 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
                     label={formatLabel(trait.result || 'Detected')}
                     severity={advantageToSeverity(trait.result || 'moderate')}
                   />
-                  {rsid && <Badge variant="secondary" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>}
-                  {rsid && <ZygosityBadge genotype={data?.genotype_map?.[rsid]} />}
+                  {rsid && <ClickableRsidBadge rsid={rsid} gene={gene} genotype={data?.genotype_map?.[rsid]} alleleString={data?.allele_string_map?.[rsid]} token={token} isDarkMode={isDarkMode} />}
                   {gene && <Badge variant="outline" className="text-xs">{gene}</Badge>}
                   <AlphaFoldBadge
                     confidence={data?.alphafold_map?.[rsid]?.confidence}

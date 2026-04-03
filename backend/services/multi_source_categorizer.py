@@ -9,6 +9,12 @@ Used by:
   - auto_categorizer.py (batch annotation-based pass)
   - variant_routes.py   (real-time categorization on lookup)
   - analysis_service.py (per-user-variant enrichment)
+
+IMPORTANT — data vs code:
+All domain data (gene→category maps, condition routing keywords,
+severe-exclusion keywords) lives in the `category_rules` DB table and is
+loaded at startup via `init_categorizer_data()`.  Do NOT add domain data
+to this file; add a migration instead.
 """
 
 from __future__ import annotations
@@ -19,102 +25,29 @@ from typing import Any, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
-# ── Gene → category maps ────────────────────────────────────────────
-GENE_CATEGORY_MAP: Dict[str, List[str]] = {
-    # Pharmacogenomics / drug metabolism
-    "CYP2D6": ["drug"], "CYP2C19": ["drug"], "CYP2C9": ["drug"],
-    "CYP3A4": ["drug"], "CYP3A5": ["drug"], "CYP1A2": ["drug"],
-    "CYP2B6": ["drug"], "CYP2A6": ["drug"], "CYP4F2": ["drug"],
-    "DPYD": ["drug"], "TPMT": ["drug"], "UGT1A1": ["drug"],
-    "NUDT15": ["drug"], "SLCO1B1": ["drug"], "VKORC1": ["drug"],
-    "NAT2": ["drug", "detox"], "ABCB1": ["drug"], "G6PD": ["drug"],
-    "IFNL3": ["drug"], "RYR1": ["drug"],
-    # Health / disease
-    "BRCA1": ["health"], "BRCA2": ["health"], "TP53": ["health"],
-    "APC": ["health"], "MLH1": ["health"], "MSH2": ["health"],
-    "PTEN": ["health"], "VHL": ["health"], "RB1": ["health"],
-    "LDLR": ["health"], "PCSK9": ["health"], "F5": ["health"],
-    "F2": ["health"], "APOE": ["health", "cognitive"],
-    "TCF7L2": ["health"], "PPARG": ["health"],
-    "PARK2": ["health"], "LRRK2": ["health"], "SNCA": ["health"],
-    "APP": ["health"], "PSEN1": ["health"], "PSEN2": ["health"],
-    "GBA": ["health"],
-    # Physical traits
-    "MC1R": ["physical"], "OCA2": ["physical"], "HERC2": ["physical"],
-    "IRF4": ["physical"], "SLC24A5": ["physical", "ancestry"],
-    "SLC45A2": ["physical", "ancestry"], "KITLG": ["physical"],
-    "TYRP1": ["physical"], "TYR": ["physical"], "ASIP": ["physical"],
-    "BNC2": ["physical"], "EDAR": ["physical", "ancestry"],
-    # Sports / fitness
-    "ACTN3": ["sports"], "ACE": ["sports"], "PPARGC1A": ["sports"],
-    "PPARA": ["sports"], "ADRB2": ["sports"], "ADRB3": ["sports"],
-    "NOS3": ["sports"], "VEGFA": ["sports"], "HIF1A": ["sports"],
-    "EPAS1": ["sports"], "AMPD1": ["sports"], "CKM": ["sports"],
-    "COL1A1": ["sports"], "COL5A1": ["sports"], "GDF5": ["sports"],
-    "MMP3": ["sports"],
-    # Nutrition
-    "LCT": ["nutrition"], "MCM6": ["nutrition"], "FADS1": ["nutrition"],
-    "FADS2": ["nutrition"], "BCMO1": ["nutrition"], "SLC23A1": ["nutrition"],
-    "GC": ["nutrition"], "CYP2R1": ["nutrition"], "VDR": ["nutrition"],
-    "TCN1": ["nutrition"], "TCN2": ["nutrition", "methylation"],
-    "HFE": ["nutrition"], "TF": ["nutrition"], "TMPRSS6": ["nutrition"],
-    "SLC30A8": ["nutrition"], "FUT2": ["nutrition"],
-    # Carrier panel
-    "CFTR": ["carrier"], "HBB": ["carrier"], "HEXA": ["carrier"],
-    "SMN1": ["carrier"],
-    # Cognitive
-    "COMT": ["cognitive", "methylation"], "BDNF": ["cognitive", "sports"],
-    "DRD2": ["cognitive", "personality"], "DRD4": ["cognitive", "personality"],
-    "KIBRA": ["cognitive"], "CHRNA4": ["cognitive"],
-    "NRXN1": ["cognitive"], "DISC1": ["cognitive"],
-    # Personality
-    "SLC6A4": ["personality"], "MAOA": ["personality"],
-    "OXTR": ["personality"], "AVPR1A": ["personality"],
-    "HTR2A": ["personality"], "FKBP5": ["personality"],
-    "CRHR1": ["personality"], "TPH2": ["personality"],
-    # Wellness
-    "CLOCK": ["wellness"], "PER2": ["wellness"], "PER3": ["wellness"],
-    "CRY1": ["wellness"], "ADORA2A": ["wellness"], "ADA": ["wellness"],
-    "FTO": ["wellness", "nutrition"], "MC4R": ["wellness"],
-    "LEPR": ["wellness"], "TNF": ["wellness"], "IL6": ["wellness"],
-    "IL10": ["wellness"], "CRP": ["wellness"],
-    # Methylation
-    "MTHFR": ["methylation", "nutrition"], "MTR": ["methylation"],
-    "MTRR": ["methylation"], "CBS": ["methylation"],
-    "BHMT": ["methylation"], "MAT1A": ["methylation"],
-    "AHCY": ["methylation"], "SHMT1": ["methylation"],
-    "SHMT2": ["methylation"], "DHFR": ["methylation"],
-    "TYMS": ["methylation"], "MTHFD1": ["methylation"],
-    # Detox
-    "CYP1A1": ["detox"], "CYP1B1": ["detox"], "CYP2E1": ["detox"],
-    "GSTM1": ["detox"], "GSTT1": ["detox"], "GSTP1": ["detox"],
-    "NAT1": ["detox"], "NQO1": ["detox"], "EPHX1": ["detox"],
-    "SOD2": ["detox"], "CAT": ["detox"], "GPX1": ["detox"],
-    "PON1": ["detox"], "ALDH2": ["detox", "ancestry"],
-    # Ancestry
-    "ABCC11": ["ancestry"],
-    "ADH1B": ["ancestry"],
-}
+# ── Gene → category map ─────────────────────────────────────────────
+# Populated at startup from CategoryRule rows where rule_type='gene_list'.
+# Keys are UPPER-CASE gene symbols; values are lists of category strings.
+# Do NOT add entries here — add a migration that inserts a CategoryRule row.
+GENE_CATEGORY_MAP: Dict[str, List[str]] = {}
 
-# ── Severe condition keywords for lifestyle panels ──────────────────
-_SEVERE_EXCLUSION_KW = frozenset([
-    "cardiomyopathy", "dystrophy", "atrophy", "encephalopathy",
-    "cancer", "tumor", "lymphoma", "leukemia", "carcinoma", "neoplasm",
-    "neurodegenerat", "amyotrophic", "huntington", "parkinson",
-    "epilepsy", "seizure", "stroke", "aneurysm",
-    "failure", "fibrosis", "cirrhosis", "nephropathy",
-    "immunodeficiency", "periodic fever", "cryopyrin",
-    "congenital", "lethal", "fatal", "death",
-    "syndrome", "aplastic", "retinitis", "blindness",
-    "deafness", "hearing loss", "spasticity",
-])
+# ── Condition keyword → category routing ───────────────────────────
+# Populated from CategoryRule rows where rule_type='clinvar_condition_keyword'.
+# Keys are category strings; values are lists of lowercase keyword strings.
+_CONDITION_CATEGORY_KW: Dict[str, List[str]] = {}
+
+# ── Severe-condition exclusion keywords for lifestyle panels ────────
+# Populated from CategoryRule rows where rule_type='lifestyle_exclude_keyword'.
+# When a condition label contains any of these keywords, lifestyle categories
+# (sports, physical, nutrition, etc.) are skipped to avoid false positives.
+_SEVERE_EXCLUSION_KW: Set[str] = set()
 
 _LIFESTYLE_CATEGORIES = frozenset([
     "sports", "physical", "personality", "nutrition", "wellness",
     "methylation", "detox", "cognitive", "ancestry",
 ])
 
-# ClinVar significances considered clinically meaningful
+# ClinVar significances considered clinically meaningful (logic constants — stay in code)
 _PATHOGENIC_SIGS = {"pathogenic", "likely pathogenic", "likely_pathogenic",
                     "pathogenic/likely_pathogenic", "pathogenic/likely pathogenic"}
 _RISK_SIGS = {"risk_factor", "risk factor", "association", "protective"}
@@ -122,27 +55,7 @@ _DRUG_SIGS = {"drug_response", "drug response"}
 _BENIGN_SIGS = {"benign", "likely benign", "likely_benign",
                 "benign/likely_benign", "benign/likely benign"}
 
-# ── Category-specific condition keywords ────────────────────────────
-_CONDITION_CATEGORY_KW: Dict[str, List[str]] = {
-    "drug": ["drug response", "pharmacokin", "metabolism", "metabolizer",
-             "statin", "warfarin", "metformin", "codeine", "opioid", "cytochrome"],
-    "carrier": ["cystic fibrosis", "thalassemia", "sickle cell", "tay-sachs",
-                "gaucher", "phenylketonuria", "duchenne", "hemophilia",
-                "wilson disease", "spinal muscular atrophy"],
-    "physical": ["hair color", "eye color", "pigment", "albinism", "freckle",
-                 "baldness", "earlobe"],
-    "nutrition": ["lactose", "celiac", "gluten", "vitamin d", "folate",
-                  "iron overload", "hemochromatosis"],
-    "wellness": ["circadian", "sleep", "obesity", "bmi", "fatigue"],
-    "sports": ["exercise intolerance", "rhabdomyolysis", "malignant hyperthermia",
-               "athletic", "endurance", "sprint"],
-    "methylation": ["methylation", "homocysteine", "folate", "neural tube"],
-    "detox": ["glutathione", "oxidative stress", "acetylation", "chemical sensitivity"],
-    "cognitive": ["memory", "learning disability"],
-}
-
-
-# ── Primary dedup field per category ────────────────────────────────
+# ── Primary dedup field per category (structural config — stays in code) ──
 _PRIMARY_FIELD = {
     "health": "condition", "carrier": "condition",
     "drug": "drug", "nutrition": "nutrient",
@@ -772,6 +685,73 @@ def categorize_variant(
     # Sort by confidence descending
     suggestions.sort(key=lambda s: s.confidence, reverse=True)
     return suggestions
+
+
+# ---------------------------------------------------------------------------
+# Startup loader — populates GENE_CATEGORY_MAP, _CONDITION_CATEGORY_KW,
+# and _SEVERE_EXCLUSION_KW from CategoryRule rows in the database.
+# Call once from the application lifespan (main.py) after the DB is ready.
+# ---------------------------------------------------------------------------
+
+async def init_categorizer_data() -> None:
+    """Load all domain data for the categorizer from the CategoryRule DB table.
+
+    Three rule types are consumed:
+    - ``gene_list``                 → GENE_CATEGORY_MAP
+    - ``clinvar_condition_keyword`` → _CONDITION_CATEGORY_KW
+    - ``lifestyle_exclude_keyword`` → _SEVERE_EXCLUSION_KW
+    """
+    from sqlalchemy import select
+    from ..db.database import async_session_factory
+    from ..db.models import CategoryRule
+
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(CategoryRule.rule_type, CategoryRule.category, CategoryRule.rule_value)
+            .where(CategoryRule.is_active == True)
+            .where(CategoryRule.rule_type.in_([
+                "gene_list",
+                "clinvar_condition_keyword",
+                "lifestyle_exclude_keyword",
+            ]))
+        )
+        rows = result.all()
+
+    gene_map: Dict[str, List[str]] = {}
+    cond_kw: Dict[str, List[str]] = {}
+    excl_kw: Set[str] = set()
+
+    for rule_type, category, rule_value in rows:
+        if rule_type == "gene_list":
+            for gene in rule_value.split(","):
+                gene = gene.strip().upper()
+                if gene:
+                    if gene not in gene_map:
+                        gene_map[gene] = []
+                    if category not in gene_map[gene]:
+                        gene_map[gene].append(category)
+        elif rule_type == "clinvar_condition_keyword":
+            kw = rule_value.strip().lower()
+            if kw:
+                cond_kw.setdefault(category, [])
+                if kw not in cond_kw[category]:
+                    cond_kw[category].append(kw)
+        elif rule_type == "lifestyle_exclude_keyword":
+            excl_kw.add(rule_value.strip().lower())
+
+    GENE_CATEGORY_MAP.clear()
+    GENE_CATEGORY_MAP.update(gene_map)
+    _CONDITION_CATEGORY_KW.clear()
+    _CONDITION_CATEGORY_KW.update(cond_kw)
+    _SEVERE_EXCLUSION_KW.clear()
+    _SEVERE_EXCLUSION_KW.update(excl_kw)
+
+    logger.info(
+        "Categorizer data loaded from DB: %d genes, %d condition keyword rules, %d exclusion keywords",
+        len(GENE_CATEGORY_MAP),
+        sum(len(v) for v in _CONDITION_CATEGORY_KW.values()),
+        len(_SEVERE_EXCLUSION_KW),
+    )
 
 
 # ---------------------------------------------------------------------------

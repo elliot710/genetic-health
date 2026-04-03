@@ -16,6 +16,7 @@ import {
   AlphaFoldBadge,
   GeneBurdenStrip,
   ZygosityBadge,
+  ClickableRsidBadge,
   advantageToSeverity,
   MasonryLayout,
   cleanCondition,
@@ -230,8 +231,7 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
                     label={scoreDisplay}
                     severity={advantageToSeverity(scoreLabel)}
                   />
-                  {trait.gene?.startsWith('rs') && <Badge variant="secondary" className="text-xs font-mono">{trait.gene}{data?.genotype_map?.[trait.gene] ? ` ${data.genotype_map[trait.gene]}` : ''}</Badge>}
-                  {trait.gene?.startsWith('rs') && <ZygosityBadge genotype={data?.genotype_map?.[trait.gene]} />}
+                  {trait.gene?.startsWith('rs') && <ClickableRsidBadge rsid={trait.gene} genotype={data?.genotype_map?.[trait.gene]} alleleString={data?.allele_string_map?.[trait.gene]} token={token} isDarkMode={isDarkMode} />}
                   {!trait.gene?.startsWith('rs') && trait.gene && trait.gene !== 'Multiple markers' && <Badge variant="outline" className="text-xs">{trait.gene}</Badge>}
                   <AlphaFoldBadge
                     confidence={data?.alphafold_map?.[rsid]?.confidence}

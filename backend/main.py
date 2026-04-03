@@ -52,6 +52,14 @@ async def lifespan(app: FastAPI):
     # separate process so the FastAPI event loop is never touched by analysis code.
     print("🚀 API server started (analysis handled by worker service)")
 
+    # Load categorizer domain data (gene→category map, condition keywords, exclusion
+    # keywords) from the CategoryRule DB table.  Must run after the DB is ready.
+    from .services.multi_source_categorizer import init_categorizer_data
+    try:
+        await init_categorizer_data()
+    except Exception as _e:
+        print(f"⚠️ Categorizer data load failed: {_e} — analysis may use empty gene map")
+
     # Log which data source files are available on disk with tabix indexes
     from .services.datasource_utils import log_data_source_availability
     log_data_source_availability()

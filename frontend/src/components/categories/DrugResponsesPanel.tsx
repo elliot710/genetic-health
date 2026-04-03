@@ -14,6 +14,7 @@ import {
   GeneContextBox,
   AlphaFoldDetailBox,
   GeneBurdenStrip,
+  ClickableRsidBadge,
   riskToSeverity,
   MasonryLayout,
   useGrouping,
@@ -203,6 +204,9 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
                   />
                   <Badge variant="secondary" className="text-xs">{drug.gene}</Badge>
                   <Badge variant="outline" className="text-xs">{drug.response}</Badge>
+                  {drug.variants?.map(v => (
+                    <ClickableRsidBadge key={v} rsid={v} gene={drug.gene} genotype={data?.genotype_map?.[v]} alleleString={data?.allele_string_map?.[v]} token={token} isDarkMode={isDarkMode} />
+                  ))}
                   {drug.variants?.[0] && data?.alphafold_map?.[drug.variants[0]] && (
                     <AlphaFoldBadge
                       confidence={data.alphafold_map[drug.variants[0]].confidence}

@@ -955,6 +955,7 @@ async def get_dashboard_data(
                 SharedVariantAnnotation.clinvar_local_data,
                 SharedVariantAnnotation.alphafold_data,
                 SharedVariantAnnotation.pharmgkb_data,
+                SharedVariantAnnotation.ensembl_data,
             )
             .select_from(AnalysisVariant)
             .join(GeneticMarker, AnalysisVariant.marker_id == GeneticMarker.id)
@@ -963,6 +964,7 @@ async def get_dashboard_data(
         )).all()
         am_map: Dict[str, Any] = {}
         cv_count_map: Dict[str, int] = {}
+        allele_string_map: Dict[str, str] = {}
         for row in annotation_rows:
             am = row.alpha_missense_data
             if isinstance(am, dict) and am.get('found'):
@@ -975,8 +977,17 @@ async def get_dashboard_data(
                 count = cv.get('count', 0)
                 if count > 0:
                     cv_count_map[row.rsid] = count
+            # Extract allele_string from Ensembl VEP data for panel allele coloring
+            ensembl = row.ensembl_data
+            if isinstance(ensembl, dict):
+                data_list = ensembl.get('data', [])
+                if data_list and isinstance(data_list, list):
+                    allele_str = data_list[0].get('allele_string', '')
+                    if allele_str and '/' in allele_str:
+                        allele_string_map[row.rsid] = allele_str
         dashboard_data["alpha_missense_map"] = am_map
         dashboard_data["clinvar_count_map"] = cv_count_map
+        dashboard_data["allele_string_map"] = allele_string_map
 
         # Build alphafold_map: rsid → {confidence, high_confidence_pct, low_confidence_pct, protein_name}
         # Built at dashboard time from gene_symbol_map + AlphaFold local DB (20k proteins),

@@ -290,6 +290,13 @@ def indel_d_is_ref(ref_allele: str | None, alt_allele: str | None) -> bool | Non
     _UNKNOWN = ('-', '.', 'N')
     ref_up = ref_allele.strip().upper()
     alt_up = alt_allele.strip().upper()
+    # For multi-allelic sites (e.g. "C,CCC" from allele_string "CC/C,CCC"),
+    # use only the first alt allele for length comparison. This matches the
+    # VariantDetailDialog.tsx frontend behaviour (alts[0]). Without this,
+    # the full comma-joined string length is used, producing incorrect D/I
+    # directionality for dual-allele consumer array variants (BUG-14).
+    if ',' in alt_up:
+        alt_up = alt_up.split(',')[0].strip()
     if ref_up in _UNKNOWN or alt_up in _UNKNOWN:
         return None
     ref_len = len(ref_up)
@@ -863,6 +870,20 @@ async def generate_from_maps(
                     _user_codes = _parse_alleles(genotype) or []
                     if _risk_code not in _user_codes:
                         continue  # User carries only the reference indel allele
+                elif genotype.strip().upper() in ('II', 'DD'):
+                    # BUG-15: No allele data to determine insertion/deletion direction.
+                    # For homozygous indel codes, we cannot confirm whether the user
+                    # carries the risk (alternate) allele or the reference allele —
+                    # either code can be hom-ref or hom-alt depending on the variant.
+                    # Skip to avoid false positives (e.g. rs61749708 "II" = hom-ref).
+                    # Heterozygous DI/ID is preserved since one allele is the insertion
+                    # and one is the deletion, so the user plausibly carries the risk one.
+                    logger.debug(
+                        "rsid %s: homozygous indel %s with no allele-direction data — "
+                        "skipping to prevent false positive (BUG-15)",
+                        rsid, genotype,
+                    )
+                    continue
             key = info[dedup_field]
             if key not in seen:
                 seen.add(key)

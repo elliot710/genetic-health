@@ -16,6 +16,7 @@ import {
   AlphaFoldBadge,
   GeneBurdenStrip,
   ZygosityBadge,
+  ClickableRsidBadge,
   sensitivityToSeverity,
   formatLabel,
   MasonryLayout,
@@ -208,8 +209,7 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
                     label={formatLabel(trait.status)}
                     severity={sensitivityToSeverity(trait.sensitivity)}
                   />
-                  {rsid && <Badge variant="secondary" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>}
-                  {rsid && <ZygosityBadge genotype={data?.genotype_map?.[rsid]} />}
+                  {rsid && <ClickableRsidBadge rsid={rsid} gene={gene} genotype={data?.genotype_map?.[rsid]} alleleString={data?.allele_string_map?.[rsid]} token={token} isDarkMode={isDarkMode} />}
                   {gene && <Badge variant="outline" className="text-xs">{gene}</Badge>}
                   <AlphaFoldBadge
                     confidence={data?.alphafold_map?.[rsid]?.confidence}

@@ -258,6 +258,8 @@ export interface DashboardData {
   gene_stats_map?: Record<string, GeneStats>
   alphafold_map?: Record<string, { confidence: number; high_confidence_pct: number; low_confidence_pct: number; protein_name?: string }>
   pharmgkb_map?: Record<string, { gene: string; haplotypes?: string[]; cpic_guideline?: string; phenotype?: string; star_allele?: string }>
+  allele_string_map?: Record<string, string>
+  gene_symbol_map?: Record<string, string>
   real_data?: {
     variants?: { rsid?: string; chromosome?: string; position?: number; genotype?: string }[]
     analysis?: Record<string, unknown>

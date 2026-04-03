@@ -19,7 +19,7 @@ import {
   AlphaFoldDetailBox,
   AlphaFoldBadge,
   GeneBurdenStrip,
-  ZygosityBadge,
+  ClickableRsidBadge,
   formatLabel,
   MasonryLayout,
 } from './shared'
@@ -237,10 +237,7 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                     )}
                     <Badge variant="secondary" className="text-xs font-medium">{item.gene}</Badge>
                     {item.associated_variants?.length > 0 && item.associated_variants.map((v: string) => (
-                      <React.Fragment key={v}>
-                        <Badge variant="secondary" className="text-xs font-mono">{v}{data?.genotype_map?.[v] ? ` ${data.genotype_map[v]}` : ''}</Badge>
-                        <ZygosityBadge genotype={data?.genotype_map?.[v]} />
-                      </React.Fragment>
+                      <ClickableRsidBadge key={v} rsid={v} gene={item.gene} genotype={data?.genotype_map?.[v]} alleleString={data?.allele_string_map?.[v]} token={token} isDarkMode={isDarkMode} />
                     ))}
                     <AlphaFoldBadge
                       confidence={data?.alphafold_map?.[rsid]?.confidence}

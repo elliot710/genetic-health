@@ -13,6 +13,7 @@ import {
   DisclaimerCard,
   VariantInfoBox,
   ZygosityBadge,
+  ClickableRsidBadge,
   GeneContextBox,
   AlphaFoldDetailBox,
   AlphaFoldBadge,
@@ -289,8 +290,7 @@ export default function RareMutationsPanel({ data, isDarkMode = false, token }: 
                     severity={clinicalSignificanceToSeverity(mutation.clinical_significance)}
                   />
                   {gene && <Badge variant="secondary" className="text-xs">{gene}</Badge>}
-                  {rsid && <Badge variant="outline" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>}
-                  {rsid && <ZygosityBadge genotype={data?.genotype_map?.[rsid]} />}
+                  {rsid && <ClickableRsidBadge rsid={rsid} gene={gene} genotype={data?.genotype_map?.[rsid]} alleleString={data?.allele_string_map?.[rsid]} token={token} isDarkMode={isDarkMode} />}
                   {mutation.mutation_type && (
                     <Badge variant="outline" className="text-xs">{formatLabel(mutation.mutation_type)}</Badge>
                   )}

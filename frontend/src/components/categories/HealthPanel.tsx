@@ -13,7 +13,7 @@ import {
   GeneBurdenStrip,
   AlphaFoldBadge,
   DisclaimerCard,
-  ZygosityBadge,
+  ClickableRsidBadge,
   EvidenceBadge,
   reviewStatusStars,
   riskToSeverity,
@@ -336,11 +336,8 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                     </Badge>
                   )}
                   {risk.gene && risk.gene !== 'Unknown' && risk.gene.startsWith('rs') && (
-                    <Badge variant="outline" className="text-xs font-mono">
-                      {risk.gene}{data?.genotype_map?.[risk.gene] ? ` · ${data.genotype_map[risk.gene]}` : ''}
-                    </Badge>
+                    <ClickableRsidBadge rsid={risk.gene} genotype={data?.genotype_map?.[risk.gene]} alleleString={data?.allele_string_map?.[risk.gene]} token={token} isDarkMode={isDarkMode} />
                   )}
-                  {risk.gene?.startsWith('rs') && <ZygosityBadge genotype={data?.genotype_map?.[risk.gene]} />}
                   <EvidenceBadge reviewStatus={risk.reviewStatus} />
                   {risk.clinicalSignificance && risk.clinicalSignificance !== 'Under research' && (
                     <Badge variant="outline" className="text-xs">{risk.clinicalSignificance}</Badge>

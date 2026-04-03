@@ -414,7 +414,7 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
                   />
                   {carrier.gene && <Badge variant="secondary" className="text-xs">{carrier.gene}</Badge>}
                   {carrier.rsids.map(rsid => (
-                    <ClickableRsidBadge key={rsid} rsid={rsid} gene={carrier.gene} genotype={data?.genotype_map?.[rsid]} token={token} isDarkMode={isDarkMode} />
+                    <ClickableRsidBadge key={rsid} rsid={rsid} gene={carrier.gene} genotype={data?.genotype_map?.[rsid]} alleleString={data?.allele_string_map?.[rsid]} token={token} isDarkMode={isDarkMode} />
                   ))}
                   <AlphaFoldBadge
                     confidence={data?.alphafold_map?.[carrier.rsids?.[0]]?.confidence}

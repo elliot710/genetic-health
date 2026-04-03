@@ -19,6 +19,7 @@ import {
   AlphaFoldBadge,
   GeneBurdenStrip,
   ZygosityBadge,
+  ClickableRsidBadge,
   formatLabel,
   MasonryLayout,
   useGrouping,
@@ -198,8 +199,7 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
                   <Badge variant="secondary" className="text-xs font-medium">{item.gene}</Badge>
                   {rsid && (
                     <>
-                      <Badge variant="secondary" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>
-                      <ZygosityBadge genotype={data?.genotype_map?.[rsid]} />
+                      <ClickableRsidBadge rsid={rsid} gene={item.gene} genotype={data?.genotype_map?.[rsid]} alleleString={data?.allele_string_map?.[rsid]} token={token} isDarkMode={isDarkMode} />
                     </>
                   )}
                   <AlphaFoldBadge
