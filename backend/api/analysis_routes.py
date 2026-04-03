@@ -632,7 +632,11 @@ async def get_dashboard_data(
         )
         cached = cache_row.scalar_one_or_none()
         if cached and cached.analysis_fingerprint == fingerprint:
-            return cached.dashboard_json
+            # Invalidate cache if it's missing fields added after it was written
+            if isinstance(cached.dashboard_json, dict) and "allele_string_map" not in cached.dashboard_json:
+                cached = None
+            else:
+                return cached.dashboard_json
 
         # If a job is currently running and we have stale cache, return it —
         # the new insights aren't ready yet and the heavy queries would compete
