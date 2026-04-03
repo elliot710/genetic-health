@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { Dna, Menu, X } from 'lucide-react'
+import { apiUrl } from '@/lib/api'
 
 const NAV_LINKS = [
   { href: '/#features', label: 'Features' },
@@ -13,11 +14,18 @@ const NAV_LINKS = [
 export default function Navbar() {
   const [isOpen, setIsOpen] = useState(false)
   const [scrolled, setScrolled] = useState(false)
+  const [isSignedIn, setIsSignedIn] = useState(false)
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 20)
     window.addEventListener('scroll', onScroll, { passive: true })
     return () => window.removeEventListener('scroll', onScroll)
+  }, [])
+
+  useEffect(() => {
+    fetch(apiUrl('/auth/me'), { credentials: 'include' })
+      .then(r => setIsSignedIn(r.ok))
+      .catch(() => setIsSignedIn(false))
   }, [])
 
   return (
@@ -55,18 +63,21 @@ export default function Navbar() {
 
           {/* CTA */}
           <div className="hidden md:flex items-center gap-3">
-            <Link
-              href="/app"
-              className="text-sm text-slate-300 hover:text-white transition-colors"
-            >
-              Sign in
-            </Link>
-            <Link
-              href="/app"
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-linear-to-r from-teal-500 to-cyan-500 text-white text-sm font-semibold hover:from-teal-400 hover:to-cyan-400 transition-all shadow-lg shadow-teal-500/25 hover:shadow-teal-500/40 hover:-translate-y-px"
-            >
-              Launch App
-            </Link>
+            {isSignedIn ? (
+              <Link
+                href="/app"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-linear-to-r from-teal-500 to-cyan-500 text-white text-sm font-semibold hover:from-teal-400 hover:to-cyan-400 transition-all shadow-lg shadow-teal-500/25 hover:shadow-teal-500/40 hover:-translate-y-px"
+              >
+                Launch App
+              </Link>
+            ) : (
+              <Link
+                href="/app"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-linear-to-r from-teal-500 to-cyan-500 text-white text-sm font-semibold hover:from-teal-400 hover:to-cyan-400 transition-all shadow-lg shadow-teal-500/25 hover:shadow-teal-500/40 hover:-translate-y-px"
+              >
+                Sign in
+              </Link>
+            )}
           </div>
 
           {/* Mobile toggle */}
@@ -98,16 +109,9 @@ export default function Navbar() {
               <Link
                 href="/app"
                 onClick={() => setIsOpen(false)}
-                className="text-center py-2 text-sm text-slate-300 hover:text-white transition-colors"
-              >
-                Sign in
-              </Link>
-              <Link
-                href="/app"
-                onClick={() => setIsOpen(false)}
                 className="text-center py-2.5 rounded-xl bg-linear-to-r from-teal-500 to-cyan-500 text-white text-sm font-semibold"
               >
-                Launch App
+                {isSignedIn ? 'Launch App' : 'Sign in'}
               </Link>
             </div>
           </div>
