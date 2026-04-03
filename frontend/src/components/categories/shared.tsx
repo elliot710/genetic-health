@@ -932,7 +932,7 @@ export function GenotypeAlleleTiles({ genotype, alleleString }: { genotype?: str
   const gt = genotype.trim().toUpperCase()
   const isIndel = /^[DI]{1,2}$/.test(gt)
 
-  // Parse allele_string ("REF/ALT" or "REF/ALT1,ALT2") when available
+  // Parse allele_string ("REF/ALT" or "REF/ALT1,ALT2" or just "REF") when available
   let ref: string | undefined
   let alts: string[] = []
   if (alleleString) {
@@ -947,10 +947,17 @@ export function GenotypeAlleleTiles({ genotype, alleleString }: { genotype?: str
 
   // Determine D/I directionality for indels from ref/alt lengths
   let dIsRef: boolean | null = null
+  let indelBothAlt = false  // true when alts go both directions from ref (e.g. CC/C,CCC)
   if (isIndel && ref !== undefined && alts.length > 0) {
     const refLen = ref === '-' || ref === '.' ? 0 : ref.length
-    const altLen = alts[0] === '-' || alts[0] === '.' ? 0 : alts[0].length
-    dIsRef = refLen <= altLen
+    const altLens = alts.map(a => a === '-' || a === '.' ? 0 : a.length)
+    const hasShorter = altLens.some(l => l < refLen)
+    const hasLonger = altLens.some(l => l > refLen)
+    if (hasShorter && hasLonger) {
+      indelBothAlt = true  // both D and I map to different alts — neither is ref
+    } else {
+      dIsRef = refLen <= (altLens[0] ?? 0)
+    }
   }
 
   return (
@@ -958,12 +965,17 @@ export function GenotypeAlleleTiles({ genotype, alleleString }: { genotype?: str
       {alleles.map((a, i) => {
         let isRef = false
         let isAlt = false
-        if (isIndel && dIsRef !== null) {
-          isRef = dIsRef ? a === 'D' : a === 'I'
-          isAlt = dIsRef ? a === 'I' : a === 'D'
-        } else if (!isIndel && ref) {
+        if (isIndel) {
+          if (indelBothAlt) {
+            isAlt = true  // both D and I are alternate alleles
+          } else if (dIsRef !== null) {
+            isRef = dIsRef ? a === 'D' : a === 'I'
+            isAlt = dIsRef ? a === 'I' : a === 'D'
+          }
+        } else if (ref) {
           isRef = a === ref
-          isAlt = alts.includes(a)
+          // If we have explicit alts, check membership; otherwise anything non-ref is alt
+          isAlt = alts.length > 0 ? alts.includes(a) : a !== ref
         }
         return (
           <span

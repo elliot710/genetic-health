@@ -633,10 +633,9 @@ async def get_dashboard_data(
         cached = cache_row.scalar_one_or_none()
         if cached and cached.analysis_fingerprint == fingerprint:
             # Invalidate cache if it's missing fields added after it was written
-            if isinstance(cached.dashboard_json, dict) and "allele_string_map" not in cached.dashboard_json:
-                cached = None
-            else:
+            if isinstance(cached.dashboard_json, dict) and "allele_string_map" in cached.dashboard_json:
                 return cached.dashboard_json
+            # else: fall through to regenerate (cached row kept for UPDATE)
 
         # If a job is currently running and we have stale cache, return it —
         # the new insights aren't ready yet and the heavy queries would compete
@@ -983,14 +982,14 @@ async def get_dashboard_data(
                 count = cv.get('count', 0)
                 if count > 0:
                     cv_count_map[row.rsid] = count
-            # Extract allele_string from GeneticMarker (always available) for panel allele coloring
-            # Format: "REF/ALT" matching Ensembl allele_string convention
+            # Extract allele_string for panel allele coloring
+            # Try: GeneticMarker ref/alt → Ensembl VEP cache → ref-only fallback
             ref_a = row.ref_allele
             alt_a = row.alt_alleles
             if ref_a and alt_a:
                 allele_string_map[row.rsid] = f"{ref_a}/{alt_a}"
-            else:
-                # Fallback: extract from Ensembl VEP cache if marker alleles missing
+            elif not ref_a or not alt_a:
+                # Try Ensembl VEP cache
                 ensembl = row.ensembl_data
                 if isinstance(ensembl, dict):
                     data_list = ensembl.get('data', [])
@@ -998,6 +997,9 @@ async def get_dashboard_data(
                         allele_str = data_list[0].get('allele_string', '')
                         if allele_str and '/' in allele_str:
                             allele_string_map[row.rsid] = allele_str
+                # Last resort: emit ref-only so frontend can still color ref vs non-ref
+                if row.rsid not in allele_string_map and ref_a:
+                    allele_string_map[row.rsid] = ref_a
         dashboard_data["alpha_missense_map"] = am_map
         dashboard_data["clinvar_count_map"] = cv_count_map
         dashboard_data["allele_string_map"] = allele_string_map

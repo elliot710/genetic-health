@@ -613,11 +613,20 @@ export default function VariantDetailDialog({
                   if (isIndel) {
                     // D=shorter, I=longer; determine mapping from ref/alt lengths
                     const refLen = ref === '-' || ref === '.' ? 0 : (ref?.length ?? 0)
-                    const altLen = alts[0] === '-' || alts[0] === '.' ? 0 : (alts[0]?.length ?? 0)
-                    const dIsRef = refLen <= altLen
-                    refCount = alleles.filter(a => dIsRef ? a === 'D' : a === 'I').length
-                    altCount = alleles.filter(a => dIsRef ? a === 'I' : a === 'D').length
-                    altLabel = alts[0] || (dIsRef ? 'I' : 'D')
+                    const altLens = alts.map(a => a === '-' || a === '.' ? 0 : a.length)
+                    const hasShorter = altLens.some(l => l < refLen)
+                    const hasLonger = altLens.some(l => l > refLen)
+                    if (hasShorter && hasLonger) {
+                      // Mixed-direction multi-allelic: both D and I are alts
+                      refCount = 0
+                      altCount = alleles.length
+                      altLabel = alts.join('/')
+                    } else {
+                      const dIsRef = refLen <= (altLens[0] ?? 0)
+                      refCount = alleles.filter(a => dIsRef ? a === 'D' : a === 'I').length
+                      altCount = alleles.filter(a => dIsRef ? a === 'I' : a === 'D').length
+                      altLabel = alts[0] || (dIsRef ? 'I' : 'D')
+                    }
                   } else {
                     altCount = alleles.filter(a => alts.includes(a)).length
                     refCount = alleles.filter(a => a === ref).length

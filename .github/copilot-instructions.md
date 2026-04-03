@@ -14,6 +14,8 @@ A full-stack genetic data analysis platform providing personalized health insigh
 IP: 204.168.200.44 
 ssh key: ~/.ssh/id_ed25519
 user: root
+DO NOT deploy unless specifically told to do it.
+
 **Login field**: `username` (not `email`) — POST `/auth/login` takes `{"username": "...", "password": "..."}`
 
 ## Architecture
