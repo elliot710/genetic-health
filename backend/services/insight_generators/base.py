@@ -375,71 +375,58 @@ _NO_CALL_CODES = frozenset({'--', '00', 'NC'})
 _BENIGN_SIG_PREFIXES = ('benign', 'likely benign', 'likely_benign')
 
 
+def _get_all_clinvar_significances(annotations: dict) -> list:
+    sigs: list = []
+    cv_local = annotations.get('clinvar_local', {})
+    if cv_local and cv_local.get('found'):
+        sigs.extend(cv_local.get('clinical_significances', []))
+    cv_api = annotations.get('clinvar', {})
+    if cv_api and cv_api.get('found'):
+        for entry in cv_api.get('entries', []):
+            entry_sigs = entry.get('clinical_significance', [])
+            sigs.extend([entry_sigs] if isinstance(entry_sigs, str) else entry_sigs)
+        top_sig = cv_api.get('clinical_significance', '')
+        if isinstance(top_sig, str) and top_sig:
+            sigs.append(top_sig)
+    return sigs
+
+
+def _has_computational_pathogenicity(annotations: dict) -> bool:
+    am = annotations.get('alpha_missense', {})
+    if am and am.get('found'):
+        am_class = (am.get('am_class') or am.get('classification') or '').lower()
+        if 'pathogenic' in am_class:
+            return True
+    gnomad = annotations.get('gnomad', {})
+    if gnomad and gnomad.get('found'):
+        cadd = gnomad.get('cadd', {})
+        if isinstance(cadd, dict) and cadd.get('phred') is not None:
+            if cadd['phred'] >= 25:
+                return True
+    return False
+
+
 def is_clinvar_benign(annotation_result) -> bool:
     """Return True when ALL available annotation sources agree the variant is benign.
 
     Cross-references ClinVar local, ClinVar API, and computational predictors
     (AlphaMissense, CADD) to avoid filtering variants where any source reports
     potential pathogenicity.
-
-    Returns True only when:
-    - At least one ClinVar source has data AND all ClinVar significances are benign
-    - No computational predictor flags the variant as potentially pathogenic
     """
     if not annotation_result or not annotation_result.annotation_data:
-        return False  # No data — don't filter
+        return False
     annotations = annotation_result.annotation_data.get('annotations', {})
 
-    # --- ClinVar Local ---
-    cv_sigs_all: list = []
-    cv_local = annotations.get('clinvar_local', {})
-    if cv_local and cv_local.get('found'):
-        sigs = cv_local.get('clinical_significances', [])
-        cv_sigs_all.extend(sigs)
-
-    # --- ClinVar API ---
-    cv_api = annotations.get('clinvar', {})
-    if cv_api and cv_api.get('found'):
-        entries = cv_api.get('entries', [])
-        for entry in entries:
-            entry_sigs = entry.get('clinical_significance', [])
-            if isinstance(entry_sigs, str):
-                entry_sigs = [entry_sigs]
-            cv_sigs_all.extend(entry_sigs)
-        # Also check top-level significance
-        top_sig = cv_api.get('clinical_significance', '')
-        if isinstance(top_sig, str) and top_sig:
-            cv_sigs_all.append(top_sig)
-
+    cv_sigs_all = _get_all_clinvar_significances(annotations)
     if not cv_sigs_all:
-        return False  # No ClinVar data at all — don't filter
+        return False
 
-    # Check if ALL ClinVar significance values are benign
     for sig in cv_sigs_all:
         s = sig.strip().lower().replace('_', ' ')
-        if not s:
-            continue
-        if not any(s.startswith(prefix) for prefix in _BENIGN_SIG_PREFIXES):
-            return False  # At least one non-benign ClinVar report → keep it
+        if s and not any(s.startswith(prefix) for prefix in _BENIGN_SIG_PREFIXES):
+            return False
 
-    # --- Cross-check computational predictors ---
-    # If AlphaMissense says likely_pathogenic, don't filter even if ClinVar says benign
-    am = annotations.get('alpha_missense', {})
-    if am and am.get('found'):
-        am_class = (am.get('am_class') or am.get('classification') or '').lower()
-        if 'pathogenic' in am_class:
-            return False  # Computational disagrees — keep for review
-
-    # If CADD PHRED score is very high (>= 25), the variant may be functionally
-    # important despite benign ClinVar classification
-    gnomad = annotations.get('gnomad', {})
-    if gnomad and gnomad.get('found'):
-        cadd = gnomad.get('cadd', {})
-        if isinstance(cadd, dict) and cadd.get('phred') is not None:
-            if cadd['phred'] >= 25:
-                return False  # High computational deleteriousness — keep
-
-    return True  # All sources agree: benign
+    return not _has_computational_pathogenicity(annotations)
 
 
 def is_indel_genotype(genotype: Optional[str]) -> bool:

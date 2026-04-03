@@ -1421,51 +1421,55 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
       </div>
 
       <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
-        <TabsList className="flex w-full max-w-5xl">
-          <TabsTrigger value="users" className="gap-2">
-            <Users className="h-4 w-4" />
-            Users
-          </TabsTrigger>
-          <TabsTrigger value="registry" className="gap-2">
-            <Database className="h-4 w-4" />
-            Registry
-          </TabsTrigger>
-          <TabsTrigger value="discoveries" className="gap-2 relative">
-            <Lightbulb className="h-4 w-4" />
-            Discoveries
-            {discoverySummary && discoverySummary.total_pending > 0 && (
-              <Badge variant="destructive" className="ml-1 h-5 min-w-[20px] px-1 text-xs">
-                {discoverySummary.total_pending}
-              </Badge>
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="data" className="gap-2">
-            <HardDrive className="h-4 w-4" />
-            Ingestion
-          </TabsTrigger>
-          <TabsTrigger value="rules" className="gap-2">
-            <Scale className="h-4 w-4" />
-            Rules
-          </TabsTrigger>
-          <TabsTrigger value="annotations" className="gap-2 relative" title="Annotation quality monitor — incomplete and failed annotations">
-            <AlertTriangle className="h-4 w-4" />
-            Incomplete
-            {incompleteSummary && (incompleteSummary.partial + incompleteSummary.failed) > 0 && (
-              <Badge variant="secondary" className="ml-1 h-5 min-w-[20px] px-1 text-xs">
-                {formatCompactNumber(incompleteSummary.partial + incompleteSummary.failed)}
-              </Badge>
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="jobs" className="gap-2 relative">
-            <Activity className="h-4 w-4" />
-            Jobs
-            {jobs.filter(j => j.analysis_status === 'processing' || j.analysis_status === 'pending').length > 0 && (
-              <Badge className="ml-1 h-5 min-w-[20px] px-1 text-xs bg-blue-500 text-white">
-                {jobs.filter(j => j.analysis_status === 'processing' || j.analysis_status === 'pending').length}
-              </Badge>
-            )}
-          </TabsTrigger>
-        </TabsList>
+        <div className="overflow-x-auto -mx-1 px-1 pb-1">
+          <TabsList className="flex w-max min-w-full">
+            <TabsTrigger value="users" className="gap-2 shrink-0">
+              <Users className="h-4 w-4" />
+              <span className="hidden sm:inline">Users</span>
+              <span className="sm:hidden">Users</span>
+            </TabsTrigger>
+            <TabsTrigger value="registry" className="gap-2 shrink-0">
+              <Database className="h-4 w-4" />
+              <span className="hidden sm:inline">Registry</span>
+              <span className="sm:hidden">Registry</span>
+            </TabsTrigger>
+            <TabsTrigger value="discoveries" className="gap-2 relative shrink-0">
+              <Lightbulb className="h-4 w-4" />
+              Discoveries
+              {discoverySummary && discoverySummary.total_pending > 0 && (
+                <Badge variant="destructive" className="ml-1 h-5 min-w-5 px-1 text-xs">
+                  {discoverySummary.total_pending}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="data" className="gap-2 shrink-0">
+              <HardDrive className="h-4 w-4" />
+              Ingestion
+            </TabsTrigger>
+            <TabsTrigger value="rules" className="gap-2 shrink-0">
+              <Scale className="h-4 w-4" />
+              Rules
+            </TabsTrigger>
+            <TabsTrigger value="annotations" className="gap-2 relative shrink-0" title="Annotation quality monitor — incomplete and failed annotations">
+              <AlertTriangle className="h-4 w-4" />
+              Incomplete
+              {incompleteSummary && (incompleteSummary.partial + incompleteSummary.failed) > 0 && (
+                <Badge variant="secondary" className="ml-1 h-5 min-w-5 px-1 text-xs">
+                  {formatCompactNumber(incompleteSummary.partial + incompleteSummary.failed)}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="jobs" className="gap-2 relative shrink-0">
+              <Activity className="h-4 w-4" />
+              Jobs
+              {jobs.filter(j => j.analysis_status === 'processing' || j.analysis_status === 'pending').length > 0 && (
+                <Badge className="ml-1 h-5 min-w-5 px-1 text-xs bg-blue-500 text-white">
+                  {jobs.filter(j => j.analysis_status === 'processing' || j.analysis_status === 'pending').length}
+                </Badge>
+              )}
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
         {/* ===== USERS TAB ===== */}
         <TabsContent value="users" className="mt-6">
@@ -1478,6 +1482,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
               <CardDescription>{users.length} registered user{users.length !== 1 ? 's' : ''}</CardDescription>
             </CardHeader>
             <CardContent>
+              <div className="overflow-x-auto -mx-6 px-6">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -1545,6 +1550,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                   ))}
                 </TableBody>
               </Table>
+              </div>
               {renderPagination(users.length, usersPage, setUsersPage)}
             </CardContent>
           </Card>
@@ -1632,6 +1638,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
               </CardHeader>
               {selectedRegistryCategory && (
                 <CardContent>
+                  <div className="overflow-x-auto">
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -1731,6 +1738,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                       })()}
                     </TableBody>
                   </Table>
+                  </div>
                   {renderPagination(filteredRegistryMappings.length, registryPage, setRegistryPage)}
                 </CardContent>
               )}
@@ -1794,6 +1802,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                 <p className={`text-center py-8 ${theme.text.tertiary}`}>No discoveries found with current filters</p>
               ) : (
                 <>
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -1862,6 +1871,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                     ))}
                   </TableBody>
                 </Table>
+                </div>
                 {renderPagination(discoveries.length, discoveriesPage, setDiscoveriesPage)}
                 </>
               )}
@@ -2617,6 +2627,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                 </p>
               ) : (
                 <>
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -2682,6 +2693,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                     ))}
                   </TableBody>
                 </Table>
+                </div>
                 {renderPagination(categoryRules.length, rulesPage, setRulesPage)}
               </>
               )}
@@ -2893,6 +2905,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                 </div>
               ) : (
                 <>
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -3050,6 +3063,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                     ))}
                   </TableBody>
                 </Table>
+                </div>
                 {renderPagination(jobs.length, jobsPage, setJobsPage)}
                 </>
               )}
@@ -3081,6 +3095,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                   <p className={theme.text.muted}>No background jobs found</p>
                 </div>
               ) : (
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -3204,6 +3219,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               )}
             </CardContent>
           </Card>

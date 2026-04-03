@@ -2,16 +2,22 @@
 
 A full-stack genetic data analysis platform providing personalized health insights from VCF and CSV genetic data. Everything runs in Docker with hot reload.
 
+The source code should follow clean code Architecture.
+The source code should include Unit tests for all the logical parts, with all the 3rd party or API calls being mocked. 
+The Source code should not include any documentations or md files. Comments should only be used in exceptional cases. the Code should be self explanatory.
+Do not try anything more than 3 times, if you cannot find the solution or in a loop for 3 times, ask for feedback.
+Do not praise me or apologize, just be clear and respond with simple responses.
+Always do plan first and only after do start with the implementations. 
+Do not add Logs and debugs everwhere, those should be used and implemented with the confirmation only. if you added any debugging logs, clean up after the final iterations.
+All the variables should have a meaningful names. 
+Methods should not be longer than 30 lines of codes, and each class should not be longer than 300 lines of code.
+If you need to convert anything, use extensions and utils.
+We will use Dependancy injection with proper namings. 
+
 ## Quick Reference
 
-| Service | URL | Container |
-|---------|-----|-----------|
-| Frontend | http://localhost:3000 | `dna_toolkit-frontend-1` |
-| Backend API | http://localhost:8000/docs | `dna_toolkit-backend-1` |
-| PostgreSQL | localhost:5432 | `dna_toolkit-postgres-1` |
-
 **Server**: 
-IP: 204.168.200.44 
+IP: 204.168.200.44
 ssh key: ~/.ssh/id_ed25519
 user: root
 DO NOT deploy unless specifically told to do it.

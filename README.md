@@ -111,6 +111,12 @@ A `deploy.sh` script handles the full production deploy from your local machine:
 
 The script uses the server's `~/.ssh/github_deploy` deploy key, stashes any manual hotfixes, runs migrations, rebuilds Docker images, and waits for a healthy backend before exiting.
 
+Unit Tests:
+```bash
+uv run pytest backend/tests/ --cov=backend --cov-report=term-missing -q --tb=no 2>&1 | tail -50
+
+```
+
 ---
 
 ## API Overview

@@ -17,6 +17,39 @@ from ..db.models import SharedVariantAnnotation
 logger = logging.getLogger(__name__)
 
 
+def _count_found(result_dict: Dict[str, Optional[Dict]]) -> int:
+    return sum(1 for v in result_dict.values() if v and v.get('found'))
+
+
+def _rsids_for(
+    source_name: str, rsids: List[str], per_source_rsids: Optional[Dict[str, List[str]]]
+) -> List[str]:
+    if per_source_rsids is not None:
+        return per_source_rsids.get(source_name, [])
+    return rsids
+
+
+async def _apply_position_fallback(
+    svc,
+    src_rsids: List[str],
+    result_dict: Dict[str, Optional[Dict]],
+    rsid_to_variant: Dict[str, Any],
+) -> None:
+    misses = [
+        r for r in src_rsids
+        if not (result_dict.get(r) and result_dict[r].get('found'))
+    ]
+    if not (misses and hasattr(svc, 'lookup_batch_by_position')):
+        return
+    pos_tuples = _build_pos_tuples(misses, rsid_to_variant)
+    if not pos_tuples:
+        return
+    pos_results = await svc.lookup_batch_by_position(pos_tuples)
+    for rsid, data in pos_results.items():
+        if data and data.get('found'):
+            result_dict[rsid] = data
+
+
 # Sentinel dicts written to DB for sources that found no data — prevents
 # the backfill from re-querying the same rsids on every run.
 NOT_FOUND = {
@@ -272,53 +305,38 @@ async def run_all_lookups(
 
     Yields to the event loop between each source lookup to prevent starvation.
     """
-    def _rsids_for(source_name: str) -> List[str]:
-        if per_source_rsids is not None:
-            return per_source_rsids.get(source_name, [])
-        return rsids
-
     results = LookupResults()
     t_total = time.monotonic()
 
-    cv_rsids = _rsids_for('clinvar_local')
+    cv_rsids = _rsids_for('clinvar_local', rsids, per_source_rsids)
     if sources.clinvar and cv_rsids:
         t0 = time.monotonic()
         logger.info(f"  ClinVar: starting lookup for {len(cv_rsids)} RSIDs...")
         results.clinvar = await sources.clinvar.lookup_batch(cv_rsids)
-        found = sum(1 for v in results.clinvar.values() if v and v.get('found'))
-        logger.info(f"  ClinVar: {found}/{len(cv_rsids)} found ({time.monotonic() - t0:.1f}s)")
+        logger.info(f"  ClinVar: {_count_found(results.clinvar)}/{len(cv_rsids)} found ({time.monotonic() - t0:.1f}s)")
         await asyncio.sleep(0)
 
-    gn_rsids = _rsids_for('gnomad')
+    gn_rsids = _rsids_for('gnomad', rsids, per_source_rsids)
     if sources.gnomad and gn_rsids:
         t0 = time.monotonic()
         logger.info(f"  gnomAD: starting lookup for {len(gn_rsids)} RSIDs...")
         results.gnomad = await sources.gnomad.lookup_batch(gn_rsids)
-        gn_found = sum(1 for v in results.gnomad.values() if v and v.get('found'))
-        # Position fallback for rsid misses — skipped when lookup_batch already
-        # exhausted tabix (same GRCh38 bridge + same files → identical results).
-        gn_misses = [
-            r for r in gn_rsids
-            if not (results.gnomad.get(r) and results.gnomad[r].get('found'))
-        ]
-        if gn_misses and not getattr(sources.gnomad, 'lookup_batch_uses_tabix', False):
-            pos_tuples = build_gnomad_pos_tuples(gn_misses, rsid_to_variant)
-            if pos_tuples:
-                pos_results = await sources.gnomad.lookup_batch_by_position(pos_tuples)
-                for rsid, data in pos_results.items():
-                    if data and data.get('found'):
-                        results.gnomad[rsid] = data
-        elif gn_misses and getattr(sources.gnomad, 'lookup_batch_uses_tabix', False):
-            logger.info(f"  gnomAD: skipping pos fallback — tabix already queried in rsid lookup ({len(gn_misses)} misses)")
-        total_found = sum(1 for v in results.gnomad.values() if v and v.get('found'))
+        rsid_found = _count_found(results.gnomad)
+        if not getattr(sources.gnomad, 'lookup_batch_uses_tabix', False):
+            await _apply_position_fallback(sources.gnomad, gn_rsids, results.gnomad, rsid_to_variant)
+        else:
+            gn_misses = len(gn_rsids) - rsid_found
+            if gn_misses:
+                logger.info(f"  gnomAD: skipping pos fallback — tabix already queried ({gn_misses} misses)")
+        total_found = _count_found(results.gnomad)
         logger.info(f"  gnomAD: {total_found}/{len(gn_rsids)} found "
-                     f"(rsid: {gn_found}, pos fallback: {total_found - gn_found}) "
+                     f"(rsid: {rsid_found}, pos fallback: {total_found - rsid_found}) "
                      f"({time.monotonic() - t0:.1f}s)")
         await asyncio.sleep(0)
 
     # gnomAD v2 exome fallback — GRCh37 per-population AFs for rsids not found
     # in the main gnomAD CADD data (which is typically indel-only on GRCh38).
-    gn_rsids_v2 = _rsids_for('gnomad')
+    gn_rsids_v2 = _rsids_for('gnomad', rsids, per_source_rsids)
     if sources.gnomad_v2 and gn_rsids_v2:
         # Only look up rsids that weren't already found by main gnomAD
         v2_candidates = [
@@ -347,12 +365,11 @@ async def run_all_lookups(
             v2_found = 0
             for rsid, afs in v2_afs.items():
                 if afs:
-                    # Wrap v2 population AFs in the standard gnomAD result format
                     results.gnomad[rsid] = {
                         "found": True,
                         "source": "gnomad_v2_exome",
                         "rsid": rsid,
-                        "af": afs.get("af_nfe"),  # Use NFE (European) as default AF
+                        "af": afs.get("af_nfe"),
                         "population_afs": {
                             pop: afs.get(f"af_{pop}")
                             for pop in ("afr", "amr", "eas", "nfe", "sas")
@@ -365,57 +382,33 @@ async def run_all_lookups(
                         f"({time.monotonic() - t0:.1f}s)")
             await asyncio.sleep(0)
 
-    ens_rsids = _rsids_for('ensembl')
+    ens_rsids = _rsids_for('ensembl', rsids, per_source_rsids)
     if sources.ensembl_vep and ens_rsids:
         t0 = time.monotonic()
         logger.info(f"  Ensembl VEP: starting lookup for {len(ens_rsids)} RSIDs...")
         results.ensembl = await sources.ensembl_vep.lookup_batch(ens_rsids)
-        ens_found = sum(1 for v in results.ensembl.values() if v and v.get('found'))
-        # Position fallback for rsid misses (handles cases where SQLite cache is absent
-        # or was built from a different upload set)
-        ens_misses = [
-            r for r in ens_rsids
-            if not (results.ensembl.get(r) and results.ensembl[r].get('found'))
-        ]
-        if ens_misses and hasattr(sources.ensembl_vep, 'lookup_batch_by_position'):
-            pos_tuples = _build_pos_tuples(ens_misses, rsid_to_variant)
-            if pos_tuples:
-                pos_results = await sources.ensembl_vep.lookup_batch_by_position(pos_tuples)
-                for rsid, data in pos_results.items():
-                    if data and data.get('found'):
-                        results.ensembl[rsid] = data
-        total_found = sum(1 for v in results.ensembl.values() if v and v.get('found'))
+        rsid_found = _count_found(results.ensembl)
+        await _apply_position_fallback(sources.ensembl_vep, ens_rsids, results.ensembl, rsid_to_variant)
+        total_found = _count_found(results.ensembl)
         logger.info(f"  Ensembl VEP: {total_found}/{len(ens_rsids)} found "
-                    f"(rsid: {ens_found}, pos fallback: {total_found - ens_found}) "
+                    f"(rsid: {rsid_found}, pos fallback: {total_found - rsid_found}) "
                     f"({time.monotonic() - t0:.1f}s)")
         await asyncio.sleep(0)
 
-    tkg_rsids = _rsids_for('thousand_genomes')
+    tkg_rsids = _rsids_for('thousand_genomes', rsids, per_source_rsids)
     if sources.thousand_genomes and tkg_rsids:
         t0 = time.monotonic()
         logger.info(f"  1000G: starting lookup for {len(tkg_rsids)} RSIDs...")
         results.thousand_genomes = await sources.thousand_genomes.lookup_batch(tkg_rsids)
-        tkg_found = sum(1 for v in results.thousand_genomes.values() if v and v.get('found'))
-        # Position fallback for rsid misses — VCF tabix is fast for this (sequential
-        # seeks via pysam, not a full scan). No cap needed.
-        tkg_misses = [
-            r for r in tkg_rsids
-            if not (results.thousand_genomes.get(r) and results.thousand_genomes[r].get('found'))
-        ]
-        if tkg_misses and hasattr(sources.thousand_genomes, 'lookup_batch_by_position'):
-            pos_tuples = _build_pos_tuples(tkg_misses, rsid_to_variant)
-            if pos_tuples:
-                pos_results = await sources.thousand_genomes.lookup_batch_by_position(pos_tuples)
-                for rsid, data in pos_results.items():
-                    if data and data.get('found'):
-                        results.thousand_genomes[rsid] = data
-        total_found = sum(1 for v in results.thousand_genomes.values() if v and v.get('found'))
+        rsid_found = _count_found(results.thousand_genomes)
+        await _apply_position_fallback(sources.thousand_genomes, tkg_rsids, results.thousand_genomes, rsid_to_variant)
+        total_found = _count_found(results.thousand_genomes)
         logger.info(f"  1000G: {total_found}/{len(tkg_rsids)} found "
-                    f"(rsid: {tkg_found}, pos fallback: {total_found - tkg_found}) "
+                    f"(rsid: {rsid_found}, pos fallback: {total_found - rsid_found}) "
                     f"({time.monotonic() - t0:.1f}s)")
         await asyncio.sleep(0)
 
-    am_rsids = _rsids_for('alpha_missense')
+    am_rsids = _rsids_for('alpha_missense', rsids, per_source_rsids)
     if sources.alpha_missense and am_rsids:
         t0 = time.monotonic()
         logger.info(f"  AlphaMissense: starting lookup for {len(am_rsids)} RSIDs...")
@@ -424,8 +417,7 @@ async def run_all_lookups(
             results.alpha_missense = await asyncio.get_event_loop().run_in_executor(
                 None, sources.alpha_missense.lookup_variants_batch, am_batch
             )
-        found = sum(1 for v in results.alpha_missense.values() if v and v.get('found'))
-        logger.info(f"  AlphaMissense: {found}/{len(am_rsids)} found ({time.monotonic() - t0:.1f}s)")
+        logger.info(f"  AlphaMissense: {_count_found(results.alpha_missense)}/{len(am_rsids)} found ({time.monotonic() - t0:.1f}s)")
         await asyncio.sleep(0)
 
     # gnomAD-tx: bulk batch via chromosome-range scans — NOT per-variant tabix seeks.
@@ -442,7 +434,7 @@ async def run_all_lookups(
             logger.info(f"  gnomAD-tx: starting lookup for {len(tx_variants)} variants...")
             tx_results = await sources.gnomad_tx.lookup_batch(tx_variants)
             results.gnomad_tx = tx_results
-            found_tx = sum(1 for v in tx_results.values() if v and v.get('found'))
+            found_tx = _count_found(tx_results)
             logger.info(f"  gnomAD-tx: {found_tx}/{len(tx_variants)} found ({time.monotonic() - t0:.1f}s)")
             await asyncio.sleep(0)
 
@@ -492,7 +484,7 @@ async def run_all_lookups(
                 af_data = gene_results.get(gene)
                 if af_data and af_data.get('found'):
                     results.alphafold[rsid] = af_data
-            found_af = sum(1 for v in results.alphafold.values() if v and v.get('found'))
+            found_af = _count_found(results.alphafold)
             logger.info(f"  AlphaFold: {found_af}/{len(rsid_gene)} RSIDs enriched ({time.monotonic() - t0:.1f}s)")
             await asyncio.sleep(0)
 

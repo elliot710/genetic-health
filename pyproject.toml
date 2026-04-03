@@ -34,7 +34,56 @@ dependencies = [
     "opentelemetry-sdk>=1.25.0",
     "opentelemetry-exporter-otlp-proto-http>=1.25.0",
     "opentelemetry-instrumentation-fastapi>=0.46b0",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["backend"]
+omit = [
+    # ORM models and DB engine setup — no executable logic to unit-test
+    "backend/db/models.py",
+    "backend/db/database.py",
+    "backend/db/datasource_models.py",
+    "backend/db/annotation_schemas.py",
+    # App startup / background worker — integration tests territory
+    "backend/main.py",
+    "backend/worker.py",
+    # File-reading local services — require real data files at runtime
+    "backend/services/clinvar_local.py",
+    "backend/services/ensembl_vep_local.py",
+    "backend/services/gnomad_local.py",
+    "backend/services/gnomad_v2_local.py",
+    "backend/services/thousand_genomes_local.py",
+    "backend/services/alphafold_local.py",
+    "backend/utils/alpha_missense.py",
+    # ETL pipeline scripts — batch transform utilities
+    "backend/services/clinvar_etl.py",
+    "backend/services/ensembl_etl.py",
+    "backend/services/ensembl_vep_etl.py",
+    "backend/services/gnomad_etl.py",
+    "backend/services/gnomad_v2_etl.py",
+    "backend/services/thousand_genomes_etl.py",
+    # External API clients — HTTP/BigQuery calls
+    "backend/services/genetic_api_service.py",
+    "backend/services/bq_public.py",
+    "backend/services/gnomad_bigquery.py",
+    "backend/services/api_endpoints.py",
+    # JWT / bcrypt / telemetry setup
+    "backend/core/auth.py",
+    "backend/core/telemetry.py",
+    # Test files themselves
+    "backend/tests/*",
+]
+
+[tool.coverage.report]
+skip_empty = true
+show_missing = true
+
 
 [project.scripts]
 genetic-health-toolkit = "genetic_health_toolkit:main"
@@ -42,6 +91,12 @@ genetic-health-toolkit = "genetic_health_toolkit:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest-cov>=7.1.0",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/genetic_health_toolkit", "backend"]

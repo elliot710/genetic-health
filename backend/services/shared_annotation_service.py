@@ -1,46 +1,74 @@
-"""
-Shared variant annotation service — manages the deduplication cache of
-external API results (shared_variant_annotations table).
-"""
 import asyncio
 import logging
 import time
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, func
+from sqlalchemy import update, func
+from sqlalchemy.dialects.postgresql import insert
 
 from ..db.models import SharedVariantAnnotation, VariantAnnotation
 from ..utils.alpha_missense import get_alpha_missense_service
 
 logger = logging.getLogger(__name__)
 
+_ANNOTATION_COL_MAP: List[Tuple[str, str]] = [
+    ('ensembl_data',          'ensembl'),
+    ('clinvar_data',          'clinvar'),
+    ('pharmgkb_data',         'clinpgx'),
+    ('snpedia_data',          'snpedia'),
+    ('litvar_data',           'litvar'),
+    ('alpha_missense_data',   'alpha_missense'),
+    ('clinvar_local_data',    'clinvar_local'),
+    ('gnomad_data',           'gnomad'),
+    ('thousand_genomes_data', 'thousand_genomes'),
+    ('chembl_data',           'chembl'),
+    ('fda_drug_data',         'fda_drug'),
+    ('alphafold_data',        'alphafold'),
+    ('gnomad_tx_data',        'gnomad_tx'),
+]
+
+_COL_NAMES = ', '.join(col for col, _ in _ANNOTATION_COL_MAP)
+_FETCH_SQL = (
+    f"SELECT rsid, {_COL_NAMES} FROM shared_variant_annotations "
+    f"WHERE rsid = ANY(:rsids) "
+    f"AND annotation_status IN ('completed', 'partial')"
+)
+
+
+def _row_to_annotation_dict(row) -> Dict[str, Any]:
+    rsid_val = row[0]
+    merged: Dict[str, Any] = {
+        'rsid': rsid_val,
+        'annotations': {},
+        'sources_queried': [],
+        'success_count': 0,
+    }
+    for col_idx, (_, key) in enumerate(_ANNOTATION_COL_MAP, start=1):
+        data = row[col_idx]
+        if data is not None:
+            merged['annotations'][key] = data
+            merged['sources_queried'].append(key)
+            merged['success_count'] += 1
+    return merged
+
+
+def _empty_annotation_dict(rsid: str) -> Dict[str, Any]:
+    return {'rsid': rsid, 'annotations': {}, 'sources_queried': [], 'success_count': 0}
+
 
 class SharedVariantAnnotationService:
-    """Service for managing shared variant annotations across users.
-    
-    Uses short-lived sessions per operation to avoid holding DB connections
-    for extended periods during long-running analyses.
-    """
-
     def __init__(self, session: AsyncSession = None):
-        self.session = session  # Legacy: only used by remote API path (save_annotation)
+        self.session = session
         self._annotation_cache: Dict[str, Dict[str, Any]] = {}
 
     async def get_existing_annotations(
         self,
         rsids: List[str],
         on_progress=None,
+        update_usage: bool = True,
+        chunk_size: int = 100_000,
     ) -> Dict[str, Dict[str, Any]]:
-        """Get existing annotations for a list of RSIDs from shared annotations table.
-
-        PERF-02: Uses a single streaming raw-SQL query with ANY(:rsids) instead
-        of 1,219 mini-batch ORM queries.  Measured speedup: ~178s → ~5s for 609K RSIDs.
-
-        ARCH-06: Does NOT compute pathogenicity_score here.  Scoring is deferred
-        to build_variant_profiles() so updated scoring logic always applies without
-        re-annotating from scratch.
-        """
         if not rsids:
             return {}
 
@@ -48,66 +76,27 @@ class SharedVariantAnnotationService:
         from sqlalchemy import text
 
         annotation_map: Dict[str, Dict[str, Any]] = {}
-        lookup_start = time.time()
+        t0 = time.time()
         total = len(rsids)
         logger.info(f"Loading shared annotations for {total} RSIDs (streaming ANY query)")
 
-        _COL_MAP = [
-            ('ensembl_data',          'ensembl'),
-            ('clinvar_data',          'clinvar'),
-            ('pharmgkb_data',         'clinpgx'),
-            ('snpedia_data',          'snpedia'),
-            ('litvar_data',           'litvar'),
-            ('alpha_missense_data',   'alpha_missense'),
-            ('clinvar_local_data',    'clinvar_local'),
-            ('gnomad_data',           'gnomad'),
-            ('thousand_genomes_data', 'thousand_genomes'),
-            ('chembl_data',           'chembl'),
-            ('fda_drug_data',         'fda_drug'),
-            ('alphafold_data',        'alphafold'),
-            ('gnomad_tx_data',        'gnomad_tx'),
-        ]
-        col_names = ', '.join(col for col, _ in _COL_MAP)
-        sql = (
-            f"SELECT rsid, {col_names} FROM shared_variant_annotations "
-            f"WHERE rsid = ANY(:rsids) "
-            f"AND annotation_status IN ('completed', 'partial')"
-        )
-
-        # Chunk at 100K to bound per-query memory while still being orders
-        # of magnitude fewer round-trips than the old batch-of-500 loop.
-        CHUNK = 100_000
-        for i in range(0, total, CHUNK):
-            chunk = rsids[i:i + CHUNK]
+        for i in range(0, total, chunk_size):
+            chunk = rsids[i:i + chunk_size]
             if i > 0:
                 await asyncio.sleep(0)
 
             async with async_session_factory() as session:
-                result = await session.execute(text(sql), {'rsids': chunk})
-                rows = result.fetchall()
+                rows = (await session.execute(text(_FETCH_SQL), {'rsids': chunk})).fetchall()
 
             for row_idx, row in enumerate(rows):
                 if row_idx > 0 and row_idx % 5000 == 0:
                     await asyncio.sleep(0)
-                rsid_val = row[0]
-                merged: Dict[str, Any] = {
-                    'rsid': rsid_val,
-                    'annotations': {},
-                    'sources_queried': [],
-                    'success_count': 0,
-                }
-                for col_idx, (_, key) in enumerate(_COL_MAP, start=1):
-                    data = row[col_idx]
-                    if data is not None:
-                        merged['annotations'][key] = data
-                        merged['sources_queried'].append(key)
-                        merged['success_count'] += 1
-
+                merged = _row_to_annotation_dict(row)
                 if merged['success_count'] > 0:
-                    annotation_map[rsid_val] = merged
+                    annotation_map[merged['rsid']] = merged
 
-            checked = min(i + CHUNK, total)
-            elapsed = time.time() - lookup_start
+            checked = min(i + chunk_size, total)
+            elapsed = time.time() - t0
             rate = checked / elapsed if elapsed > 0 else 0
             logger.info(
                 f"  Loaded {len(annotation_map)} annotations from {checked}/{total} RSIDs "
@@ -116,109 +105,35 @@ class SharedVariantAnnotationService:
             if on_progress is not None:
                 await on_progress(checked, total)
 
-        if annotation_map:
-            # Update usage_count in chunks to stay within PG parameter limits.
-            found_rsids = list(annotation_map.keys())
-            UPDATE_BATCH = 30_000
-            for j in range(0, len(found_rsids), UPDATE_BATCH):
-                batch = found_rsids[j:j + UPDATE_BATCH]
-                async with async_session_factory() as update_session:
-                    await update_session.execute(
-                        update(SharedVariantAnnotation)
-                        .where(SharedVariantAnnotation.rsid.in_(batch))
-                        .values(
-                            usage_count=SharedVariantAnnotation.usage_count + 1,
-                            last_updated_at=func.now(),
-                        )
-                    )
-                    await update_session.commit()
-                await asyncio.sleep(0)
+        if update_usage and annotation_map:
+            await self._increment_usage_counts(list(annotation_map.keys()))
 
-        elapsed = time.time() - lookup_start
+        elapsed = time.time() - t0
         logger.info(
             f"Found {len(annotation_map)} existing shared annotations "
             f"for {len(rsids)} requested RSIDs ({elapsed:.1f}s)"
         )
         return annotation_map
-        logger.info(f"Found {len(annotation_map)} existing shared annotations for {len(rsids)} requested RSIDs ({elapsed:.1f}s)")
-        return annotation_map
 
     async def get_existing_annotations_fast(self, rsids: List[str]) -> Dict[str, Dict[str, Any]]:
-        """Fast bulk loader for insight regeneration — Core SQL, no ORM, no usage_count update.
+        return await self.get_existing_annotations(rsids, update_usage=False, chunk_size=5000)
 
-        ~10x faster than get_existing_annotations() because:
-        - Uses raw SQL with streaming instead of ORM object materialization
-        - Skips scorer.score_variant() — pathogenicity_score is re-computed
-          from profiles during insight generation anyway
-        - Uses batch size 5000 instead of 500 (fewer round-trips)
-        - Skips usage_count UPDATE (regen shouldn't count as a new "use")
-        """
-        if not rsids:
-            return {}
-
+    async def _increment_usage_counts(self, rsids: List[str]) -> None:
         from ..db.database import async_session_factory
-        from sqlalchemy import text
-
-        annotation_map: Dict[str, Dict[str, Any]] = {}
-        batch_size = 5000
-        total_batches = (len(rsids) + batch_size - 1) // batch_size
-        t0 = time.time()
-
-        _COL_MAP = [
-            ('ensembl_data', 'ensembl'),
-            ('clinvar_data', 'clinvar'),
-            ('pharmgkb_data', 'clinpgx'),
-            ('snpedia_data', 'snpedia'),
-            ('litvar_data', 'litvar'),
-            ('alpha_missense_data', 'alpha_missense'),
-            ('clinvar_local_data', 'clinvar_local'),
-            ('gnomad_data', 'gnomad'),
-            ('thousand_genomes_data', 'thousand_genomes'),
-            ('chembl_data', 'chembl'),
-            ('fda_drug_data', 'fda_drug'),
-            ('alphafold_data', 'alphafold'),
-            ('gnomad_tx_data', 'gnomad_tx'),
-        ]
-        col_names = ', '.join(col for col, _ in _COL_MAP)
-        sql = (f"SELECT rsid, {col_names} FROM shared_variant_annotations "
-               f"WHERE rsid = ANY(:rsids) "
-               f"AND annotation_status IN ('completed', 'partial')")
-
-        for i in range(0, len(rsids), batch_size):
-            batch = rsids[i:i + batch_size]
-            batch_num = i // batch_size + 1
-
-            if batch_num % 20 == 0 or batch_num == total_batches:
-                logger.info(f"Fast annotation load: batch {batch_num}/{total_batches} "
-                            f"({len(annotation_map)} found, {time.time()-t0:.1f}s)")
-
+        UPDATE_BATCH = 30_000
+        for j in range(0, len(rsids), UPDATE_BATCH):
+            batch = rsids[j:j + UPDATE_BATCH]
             async with async_session_factory() as session:
-                result = await session.execute(text(sql), {'rsids': batch})
-                rows = result.fetchall()
-
-            for row in rows:
-                rsid_val = row[0]
-                merged: Dict[str, Any] = {
-                    'rsid': rsid_val,
-                    'annotations': {},
-                    'sources_queried': [],
-                    'success_count': 0,
-                }
-                for col_idx, (_, key) in enumerate(_COL_MAP, start=1):
-                    data = row[col_idx]
-                    if data is not None:
-                        merged['annotations'][key] = data
-                        merged['success_count'] += 1
-
-                if merged['success_count'] > 0:
-                    annotation_map[rsid_val] = merged
-
+                await session.execute(
+                    update(SharedVariantAnnotation)
+                    .where(SharedVariantAnnotation.rsid.in_(batch))
+                    .values(
+                        usage_count=SharedVariantAnnotation.usage_count + 1,
+                        last_updated_at=func.now(),
+                    )
+                )
+                await session.commit()
             await asyncio.sleep(0)
-
-        elapsed = time.time() - t0
-        logger.info(f"Fast annotation load complete: {len(annotation_map)}/{len(rsids)} "
-                     f"in {elapsed:.1f}s ({total_batches} batches)")
-        return annotation_map
 
     async def save_annotation(
         self,
@@ -228,252 +143,218 @@ class SharedVariantAnnotationService:
         analysis_variant_id: int,
         marker_id: int = None,
         enabled_sources: Optional[List[str]] = None,
-        rsid_gene_map: Optional[Dict[str, str]] = None
+        rsid_gene_map: Optional[Dict[str, str]] = None,
     ) -> bool:
-        """Save new annotation data to shared system and create user reference."""
         try:
             annotations = annotation_data.get('annotations', {})
-            sources_queried = annotation_data.get('sources_queried', ['ensembl', 'clinvar', 'clinpgx', 'snpedia'])
-            success_count = annotation_data.get('success_count', 0)
+            status, failed = self._compute_annotation_status(annotation_data)
+            local_data = await self._fetch_local_source_data(rsid, annotations, enabled_sources)
+            values = self._build_insert_values(rsid, annotations, status, failed, local_data, marker_id)
+            conflict_set = self._build_conflict_set(annotations, local_data)
 
-            # Determine which sources failed (queried but threw errors / returned None)
-            # A response with found=False means the API confirmed no data exists — that's not a failure
-            failed = []
-            for src in sources_queried:
-                src_data = annotations.get(src)
-                if src_data is None:
-                    # Source was queried but returned nothing (error/timeout)
-                    failed.append(src)
-                # found=False with a dict response = confirmed absence, NOT a failure
-
-            total_sources = len(sources_queried)
-            if failed:
-                status = 'partial' if success_count > 0 else 'failed'
-            else:
-                status = 'completed'
-
-            # Look up AlphaMissense prediction from local data (comprehensive)
-            am_data = None
-            if enabled_sources is None or 'alpha_missense' in enabled_sources:
-                ensembl_ann = annotations.get('ensembl', {})
-            if ensembl_ann and ensembl_ann.get('found') and ensembl_ann.get('data'):
-                e_entry = ensembl_ann['data'][0] if isinstance(ensembl_ann['data'], list) else ensembl_ann['data']
-                chrom = e_entry.get('seq_region_name')
-                pos = e_entry.get('start')
-                allele_str = e_entry.get('allele_string', '')
-                parts = allele_str.split('/') if allele_str else []
-                if chrom and pos and len(parts) == 2:
-                    ref, alt = parts[0], parts[1]
-                    if len(ref) == 1 and len(alt) == 1:
-                        am_svc = get_alpha_missense_service()
-                        am_data = am_svc.lookup_comprehensive(str(chrom), int(pos), ref, alt)
-
-            # Look up ClinVar local data (PostgreSQL-backed)
-            cv_local_data = None
-            if enabled_sources is None or 'clinvar_local' in enabled_sources:
-                from .clinvar_local import get_clinvar_local_service
-                cv_svc = get_clinvar_local_service()
-                if cv_svc.is_loaded:
-                    cv_local_data = await cv_svc.lookup(rsid)
-
-            # Look up gnomAD data (PG-only during bulk analysis — no BQ fallback)
-            gnomad_data_val = None
-            if enabled_sources is None or 'gnomad' in enabled_sources:
-                from .gnomad_local import get_gnomad_service
-                gnomad_svc = get_gnomad_service()
-                if gnomad_svc.is_loaded:
-                    gnomad_data_val = await gnomad_svc.lookup(rsid, local_only=True)
-
-            # Look up 1000 Genomes Phase 3 data
-            thousand_genomes_data_val = None
-            if enabled_sources is None or 'thousand_genomes' in enabled_sources:
-                from .thousand_genomes_local import get_thousand_genomes_service
-                tkg_svc = get_thousand_genomes_service()
-                if tkg_svc.is_loaded:
-                    thousand_genomes_data_val = await tkg_svc.lookup(rsid)
-                    if thousand_genomes_data_val and not thousand_genomes_data_val.get('found'):
-                        thousand_genomes_data_val = None
-
-            # Look up gnomAD tx_annotated data (gene/csq/LoF/tissue expression)
-            gnomad_tx_data_val = None
-            if enabled_sources is None or 'gnomad_tx' in enabled_sources:
-                ensembl_for_tx = annotations.get('ensembl', {})
-                if ensembl_for_tx and ensembl_for_tx.get('found') and ensembl_for_tx.get('data'):
-                    e_tx = ensembl_for_tx['data'][0] if isinstance(ensembl_for_tx['data'], list) else ensembl_for_tx['data']
-                    tx_chrom = e_tx.get('seq_region_name')
-                    tx_pos = e_tx.get('start')
-                    tx_allele_str = e_tx.get('allele_string', '')
-                    tx_parts = tx_allele_str.split('/') if tx_allele_str else []
-                    if tx_chrom and tx_pos and len(tx_parts) == 2:
-                        tx_ref, tx_alt = tx_parts[0], tx_parts[1]
-                        if len(tx_ref) == 1 and len(tx_alt) == 1:
-                            from .gnomad_local import get_gnomad_tx_service
-                            gtx_svc = get_gnomad_tx_service()
-                            if gtx_svc.available:
-                                gnomad_tx_data_val = await gtx_svc.lookup(str(tx_chrom), int(tx_pos), tx_ref, tx_alt)
-
-            # BigQuery enrichment (ChEMBL, FDA Drug, AlphaFold) is deferred to
-            # backfill / on-demand variant-detail to avoid blocking bulk analysis.
-            chembl_data_val = None
-            fda_drug_data_val = None
-            alphafold_data_val = None
-
-            from sqlalchemy.dialects.postgresql import insert
-            values = dict(
-                rsid=rsid,
-                ensembl_data=annotations.get('ensembl'),
-                clinvar_data=annotations.get('clinvar'),
-                pharmgkb_data=annotations.get('clinpgx'),
-                snpedia_data=annotations.get('snpedia'),
-                litvar_data=annotations.get('litvar'),
-                annotation_status=status,
-                failed_sources=failed if failed else None,
-                total_api_calls=success_count,
-                usage_count=1
+            stmt = (
+                insert(SharedVariantAnnotation)
+                .values(**values)
+                .on_conflict_do_update(index_elements=['rsid'], set_=conflict_set)
+                .returning(SharedVariantAnnotation.id)
             )
-            # Only set local source columns when there's actual data (not None).
-            # Leaving them out of the INSERT keeps SQL NULL → backfill will
-            # populate them later.  Previously, None was written as JSON null
-            # which is NOT the same as SQL NULL.
-            if am_data is not None:
-                values['alpha_missense_data'] = am_data
-            if cv_local_data is not None:
-                values['clinvar_local_data'] = cv_local_data
-            if gnomad_data_val is not None:
-                values['gnomad_data'] = gnomad_data_val
-            if thousand_genomes_data_val is not None:
-                values['thousand_genomes_data'] = thousand_genomes_data_val
-            if gnomad_tx_data_val is not None:
-                values['gnomad_tx_data'] = gnomad_tx_data_val
-            if chembl_data_val is not None:
-                values['chembl_data'] = chembl_data_val
-            if fda_drug_data_val is not None:
-                values['fda_drug_data'] = fda_drug_data_val
-            if alphafold_data_val is not None:
-                values['alphafold_data'] = alphafold_data_val
-            if marker_id is not None:
-                values['marker_id'] = marker_id
-            stmt = insert(SharedVariantAnnotation).values(**values)
-            # Build the conflict-update dict — always bump usage_count and
-            # back-fill any columns that were previously NULL.
-            conflict_set = dict(
-                usage_count=SharedVariantAnnotation.usage_count + 1,
-                last_updated_at=func.now(),
-                total_api_calls=func.greatest(
-                    SharedVariantAnnotation.total_api_calls,
-                    stmt.excluded.total_api_calls
-                ),
-            )
-            # Back-fill NULL data columns with new values (coalesce keeps existing)
-            for col_name, ann_key in [
-                ('ensembl_data', 'ensembl'),
-                ('clinvar_data', 'clinvar'),
-                ('pharmgkb_data', 'clinpgx'),
-                ('snpedia_data', 'snpedia'),
-                ('litvar_data', 'litvar'),
-            ]:
-                val = annotations.get(ann_key)
-                if val is not None:
-                    col = getattr(SharedVariantAnnotation, col_name)
-                    conflict_set[col_name] = func.coalesce(col, stmt.excluded[col_name])
-            if am_data:
-                conflict_set['alpha_missense_data'] = func.coalesce(
-                    SharedVariantAnnotation.alpha_missense_data,
-                    stmt.excluded.alpha_missense_data,
-                )
-            if cv_local_data:
-                conflict_set['clinvar_local_data'] = func.coalesce(
-                    SharedVariantAnnotation.clinvar_local_data,
-                    stmt.excluded.clinvar_local_data,
-                )
-            if gnomad_data_val:
-                conflict_set['gnomad_data'] = func.coalesce(
-                    SharedVariantAnnotation.gnomad_data,
-                    stmt.excluded.gnomad_data,
-                )
-            if thousand_genomes_data_val:
-                conflict_set['thousand_genomes_data'] = func.coalesce(
-                    SharedVariantAnnotation.thousand_genomes_data,
-                    stmt.excluded.thousand_genomes_data,
-                )
-            if gnomad_tx_data_val:
-                conflict_set['gnomad_tx_data'] = func.coalesce(
-                    SharedVariantAnnotation.gnomad_tx_data,
-                    stmt.excluded.gnomad_tx_data,
-                )
-            if chembl_data_val:
-                conflict_set['chembl_data'] = func.coalesce(
-                    SharedVariantAnnotation.chembl_data,
-                    stmt.excluded.chembl_data,
-                )
-            if fda_drug_data_val:
-                conflict_set['fda_drug_data'] = func.coalesce(
-                    SharedVariantAnnotation.fda_drug_data,
-                    stmt.excluded.fda_drug_data,
-                )
-            if alphafold_data_val:
-                conflict_set['alphafold_data'] = func.coalesce(
-                    SharedVariantAnnotation.alphafold_data,
-                    stmt.excluded.alphafold_data,
-                )
 
-            # Recalculate annotation_status & failed_sources after the merge.
-            # A source is "failed" only when its column is still NULL after
-            # merging old + new data.  found=false is a confirmed absence, not
-            # a failure.
-            merged_ensembl  = func.coalesce(SharedVariantAnnotation.ensembl_data,  stmt.excluded.ensembl_data)
-            merged_clinvar  = func.coalesce(SharedVariantAnnotation.clinvar_data,  stmt.excluded.clinvar_data)
-            merged_pharmgkb = func.coalesce(SharedVariantAnnotation.pharmgkb_data, stmt.excluded.pharmgkb_data)
-            merged_snpedia  = func.coalesce(SharedVariantAnnotation.snpedia_data,  stmt.excluded.snpedia_data)
-
-            # Status: 'completed' when all 4 core columns are non-NULL
-            from sqlalchemy import case, literal
-            conflict_set['annotation_status'] = case(
-                (
-                    (merged_ensembl.isnot(None))
-                    & (merged_clinvar.isnot(None))
-                    & (merged_pharmgkb.isnot(None))
-                    & (merged_snpedia.isnot(None)),
-                    literal('completed')
-                ),
-                else_=literal('partial'),
-            )
-            # Clear failed_sources when completed
-            conflict_set['failed_sources'] = case(
-                (
-                    (merged_ensembl.isnot(None))
-                    & (merged_clinvar.isnot(None))
-                    & (merged_pharmgkb.isnot(None))
-                    & (merged_snpedia.isnot(None)),
-                    None
-                ),
-                else_=stmt.excluded.failed_sources,
-            )
-            stmt = stmt.on_conflict_do_update(
-                index_elements=['rsid'],
-                set_=conflict_set,
-            ).returning(SharedVariantAnnotation.id)
-
-            # Use a short-lived session for each save operation
             from ..db.database import async_session_factory
             async with async_session_factory() as save_session:
                 result = await save_session.execute(stmt)
                 shared_annotation_id = result.scalar_one()
-
-                # Use INSERT ... ON CONFLICT DO NOTHING to handle resume/retry
-                from sqlalchemy.dialects.postgresql import insert as pg_insert
-                va_stmt = pg_insert(VariantAnnotation).values(
-                    analysis_id=analysis_id,
-                    analysis_variant_id=analysis_variant_id,
-                    shared_annotation_id=shared_annotation_id,
-                    rsid=rsid
-                ).on_conflict_do_nothing(
-                    constraint='uq_variant_annotations_analysis_variant'
+                await self._upsert_variant_link(
+                    save_session, analysis_id, analysis_variant_id, shared_annotation_id, rsid
                 )
-                await save_session.execute(va_stmt)
                 await save_session.commit()
             return True
 
         except Exception as e:
             logger.error(f"Failed to save annotation for {rsid}: {e}")
             return False
+
+    def _compute_annotation_status(
+        self, annotation_data: Dict[str, Any]
+    ) -> Tuple[str, List[str]]:
+        annotations = annotation_data.get('annotations', {})
+        sources_queried = annotation_data.get('sources_queried', ['ensembl', 'clinvar', 'clinpgx', 'snpedia'])
+        success_count = annotation_data.get('success_count', 0)
+        failed = [src for src in sources_queried if annotations.get(src) is None]
+        if failed:
+            status = 'partial' if success_count > 0 else 'failed'
+        else:
+            status = 'completed'
+        return status, failed
+
+    async def _fetch_local_source_data(
+        self,
+        rsid: str,
+        annotations: Dict[str, Any],
+        enabled_sources: Optional[List[str]],
+    ) -> Dict[str, Any]:
+        def _enabled(name: str) -> bool:
+            return enabled_sources is None or name in enabled_sources
+
+        result: Dict[str, Any] = {
+            'am': None, 'cv_local': None, 'gnomad': None,
+            'thousand_genomes': None, 'gnomad_tx': None,
+            'chembl': None, 'fda_drug': None, 'alphafold': None,
+        }
+        if _enabled('alpha_missense'):
+            result['am'] = await self._lookup_alpha_missense(annotations)
+        if _enabled('clinvar_local'):
+            result['cv_local'] = await self._lookup_clinvar_local(rsid)
+        if _enabled('gnomad'):
+            result['gnomad'] = await self._lookup_gnomad(rsid)
+        if _enabled('thousand_genomes'):
+            result['thousand_genomes'] = await self._lookup_thousand_genomes(rsid)
+        if _enabled('gnomad_tx'):
+            result['gnomad_tx'] = await self._lookup_gnomad_tx(annotations)
+        return result
+
+    async def _lookup_alpha_missense(self, annotations: Dict[str, Any]) -> Optional[Dict]:
+        ensembl_ann = annotations.get('ensembl', {})
+        if not (ensembl_ann and ensembl_ann.get('found') and ensembl_ann.get('data')):
+            return None
+        e_entry = ensembl_ann['data'][0] if isinstance(ensembl_ann['data'], list) else ensembl_ann['data']
+        chrom = e_entry.get('seq_region_name')
+        pos = e_entry.get('start')
+        parts = (e_entry.get('allele_string', '') or '').split('/')
+        if not (chrom and pos and len(parts) == 2 and len(parts[0]) == 1 and len(parts[1]) == 1):
+            return None
+        return get_alpha_missense_service().lookup_comprehensive(str(chrom), int(pos), parts[0], parts[1])
+
+    async def _lookup_clinvar_local(self, rsid: str) -> Optional[Dict]:
+        from .clinvar_local import get_clinvar_local_service
+        svc = get_clinvar_local_service()
+        return await svc.lookup(rsid) if svc.is_loaded else None
+
+    async def _lookup_gnomad(self, rsid: str) -> Optional[Dict]:
+        from .gnomad_local import get_gnomad_service
+        svc = get_gnomad_service()
+        return await svc.lookup(rsid, local_only=True) if svc.is_loaded else None
+
+    async def _lookup_thousand_genomes(self, rsid: str) -> Optional[Dict]:
+        from .thousand_genomes_local import get_thousand_genomes_service
+        svc = get_thousand_genomes_service()
+        if not svc.is_loaded:
+            return None
+        data = await svc.lookup(rsid)
+        return data if (data and data.get('found')) else None
+
+    async def _lookup_gnomad_tx(self, annotations: Dict[str, Any]) -> Optional[Dict]:
+        ensembl = annotations.get('ensembl', {})
+        if not (ensembl and ensembl.get('found') and ensembl.get('data')):
+            return None
+        entry = ensembl['data'][0] if isinstance(ensembl['data'], list) else ensembl['data']
+        chrom = entry.get('seq_region_name')
+        pos = entry.get('start')
+        parts = (entry.get('allele_string', '') or '').split('/')
+        if not (chrom and pos and len(parts) == 2 and len(parts[0]) == 1 and len(parts[1]) == 1):
+            return None
+        from .gnomad_local import get_gnomad_tx_service
+        svc = get_gnomad_tx_service()
+        return await svc.lookup(str(chrom), int(pos), parts[0], parts[1]) if svc.available else None
+
+    def _build_insert_values(
+        self,
+        rsid: str,
+        annotations: Dict[str, Any],
+        status: str,
+        failed: List[str],
+        local_data: Dict[str, Any],
+        marker_id: Optional[int],
+    ) -> Dict[str, Any]:
+        values: Dict[str, Any] = dict(
+            rsid=rsid,
+            ensembl_data=annotations.get('ensembl'),
+            clinvar_data=annotations.get('clinvar'),
+            pharmgkb_data=annotations.get('clinpgx'),
+            snpedia_data=annotations.get('snpedia'),
+            litvar_data=annotations.get('litvar'),
+            annotation_status=status,
+            failed_sources=failed or None,
+            total_api_calls=annotations.get('success_count', 0),
+            usage_count=1,
+        )
+        optional_cols = {
+            'alpha_missense_data':    local_data.get('am'),
+            'clinvar_local_data':     local_data.get('cv_local'),
+            'gnomad_data':            local_data.get('gnomad'),
+            'thousand_genomes_data':  local_data.get('thousand_genomes'),
+            'gnomad_tx_data':         local_data.get('gnomad_tx'),
+            'chembl_data':            local_data.get('chembl'),
+            'fda_drug_data':          local_data.get('fda_drug'),
+            'alphafold_data':         local_data.get('alphafold'),
+        }
+        for col, val in optional_cols.items():
+            if val is not None:
+                values[col] = val
+        if marker_id is not None:
+            values['marker_id'] = marker_id
+        return values
+
+    def _build_conflict_set(
+        self,
+        annotations: Dict[str, Any],
+        local_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        from sqlalchemy import case, literal
+        stmt_excl = insert(SharedVariantAnnotation).excluded
+        conflict_set: Dict[str, Any] = dict(
+            usage_count=SharedVariantAnnotation.usage_count + 1,
+            last_updated_at=func.now(),
+        )
+        for col_name, ann_key in [
+            ('ensembl_data', 'ensembl'), ('clinvar_data', 'clinvar'),
+            ('pharmgkb_data', 'clinpgx'), ('snpedia_data', 'snpedia'), ('litvar_data', 'litvar'),
+        ]:
+            if annotations.get(ann_key) is not None:
+                col = getattr(SharedVariantAnnotation, col_name)
+                conflict_set[col_name] = func.coalesce(col, stmt_excl[col_name])
+
+        for col_name, local_key in [
+            ('alpha_missense_data', 'am'), ('clinvar_local_data', 'cv_local'),
+            ('gnomad_data', 'gnomad'), ('thousand_genomes_data', 'thousand_genomes'),
+            ('gnomad_tx_data', 'gnomad_tx'), ('chembl_data', 'chembl'),
+            ('fda_drug_data', 'fda_drug'), ('alphafold_data', 'alphafold'),
+        ]:
+            if local_data.get(local_key):
+                col = getattr(SharedVariantAnnotation, col_name)
+                conflict_set[col_name] = func.coalesce(col, stmt_excl[col_name])
+
+        merged_ensembl  = func.coalesce(SharedVariantAnnotation.ensembl_data,  stmt_excl.ensembl_data)
+        merged_clinvar  = func.coalesce(SharedVariantAnnotation.clinvar_data,   stmt_excl.clinvar_data)
+        merged_pharmgkb = func.coalesce(SharedVariantAnnotation.pharmgkb_data,  stmt_excl.pharmgkb_data)
+        merged_snpedia  = func.coalesce(SharedVariantAnnotation.snpedia_data,   stmt_excl.snpedia_data)
+        all_core_present = (
+            merged_ensembl.isnot(None) & merged_clinvar.isnot(None)
+            & merged_pharmgkb.isnot(None) & merged_snpedia.isnot(None)
+        )
+        conflict_set['annotation_status'] = case(
+            (all_core_present, literal('completed')), else_=literal('partial')
+        )
+        conflict_set['failed_sources'] = case(
+            (all_core_present, None), else_=stmt_excl.failed_sources
+        )
+        return conflict_set
+
+    async def _upsert_variant_link(
+        self,
+        session: AsyncSession,
+        analysis_id: int,
+        analysis_variant_id: int,
+        shared_annotation_id: int,
+        rsid: str,
+    ) -> None:
+        stmt = (
+            insert(VariantAnnotation)
+            .values(
+                analysis_id=analysis_id,
+                analysis_variant_id=analysis_variant_id,
+                shared_annotation_id=shared_annotation_id,
+                rsid=rsid,
+            )
+            .on_conflict_do_nothing(constraint='uq_variant_annotations_analysis_variant')
+        )
+        await session.execute(stmt)

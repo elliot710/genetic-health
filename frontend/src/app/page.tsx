@@ -63,17 +63,17 @@ const STATS = [
 
 export default function LandingPage() {
   return (
-    <div className="min-h-screen bg-slate-950 text-white overflow-x-hidden">
+    <div className="min-h-screen bg-white dark:bg-slate-950 text-slate-900 dark:text-white overflow-x-hidden">
       <Navbar />
 
       {/* Hero */}
       <section className="relative min-h-screen flex items-center pt-16">
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-teal-500/15 rounded-full blur-3xl animate-pulse" />
-          <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl animate-pulse [animation-delay:1.5s]" />
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-150 h-150 bg-slate-800/30 rounded-full blur-3xl" />
+          <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-teal-500/10 dark:bg-teal-500/15 rounded-full blur-3xl animate-pulse" />
+          <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-cyan-500/8 dark:bg-cyan-500/10 rounded-full blur-3xl animate-pulse [animation-delay:1.5s]" />
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-150 h-150 bg-slate-200/20 dark:bg-slate-800/30 rounded-full blur-3xl" />
           <div
-            className="absolute inset-0 opacity-[0.03]"
+            className="absolute inset-0 opacity-[0.02] dark:opacity-[0.03]"
             style={{
               backgroundImage: 'linear-gradient(rgba(20,184,166,1) 1px, transparent 1px), linear-gradient(90deg, rgba(20,184,166,1) 1px, transparent 1px)',
               backgroundSize: '60px 60px',
@@ -82,9 +82,9 @@ export default function LandingPage() {
         </div>
 
         <div className="relative max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-24 text-center">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-teal-500/10 border border-teal-500/25 text-teal-400 text-xs font-medium mb-8">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-teal-500/10 border border-teal-500/25 text-teal-600 dark:text-teal-400 text-xs font-medium mb-8">
             <Dna className="w-3.5 h-3.5" />
-            Genetic health analysis — powered by ClinVar, gnomAD &amp; more
+            Genetic health analysis - powered by Ensembl, ClinVar, gnomAD, AlphaFold &amp; more
           </div>
 
           <h1 className="text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight leading-[1.08] mb-6">
@@ -94,7 +94,7 @@ export default function LandingPage() {
             </span>
           </h1>
 
-          <p className="text-lg sm:text-xl text-slate-400 max-w-2xl mx-auto mb-10 leading-relaxed">
+          <p className="text-lg sm:text-xl text-slate-500 dark:text-slate-400 max-w-2xl mx-auto mb-10 leading-relaxed">
             Upload your DNA file and get personalized health insights across 13 panels — from drug responses and disease risk to ancestry and rare mutations. Evidence-based. Fully private.
           </p>
 
@@ -108,7 +108,7 @@ export default function LandingPage() {
             </Link>
             <Link
               href="#how-it-works"
-              className="inline-flex items-center gap-2 px-7 py-4 rounded-2xl bg-slate-800 border border-slate-700 text-slate-200 font-medium text-base hover:bg-slate-700 hover:border-slate-600 transition-all"
+              className="inline-flex items-center gap-2 px-7 py-4 rounded-2xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 font-medium text-base hover:bg-slate-200 dark:hover:bg-slate-700 hover:border-slate-300 dark:hover:border-slate-600 transition-all"
             >
               See how it works
             </Link>
@@ -117,7 +117,7 @@ export default function LandingPage() {
           <div className="mt-20 grid grid-cols-2 sm:grid-cols-4 gap-6 max-w-2xl mx-auto">
             {STATS.map(s => (
               <div key={s.label} className="text-center">
-                <div className="text-3xl font-extrabold text-white mb-1">{s.value}</div>
+                <div className="text-3xl font-extrabold text-slate-900 dark:text-white mb-1">{s.value}</div>
                 <div className="text-xs text-slate-500 uppercase tracking-widest">{s.label}</div>
               </div>
             ))}
@@ -127,21 +127,21 @@ export default function LandingPage() {
 
       {/* Features */}
       <section id="features" className="py-24 relative">
-        <div className="absolute inset-0 bg-linear-to-b from-transparent via-slate-900/50 to-transparent pointer-events-none" />
+        <div className="absolute inset-0 bg-linear-to-b from-transparent via-slate-100/50 dark:via-slate-900/50 to-transparent pointer-events-none" />
         <div className="relative max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-14">
-            <p className="text-xs font-semibold text-teal-400 uppercase tracking-widest mb-3">Why Epigenic</p>
+            <p className="text-xs font-semibold text-teal-600 dark:text-teal-400 uppercase tracking-widest mb-3">Why Epigenic</p>
             <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">Built for depth, not just curiosity</h2>
-            <p className="mt-4 text-slate-400 max-w-xl mx-auto">Consumer DNA kits give you a file. We give you answers.</p>
+            <p className="mt-4 text-slate-500 dark:text-slate-400 max-w-xl mx-auto">Consumer DNA kits give you a file. We give you answers.</p>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
             {FEATURES.map(f => (
-              <div key={f.title} className="group p-6 rounded-2xl bg-slate-800/50 border border-slate-700/50 hover:bg-slate-800 hover:border-teal-500/30 transition-all">
+              <div key={f.title} className="group p-6 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50 hover:bg-white dark:hover:bg-slate-800 hover:border-teal-500/30 transition-all shadow-sm hover:shadow-md">
                 <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-teal-500/10 border border-teal-500/20 mb-4 group-hover:bg-teal-500/20 transition-colors">
-                  <f.icon className="w-5 h-5 text-teal-400" />
+                  <f.icon className="w-5 h-5 text-teal-500 dark:text-teal-400" />
                 </div>
-                <h3 className="font-semibold text-white mb-2">{f.title}</h3>
-                <p className="text-sm text-slate-400 leading-relaxed">{f.desc}</p>
+                <h3 className="font-semibold text-slate-900 dark:text-white mb-2">{f.title}</h3>
+                <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">{f.desc}</p>
               </div>
             ))}
           </div>
@@ -152,21 +152,21 @@ export default function LandingPage() {
       <section id="panels" className="py-24">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-14">
-            <p className="text-xs font-semibold text-teal-400 uppercase tracking-widest mb-3">Analysis Panels</p>
+            <p className="text-xs font-semibold text-teal-600 dark:text-teal-400 uppercase tracking-widest mb-3">Analysis Panels</p>
             <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">13 specialized panels</h2>
-            <p className="mt-4 text-slate-400 max-w-xl mx-auto">
+            <p className="mt-4 text-slate-500 dark:text-slate-400 max-w-xl mx-auto">
               Every panel cross-references multiple evidence databases and highlights only the variants that matter for <em>you</em>.
             </p>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {PANELS.map(p => (
               <div key={p.label} className={`flex items-start gap-4 p-5 rounded-2xl border ${p.bg} hover:scale-[1.01] transition-transform`}>
-                <div className={`shrink-0 flex items-center justify-center w-10 h-10 rounded-xl bg-slate-950/40 ${p.color}`}>
+                <div className={`shrink-0 flex items-center justify-center w-10 h-10 rounded-xl bg-white/60 dark:bg-slate-950/40 ${p.color}`}>
                   <p.icon className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="font-semibold text-white text-sm">{p.label}</h3>
-                  <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">{p.desc}</p>
+                  <h3 className="font-semibold text-slate-900 dark:text-white text-sm">{p.label}</h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">{p.desc}</p>
                 </div>
               </div>
             ))}
@@ -176,10 +176,10 @@ export default function LandingPage() {
 
       {/* How it works */}
       <section id="how-it-works" className="py-24 relative">
-        <div className="absolute inset-0 bg-linear-to-br from-teal-950/20 to-transparent pointer-events-none" />
+        <div className="absolute inset-0 bg-linear-to-br from-teal-50/50 dark:from-teal-950/20 to-transparent pointer-events-none" />
         <div className="relative max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-14">
-            <p className="text-xs font-semibold text-teal-400 uppercase tracking-widest mb-3">Getting started</p>
+            <p className="text-xs font-semibold text-teal-600 dark:text-teal-400 uppercase tracking-widest mb-3">Getting started</p>
             <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">From file to insights in minutes</h2>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
@@ -190,10 +190,10 @@ export default function LandingPage() {
                 )}
                 <div className="relative z-10 flex flex-col gap-4">
                   <div className="flex items-center justify-center w-16 h-16 rounded-2xl bg-linear-to-br from-teal-500/20 to-cyan-500/10 border border-teal-500/25">
-                    <span className="text-2xl font-extrabold text-teal-400">{step.n}</span>
+                    <span className="text-2xl font-extrabold text-teal-500 dark:text-teal-400">{step.n}</span>
                   </div>
-                  <h3 className="text-lg font-bold text-white">{step.title}</h3>
-                  <p className="text-sm text-slate-400 leading-relaxed">{step.body}</p>
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">{step.title}</h3>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">{step.body}</p>
                 </div>
               </div>
             ))}
@@ -213,20 +213,20 @@ export default function LandingPage() {
       {/* Privacy */}
       <section className="py-20">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="rounded-3xl bg-linear-to-br from-slate-800/80 to-slate-900/80 border border-slate-700/50 p-10 sm:p-14 text-center relative overflow-hidden">
+          <div className="rounded-3xl bg-linear-to-br from-slate-100 to-slate-50 dark:from-slate-800/80 dark:to-slate-900/80 border border-slate-200 dark:border-slate-700/50 p-10 sm:p-14 text-center relative overflow-hidden">
             <div className="absolute inset-0 bg-linear-to-br from-teal-500/5 to-cyan-500/5 pointer-events-none" />
             <div className="relative">
               <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-teal-500/10 border border-teal-500/20 mb-6">
-                <Lock className="w-7 h-7 text-teal-400" />
+                <Lock className="w-7 h-7 text-teal-500 dark:text-teal-400" />
               </div>
               <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-4">Your DNA never leaves your control</h2>
-              <p className="text-slate-400 max-w-xl mx-auto mb-8 leading-relaxed">
+              <p className="text-slate-500 dark:text-slate-400 max-w-xl mx-auto mb-8 leading-relaxed">
                 All genetic data is encrypted at rest and in transit. We never sell, share, or use your data for research without explicit consent. Delete everything in one click — permanently.
               </p>
-              <div className="flex flex-wrap items-center justify-center gap-4 text-sm text-slate-400">
+              <div className="flex flex-wrap items-center justify-center gap-4 text-sm text-slate-500 dark:text-slate-400">
                 {['AES-256 encryption', 'Never sold to third parties', 'One-click data deletion', 'GDPR-aligned'].map(item => (
                   <span key={item} className="inline-flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-teal-400" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-teal-500 dark:bg-teal-400" />
                     {item}
                   </span>
                 ))}
@@ -240,7 +240,7 @@ export default function LandingPage() {
       <section className="py-24">
         <div className="max-w-2xl mx-auto px-4 sm:px-6 text-center">
           <h2 className="text-4xl sm:text-5xl font-extrabold tracking-tight mb-5">Ready to understand your genome?</h2>
-          <p className="text-slate-400 mb-10 text-lg leading-relaxed">
+          <p className="text-slate-500 dark:text-slate-400 mb-10 text-lg leading-relaxed">
             Upload your genetic data today and start exploring 13 panels of personalized insights backed by scientific evidence.
           </p>
           <Link

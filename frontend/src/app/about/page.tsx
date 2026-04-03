@@ -20,10 +20,10 @@ export const metadata: Metadata = {
 }
 
 const VALUES = [
-  { icon: Heart, title: 'Evidence first', body: 'Every insight maps to peer-reviewed databases: ClinVar, gnomAD, PharmGKB, Ensembl VEP, and AlphaMissense. We never speculate.' },
+  { icon: Heart, title: 'Evidence first', body: 'Every insight maps to peer-reviewed databases: ClinVar, gnomAD, PharmGKB, Litvar, dbSNP, SNPedia, UniProt, GeneCards, OMIM, PubMed, Ensembl VEP, AphaFold and AlphaMissense. We never speculate.' },
   { icon: Shield, title: 'Privacy by design', body: 'Your genetic data is yours. It is encrypted, never sold, and can be deleted permanently at any time.' },
   { icon: Zap, title: 'Actionable', body: 'We translate raw variant calls into plain-language findings with clear next steps — not just rsid lists.' },
-  { icon: Users, title: 'Inclusive', body: 'We support VCF files from clinical sequencing and CSV exports from consumer kits like 23andMe and AncestryDNA.' },
+  { icon: Users, title: 'Inclusive', body: 'We support VCF files from clinical sequencing and CSV exports from consumer kits like MyHeritage, 23andMe, AncestryDNA and others.' },
 ]
 
 export default function AboutPage() {

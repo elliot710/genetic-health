@@ -750,10 +750,24 @@ class BackfillResponse(BaseModel):
     confirmed_no_data: int
 
 
+def _extract_am_coords(ensembl_data) -> Optional[tuple]:
+    if not (ensembl_data and isinstance(ensembl_data, dict)
+            and ensembl_data.get('found') and ensembl_data.get('data')):
+        return None
+    e_data = ensembl_data['data']
+    e_entry = e_data[0] if isinstance(e_data, list) else e_data
+    chrom = e_entry.get('seq_region_name')
+    pos = e_entry.get('start')
+    parts = (e_entry.get('allele_string', '') or '').split('/')
+    if chrom and pos and len(parts) == 2 and len(parts[0]) == 1 and len(parts[1]) == 1:
+        return (str(chrom), int(pos), parts[0], parts[1])
+    return None
+
+
 @router.post("/annotation-sources/{source_name}/backfill", response_model=BackfillResponse)
 async def backfill_source(
     source_name: str,
-    limit: int = Query(100, ge=1, le=5000, description="Max variants to backfill in one request"),
+    limit: int = Query(100, ge=1, description="Max variants to backfill in one request"),
     db: AsyncSession = Depends(get_session),
     admin: User = Depends(require_admin),
 ):
@@ -798,31 +812,20 @@ async def backfill_source(
 
             try:
                 if source_name == 'alpha_missense':
-                    # Local lookup — needs Ensembl data for coordinates
                     from ..utils.alpha_missense import get_alpha_missense_service
-                    ensembl_ann = ann.ensembl_data
-                    if ensembl_ann and isinstance(ensembl_ann, dict) and ensembl_ann.get('found') and ensembl_ann.get('data'):
-                        e_data = ensembl_ann['data']
-                        e_entry = e_data[0] if isinstance(e_data, list) else e_data
-                        chrom = e_entry.get('seq_region_name')
-                        pos = e_entry.get('start')
-                        allele_str = e_entry.get('allele_string', '')
-                        parts = allele_str.split('/') if allele_str else []
-                        if chrom and pos and len(parts) == 2 and len(parts[0]) == 1 and len(parts[1]) == 1:
-                            am_svc = get_alpha_missense_service()
-                            result_data = am_svc.lookup_comprehensive(str(chrom), int(pos), parts[0], parts[1])
-                            if result_data:
-                                ann.alpha_missense_data = result_data
-                                completed += 1
-                            else:
-                                ann.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense', 'reason': 'not_missense'}
-                                confirmed_no_data += 1
+                    coords = _extract_am_coords(ann.ensembl_data)
+                    if coords:
+                        am_svc = get_alpha_missense_service()
+                        result_data = am_svc.lookup_comprehensive(*coords)
+                        if result_data:
+                            ann.alpha_missense_data = result_data
+                            completed += 1
                         else:
                             ann.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense', 'reason': 'not_missense'}
                             confirmed_no_data += 1
                     else:
-                        # No Ensembl data to derive coordinates
-                        failed += 1
+                        ann.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense', 'reason': 'not_missense'}
+                        confirmed_no_data += 1
                 elif source_name == 'clinvar_local':
                     from ..services.clinvar_local import get_clinvar_local_service
                     cv_svc = get_clinvar_local_service()
@@ -1424,28 +1427,19 @@ async def _retrigger_sources(
                     still_failed.append(src)
             elif src == 'alpha_missense':
                 from ..utils.alpha_missense import get_alpha_missense_service
-                ensembl_ann = annotation.ensembl_data
-                if ensembl_ann and isinstance(ensembl_ann, dict) and ensembl_ann.get('found') and ensembl_ann.get('data'):
-                    e_data = ensembl_ann['data']
-                    e_entry = e_data[0] if isinstance(e_data, list) else e_data
-                    chrom = e_entry.get('seq_region_name')
-                    pos = e_entry.get('start')
-                    allele_str = e_entry.get('allele_string', '')
-                    parts = allele_str.split('/') if allele_str else []
-                    if chrom and pos and len(parts) == 2 and len(parts[0]) == 1 and len(parts[1]) == 1:
-                        am_svc = get_alpha_missense_service()
-                        result_data = am_svc.lookup_comprehensive(str(chrom), int(pos), parts[0], parts[1])
-                        if result_data:
-                            annotation.alpha_missense_data = result_data
-                            updated.append(src)
-                        else:
-                            annotation.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense'}
-                            confirmed_no_data.append(src)
+                coords = _extract_am_coords(annotation.ensembl_data)
+                if coords:
+                    am_svc = get_alpha_missense_service()
+                    result_data = am_svc.lookup_comprehensive(*coords)
+                    if result_data:
+                        annotation.alpha_missense_data = result_data
+                        updated.append(src)
                     else:
-                        annotation.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense', 'reason': 'not_missense'}
+                        annotation.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense'}
                         confirmed_no_data.append(src)
                 else:
-                    still_failed.append(src)  # Need Ensembl data first
+                    annotation.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense', 'reason': 'not_missense'}
+                    confirmed_no_data.append(src)
         except Exception:
             still_failed.append(src)
 

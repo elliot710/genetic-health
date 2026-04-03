@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import { Dna, Menu, X } from 'lucide-react'
+import { Dna, Menu, X, Sun, Moon } from 'lucide-react'
 import { apiUrl } from '@/lib/api'
 
 const NAV_LINKS = [
@@ -15,6 +15,22 @@ export default function Navbar() {
   const [isOpen, setIsOpen] = useState(false)
   const [scrolled, setScrolled] = useState(false)
   const [isSignedIn, setIsSignedIn] = useState(false)
+  const [isDark, setIsDark] = useState(false)
+
+  useEffect(() => {
+    const saved = localStorage.getItem('darkMode')
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+    const dark = saved !== null ? JSON.parse(saved) : prefersDark
+    setIsDark(dark)
+    document.documentElement.classList.toggle('dark', dark)
+  }, [])
+
+  const toggleTheme = () => {
+    const next = !isDark
+    setIsDark(next)
+    document.documentElement.classList.toggle('dark', next)
+    localStorage.setItem('darkMode', JSON.stringify(next))
+  }
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 20)
@@ -32,7 +48,7 @@ export default function Navbar() {
     <header
       className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
         scrolled
-          ? 'bg-slate-950/90 backdrop-blur-xl border-b border-slate-700/50 shadow-lg shadow-black/20'
+          ? 'bg-white/90 dark:bg-slate-950/90 backdrop-blur-xl border-b border-slate-200/60 dark:border-slate-700/50 shadow-lg shadow-black/5 dark:shadow-black/20'
           : 'bg-transparent'
       }`}
     >
@@ -43,7 +59,7 @@ export default function Navbar() {
             <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-linear-to-br from-teal-500 to-cyan-500 shadow-lg shadow-teal-500/30 group-hover:shadow-teal-500/50 transition-shadow">
               <Dna className="w-5 h-5 text-white" />
             </div>
-            <span className="text-lg font-bold text-white tracking-tight">
+            <span className="text-lg font-bold text-slate-900 dark:text-white tracking-tight">
               Epigenic
             </span>
           </Link>
@@ -54,58 +70,65 @@ export default function Navbar() {
               <Link
                 key={link.href}
                 href={link.href}
-                className="text-sm text-slate-300 hover:text-white transition-colors"
+                className="text-sm text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors"
               >
                 {link.label}
               </Link>
             ))}
           </nav>
 
-          {/* CTA */}
+          {/* CTA + theme toggle */}
           <div className="hidden md:flex items-center gap-3">
-            {isSignedIn ? (
-              <Link
-                href="/app"
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-linear-to-r from-teal-500 to-cyan-500 text-white text-sm font-semibold hover:from-teal-400 hover:to-cyan-400 transition-all shadow-lg shadow-teal-500/25 hover:shadow-teal-500/40 hover:-translate-y-px"
-              >
-                Launch App
-              </Link>
-            ) : (
-              <Link
-                href="/app"
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-linear-to-r from-teal-500 to-cyan-500 text-white text-sm font-semibold hover:from-teal-400 hover:to-cyan-400 transition-all shadow-lg shadow-teal-500/25 hover:shadow-teal-500/40 hover:-translate-y-px"
-              >
-                Sign in
-              </Link>
-            )}
+            <button
+              onClick={toggleTheme}
+              className="p-2 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              aria-label="Toggle theme"
+            >
+              {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            </button>
+            <Link
+              href="/app"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-linear-to-r from-teal-500 to-cyan-500 text-white text-sm font-semibold hover:from-teal-400 hover:to-cyan-400 transition-all shadow-lg shadow-teal-500/25 hover:shadow-teal-500/40 hover:-translate-y-px"
+            >
+              {isSignedIn ? 'Launch App' : 'Sign in'}
+            </Link>
           </div>
 
           {/* Mobile toggle */}
-          <button
-            onClick={() => setIsOpen(!isOpen)}
-            className="md:hidden p-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
-            aria-label="Toggle menu"
-          >
-            {isOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-          </button>
+          <div className="md:hidden flex items-center gap-2">
+            <button
+              onClick={toggleTheme}
+              className="p-2 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              aria-label="Toggle theme"
+            >
+              {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            </button>
+            <button
+              onClick={() => setIsOpen(!isOpen)}
+              className="p-2 rounded-lg text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              aria-label="Toggle menu"
+            >
+              {isOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Mobile menu */}
       {isOpen && (
-        <div className="md:hidden bg-slate-950/95 backdrop-blur-xl border-t border-slate-700/50">
+        <div className="md:hidden bg-white/95 dark:bg-slate-950/95 backdrop-blur-xl border-t border-slate-200/60 dark:border-slate-700/50">
           <div className="px-4 py-4 space-y-3">
             {NAV_LINKS.map(link => (
               <Link
                 key={link.href}
                 href={link.href}
                 onClick={() => setIsOpen(false)}
-                className="block text-sm text-slate-300 hover:text-white py-2 transition-colors"
+                className="block text-sm text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white py-2 transition-colors"
               >
                 {link.label}
               </Link>
             ))}
-            <div className="pt-3 border-t border-slate-700/50 flex flex-col gap-2">
+            <div className="pt-3 border-t border-slate-200/60 dark:border-slate-700/50 flex flex-col gap-2">
               <Link
                 href="/app"
                 onClick={() => setIsOpen(false)}

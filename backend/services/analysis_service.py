@@ -132,6 +132,15 @@ class ComprehensiveAnalysisService:
     and populates all category tables with insights.
     """
 
+    _COMPLETED_PHASES = {
+        'initializing': 0,
+        'annotating_variants': 0,
+        'annotation_complete': 1,
+        'enriching_data': 1,
+        'generating_insights': 2,
+        'completed': 4,
+    }
+
     def __init__(self, user_id: Optional[int] = None):
         self.user_id = user_id
         self.api_service = None
@@ -238,15 +247,7 @@ class ComprehensiveAnalysisService:
             # 'annotation_complete' is written after Phase 2 fully finishes so
             # a crash between Phase 2 completion and Phase 3 start is safe to
             # resume from Phase 3 without re-annotating.
-            _completed_phases = {
-                'initializing': 0,
-                'annotating_variants': 0,   # Phase 2 was in progress — restart it
-                'annotation_complete': 1,   # Phase 2 finished — skip to Phase 3
-                'enriching_data': 1,        # Phase 3 in progress (Phase 2 done)
-                'generating_insights': 2,   # Phases 2+3 done, Phase 4 in progress
-                'completed': 4,
-            }
-            last_completed_phase = _completed_phases.get(resume_step, 0)
+            last_completed_phase = self._COMPLETED_PHASES.get(resume_step, 0)
             is_resume = last_completed_phase > 0
             if is_resume:
                 logger.info(f"Resuming analysis {analysis_id} from step '{resume_step}' "
@@ -627,42 +628,28 @@ class ComprehensiveAnalysisService:
 
     async def _update_progress(self, analysis_id: int, progress: AnalysisProgress,
                                *, force_percentage: Optional[int] = None):
-        try:
-            from ..db.database import async_session_factory
-            pct = force_percentage if force_percentage is not None else progress.progress_percentage
-
-            async with async_session_factory() as session:
-                # Single UPDATE with status guard — no separate SELECT needed
-                await session.execute(
-                    update(GeneticAnalysis)
-                    .where(
-                        GeneticAnalysis.id == analysis_id,
-                        GeneticAnalysis.analysis_status.notin_(['paused', 'stopped']),
-                    )
-                    .values(
-                        progress_percentage=pct,
-                        processed_variants=progress.processed_variants,
-                        current_step=progress.current_step,
-                        analysis_status=progress.status,
-                        estimated_completion=progress.estimated_completion
-                    )
-                )
-                await session.commit()
-        except Exception as e:
-            logger.error(f"Failed to update progress: {e}")
+        pct = force_percentage if force_percentage is not None else progress.progress_percentage
+        await self._update_db(
+            analysis_id,
+            progress_percentage=pct,
+            processed_variants=progress.processed_variants,
+            current_step=progress.current_step,
+            analysis_status=progress.status,
+            estimated_completion=progress.estimated_completion,
+            guard_paused=True,
+        )
 
     async def _update_analysis_status(self, analysis_id: int, status: str, step: str):
+        await self._update_db(analysis_id, analysis_status=status, current_step=step)
+
+    async def _update_db(self, analysis_id: int, *, guard_paused: bool = False, **values):
         try:
             from ..db.database import async_session_factory
             async with async_session_factory() as session:
-                await session.execute(
-                    update(GeneticAnalysis)
-                    .where(GeneticAnalysis.id == analysis_id)
-                    .values(
-                        analysis_status=status,
-                        current_step=step
-                    )
-                )
+                q = update(GeneticAnalysis).where(GeneticAnalysis.id == analysis_id)
+                if guard_paused:
+                    q = q.where(GeneticAnalysis.analysis_status.notin_(['paused', 'stopped']))
+                await session.execute(q.values(**values))
                 await session.commit()
         except Exception as e:
-            logger.error(f"Failed to update status: {e}")
+            logger.error(f"Failed to update analysis {analysis_id}: {e}")
