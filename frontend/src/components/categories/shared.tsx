@@ -954,7 +954,7 @@ export function GenotypeAlleleTiles({ genotype, alleleString }: { genotype?: str
   }
 
   return (
-    <span className="inline-flex items-center gap-0.5 font-mono">
+    <span className="inline-flex items-center gap-px font-mono">
       {alleles.map((a, i) => {
         let isRef = false
         let isAlt = false
@@ -969,7 +969,7 @@ export function GenotypeAlleleTiles({ genotype, alleleString }: { genotype?: str
           <span
             key={i}
             title={isRef ? 'Reference allele' : isAlt ? 'Alternate allele' : undefined}
-            className={`inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-bold border ${
+            className={`inline-flex items-center justify-center w-4 h-4 rounded text-[9px] font-bold border ${
               isAlt
                 ? 'bg-orange-500/20 text-orange-300 border-orange-500/40'
                 : isRef

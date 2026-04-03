@@ -950,6 +950,8 @@ async def get_dashboard_data(
         annotation_rows = (await db.execute(
             select(
                 GeneticMarker.rsid,
+                GeneticMarker.ref_allele,
+                GeneticMarker.alt_alleles,
                 SharedVariantAnnotation.alpha_missense_data,
                 SharedVariantAnnotation.clinvar_data,
                 SharedVariantAnnotation.clinvar_local_data,
@@ -959,7 +961,7 @@ async def get_dashboard_data(
             )
             .select_from(AnalysisVariant)
             .join(GeneticMarker, AnalysisVariant.marker_id == GeneticMarker.id)
-            .join(SharedVariantAnnotation, SharedVariantAnnotation.marker_id == GeneticMarker.id)
+            .outerjoin(SharedVariantAnnotation, SharedVariantAnnotation.marker_id == GeneticMarker.id)
             .where(AnalysisVariant.analysis_id == primary_analysis.id)
         )).all()
         am_map: Dict[str, Any] = {}
@@ -977,14 +979,21 @@ async def get_dashboard_data(
                 count = cv.get('count', 0)
                 if count > 0:
                     cv_count_map[row.rsid] = count
-            # Extract allele_string from Ensembl VEP data for panel allele coloring
-            ensembl = row.ensembl_data
-            if isinstance(ensembl, dict):
-                data_list = ensembl.get('data', [])
-                if data_list and isinstance(data_list, list):
-                    allele_str = data_list[0].get('allele_string', '')
-                    if allele_str and '/' in allele_str:
-                        allele_string_map[row.rsid] = allele_str
+            # Extract allele_string from GeneticMarker (always available) for panel allele coloring
+            # Format: "REF/ALT" matching Ensembl allele_string convention
+            ref_a = row.ref_allele
+            alt_a = row.alt_alleles
+            if ref_a and alt_a:
+                allele_string_map[row.rsid] = f"{ref_a}/{alt_a}"
+            else:
+                # Fallback: extract from Ensembl VEP cache if marker alleles missing
+                ensembl = row.ensembl_data
+                if isinstance(ensembl, dict):
+                    data_list = ensembl.get('data', [])
+                    if data_list and isinstance(data_list, list):
+                        allele_str = data_list[0].get('allele_string', '')
+                        if allele_str and '/' in allele_str:
+                            allele_string_map[row.rsid] = allele_str
         dashboard_data["alpha_missense_map"] = am_map
         dashboard_data["clinvar_count_map"] = cv_count_map
         dashboard_data["allele_string_map"] = allele_string_map
