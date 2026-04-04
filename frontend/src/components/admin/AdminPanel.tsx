@@ -1952,85 +1952,87 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                                     : isDarkMode ? 'border-white/5 bg-white/[0.02]' : 'border-gray-100 bg-gray-25'
                                 }`}
                               >
-                                <div className="flex items-center justify-between">
-                                  <div className="flex items-center gap-4 flex-1">
-                                    <Switch
-                                      checked={src.is_enabled}
-                                      onCheckedChange={(checked) => toggleSource(src.source_name, checked)}
-                                      disabled={sourceToggling === src.source_name}
-                                    />
-                                    <div className={`flex-1 ${!src.is_enabled ? 'opacity-50' : ''}`}>
-                                      <div className="flex items-center gap-2">
-                                        <span className={`font-medium ${theme.text.primary}`}>{src.display_name}</span>
-                                        {src.rate_limit && (
-                                          <Badge variant="outline" className="text-xs">
-                                            {src.rate_limit} req/s
-                                          </Badge>
-                                        )}
-                                        <Badge variant={src.is_enabled ? 'default' : 'secondary'} className="text-xs">
-                                          {src.is_enabled ? 'Enabled' : 'Disabled'}
+                                {/* Top row: toggle + name/description */}
+                                <div className="flex items-start gap-3">
+                                  <Switch
+                                    checked={src.is_enabled}
+                                    onCheckedChange={(checked) => toggleSource(src.source_name, checked)}
+                                    disabled={sourceToggling === src.source_name}
+                                    className="mt-0.5 shrink-0"
+                                  />
+                                  <div className={`flex-1 min-w-0 ${!src.is_enabled ? 'opacity-50' : ''}`}>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className={`font-medium ${theme.text.primary}`}>{src.display_name}</span>
+                                      {src.rate_limit && (
+                                        <Badge variant="outline" className="text-xs">
+                                          {src.rate_limit} req/s
                                         </Badge>
-                                      </div>
-                                      {src.description && (
-                                        <p className={`text-sm mt-1 ${theme.text.muted}`}>{src.description}</p>
                                       )}
+                                      <Badge variant={src.is_enabled ? 'default' : 'secondary'} className="text-xs">
+                                        {src.is_enabled ? 'Enabled' : 'Disabled'}
+                                      </Badge>
+                                    </div>
+                                    {src.description && (
+                                      <p className={`text-sm mt-1 ${theme.text.muted}`}>{src.description}</p>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Bottom row: progress + actions */}
+                                <div className={`mt-3 flex flex-wrap items-center gap-3 ${!src.is_enabled ? 'opacity-50' : ''}`}>
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <span className={`text-sm font-mono ${theme.text.secondary}`}>
+                                        {src.annotated_count.toLocaleString()} / {total.toLocaleString()}
+                                      </span>
+                                      <span className={`text-xs ${theme.text.muted}`}>({pct}%)</span>
+                                    </div>
+                                    <div className="w-32 h-1.5 rounded-full bg-gray-700/30 mt-1 overflow-hidden">
+                                      <div
+                                        className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-500"
+                                        style={{ width: `${pct}%` }}
+                                      />
                                     </div>
                                   </div>
-                                  <div className={`flex items-center gap-3 ml-4 ${!src.is_enabled ? 'opacity-50' : ''}`}>
-                                    <div className="text-right min-w-[140px]">
-                                      <div className="flex items-center gap-2 justify-end">
-                                        <span className={`text-sm font-mono ${theme.text.secondary}`}>
-                                          {src.annotated_count.toLocaleString()} / {total.toLocaleString()}
-                                        </span>
-                                        <span className={`text-xs ${theme.text.muted}`}>({pct}%)</span>
-                                      </div>
-                                      <div className="w-32 h-1.5 rounded-full bg-gray-700/30 mt-1 overflow-hidden">
-                                        <div
-                                          className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-500"
-                                          style={{ width: `${pct}%` }}
-                                        />
-                                      </div>
-                                    </div>
-                                    {src.missing_count > 0 && src.is_enabled && (
-                                      <div className="flex items-center gap-2">
-                                        <Input
-                                          type="number"
-                                          min={1}
-                                          max={src.missing_count}
-                                          placeholder={String(src.missing_count)}
-                                          value={backfillLimits[src.source_name] ?? ''}
-                                          onChange={(e) => setBackfillLimits(prev => ({ ...prev, [src.source_name]: e.target.value }))}
-                                          className="w-20 h-8 text-xs text-center"
-                                          disabled={backfillingSource === src.source_name}
-                                        />
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          disabled={backfillingSource === src.source_name}
-                                          onClick={() => backfillSource(src.source_name, effectiveLimit)}
-                                          title={`Backfill ${effectiveLimit.toLocaleString()} variants from ${src.display_name}`}
-                                        >
-                                          {backfillingSource === src.source_name
-                                            ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Backfilling...</>
-                                            : <><Download className="h-3 w-3 mr-1" /> Backfill ({effectiveLimit > 999 ? `${Math.round(effectiveLimit / 1000)}k` : effectiveLimit})</>}
-                                        </Button>
-                                      </div>
-                                    )}
-                                    {['clinvar_local', 'gnomad', 'alpha_missense', 'ensembl', 'thousand_genomes', 'ensembl_vep'].includes(src.source_name) && (
+                                  {src.missing_count > 0 && src.is_enabled && (
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <Input
+                                        type="number"
+                                        min={1}
+                                        max={src.missing_count}
+                                        placeholder={String(src.missing_count)}
+                                        value={backfillLimits[src.source_name] ?? ''}
+                                        onChange={(e) => setBackfillLimits(prev => ({ ...prev, [src.source_name]: e.target.value }))}
+                                        className="w-20 h-8 text-xs text-center"
+                                        disabled={backfillingSource === src.source_name}
+                                      />
                                       <Button
                                         size="sm"
                                         variant="outline"
-                                        className="ml-2 text-xs text-amber-400 border-amber-500/30 hover:bg-amber-500/10"
-                                        disabled={resettingSentinels === src.source_name}
-                                        onClick={() => resetSentinels(src.source_name)}
-                                        title="Reset 'not found' sentinels so backfill re-checks this source"
+                                        disabled={backfillingSource === src.source_name}
+                                        onClick={() => backfillSource(src.source_name, effectiveLimit)}
+                                        title={`Backfill ${effectiveLimit.toLocaleString()} variants from ${src.display_name}`}
                                       >
-                                        {resettingSentinels === src.source_name
-                                          ? <><RotateCcw className="h-3 w-3 mr-1 animate-spin" /> Resetting...</>
-                                          : <><RotateCcw className="h-3 w-3 mr-1" /> Reset Sentinels</>}
+                                        {backfillingSource === src.source_name
+                                          ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Queuing...</>
+                                          : <><Download className="h-3 w-3 mr-1" /> Backfill ({effectiveLimit > 999 ? `${Math.round(effectiveLimit / 1000)}k` : effectiveLimit})</>}
                                       </Button>
-                                    )}
-                                  </div>
+                                    </div>
+                                  )}
+                                  {['clinvar_local', 'gnomad', 'alpha_missense', 'ensembl', 'thousand_genomes', 'ensembl_vep'].includes(src.source_name) && (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="text-xs text-amber-400 border-amber-500/30 hover:bg-amber-500/10"
+                                      disabled={resettingSentinels === src.source_name}
+                                      onClick={() => resetSentinels(src.source_name)}
+                                      title="Reset 'not found' sentinels so backfill re-checks this source"
+                                    >
+                                      {resettingSentinels === src.source_name
+                                        ? <><RotateCcw className="h-3 w-3 mr-1 animate-spin" /> Resetting...</>
+                                        : <><RotateCcw className="h-3 w-3 mr-1" /> Reset Sentinels</>}
+                                    </Button>
+                                  )}
                                 </div>
                               </div>
                             )

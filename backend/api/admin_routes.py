@@ -771,149 +771,45 @@ async def backfill_source(
     db: AsyncSession = Depends(get_session),
     admin: User = Depends(require_admin),
 ):
-    """Backfill annotations from a specific source for variants that don't have data from it yet.
-    Use this after enabling a previously-disabled source to populate existing variants."""
+    """Enqueue a backfill WorkerJob for a specific annotation source.
+    The worker process will execute the backfill asynchronously."""
+    from ..db.models import WorkerJob
     if source_name not in SOURCE_TO_COLUMN:
         raise HTTPException(status_code=400, detail=f"Unknown source: {source_name}")
 
     col_name = SOURCE_TO_COLUMN[source_name]
     col = getattr(SharedVariantAnnotation, f'{col_name}_data')
 
-    # Find annotations missing data from this source
-    result = await db.execute(
-        select(SharedVariantAnnotation)
-        .where(col.is_(None))
-        .order_by(SharedVariantAnnotation.usage_count.desc())
-        .limit(limit)
+    # Quick count to check if there's anything to do
+    count_result = await db.execute(
+        select(func.count()).select_from(SharedVariantAnnotation).where(col.is_(None))
     )
-    annotations = result.scalars().all()
+    missing = count_result.scalar() or 0
 
-    if not annotations:
+    if missing == 0:
         return BackfillResponse(
             detail=f"No variants need backfilling from {source_name}",
             source=source_name, total_to_backfill=0,
             completed=0, failed=0, confirmed_no_data=0,
         )
 
-    from ..services.genetic_api_service import OptimizedGeneticAPIService
-    api_service = None
-    if source_name not in ('alpha_missense', 'clinvar_local', 'ensembl'):
-        api_service = OptimizedGeneticAPIService()
-        await api_service.initialize()
-
-    completed = 0
-    failed = 0
-    confirmed_no_data = 0
-
-    try:
-        for idx, ann in enumerate(annotations):
-            if idx > 0 and source_name not in ('alpha_missense', 'clinvar_local', 'ensembl'):
-                await asyncio.sleep(0.5)
-
-            try:
-                if source_name == 'alpha_missense':
-                    from ..utils.alpha_missense import get_alpha_missense_service
-                    coords = _extract_am_coords(ann.ensembl_data)
-                    if coords:
-                        am_svc = get_alpha_missense_service()
-                        result_data = am_svc.lookup_comprehensive(*coords)
-                        if result_data:
-                            ann.alpha_missense_data = result_data
-                            completed += 1
-                        else:
-                            ann.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense', 'reason': 'not_missense'}
-                            confirmed_no_data += 1
-                    else:
-                        ann.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense', 'reason': 'not_missense'}
-                        confirmed_no_data += 1
-                elif source_name == 'clinvar_local':
-                    from ..services.clinvar_local import get_clinvar_local_service
-                    cv_svc = get_clinvar_local_service()
-                    if cv_svc.is_loaded:
-                        result_data = await cv_svc.lookup(ann.rsid)
-                        if result_data:
-                            ann.clinvar_local_data = result_data
-                            completed += 1
-                        else:
-                            ann.clinvar_local_data = {'found': False, 'confirmed_no_data': True, 'source': 'clinvar_local'}
-                            confirmed_no_data += 1
-                    else:
-                        failed += 1
-                elif source_name == 'ensembl':
-                    from ..services.ensembl_vep_local import get_ensembl_vep_service
-                    vep_svc = get_ensembl_vep_service()
-                    if await vep_svc.ensure_loaded():
-                        result_data = await vep_svc.lookup(ann.rsid)
-                        if result_data and result_data.get('found'):
-                            ann.ensembl_data = result_data
-                            completed += 1
-                        else:
-                            ann.ensembl_data = {'found': False, 'confirmed_no_data': True, 'source': 'ensembl'}
-                            confirmed_no_data += 1
-                    else:
-                        # No local VEP data loaded — fall back to API
-                        if not api_service:
-                            from ..services.genetic_api_service import OptimizedGeneticAPIService
-                            api_service = OptimizedGeneticAPIService()
-                            await api_service.initialize()
-                        method = getattr(api_service, '_get_ensembl_annotation', None)
-                        if method:
-                            result_data = await method(ann.rsid)
-                            if result_data and isinstance(result_data, dict) and result_data.get('found', False):
-                                ann.ensembl_data = result_data
-                                completed += 1
-                            else:
-                                ann.ensembl_data = {'found': False, 'confirmed_no_data': True, 'source': 'ensembl'}
-                                confirmed_no_data += 1
-                        else:
-                            failed += 1
-                else:
-                    method = getattr(api_service, f'_get_{source_name}_annotation', None)
-                    if not method:
-                        failed += 1
-                        continue
-                    result_data = await method(ann.rsid)
-                    if result_data and isinstance(result_data, dict) and result_data.get('found', False):
-                        setattr(ann, f'{col_name}_data', result_data)
-                        completed += 1
-                    else:
-                        setattr(ann, f'{col_name}_data', {'found': False, 'confirmed_no_data': True, 'source': source_name})
-                        confirmed_no_data += 1
-
-                # Update annotation status
-                all_cols = {s: SOURCE_TO_COLUMN[s] for s in SOURCE_TO_COLUMN}
-                has_any_null = False
-                has_any_failed = False
-                for s, c in all_cols.items():
-                    d = getattr(ann, f'{c}_data', None)
-                    if d is None:
-                        has_any_null = True
-                    elif isinstance(d, dict) and not d.get('found', True) and not d.get('confirmed_no_data', False):
-                        has_any_failed = True
-
-                if not has_any_null and not has_any_failed:
-                    ann.annotation_status = 'completed'
-                    ann.failed_sources = None
-                elif has_any_failed:
-                    ann.annotation_status = 'partial'
-                ann.total_api_calls = (ann.total_api_calls or 0) + 1
-
-            except Exception as e:
-                logger.error(f"Backfill {source_name} error for {ann.rsid}: {e}")
-                failed += 1
-    finally:
-        if api_service:
-            await api_service.close()
-
+    job = WorkerJob(
+        job_type="backfill_source",
+        status="pending",
+        params={"source_name": source_name, "limit": limit},
+        requested_by=admin.id,
+    )
+    db.add(job)
     await db.commit()
+    await db.refresh(job)
 
     return BackfillResponse(
-        detail=f"Backfill from {source_name}: {completed} updated, {confirmed_no_data} confirmed no data, {failed} failed",
+        detail=f"Backfill job #{job.id} queued for {source_name} ({min(limit, missing):,} variants). Check Jobs tab for progress.",
         source=source_name,
-        total_to_backfill=len(annotations),
-        completed=completed,
-        failed=failed,
-        confirmed_no_data=confirmed_no_data,
+        total_to_backfill=min(limit, missing),
+        completed=0,
+        failed=0,
+        confirmed_no_data=0,
     )
 
 
