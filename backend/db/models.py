@@ -119,7 +119,8 @@ class GeneticAnalysis(Base):
     
     # Persisted job logs (JSON array of {ts, level, msg} entries)
     job_logs = Column(JSON, nullable=True)
-    
+    inferred_sex = Column(String(10), nullable=True)  # 'male', 'female', 'unknown'
+
     # Relationship to user
     user = relationship("User", back_populates="genetic_analyses")
     

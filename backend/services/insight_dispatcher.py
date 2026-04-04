@@ -49,6 +49,7 @@ async def generate_comprehensive_insights(
     *,
     check_cancelled_fn: Optional[Callable] = None,
     update_progress_fn: Optional[Callable] = None,
+    inferred_sex: Optional[str] = None,
 ) -> int:
     """Generate comprehensive insights for all categories.
 
@@ -126,6 +127,7 @@ async def generate_comprehensive_insights(
                     rsid_gene_map=rsid_gene_map,
                     registry=registry,
                     variant_profiles=variant_profiles,
+                    inferred_sex=inferred_sex,
                 )
                 count = await gen_func(ctx)
                 await gen_session.commit()
@@ -183,6 +185,20 @@ async def regenerate_insights(analysis_id: int, user_id: Optional[int] = None) -
                 "insights_generated": 0, "message": "No variants found",
             }
 
+        inferred_sex = getattr(analysis, 'inferred_sex', None)
+        if not inferred_sex:
+            from ..utils.sex_inferrer import infer_biological_sex
+            inferred_sex = infer_biological_sex(variants)
+            async with async_session_factory() as upd_session:
+                from sqlalchemy import update as sa_update
+                from ..db.models import GeneticAnalysis
+                await upd_session.execute(
+                    sa_update(GeneticAnalysis)
+                    .where(GeneticAnalysis.id == analysis_id)
+                    .values(inferred_sex=inferred_sex)
+                )
+                await upd_session.commit()
+
         logger.info(f"═══ Insight regeneration for analysis {analysis_id} ═══")
         logger.info(f"  Variants: {len(variants)}")
 
@@ -217,6 +233,7 @@ async def regenerate_insights(analysis_id: int, user_id: Optional[int] = None) -
         insights_generated = await generate_comprehensive_insights(
             variants, annotation_results, analysis_id,
             rsid_gene_map, registry, progress,
+            inferred_sex=inferred_sex,
         )
 
         # Invalidate dashboard cache

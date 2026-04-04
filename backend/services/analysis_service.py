@@ -239,6 +239,11 @@ class ComprehensiveAnalysisService:
                     "message": "No variants found"
                 }
 
+            from ..utils.sex_inferrer import infer_biological_sex
+            inferred_sex = infer_biological_sex(variants)
+            await self._update_db(analysis_id, inferred_sex=inferred_sex)
+            self._inferred_sex = inferred_sex
+
             # Determine resume point from prior run's current_step
             resume_step = getattr(analysis, 'current_step', None) or 'initializing'
             # Map step names to completed phase numbers.
@@ -615,6 +620,7 @@ class ComprehensiveAnalysisService:
             self._rsid_gene_map, self._registry, progress,
             check_cancelled_fn=self._check_if_cancelled,
             update_progress_fn=self._update_progress,
+            inferred_sex=getattr(self, '_inferred_sex', None),
         )
 
     async def regenerate_insights(self, analysis_id: int) -> Dict[str, Any]:

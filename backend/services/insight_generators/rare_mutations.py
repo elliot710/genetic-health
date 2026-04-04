@@ -6,6 +6,7 @@ from .base import (
     GeneratorContext, extract_gene_and_consequence, extract_frequency,
     get_user_genotype, _get_effective_ref_allele, is_homozygous_reference,
     is_no_call_genotype, is_indel_genotype, get_annotation_allele_parts,
+    is_heterozygous,
 )
 
 logger = logging.getLogger(__name__)
@@ -172,6 +173,17 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
             continue
 
         if not gene:
+            continue
+
+        # X-linked recessive sex filter: heterozygous females are carriers,
+        # not affected — they belong in carrier_status, not rare_mutations.
+        if inheritance_pattern == 'x_linked' and ctx.inferred_sex == 'female':
+            if profile:
+                is_het = profile.is_het
+            else:
+                is_het = is_heterozygous(user_gt)
+            if is_het:
+                continue
             continue
 
         # Use scoring engine composite score for informational purposes only.

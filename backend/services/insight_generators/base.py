@@ -64,6 +64,7 @@ class GeneratorContext:
     rsid_gene_map: Dict[str, str]       # rsid -> gene symbol
     registry: Dict[str, Dict[str, Dict]]  # category -> {rsid: {}, gene: {}}
     variant_profiles: Dict[str, VariantProfile] = field(default_factory=dict)
+    inferred_sex: Optional[str] = None  # 'male', 'female', 'unknown'
 
     def get_maps(self, category: str):
         """Return (rsid_map, gene_map) for a category from the loaded registry."""
