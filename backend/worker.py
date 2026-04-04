@@ -34,7 +34,8 @@ import logging
 import os
 import signal
 import sys
-from typing import Set
+from datetime import datetime
+from typing import Optional, Set
 
 from sqlalchemy import select, text, update
 from sqlalchemy.sql import func
@@ -217,12 +218,12 @@ async def _execute_job(job_id: int, job_type: str, params: dict) -> dict:
         result_path = await asyncio.to_thread(run_etl, force=p.get("force", False))
         return {"db_path": str(result_path)}
     elif job_type == "backfill_source":
-        return await _backfill_source(params or {})
+        return await _backfill_source(params or {}, job_id=job_id)
     else:
         raise ValueError(f"Unknown job type: {job_type}")
 
 
-async def _backfill_source(params: dict) -> dict:
+async def _backfill_source(params: dict, job_id: Optional[int] = None) -> dict:
     """Backfill annotations for a single source on variants that are missing it.
 
     Runs entirely inside the worker process so it never blocks the API server.
@@ -254,20 +255,59 @@ async def _backfill_source(params: dict) -> dict:
                 "failed": 0, "total": 0}
 
     api_service = None
-    if source_name not in ('alpha_missense', 'clinvar_local', 'ensembl'):
+    is_api_source = source_name not in ('alpha_missense', 'clinvar_local', 'ensembl')
+    if is_api_source:
         from backend.services.genetic_api_service import OptimizedGeneticAPIService
         api_service = OptimizedGeneticAPIService()
         await api_service.initialize()
 
     completed = failed = confirmed_no_data = 0
     BATCH_SIZE = 200
+    LOG_INTERVAL = 50
+    DB_LOG_FLUSH_INTERVAL = 50
+    start_ts = asyncio.get_event_loop().time()
+    _log_buffer: list[dict] = []
+
+    def _append_log(msg: str) -> None:
+        _log_buffer.append({"ts": datetime.utcnow().strftime("%H:%M:%S"), "level": "INFO", "msg": msg})
+
+    async def _flush_logs_to_db() -> None:
+        if job_id is None or not _log_buffer:
+            return
+        snapshot = list(_log_buffer)
+        try:
+            async with session_factory() as sess:
+                await sess.execute(
+                    update(WorkerJob).where(WorkerJob.id == job_id).values(job_logs=snapshot)
+                )
+                await sess.commit()
+        except Exception:
+            pass
+
+    source_type = "API (rate-limited)" if is_api_source else "local"
+    start_msg = f"[backfill {source_name}] starting {len(rows)} rows via {source_type}"
+    logger.info(start_msg)
+    _append_log(start_msg)
 
     try:
         for idx, ann in enumerate(rows):
-            if idx > 0 and idx % 50 == 0:
+            if idx > 0 and idx % LOG_INTERVAL == 0:
                 await asyncio.sleep(0)
-                logger.info("[backfill %s] %d/%d — %d updated, %d no-data, %d failed",
-                            source_name, idx, len(rows), completed, confirmed_no_data, failed)
+                elapsed = asyncio.get_event_loop().time() - start_ts
+                rate = idx / elapsed if elapsed > 0 else 0
+                remaining = len(rows) - idx
+                eta_s = int(remaining / rate) if rate > 0 else 0
+                eta_str = f"{eta_s // 3600}h {(eta_s % 3600) // 60}m" if eta_s >= 60 else f"{eta_s}s"
+                pct = 100 * idx // len(rows)
+                progress_msg = (
+                    f"[backfill {source_name}] {idx}/{len(rows)} ({pct}%) "
+                    f"— updated={completed} no-data={confirmed_no_data} failed={failed} "
+                    f"| {rate * 60:.1f}/min | ETA {eta_str}"
+                )
+                logger.info(progress_msg)
+                _append_log(progress_msg)
+                if idx % DB_LOG_FLUSH_INTERVAL == 0:
+                    await _flush_logs_to_db()
 
             try:
                 if source_name == 'alpha_missense':
@@ -322,7 +362,7 @@ async def _backfill_source(params: dict) -> dict:
 
                 else:
                     if idx > 0:
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(0.5)  # rate limit: 2 req/s max
                     method = getattr(api_service, f'_get_{source_name}_annotation', None)
                     if not method:
                         failed += 1
@@ -347,6 +387,10 @@ async def _backfill_source(params: dict) -> dict:
                     for r in rows[max(0, idx + 1 - BATCH_SIZE):idx + 1]:
                         await sess.merge(r)
                     await sess.commit()
+                commit_msg = f"[backfill {source_name}] committed batch {idx + 1}/{len(rows)}"
+                logger.info(commit_msg)
+                _append_log(commit_msg)
+                await _flush_logs_to_db()
 
     finally:
         if api_service:
@@ -359,8 +403,14 @@ async def _backfill_source(params: dict) -> dict:
                 await sess.merge(r)
             await sess.commit()
 
-    logger.info("[backfill %s] done — %d updated, %d no-data, %d failed",
-                source_name, completed, confirmed_no_data, failed)
+    elapsed_total = asyncio.get_event_loop().time() - start_ts
+    done_msg = (
+        f"[backfill {source_name}] done in {elapsed_total:.1f}s "
+        f"— updated={completed} no-data={confirmed_no_data} failed={failed} / total={len(rows)}"
+    )
+    logger.info(done_msg)
+    _append_log(done_msg)
+    await _flush_logs_to_db()
     return {
         "source": source_name,
         "completed": completed,

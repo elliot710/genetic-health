@@ -969,6 +969,7 @@ class WorkerJob(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+    job_logs = Column(JSON, nullable=True)
 
     __table_args__ = (
         Index('ix_worker_jobs_status', 'status'),

@@ -2277,6 +2277,7 @@ async def list_worker_jobs(
             "params": j.params,
             "result": j.result,
             "error": j.error,
+            "job_logs": j.job_logs,
             "requested_by_email": email,
             "requested_by_username": uname,
             "created_at": j.created_at.isoformat() if j.created_at else None,

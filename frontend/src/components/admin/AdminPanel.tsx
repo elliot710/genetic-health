@@ -150,6 +150,7 @@ interface WorkerJob {
   params: Record<string, unknown> | null
   result: Record<string, unknown> | null
   error: string | null
+  job_logs: Array<{ ts: string; level: string; msg: string }> | null
   requested_by_email: string | null
   requested_by_username: string | null
   created_at: string | null
@@ -3210,7 +3211,25 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                                   <span className="text-red-400 whitespace-pre-wrap">{job.error}</span>
                                 </div>
                               )}
-                              {!job.started_at && !job.result && !job.error && !(job.params && Object.entries(job.params).filter(([,v]) => v !== null && v !== false).length > 0) && (
+                              {/* Progress logs */}
+                              {job.job_logs && job.job_logs.length > 0 && (
+                                <div className="space-y-0.5">
+                                  <span className="text-gray-400 font-sans font-medium block">
+                                    Logs ({job.job_logs.length}):
+                                  </span>
+                                  <div className="max-h-48 overflow-y-auto rounded bg-black/40 border border-white/5 p-2 space-y-0.5">
+                                    {job.job_logs.map((entry, i) => (
+                                      <div key={i} className="flex gap-2 leading-relaxed">
+                                        <span className="text-gray-600 shrink-0">{entry.ts}</span>
+                                        <span className={entry.level === 'ERROR' ? 'text-red-400' : entry.level === 'WARNING' ? 'text-amber-400' : 'text-gray-300'}>
+                                          {entry.msg}
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {!job.started_at && !job.result && !job.error && !job.job_logs && !(job.params && Object.entries(job.params).filter(([,v]) => v !== null && v !== false).length > 0) && (
                                 <span className="text-gray-500">No additional details</span>
                               )}
                             </div>
