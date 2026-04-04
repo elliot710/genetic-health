@@ -230,14 +230,7 @@ async def _backfill_source(params: dict) -> dict:
     """
     from sqlalchemy import select, func
     from backend.db.models import SharedVariantAnnotation
-
-    SOURCE_TO_COLUMN = {
-        'clinvar': 'clinvar', 'clinvar_local': 'clinvar_local',
-        'gnomad': 'gnomad', 'gnomad_tx': 'gnomad_tx',
-        'ensembl': 'ensembl', 'thousand_genomes': 'thousand_genomes',
-        'alpha_missense': 'alpha_missense', 'alphafold': 'alphafold',
-        'snpedia': 'snpedia', 'litvar': 'litvar', 'pharmgkb': 'pharmgkb',
-    }
+    from backend.services.annotation_constants import SOURCE_TO_COLUMN
 
     source_name = params.get("source_name")
     limit = int(params.get("limit", 5000))
