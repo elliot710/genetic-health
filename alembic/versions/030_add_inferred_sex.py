@@ -6,8 +6,8 @@ Revises: 029
 from alembic import op
 import sqlalchemy as sa
 
-revision = '030'
-down_revision = '029'
+revision = '030_add_inferred_sex'
+down_revision = '029_add_autism_gene_mappings'
 branch_labels = None
 depends_on = None
 
