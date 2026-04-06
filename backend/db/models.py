@@ -1003,9 +1003,9 @@ class GwasCatalogAssociation(Base):
     __tablename__ = 'gwas_catalog_associations'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    rsid = Column(String(32), nullable=True, index=True)
-    pubmed_id = Column(String(20), nullable=True)
-    study_accession = Column(String(20), nullable=True)
+    rsid = Column(Text, nullable=True, index=True)
+    pubmed_id = Column(Text, nullable=True)
+    study_accession = Column(Text, nullable=True)
     trait = Column(Text, nullable=True)
     mapped_trait = Column(Text, nullable=True)
     mapped_trait_uri = Column(Text, nullable=True)
