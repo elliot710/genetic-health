@@ -343,7 +343,7 @@ class ScoringEngine:
             source="gwas_catalog",
             score=0.45,
             weight=0.08,
-            label=f"GWAS: {data.get('top_trait', 'trait association')[:60]}",
+            label=f"GWAS: {(data.get('top_trait') or 'trait association')[:60]}",
             raw_value=top_p,
         )
 
@@ -384,7 +384,7 @@ class ScoringEngine:
         has_genetic = data.get("has_strong_genetic_evidence", False)
         weight = 0.15 if has_genetic else 0.08
         adjusted_score = min(0.70, max_score * 0.85)
-        disease = data.get("top_disease", "disease")
+        disease = data.get("top_disease") or "disease"
         return SourceEvidence(
             source="open_targets",
             score=adjusted_score,
