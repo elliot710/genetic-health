@@ -23,7 +23,7 @@ VERTEX_AI_LOCATION = os.environ.get("VERTEX_AI_LOCATION", "us-central1")
 MAX_TOKENS = 4000
 
 # Global enable/disable toggle — persisted to file so it survives restarts
-_STATE_FILE = Path(__file__).resolve().parent.parent.parent / ".insights_state"
+_STATE_FILE = Path(os.environ.get("DATA_DIR", "/app/data_sources")) / ".insights_state"
 
 def _load_enabled_state() -> bool:
     """Load persisted enabled state. Falls back to AI_INSIGHTS_ENABLED env var, then False."""

@@ -65,7 +65,7 @@ services:
       - TKG_DATA_DIR=/app/data_sources/1000G
       - GOOGLE_APPLICATION_CREDENTIALS=/app/genetic-health-490017-b854a959d61b.json
       - GEMINI_API_KEY=${GEMINI_API_KEY}
-      # OpenTelemetry — traces go to the OTel Collector (→ Jaeger + spanmetrics → Prometheus for SPM).
+      - AI_INSIGHTS_ENABLED=${AI_INSIGHTS_ENABLED:-true} — traces go to the OTel Collector (→ Jaeger + spanmetrics → Prometheus for SPM).
       # Set OTEL_EXPORTER_OTLP_ENDPOINT='' in your .env to disable tracing.
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
       - OTEL_SERVICE_NAME=dna-toolkit-backend
@@ -175,6 +175,7 @@ services:
       - TKG_DATA_DIR=/app/data_sources/1000G
       - GOOGLE_APPLICATION_CREDENTIALS=/app/genetic-health-490017-b854a959d61b.json
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - AI_INSIGHTS_ENABLED=${AI_INSIGHTS_ENABLED:-true}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
       - OTEL_SERVICE_NAME=dna-toolkit-worker
       - OTEL_CONSOLE_EXPORT=${OTEL_CONSOLE_EXPORT:-false}
