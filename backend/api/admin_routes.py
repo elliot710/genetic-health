@@ -1805,7 +1805,7 @@ async def clinvar_etl_import(admin: User = Depends(require_admin)):
 # ======================================================================
 
 @router.get("/gwas-catalog-etl/progress")
-async def gwas_catalog_etl_progress(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+async def gwas_catalog_etl_progress(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_session)):
     from ..services.gwas_catalog_etl import get_etl_progress
     from sqlalchemy import text
     prog = get_etl_progress()
@@ -1841,7 +1841,7 @@ async def gwas_catalog_etl_import(admin: User = Depends(require_admin)):
 # ======================================================================
 
 @router.get("/clingen-etl/progress")
-async def clingen_etl_progress(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+async def clingen_etl_progress(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_session)):
     from ..services.clingen_etl import get_etl_progress
     from sqlalchemy import text
     prog = get_etl_progress()

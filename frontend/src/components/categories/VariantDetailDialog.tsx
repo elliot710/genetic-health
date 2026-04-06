@@ -1937,31 +1937,65 @@ export default function VariantDetailDialog({
                 <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
                   <Activity className="h-3.5 w-3.5" /> GWAS Catalog
                   {details.gwas_catalog.genome_wide_significant && (
-                    <Badge className="text-xs bg-purple-500/15 text-purple-400 border-purple-500/30 ml-1">GWS</Badge>
+                    <Badge className="text-xs bg-purple-500/15 text-purple-400 border-purple-500/30 ml-1">Genome-Wide Significant</Badge>
                   )}
                 </h4>
-                <div className={`${cardBg} rounded-xl p-3 border ${border} space-y-2`}>
+                <div className={`${cardBg} rounded-xl p-3 border ${border} space-y-3`}>
+                  {/* Explanation banner */}
+                  <p className={`text-xs ${textSecondary} leading-relaxed`}>
+                    This variant has been found in large population studies to be statistically associated with the traits below.
+                    A lower p-value means a stronger, more reliable association.
+                    {details.gwas_catalog.genome_wide_significant
+                      ? ' All associations shown are genome-wide significant (p ≤ 5×10⁻⁸) — the gold standard threshold for genetic association studies.'
+                      : ' This is a statistical association, not a direct cause of disease.'}
+                  </p>
+                  {/* Top association */}
                   {details.gwas_catalog.top_trait && (
-                    <div className="flex items-center justify-between">
-                      <span className={`text-xs font-medium ${textPrimary}`}>{details.gwas_catalog.top_trait}</span>
-                      {details.gwas_catalog.top_p_value != null && (
-                        <span className={`text-xs font-mono ${textSecondary}`}>p = {details.gwas_catalog.top_p_value.toExponential(2)}</span>
-                      )}
+                    <div className={`rounded-lg p-2 border ${border} ${isDarkMode ? 'bg-purple-500/8' : 'bg-purple-50'}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={`text-xs font-semibold ${textPrimary}`}>{details.gwas_catalog.top_trait}</span>
+                        {details.gwas_catalog.top_p_value != null && (
+                          <span className="text-xs font-mono text-purple-400 shrink-0">
+                            p = {details.gwas_catalog.top_p_value.toExponential(2)}
+                          </span>
+                        )}
+                      </div>
+                      <p className={`text-xs ${textSecondary} mt-0.5`}>Strongest association in this dataset</p>
                     </div>
                   )}
+                  {/* Additional associations */}
                   {(details.gwas_catalog.associations?.length ?? 0) > 1 && (
-                    <div className="space-y-1">
-                      {details.gwas_catalog.associations!.slice(0, 5).map((a, i) => (
-                        <div key={i} className={`flex items-center justify-between text-xs ${textSecondary} border-t ${border} pt-1`}>
-                          <span className="truncate max-w-[60%]">{a.mapped_trait ?? a.trait ?? '—'}</span>
-                          <span className="font-mono ml-2">{a.p_value != null ? `p=${a.p_value.toExponential(1)}` : '—'}</span>
-                        </div>
-                      ))}
+                    <div className="space-y-0">
+                      <p className={`text-xs font-medium ${textSecondary} mb-1`}>Other trait associations:</p>
+                      {details.gwas_catalog.associations!.slice(0, 6).map((a, i) => {
+                        const pval = a.p_value
+                        const strength = pval == null ? null : pval <= 1e-30 ? 'Very strong' : pval <= 1e-15 ? 'Strong' : pval <= 1e-8 ? 'Significant' : 'Suggestive'
+                        const strengthColor = strength === 'Very strong' ? 'text-purple-400' : strength === 'Strong' ? 'text-blue-400' : strength === 'Significant' ? 'text-green-400' : textSecondary
+                        return (
+                          <div key={i} className={`flex items-center justify-between text-xs border-t ${border} pt-1.5`}>
+                            <span className={`truncate max-w-[55%] ${textSecondary}`}>{a.mapped_trait ?? a.trait ?? '—'}</span>
+                            <div className="flex items-center gap-2 shrink-0">
+                              {strength && <span className={`text-xs ${strengthColor}`}>{strength}</span>}
+                              <span className={`font-mono ${textSecondary}`}>{pval != null ? `p=${pval.toExponential(1)}` : '—'}</span>
+                            </div>
+                          </div>
+                        )
+                      })}
                     </div>
                   )}
+                  {/* P-value legend */}
+                  <div className={`text-xs ${textSecondary} border-t ${border} pt-2 space-y-0.5`}>
+                    <p className="font-medium mb-1">How to read p-values:</p>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+                      <span className="text-purple-400">p ≤ 10⁻³⁰ · Very strong</span>
+                      <span className="text-blue-400">p ≤ 10⁻¹⁵ · Strong</span>
+                      <span className="text-green-400">p ≤ 5×10⁻⁸ · Significant (GWS)</span>
+                      <span className={textSecondary}>p &gt; 5×10⁻⁸ · Suggestive only</span>
+                    </div>
+                  </div>
                   <a href={`https://www.ebi.ac.uk/gwas/search?query=${rsid}`} target="_blank" rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-xs text-purple-400 hover:text-purple-300 mt-1 transition-colors">
-                    View in GWAS Catalog <ExternalLink className="h-3 w-3" />
+                    className="inline-flex items-center gap-1 text-xs text-purple-400 hover:text-purple-300 transition-colors">
+                    View full record in GWAS Catalog <ExternalLink className="h-3 w-3" />
                   </a>
                 </div>
               </div>
