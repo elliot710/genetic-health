@@ -179,13 +179,13 @@ async def run_clingen_etl(
 
         elapsed = time.time() - start
         _etl_progress.update(
-            running=False, pct=100, step="done",
+            running=False, pct=100, step="complete",
             total_elapsed=elapsed, completed_at=time.time(),
         )
         return {"rows_inserted": rows_inserted, "skipped": skipped, "elapsed_seconds": elapsed}
 
     except Exception as exc:
-        _etl_progress.update(running=False, error=str(exc))
+        _etl_progress.update(running=False, step="error", error=str(exc))
         raise
 
 
