@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Search, Loader2, AlertCircle, CheckCircle, Info, ExternalLink, AlertTriangle, ChevronLeft, ChevronRight, Database, Globe, X, BarChart3, RefreshCw, Clock, Bookmark } from 'lucide-react'
+import { Search, Loader2, AlertCircle, CheckCircle, Info, ExternalLink, AlertTriangle, ChevronLeft, ChevronRight, Database, Globe, X, BarChart3, RefreshCw, Clock, Bookmark, Shield, Activity, FlaskConical } from 'lucide-react'
 import type { getTheme } from '@/utils/theme'
 import { apiUrl } from '@/lib/api'
 
@@ -119,6 +119,73 @@ interface AlphaMissenseIsoform {
   am_class: string
 }
 
+interface GwasAssociation {
+  rsid?: string
+  trait?: string
+  mapped_trait?: string
+  p_value?: number
+  odds_ratio?: number
+  pubmed_id?: string
+  study_accession?: string
+}
+
+interface GwasAnnotation extends LookupAnnotationSource {
+  associations?: GwasAssociation[]
+  top_trait?: string
+  top_p_value?: number
+  genome_wide_significant?: boolean
+}
+
+interface ClinGenCuration {
+  disease_label?: string
+  classification?: string
+  moi?: string
+  gcep?: string
+}
+
+interface ClinGenAnnotation extends LookupAnnotationSource {
+  gene_symbol?: string
+  strongest_classification?: string
+  is_definitive?: boolean
+  is_disputed?: boolean
+  disease_count?: number
+  curations?: ClinGenCuration[]
+}
+
+interface OpenTargetsAssociation {
+  disease_label?: string
+  overall_score?: number
+  genetic_association?: number
+  literature_mining?: number
+}
+
+interface OpenTargetsAnnotation extends LookupAnnotationSource {
+  gene_symbol?: string
+  ensembl_id?: string
+  top_disease?: string
+  max_score?: number
+  has_strong_genetic_evidence?: boolean
+  associations?: OpenTargetsAssociation[]
+}
+
+interface TranscriptConsequence {
+  transcript_id?: string
+  gene_symbol?: string
+  gene_id?: string
+  biotype?: string
+  consequence_terms?: string[]
+  impact?: string
+  sift_score?: number
+  sift_prediction?: string
+  polyphen_score?: number
+  polyphen_prediction?: string
+  hgvsc?: string
+  hgvsp?: string
+  canonical?: number
+  protein_start?: number
+  protein_end?: number
+}
+
 interface LookupResult {
   variant_id: string
   found: boolean
@@ -140,6 +207,10 @@ interface LookupResult {
     ensembl_local?: EnsemblLocalAnnotation
     bq_chembl?: ChemblAnnotation
     bq_alphafold?: AlphaFoldAnnotation
+    gwas_catalog?: GwasAnnotation
+    clingen?: ClinGenAnnotation
+    open_targets?: OpenTargetsAnnotation
+    transcript_consequences?: TranscriptConsequence[]
     [key: string]: LookupAnnotationSource | undefined
   }
   literature?: {
@@ -350,6 +421,9 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
       bq_chembl: isDarkMode ? 'bg-indigo-500/20 text-indigo-300' : 'bg-indigo-100 text-indigo-700',
       bq_alphafold: isDarkMode ? 'bg-cyan-500/20 text-cyan-300' : 'bg-cyan-100 text-cyan-700',
       bq_fda_drug: isDarkMode ? 'bg-pink-500/20 text-pink-300' : 'bg-pink-100 text-pink-700',
+      gwas_catalog: isDarkMode ? 'bg-violet-500/20 text-violet-300' : 'bg-violet-100 text-violet-700',
+      clingen: isDarkMode ? 'bg-emerald-500/20 text-emerald-300' : 'bg-emerald-100 text-emerald-700',
+      open_targets: isDarkMode ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700',
     }
     return (
       <span key={source} className={`px-2 py-0.5 rounded text-xs font-medium ${colors[source] || (isDarkMode ? 'bg-slate-500/20 text-slate-300' : 'bg-gray-100 text-gray-600')}`}>
@@ -783,6 +857,10 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
                   {lookupResults.annotations?.bq_chembl?.found && sourceBadge('bq_chembl', 'ChEMBL')}
                   {lookupResults.annotations?.bq_alphafold?.found && sourceBadge('bq_alphafold', 'AlphaFold')}
                   {lookupResults.annotations?.bq_fda_drug?.found && sourceBadge('bq_fda_drug', 'FDA Drug')}
+                  {lookupResults.annotations?.gwas_catalog?.found && sourceBadge('gwas_catalog', 'GWAS Catalog')}
+                  {lookupResults.annotations?.clingen?.found && sourceBadge('clingen', 'ClinGen')}
+                  {lookupResults.annotations?.open_targets?.found && sourceBadge('open_targets', 'Open Targets')}
+                  {(lookupResults.annotations?.transcript_consequences?.length ?? 0) > 0 && sourceBadge('ensembl_local', 'VEP Transcripts')}
                 </div>
               </div>
 
@@ -1425,6 +1503,276 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
                 )
               })()}
 
+              {/* ── Transcript Consequences (VEP) ── */}
+              {(lookupResults.annotations?.transcript_consequences?.length ?? 0) > 0 && (() => {
+                const tcs = lookupResults.annotations!.transcript_consequences!
+                const canonical = tcs.find(t => t.canonical === 1) || tcs[0]
+                const worstSift = tcs.reduce<TranscriptConsequence | null>((w, t) =>
+                  t.sift_score != null && (w == null || t.sift_score < (w.sift_score ?? 1)) ? t : w, null)
+                const worstPP = tcs.reduce<TranscriptConsequence | null>((w, t) =>
+                  t.polyphen_score != null && (w == null || t.polyphen_score > (w.polyphen_score ?? 0)) ? t : w, null)
+                return (
+                  <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
+                    <h4 className={`font-bold ${t.text.primary} mb-1 flex items-center gap-2`}>
+                      <FlaskConical className="h-4 w-4 text-blue-500" />
+                      Transcript Consequences
+                      <span className={`text-xs font-normal ${t.text.muted}`}>{tcs.length} transcript{tcs.length !== 1 ? 's' : ''} · Ensembl VEP</span>
+                    </h4>
+                    {/* Key scores row */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                      {worstSift && worstSift.sift_score != null && (
+                        <div className={`p-2.5 rounded-lg ${isDarkMode ? 'bg-slate-700/30' : 'bg-gray-100/60'}`}>
+                          <div className={`text-xs ${t.text.muted} mb-1`}>SIFT (lowest)</div>
+                          <div className={`text-sm font-mono font-medium ${worstSift.sift_score < 0.05 ? 'text-red-400' : 'text-green-400'}`}>
+                            {worstSift.sift_score.toFixed(3)}
+                          </div>
+                          {worstSift.sift_prediction && (
+                            <div className={`text-xs mt-0.5 ${t.text.muted}`}>{worstSift.sift_prediction.replace(/_/g, ' ')}</div>
+                          )}
+                        </div>
+                      )}
+                      {worstPP && worstPP.polyphen_score != null && (
+                        <div className={`p-2.5 rounded-lg ${isDarkMode ? 'bg-slate-700/30' : 'bg-gray-100/60'}`}>
+                          <div className={`text-xs ${t.text.muted} mb-1`}>PolyPhen-2 (highest)</div>
+                          <div className={`text-sm font-mono font-medium ${worstPP.polyphen_score > 0.85 ? 'text-red-400' : worstPP.polyphen_score > 0.446 ? 'text-amber-400' : 'text-green-400'}`}>
+                            {worstPP.polyphen_score.toFixed(3)}
+                          </div>
+                          {worstPP.polyphen_prediction && (
+                            <div className={`text-xs mt-0.5 ${t.text.muted}`}>{worstPP.polyphen_prediction.replace(/_/g, ' ')}</div>
+                          )}
+                        </div>
+                      )}
+                      {canonical?.hgvsc && (
+                        <div className={`p-2.5 rounded-lg ${isDarkMode ? 'bg-slate-700/30' : 'bg-gray-100/60'} col-span-2`}>
+                          <div className={`text-xs ${t.text.muted} mb-1`}>HGVS (canonical)</div>
+                          <div className={`text-xs font-mono ${t.text.primary} break-all`}>{canonical.hgvsc}</div>
+                          {canonical.hgvsp && <div className={`text-xs font-mono ${t.text.secondary} break-all`}>{canonical.hgvsp}</div>}
+                        </div>
+                      )}
+                    </div>
+                    {/* Transcript table */}
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className={`border-b ${t.glassBorder}`}>
+                            <th className={`text-left py-2 px-2 ${t.text.muted} font-medium`}>Transcript</th>
+                            <th className={`text-left py-2 px-2 ${t.text.muted} font-medium`}>Consequence</th>
+                            <th className={`text-left py-2 px-2 ${t.text.muted} font-medium`}>Impact</th>
+                            <th className={`text-left py-2 px-2 ${t.text.muted} font-medium`}>SIFT</th>
+                            <th className={`text-left py-2 px-2 ${t.text.muted} font-medium`}>PolyPhen</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {tcs.slice(0, 8).map((tc, i) => (
+                            <tr key={i} className={`border-b ${t.glassBorder} ${isDarkMode ? 'hover:bg-slate-700/20' : 'hover:bg-gray-100/40'}`}>
+                              <td className={`py-2 px-2 font-mono ${tc.canonical ? t.text.primary : t.text.secondary}`}>
+                                {tc.transcript_id || '—'}
+                                {tc.canonical === 1 && <span className={`ml-1 text-[10px] ${isDarkMode ? 'text-indigo-400' : 'text-indigo-600'}`}>canonical</span>}
+                              </td>
+                              <td className="py-2 px-2">
+                                {tc.consequence_terms?.[0] && (
+                                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                    (tc.consequence_terms[0] || '').includes('missense') || (tc.consequence_terms[0] || '').includes('stop') || (tc.consequence_terms[0] || '').includes('frameshift')
+                                      ? isDarkMode ? 'bg-red-500/20 text-red-300' : 'bg-red-100 text-red-700'
+                                      : (tc.consequence_terms[0] || '').includes('synonymous')
+                                        ? isDarkMode ? 'bg-green-500/20 text-green-300' : 'bg-green-100 text-green-700'
+                                        : isDarkMode ? 'bg-slate-600/30 text-slate-300' : 'bg-gray-100 text-gray-600'
+                                  }`}>
+                                    {tc.consequence_terms[0].replace(/_/g, ' ')}
+                                  </span>
+                                )}
+                              </td>
+                              <td className={`py-2 px-2 font-medium ${
+                                tc.impact === 'HIGH' ? 'text-red-400' :
+                                tc.impact === 'MODERATE' ? 'text-amber-400' :
+                                tc.impact === 'LOW' ? 'text-green-400' : t.text.muted
+                              }`}>{tc.impact || '—'}</td>
+                              <td className={`py-2 px-2 font-mono ${tc.sift_score != null && tc.sift_score < 0.05 ? 'text-red-400' : 'text-green-400'}`}>
+                                {tc.sift_score != null ? tc.sift_score.toFixed(3) : '—'}
+                              </td>
+                              <td className={`py-2 px-2 font-mono ${tc.polyphen_score != null && tc.polyphen_score > 0.85 ? 'text-red-400' : tc.polyphen_score != null && tc.polyphen_score > 0.446 ? 'text-amber-400' : 'text-green-400'}`}>
+                                {tc.polyphen_score != null ? tc.polyphen_score.toFixed(3) : '—'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {tcs.length > 8 && (
+                      <p className={`text-xs ${t.text.muted} mt-2`}>Showing 8 of {tcs.length} transcripts</p>
+                    )}
+                  </div>
+                )
+              })()}
+
+              {/* ── GWAS Catalog ── */}
+              {lookupResults.annotations?.gwas_catalog?.found && (() => {
+                const gw = lookupResults.annotations.gwas_catalog!
+                return (
+                  <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
+                    <h4 className={`font-bold ${t.text.primary} mb-1 flex items-center gap-2`}>
+                      <Activity className="h-4 w-4 text-purple-500" />
+                      GWAS Catalog
+                      {gw.genome_wide_significant && (
+                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${isDarkMode ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'bg-purple-100 text-purple-700 border border-purple-200'}`}>
+                          Genome-Wide Significant
+                        </span>
+                      )}
+                    </h4>
+                    <p className={`text-xs ${t.text.secondary} mb-3 leading-relaxed`}>
+                      Large population studies link this variant to the traits below. A lower p‑value means a stronger, more replicated association.
+                      {gw.genome_wide_significant
+                        ? ' All associations shown meet the p ≤ 5×10⁻⁸ genome-wide significance threshold.'
+                        : ' These are statistical associations, not direct causes.'}
+                    </p>
+                    <div className={`space-y-2`}>
+                      {gw.top_trait && (
+                        <div className={`flex items-center justify-between rounded-lg p-2.5 border ${t.glassBorder} ${isDarkMode ? 'bg-purple-500/8' : 'bg-purple-50'}`}>
+                          <span className={`text-sm font-semibold ${t.text.primary}`}>{gw.top_trait}</span>
+                          {gw.top_p_value != null && (
+                            <span className="text-xs font-mono text-purple-400">p = {gw.top_p_value.toExponential(2)}</span>
+                          )}
+                        </div>
+                      )}
+                      {(gw.associations?.length ?? 0) > 1 && gw.associations!.slice(1, 7).map((a, i) => {
+                        const pval = a.p_value
+                        const strength = pval == null ? '' : pval <= 1e-30 ? 'Very strong' : pval <= 1e-15 ? 'Strong' : pval <= 5e-8 ? 'Significant' : 'Suggestive'
+                        const sc = strength === 'Very strong' ? 'text-purple-400' : strength === 'Strong' ? 'text-blue-400' : strength === 'Significant' ? 'text-green-400' : t.text.muted
+                        return (
+                          <div key={i} className={`flex items-center justify-between text-xs border-t ${t.glassBorder} pt-1.5`}>
+                            <span className={`truncate max-w-[55%] ${t.text.secondary}`}>{a.mapped_trait ?? a.trait ?? '—'}</span>
+                            <div className="flex items-center gap-2 shrink-0">
+                              {strength && <span className={sc}>{strength}</span>}
+                              <span className={`font-mono ${t.text.muted}`}>{pval != null ? `p=${pval.toExponential(1)}` : '—'}</span>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div className={`text-xs ${t.text.muted} border-t ${t.glassBorder} pt-2 mt-3 grid grid-cols-2 gap-x-4`}>
+                      <span className="text-purple-400">p ≤ 10⁻³⁰ · Very strong</span>
+                      <span className="text-blue-400">p ≤ 10⁻¹⁵ · Strong</span>
+                      <span className="text-green-400">p ≤ 5×10⁻⁸ · Significant (GWS)</span>
+                      <span className={t.text.muted}>p &gt; 5×10⁻⁸ · Suggestive</span>
+                    </div>
+                    <a href={`https://www.ebi.ac.uk/gwas/search?query=${lookupResults.variant_id}`} target="_blank" rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-purple-400 hover:text-purple-300 transition-colors mt-2">
+                      View in GWAS Catalog <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </div>
+                )
+              })()}
+
+              {/* ── ClinGen Gene Validity ── */}
+              {lookupResults.annotations?.clingen?.found && (() => {
+                const cg = lookupResults.annotations.clingen!
+                const clsColor = cg.strongest_classification === 'Definitive' ? 'bg-green-500/15 text-green-400 border-green-500/30'
+                  : cg.strongest_classification === 'Strong' ? 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30'
+                  : cg.strongest_classification === 'Moderate' ? 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30'
+                  : cg.strongest_classification === 'Limited' ? 'bg-orange-500/15 text-orange-400 border-orange-500/30'
+                  : 'bg-red-500/15 text-red-400 border-red-500/30'
+                return (
+                  <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
+                    <h4 className={`font-bold ${t.text.primary} mb-1 flex items-center gap-2`}>
+                      <Shield className="h-4 w-4 text-green-500" />
+                      ClinGen Gene Validity
+                      {cg.strongest_classification && (
+                        <span className={`px-2 py-0.5 rounded text-xs font-medium border ${clsColor}`}>{cg.strongest_classification}</span>
+                      )}
+                    </h4>
+                    <p className={`text-xs ${t.text.secondary} mb-3`}>
+                      Expert-curated evidence for <span className="font-semibold">{cg.gene_symbol}</span> gene-disease relationships.
+                      {cg.disease_count ? ` ${cg.disease_count} disease association${cg.disease_count > 1 ? 's' : ''}.` : ''}
+                      {cg.is_definitive && ' Definitive evidence — highest confidence classification.'}
+                      {cg.is_disputed && ' This gene-disease relationship is disputed.'}
+                    </p>
+                    {(cg.curations?.length ?? 0) > 0 && (
+                      <div className="space-y-1">
+                        {cg.curations!.slice(0, 5).map((c, i) => {
+                          const cc = c.classification === 'Definitive' ? 'bg-green-500/15 text-green-400' : c.classification === 'Strong' ? 'bg-cyan-500/15 text-cyan-400' : c.classification === 'Moderate' ? 'bg-yellow-500/15 text-yellow-400' : c.classification === 'Limited' ? 'bg-orange-500/15 text-orange-400' : 'bg-red-500/15 text-red-400'
+                          return (
+                            <div key={i} className={`flex items-center justify-between text-xs p-2 rounded-lg ${isDarkMode ? 'bg-slate-700/20' : 'bg-gray-50'}`}>
+                              <div>
+                                <span className={`font-medium ${t.text.primary}`}>{c.disease_label || '—'}</span>
+                                {c.moi && <span className={`ml-2 ${t.text.muted}`}>· {c.moi}</span>}
+                              </div>
+                              {c.classification && (
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${cc}`}>{c.classification}</span>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                    <a href={`https://search.clinicalgenome.org/kb/gene-validity?gene=${cg.gene_symbol ?? ''}`} target="_blank" rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-green-400 hover:text-green-300 transition-colors mt-2">
+                      View ClinGen curations <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </div>
+                )
+              })()}
+
+              {/* ── Open Targets ── */}
+              {lookupResults.annotations?.open_targets?.found && (() => {
+                const ot = lookupResults.annotations.open_targets!
+                return (
+                  <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
+                    <h4 className={`font-bold ${t.text.primary} mb-1 flex items-center gap-2`}>
+                      <BarChart3 className="h-4 w-4 text-orange-500" />
+                      Open Targets
+                      {ot.has_strong_genetic_evidence && (
+                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${isDarkMode ? 'bg-orange-500/20 text-orange-300 border border-orange-500/30' : 'bg-orange-100 text-orange-700 border border-orange-200'}`}>
+                          Strong genetic evidence
+                        </span>
+                      )}
+                    </h4>
+                    <p className={`text-xs ${t.text.secondary} mb-3`}>
+                      Gene–disease association scores from Open Targets Platform for <span className="font-semibold">{ot.gene_symbol ?? lookupResults.basic_info?.gene_symbol}</span>.
+                      Scores combine genetic, literature, somatic and other evidence (0–1 scale).
+                    </p>
+                    {ot.max_score != null && (
+                      <div className="mb-4">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className={`text-xs ${t.text.secondary}`}>Highest association score</span>
+                          <span className={`text-sm font-mono font-bold ${ot.max_score > 0.7 ? 'text-red-400' : ot.max_score > 0.4 ? 'text-amber-400' : 'text-green-400'}`}>
+                            {ot.max_score.toFixed(2)}
+                          </span>
+                        </div>
+                        <div className={`h-2 rounded-full overflow-hidden ${isDarkMode ? 'bg-slate-700/50' : 'bg-gray-200'}`}>
+                          <div
+                            className="h-full rounded-full bg-gradient-to-r from-orange-500 to-red-500 transition-all"
+                            style={{ width: `${Math.round(ot.max_score * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    {(ot.associations?.length ?? 0) > 0 && (
+                      <div className="space-y-1">
+                        {ot.associations!.slice(0, 5).map((a, i) => (
+                          <div key={i} className={`flex items-center justify-between text-xs p-2 rounded-lg ${isDarkMode ? 'bg-slate-700/20' : 'bg-gray-50'}`}>
+                            <span className={`font-medium ${t.text.primary} truncate max-w-[60%]`}>{a.disease_label || '—'}</span>
+                            <div className="flex items-center gap-2 shrink-0">
+                              {a.genetic_association != null && (
+                                <span className={`${t.text.muted}`} title="Genetic association">G:{a.genetic_association.toFixed(2)}</span>
+                              )}
+                              {a.overall_score != null && (
+                                <span className={`font-mono font-medium ${a.overall_score > 0.7 ? 'text-red-400' : a.overall_score > 0.4 ? 'text-amber-400' : 'text-green-400'}`}>
+                                  {a.overall_score.toFixed(2)}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <a href={`https://platform.opentargets.org/target/${ot.ensembl_id ?? ''}`} target="_blank" rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-orange-400 hover:text-orange-300 transition-colors mt-2">
+                      View on Open Targets Platform <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </div>
+                )
+              })()}
+
               {/* External Links */}
               <div className={`${t.glass} border ${t.glassBorder} rounded-xl p-5`}>
                 <h4 className={`font-bold ${t.text.primary} mb-3 flex items-center gap-2`}>
@@ -1438,6 +1786,9 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
                     { label: 'ClinVar', url: `https://www.ncbi.nlm.nih.gov/clinvar/?term=${lookupResults.variant_id}`, color: isDarkMode ? 'bg-red-500/20 hover:bg-red-500/30 text-red-300' : 'bg-red-100 hover:bg-red-200 text-red-800', show: !!lookupResults.annotations?.clinvar?.found },
                     { label: 'ClinPGx', url: `https://www.clinpgx.org/variant/${lookupResults.variant_id}`, color: isDarkMode ? 'bg-purple-500/20 hover:bg-purple-500/30 text-purple-300' : 'bg-purple-100 hover:bg-purple-200 text-purple-800', show: !!lookupResults.pharmacogenomics?.found },
                     { label: 'SNPedia', url: `https://www.snpedia.com/index.php/${lookupResults.variant_id}`, color: isDarkMode ? 'bg-orange-500/20 hover:bg-orange-500/30 text-orange-300' : 'bg-orange-100 hover:bg-orange-200 text-orange-800', show: !!lookupResults.literature?.snpedia_found },
+                    { label: 'GWAS Catalog', url: `https://www.ebi.ac.uk/gwas/search?query=${lookupResults.variant_id}`, color: isDarkMode ? 'bg-violet-500/20 hover:bg-violet-500/30 text-violet-300' : 'bg-violet-100 hover:bg-violet-200 text-violet-800', show: !!lookupResults.annotations?.gwas_catalog?.found },
+                    { label: 'ClinGen', url: `https://search.clinicalgenome.org/kb/gene-validity?gene=${lookupResults.annotations?.clingen?.gene_symbol ?? lookupResults.basic_info?.gene_symbol ?? ''}`, color: isDarkMode ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300' : 'bg-emerald-100 hover:bg-emerald-200 text-emerald-800', show: !!lookupResults.annotations?.clingen?.found },
+                    { label: 'Open Targets', url: `https://platform.opentargets.org/target/${lookupResults.annotations?.open_targets?.ensembl_id ?? ''}`, color: isDarkMode ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300' : 'bg-amber-100 hover:bg-amber-200 text-amber-800', show: !!lookupResults.annotations?.open_targets?.found },
                     { label: 'PubMed', url: `https://pubmed.ncbi.nlm.nih.gov/?term=${lookupResults.variant_id}`, color: isDarkMode ? 'bg-teal-500/20 hover:bg-teal-500/30 text-teal-300' : 'bg-teal-100 hover:bg-teal-200 text-teal-800', show: true },
                   ].filter(link => link.show).map(link => (
                     <a key={link.label} href={link.url} target="_blank" rel="noopener noreferrer"

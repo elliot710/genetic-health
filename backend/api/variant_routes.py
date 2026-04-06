@@ -18,6 +18,9 @@ from ..services.clinvar_local import get_clinvar_local_service
 from ..services.gnomad_local import get_gnomad_service
 from ..services.ensembl_vep_local import get_ensembl_local_service
 from ..services.bq_public import BigQueryPublicService
+from ..services.gwas_catalog_local import get_gwas_catalog_service
+from ..services.clingen_local import get_clingen_service
+from ..services.open_targets_service import get_open_targets_service
 from ..db.database import get_session
 from ..db.models import (
     GeneticAnalysis, AnalysisVariant, GeneticMarker,
@@ -356,6 +359,44 @@ async def lookup_variant(
                             annotations[f'bq_{source_name}'] = source_data
                 except Exception as e:
                     _logger.debug("BQ enrichment failed for %s: %s", gene_symbol, e)
+
+            # GWAS Catalog local lookup
+            try:
+                gwas_svc = get_gwas_catalog_service()
+                await gwas_svc.ensure_loaded()
+                gwas_batch = await gwas_svc.lookup_batch([variant_id])
+                gwas_result = gwas_batch.get(variant_id)
+                if gwas_result and gwas_result.get('found'):
+                    annotations['gwas_catalog'] = gwas_result
+            except Exception as e:
+                _logger.debug("GWAS Catalog lookup failed for %s: %s", variant_id, e)
+
+            # ClinGen gene validity (requires gene symbol)
+            if gene_symbol:
+                try:
+                    clingen_svc = get_clingen_service()
+                    await clingen_svc.ensure_loaded()
+                    clingen_result = await clingen_svc.lookup_by_gene(gene_symbol)
+                    if clingen_result and clingen_result.get('found'):
+                        annotations['clingen'] = clingen_result
+                except Exception as e:
+                    _logger.debug("ClinGen lookup failed for %s: %s", gene_symbol, e)
+
+            # Open Targets gene-disease associations (requires gene symbol)
+            if gene_symbol:
+                try:
+                    ot_svc = get_open_targets_service()
+                    ot_result = await ot_svc.lookup_by_gene(gene_symbol)
+                    if ot_result and ot_result.get('found'):
+                        annotations['open_targets'] = ot_result
+                except Exception as e:
+                    _logger.debug("Open Targets lookup failed for %s: %s", gene_symbol, e)
+
+            # Transcript consequences from Ensembl VEP
+            if ensembl_entry:
+                tcs = ensembl_entry.get('transcript_consequences', [])
+                if tcs:
+                    annotations['transcript_consequences'] = tcs[:25]
 
             # Determine if variant was found
             found = any([
