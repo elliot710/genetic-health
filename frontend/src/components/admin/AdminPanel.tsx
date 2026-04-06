@@ -913,6 +913,28 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
         arrayKeys: [] as string[],
       },
     },
+    {
+      key: 'gwas_catalog', label: 'GWAS Catalog',
+      statusEndpoint: '/gwas-catalog-etl/progress', importEndpoint: '/gwas-catalog-etl/import',
+      description: 'EBI GWAS Catalog trait associations (zip → PostgreSQL)',
+      displayConfig: {
+        primaryKey: 'rows',
+        countKeys: [] as string[],
+        fileKeys: [] as string[],
+        arrayKeys: [] as string[],
+      },
+    },
+    {
+      key: 'clingen', label: 'ClinGen Gene Validity',
+      statusEndpoint: '/clingen-etl/progress', importEndpoint: '/clingen-etl/import',
+      description: 'ClinGen gene-disease validity classifications (CSV → PostgreSQL)',
+      displayConfig: {
+        primaryKey: 'rows',
+        countKeys: [] as string[],
+        fileKeys: [] as string[],
+        arrayKeys: [] as string[],
+      },
+    },
   ]
 
   const fetchEtlStatus = useCallback(async (key: string, endpoint: string) => {

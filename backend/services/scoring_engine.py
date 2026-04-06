@@ -140,6 +140,21 @@ class ScoringEngine:
         if ev:
             evidences.append(ev)
 
+        # 6. GWAS Catalog (genome-wide significant associations)
+        ev = self._score_gwas_catalog(annotations.get("gwas_catalog"))
+        if ev:
+            evidences.append(ev)
+
+        # 7. ClinGen gene validity (Definitive/Strong/Moderate/Limited)
+        ev = self._score_clingen(annotations.get("clingen"))
+        if ev:
+            evidences.append(ev)
+
+        # 8. Open Targets (genetic association score)
+        ev = self._score_open_targets(annotations.get("open_targets"))
+        if ev:
+            evidences.append(ev)
+
         return self._aggregate(evidences).to_dict()
 
     # ------------------------------------------------------------------
@@ -310,6 +325,72 @@ class ScoringEngine:
             weight=0.05,  # VEP consequence alone is weak evidence
             label=f"VEP: {consequences}",
             raw_value=consequences,
+        )
+
+    def _score_gwas_catalog(self, data: Optional[Dict]) -> Optional[SourceEvidence]:
+        """Score based on GWAS Catalog genome-wide significant associations.
+
+        A GWS hit (p≤5e-8) indicates the variant is reliably associated with a
+        trait, but does NOT imply pathogenicity — it raises evidence weight only.
+        """
+        if not data or not data.get("found"):
+            return None
+        is_gws = data.get("genome_wide_significant", False)
+        top_p = data.get("top_p_value")
+        if not is_gws and (top_p is None or top_p > 5e-8):
+            return None
+        return SourceEvidence(
+            source="gwas_catalog",
+            score=0.45,
+            weight=0.08,
+            label=f"GWAS: {data.get('top_trait', 'trait association')[:60]}",
+            raw_value=top_p,
+        )
+
+    def _score_clingen(self, data: Optional[Dict]) -> Optional[SourceEvidence]:
+        """Score based on ClinGen gene validity classification."""
+        if not data or not data.get("found"):
+            return None
+        classification = data.get("strongest_classification") or ""
+        score_map = {
+            "Definitive": (0.75, 0.20),
+            "Strong":     (0.65, 0.18),
+            "Moderate":   (0.55, 0.12),
+            "Limited":    (0.40, 0.06),
+            "Animal Model Only": (0.35, 0.04),
+            "Disputed":   (0.20, 0.05),
+            "Refuted":    (0.05, 0.10),
+            "No Known Disease Relationship": (0.02, 0.05),
+        }
+        entry = score_map.get(classification)
+        if not entry:
+            return None
+        score, weight = entry
+        return SourceEvidence(
+            source="clingen",
+            score=score,
+            weight=weight,
+            label=f"ClinGen: {classification}",
+            raw_value=classification,
+        )
+
+    def _score_open_targets(self, data: Optional[Dict]) -> Optional[SourceEvidence]:
+        """Score based on Open Targets genetic association evidence."""
+        if not data or not data.get("found"):
+            return None
+        max_score = data.get("max_score")
+        if not max_score or max_score < 0.1:
+            return None
+        has_genetic = data.get("has_strong_genetic_evidence", False)
+        weight = 0.15 if has_genetic else 0.08
+        adjusted_score = min(0.70, max_score * 0.85)
+        disease = data.get("top_disease", "disease")
+        return SourceEvidence(
+            source="open_targets",
+            score=adjusted_score,
+            weight=weight,
+            label=f"OT: {disease[:50]} ({max_score:.2f})",
+            raw_value=max_score,
         )
 
     # ------------------------------------------------------------------

@@ -59,6 +59,8 @@ NOT_FOUND = {
     'thousand_genomes': {"found": False, "source": "1000genomes_local"},
     'alpha_missense':   {"found": False, "source": "alpha_missense"},
     'gnomad_tx':     {"found": False, "source": "gnomad_tx"},
+    'gwas_catalog':  {"found": False, "source": "gwas_catalog"},
+    'clingen':       {"found": False, "source": "clingen"},
 }
 
 # DB column names for each source
@@ -69,6 +71,8 @@ COL_MAP = {
     'thousand_genomes': 'thousand_genomes_data',
     'alpha_missense':   'alpha_missense_data',
     'gnomad_tx':        'gnomad_tx_data',
+    'gwas_catalog':     'gwas_catalog_data',
+    'clingen':          'clingen_data',
 }
 
 
@@ -83,6 +87,8 @@ class LoadedSources:
     alpha_missense: Any = None
     gnomad_tx: Any = None
     alphafold: Any = None
+    gwas_catalog: Any = None
+    clingen: Any = None
 
     @property
     def active_names(self) -> List[str]:
@@ -103,6 +109,10 @@ class LoadedSources:
             names.append('gnomad_tx')
         if self.alphafold:
             names.append('alphafold')
+        if self.gwas_catalog:
+            names.append('gwas_catalog')
+        if self.clingen:
+            names.append('clingen')
         return names
 
 
@@ -174,6 +184,22 @@ async def load_local_sources(enabled_sources: Optional[List[str]]) -> LoadedSour
             await svc.ensure_loaded()
         if svc.is_loaded and (svc.has_pg_data or svc.indexed_count > 0):
             sources.gnomad_v2 = svc
+
+    if enabled_sources is None or 'gwas_catalog' in enabled_sources:
+        from .gwas_catalog_local import get_gwas_catalog_service
+        svc = get_gwas_catalog_service()
+        if not svc.is_loaded:
+            await svc.ensure_loaded()
+        if svc.is_loaded:
+            sources.gwas_catalog = svc
+
+    if enabled_sources is None or 'clingen' in enabled_sources:
+        from .clingen_local import get_clingen_service
+        svc = get_clingen_service()
+        if not svc.is_loaded:
+            await svc.ensure_loaded()
+        if svc.is_loaded:
+            sources.clingen = svc
 
     return sources
 
@@ -273,7 +299,9 @@ class LookupResults:
     thousand_genomes: Dict[str, Optional[Dict]] = field(default_factory=dict)
     alpha_missense: Dict[str, Optional[Dict]] = field(default_factory=dict)
     gnomad_tx: Dict[str, Optional[Dict]] = field(default_factory=dict)
-    alphafold: Dict[str, Optional[Dict]] = field(default_factory=dict)  # rsid → AF data (gene-keyed internally)
+    alphafold: Dict[str, Optional[Dict]] = field(default_factory=dict)
+    gwas_catalog: Dict[str, Optional[Dict]] = field(default_factory=dict)
+    clingen: Dict[str, Optional[Dict]] = field(default_factory=dict)
 
     def items(self):
         """Iterate (source_name, results_dict) for all sources."""
@@ -284,6 +312,8 @@ class LookupResults:
         yield 'alpha_missense', self.alpha_missense
         yield 'gnomad_tx', self.gnomad_tx
         yield 'alphafold', self.alphafold
+        yield 'gwas_catalog', self.gwas_catalog
+        yield 'clingen', self.clingen
 
 
 async def run_all_lookups(
@@ -488,12 +518,68 @@ async def run_all_lookups(
             logger.info(f"  AlphaFold: {found_af}/{len(rsid_gene)} RSIDs enriched ({time.monotonic() - t0:.1f}s)")
             await asyncio.sleep(0)
 
+    if sources.gwas_catalog and rsids:
+        t0 = time.monotonic()
+        logger.info(f"  GWAS Catalog: batch lookup for {len(rsids)} RSIDs...")
+        results.gwas_catalog = await sources.gwas_catalog.lookup_batch(rsids)
+        found_gwas = _count_found(results.gwas_catalog)
+        logger.info(f"  GWAS Catalog: {found_gwas}/{len(rsids)} found ({time.monotonic() - t0:.1f}s)")
+        await asyncio.sleep(0)
+
+    if sources.clingen and rsids:
+        t0 = time.monotonic()
+        gene_symbols = list({
+            g for rsid in rsids
+            for g in [_extract_gene(rsid, rsid_to_variant, results)]
+            if g
+        })
+        if gene_symbols:
+            logger.info(f"  ClinGen: lookup for {len(gene_symbols)} genes across {len(rsids)} RSIDs...")
+            gene_results = await sources.clingen.lookup_genes_batch(gene_symbols)
+            rsid_gene_map = {
+                rsid: _extract_gene(rsid, rsid_to_variant, results)
+                for rsid in rsids
+            }
+            for rsid, gene in rsid_gene_map.items():
+                if gene and gene in gene_results:
+                    results.clingen[rsid] = gene_results[gene]
+            found_cg = _count_found(results.clingen)
+            logger.info(f"  ClinGen: {found_cg}/{len(rsids)} RSIDs enriched ({time.monotonic() - t0:.1f}s)")
+            await asyncio.sleep(0)
+
     logger.info(f"  All source lookups: {time.monotonic() - t_total:.1f}s total")
     return results
 
 
+def _extract_gene(rsid: str, rsid_to_variant: Dict[str, Any], results: "LookupResults") -> Optional[str]:
+    """Extract gene symbol for a given rsid from marker data or annotation results."""
+    v = rsid_to_variant.get(rsid)
+    if v:
+        marker = getattr(v, 'marker', None)
+        if marker and getattr(marker, 'gene_symbol', None):
+            return marker.gene_symbol
+
+    ens = results.ensembl.get(rsid) or {}
+    if ens.get('found'):
+        ens_data = ens.get('data', {})
+        if isinstance(ens_data, list) and ens_data:
+            ens_data = ens_data[0]
+        tcs = ens_data.get('transcript_consequences', [])
+        if tcs and tcs[0].get('gene_symbol'):
+            return tcs[0]['gene_symbol']
+
+    cv = results.clinvar.get(rsid) or {}
+    if cv.get('found'):
+        return cv.get('gene_symbol') or cv.get('gene')
+
+    gn = results.gnomad.get(rsid) or {}
+    if gn.get('found') and gn.get('gene'):
+        return gn['gene']
+
+    return None
+
+
 async def chunked_db_write(
-    col_name: str,
     params: List[Dict],
     chunk_size: int = 5000,
 ):

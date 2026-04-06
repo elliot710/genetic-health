@@ -194,6 +194,42 @@ interface VariantDetails {
   }
   user_genotype?: string
   cache_hit?: boolean
+  gwas_catalog?: {
+    found: boolean
+    associations?: Array<{
+      rsid?: string
+      trait?: string
+      mapped_trait?: string
+      p_value?: number
+      or_beta?: number
+      risk_allele_frequency?: number
+    }>
+    top_trait?: string
+    top_p_value?: number
+    genome_wide_significant?: boolean
+  }
+  clingen?: {
+    found: boolean
+    gene_symbol?: string
+    strongest_classification?: string
+    is_definitive?: boolean
+    is_disputed?: boolean
+    disease_count?: number
+    curations?: Array<{
+      disease_label?: string
+      moi?: string
+      classification?: string
+      report_url?: string
+    }>
+  }
+  open_targets?: {
+    found: boolean
+    gene_symbol?: string
+    associations?: Array<{ disease_name: string; score: number; genetic_association_score?: number }>
+    top_disease?: string
+    max_score?: number
+    has_strong_genetic_evidence?: boolean
+  }
 }
 
 // ─── Props ──────────────────────────────────────────────────────
@@ -1895,6 +1931,127 @@ export default function VariantDetailDialog({
               </div>
             )}
 
+            {/* ── GWAS Catalog ── */}
+            {details.gwas_catalog?.found && (
+              <div>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
+                  <Activity className="h-3.5 w-3.5" /> GWAS Catalog
+                  {details.gwas_catalog.genome_wide_significant && (
+                    <Badge className="text-xs bg-purple-500/15 text-purple-400 border-purple-500/30 ml-1">GWS</Badge>
+                  )}
+                </h4>
+                <div className={`${cardBg} rounded-xl p-3 border ${border} space-y-2`}>
+                  {details.gwas_catalog.top_trait && (
+                    <div className="flex items-center justify-between">
+                      <span className={`text-xs font-medium ${textPrimary}`}>{details.gwas_catalog.top_trait}</span>
+                      {details.gwas_catalog.top_p_value != null && (
+                        <span className={`text-xs font-mono ${textSecondary}`}>p = {details.gwas_catalog.top_p_value.toExponential(2)}</span>
+                      )}
+                    </div>
+                  )}
+                  {(details.gwas_catalog.associations?.length ?? 0) > 1 && (
+                    <div className="space-y-1">
+                      {details.gwas_catalog.associations!.slice(0, 5).map((a, i) => (
+                        <div key={i} className={`flex items-center justify-between text-xs ${textSecondary} border-t ${border} pt-1`}>
+                          <span className="truncate max-w-[60%]">{a.mapped_trait ?? a.trait ?? '—'}</span>
+                          <span className="font-mono ml-2">{a.p_value != null ? `p=${a.p_value.toExponential(1)}` : '—'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <a href={`https://www.ebi.ac.uk/gwas/search?query=${rsid}`} target="_blank" rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs text-purple-400 hover:text-purple-300 mt-1 transition-colors">
+                    View in GWAS Catalog <ExternalLink className="h-3 w-3" />
+                  </a>
+                </div>
+              </div>
+            )}
+
+            {/* ── ClinGen ── */}
+            {details.clingen?.found && (
+              <div>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
+                  <Shield className="h-3.5 w-3.5" /> ClinGen Gene Validity
+                  {details.clingen.strongest_classification && (() => {
+                    const cls = details.clingen!.strongest_classification!
+                    const color = cls === 'Definitive' ? 'bg-green-500/15 text-green-400 border-green-500/30'
+                      : cls === 'Strong' ? 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30'
+                      : cls === 'Moderate' ? 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30'
+                      : cls === 'Limited' ? 'bg-orange-500/15 text-orange-400 border-orange-500/30'
+                      : 'bg-red-500/15 text-red-400 border-red-500/30'
+                    return <Badge className={`text-xs ${color} ml-1`}>{cls}</Badge>
+                  })()}
+                </h4>
+                <div className={`${cardBg} rounded-xl p-3 border ${border} space-y-2`}>
+                  <p className={`text-xs ${textSecondary}`}>Gene-level evidence — {details.clingen.gene_symbol ?? 'unknown gene'}
+                    {details.clingen.disease_count ? ` · ${details.clingen.disease_count} disease association${details.clingen.disease_count > 1 ? 's' : ''}` : ''}
+                  </p>
+                  {details.clingen.curations?.slice(0, 4).map((c, i) => (
+                    <div key={i} className={`flex items-start justify-between text-xs border-t ${border} pt-1 gap-2`}>
+                      <div className="flex-1 min-w-0">
+                        <span className={`font-medium ${textPrimary} block truncate`}>{c.disease_label ?? '—'}</span>
+                        {c.moi && <span className={`${textSecondary}`}>{c.moi}</span>}
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {c.classification && <Badge className="text-xs bg-gray-500/15 text-gray-400 border-gray-500/30">{c.classification}</Badge>}
+                        {c.report_url && (
+                          <a href={c.report_url} target="_blank" rel="noopener noreferrer"
+                            className="text-cyan-400 hover:text-cyan-300"><ExternalLink className="h-3 w-3" /></a>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  <a href={`https://search.clinicalgenome.org/kb/genes?search=${details.clingen.gene_symbol ?? ''}`}
+                    target="_blank" rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mt-1 transition-colors">
+                    View in ClinGen <ExternalLink className="h-3 w-3" />
+                  </a>
+                </div>
+              </div>
+            )}
+
+            {/* ── Open Targets ── */}
+            {details.open_targets?.found && (
+              <div>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
+                  <Atom className="h-3.5 w-3.5" /> Open Targets
+                  {details.open_targets.has_strong_genetic_evidence && (
+                    <Badge className="text-xs bg-blue-500/15 text-blue-400 border-blue-500/30 ml-1">Strong Genetic Evidence</Badge>
+                  )}
+                </h4>
+                <div className={`${cardBg} rounded-xl p-3 border ${border} space-y-2`}>
+                  {details.open_targets.max_score != null && (
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs ${textSecondary} w-24`}>Max score</span>
+                      <div className="flex-1 bg-gray-700/40 rounded-full h-1.5">
+                        <div
+                          className="bg-blue-500 h-1.5 rounded-full"
+                          style={{ width: `${Math.round(details.open_targets.max_score * 100)}%` }}
+                        />
+                      </div>
+                      <span className={`text-xs font-mono ${textPrimary}`}>{details.open_targets.max_score.toFixed(2)}</span>
+                    </div>
+                  )}
+                  {details.open_targets.associations?.slice(0, 5).map((a, i) => (
+                    <div key={i} className={`flex items-center justify-between text-xs border-t ${border} pt-1`}>
+                      <span className={`truncate max-w-[65%] ${textSecondary}`}>{a.disease_name}</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {a.genetic_association_score != null && (
+                          <span className="font-mono text-blue-400">{a.genetic_association_score.toFixed(2)}</span>
+                        )}
+                        <span className={`font-mono ${textSecondary}`}>{a.score.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  ))}
+                  <a href={`https://platform.opentargets.org/target/${details.open_targets.gene_symbol ?? ''}`}
+                    target="_blank" rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 mt-1 transition-colors">
+                    View in Open Targets <ExternalLink className="h-3 w-3" />
+                  </a>
+                </div>
+              </div>
+            )}
+
             {/* ── AI-Powered Analysis ── */}
             <SmartInsights
               isDarkMode={isDarkMode}
@@ -1927,6 +2084,16 @@ export default function VariantDetailDialog({
                 className="inline-flex items-center gap-1 text-xs text-green-400 hover:text-green-300 transition-colors">
                 SNPedia <ExternalLink className="h-3 w-3" />
               </a>
+              <a href={`https://www.ebi.ac.uk/gwas/search?query=${rsid}`} target="_blank" rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-xs text-purple-400 hover:text-purple-300 transition-colors">
+                GWAS Catalog <ExternalLink className="h-3 w-3" />
+              </a>
+              {gene && gene !== 'Unknown' && !gene.startsWith('rs') && (
+                <a href={`https://platform.opentargets.org/target/${gene}`} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors">
+                  Open Targets <ExternalLink className="h-3 w-3" />
+                </a>
+              )}
               {gene && gene !== 'Unknown' && !gene.startsWith('rs') && (
                 <>
                   <a href={`https://www.genecards.org/cgi-bin/carddisp.pl?gene=${gene}`} target="_blank" rel="noopener noreferrer"

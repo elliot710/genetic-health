@@ -367,6 +367,9 @@ class SharedVariantAnnotation(Base):
     chembl_data = Column(JSON)  # ChEMBL drug mechanisms, indications, warnings (BigQuery)
     fda_drug_data = Column(JSON)  # FDA drug label CYP interactions (BigQuery)
     alphafold_data = Column(JSON)  # AlphaFold protein structure confidence (BigQuery)
+    gwas_catalog_data = Column(JSON)  # GWAS Catalog trait associations (local TSV)
+    clingen_data = Column(JSON)  # ClinGen gene validity classifications (local TSV)
+    open_targets_data = Column(JSON)  # Open Targets Platform gene-disease association scores (API)
     
     # Metadata for tracking and reuse
     first_annotated_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -993,4 +996,54 @@ class AiInsightCache(Base):
     cache_key = Column(String, unique=True, nullable=False, index=True)
     result = Column(JSON, nullable=False)
     provider = Column(String, nullable=True)
+
+
+class GwasCatalogAssociation(Base):
+    """GWAS Catalog variant-trait associations imported from the EBI full download."""
+    __tablename__ = 'gwas_catalog_associations'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    rsid = Column(String(32), nullable=True, index=True)
+    pubmed_id = Column(String(20), nullable=True)
+    study_accession = Column(String(20), nullable=True)
+    trait = Column(Text, nullable=True)
+    mapped_trait = Column(Text, nullable=True)
+    mapped_trait_uri = Column(Text, nullable=True)
+    reported_genes = Column(Text, nullable=True)
+    mapped_genes = Column(Text, nullable=True)
+    p_value = Column(Float, nullable=True)
+    p_value_mlog = Column(Float, nullable=True)
+    or_beta = Column(Float, nullable=True)
+    ci_text = Column(Text, nullable=True)
+    risk_allele_frequency = Column(Float, nullable=True)
+    strongest_snp_risk_allele = Column(Text, nullable=True)
+    chromosome = Column(String(5), nullable=True)
+    chromosome_position = Column(Integer, nullable=True)
+    context = Column(Text, nullable=True)
+    imported_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index('ix_gwas_catalog_rsid', 'rsid'),
+    )
+
+
+class ClinGenGeneValidity(Base):
+    """ClinGen gene-disease validity classifications."""
+    __tablename__ = 'clingen_gene_validity'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    gene_symbol = Column(String(64), nullable=False, index=True)
+    gene_hgnc_id = Column(String(32), nullable=True)
+    disease_label = Column(Text, nullable=True)
+    disease_mondo_id = Column(String(32), nullable=True)
+    moi = Column(String(64), nullable=True)
+    classification = Column(String(64), nullable=True)
+    classification_date = Column(String(32), nullable=True)
+    gcep = Column(Text, nullable=True)
+    report_url = Column(Text, nullable=True)
+    imported_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index('ix_clingen_gene_symbol', 'gene_symbol'),
+    )
     generated_at = Column(DateTime(timezone=True), server_default=func.now())

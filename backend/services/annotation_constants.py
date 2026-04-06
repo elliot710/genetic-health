@@ -13,6 +13,8 @@ ALL_SOURCES: List[str] = [
     'alpha_missense', 'clinvar_local', 'gnomad', 'thousand_genomes',
     'ensembl_vep', 'gnomad_tx',
     'chembl', 'fda_drug', 'alphafold',
+    'gwas_catalog', 'clingen',
+    'open_targets',
 ]
 
 # Map source name → DB column prefix (e.g. clinpgx data stored in pharmgkb_data)
@@ -30,6 +32,9 @@ SOURCE_TO_COLUMN: Dict[str, str] = {
     'chembl': 'chembl',
     'fda_drug': 'fda_drug',
     'alphafold': 'alphafold',
+    'gwas_catalog': 'gwas_catalog',
+    'clingen': 'clingen',
+    'open_targets': 'open_targets',
 }
 
 # Sources that use external HTTP APIs (via OptimizedGeneticAPIService / GeneticAPIService)
@@ -38,10 +43,10 @@ REMOTE_API_SOURCES: Set[str] = {'ensembl', 'clinvar', 'clinpgx', 'snpedia'}
 # Sources backed by local data (files, local DB tables, or SQLite cache)
 # 'ensembl' is hybrid — uses local VEP VCF when loaded, falls back to API
 # 'alphafold' uses local SQLite built from EBI FTP tar when available
-LOCAL_SOURCES: Set[str] = {'clinvar_local', 'gnomad', 'gnomad_tx', 'alpha_missense', 'ensembl', 'thousand_genomes', 'ensembl_vep', 'alphafold'}
+LOCAL_SOURCES: Set[str] = {'clinvar_local', 'gnomad', 'gnomad_tx', 'alpha_missense', 'ensembl', 'thousand_genomes', 'ensembl_vep', 'alphafold', 'gwas_catalog', 'clingen'}
 
 # Sources backed by BigQuery public datasets (alphafold moved to LOCAL_SOURCES)
-BQ_SOURCES: Set[str] = {'chembl', 'fda_drug'}
+BQ_SOURCES: Set[str] = {'chembl', 'fda_drug', 'open_targets'}
 
 
 def source_status(data) -> str:

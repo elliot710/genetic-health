@@ -597,6 +597,10 @@ DEFAULT_SOURCES = [
     {"source_name": "chembl", "display_name": "ChEMBL (BigQuery)", "is_enabled": True, "source_type": "bigquery", "description": "Drug mechanisms, indications, and safety warnings for gene targets — ebi_chembl v33 public dataset", "rate_limit": None, "priority": 11},
     {"source_name": "fda_drug", "display_name": "FDA Drug Labels (BigQuery)", "is_enabled": True, "source_type": "bigquery", "description": "FDA drug labels with CYP enzyme interaction data and pharmacokinetics", "rate_limit": None, "priority": 12},
     {"source_name": "alphafold", "display_name": "AlphaFold (BigQuery)", "is_enabled": True, "source_type": "bigquery", "description": "DeepMind AlphaFold protein structure confidence scores (pLDDT)", "rate_limit": None, "priority": 13},
+    # EBI / ClinGen curated databases
+    {"source_name": "gwas_catalog", "display_name": "GWAS Catalog", "is_enabled": True, "source_type": "hybrid", "description": "EBI GWAS Catalog — rsID→trait associations with p-values and effect sizes. Download: data_sources/gwas_catalog/gwas_associations.tsv, ETL-imported into PostgreSQL", "rate_limit": None, "priority": 14},
+    {"source_name": "clingen", "display_name": "ClinGen Gene Validity", "is_enabled": True, "source_type": "hybrid", "description": "ClinGen gene-disease validity classifications (Definitive/Strong/Moderate/Limited). Download: data_sources/clingen/clingen_gene_validity.tsv, ETL-imported into PostgreSQL", "rate_limit": None, "priority": 15},
+    {"source_name": "open_targets", "display_name": "Open Targets Platform", "is_enabled": True, "source_type": "api", "description": "Open Targets Platform gene-disease scores aggregated from genetic, literature, and animal model evidence. Queried live via GraphQL API by gene symbol during annotation.", "rate_limit": 5.0, "priority": 16},
 ]
 
 # Shared source-to-column mapping — single source of truth
@@ -1790,6 +1794,66 @@ async def clinvar_etl_import(admin: User = Depends(require_admin)):
             await cv_svc.ensure_loaded()
         except Exception:
             pass  # errors are recorded in _etl_progress
+
+    import asyncio as _asyncio
+    _asyncio.create_task(_run())
+    return {"status": "started"}
+
+
+# ======================================================================
+# GWAS Catalog ETL endpoints
+# ======================================================================
+
+@router.get("/gwas-catalog-etl/progress")
+async def gwas_catalog_etl_progress(admin: User = Depends(require_admin)):
+    from ..services.gwas_catalog_etl import get_etl_progress
+    return get_etl_progress()
+
+
+@router.post("/gwas-catalog-etl/import")
+async def gwas_catalog_etl_import(admin: User = Depends(require_admin)):
+    from ..services.gwas_catalog_etl import run_gwas_etl, get_etl_progress
+    prog = get_etl_progress()
+    if prog.get("running"):
+        return {"status": "already_running", "step": prog.get("step"), "pct": prog.get("pct")}
+
+    async def _run():
+        try:
+            await run_gwas_etl()
+            from ..services.gwas_catalog_local import get_gwas_catalog_service
+            await get_gwas_catalog_service().ensure_loaded()
+        except Exception:
+            pass
+
+    import asyncio as _asyncio
+    _asyncio.create_task(_run())
+    return {"status": "started"}
+
+
+# ======================================================================
+# ClinGen ETL endpoints
+# ======================================================================
+
+@router.get("/clingen-etl/progress")
+async def clingen_etl_progress(admin: User = Depends(require_admin)):
+    from ..services.clingen_etl import get_etl_progress
+    return get_etl_progress()
+
+
+@router.post("/clingen-etl/import")
+async def clingen_etl_import(admin: User = Depends(require_admin)):
+    from ..services.clingen_etl import run_clingen_etl, get_etl_progress
+    prog = get_etl_progress()
+    if prog.get("running"):
+        return {"status": "already_running", "step": prog.get("step"), "pct": prog.get("pct")}
+
+    async def _run():
+        try:
+            await run_clingen_etl()
+            from ..services.clingen_local import get_clingen_service
+            await get_clingen_service().ensure_loaded()
+        except Exception:
+            pass
 
     import asyncio as _asyncio
     _asyncio.create_task(_run())

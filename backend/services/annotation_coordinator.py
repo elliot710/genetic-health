@@ -210,6 +210,8 @@ async def annotate_variants_efficiently(
             am_val  = _truthy_data(results.alpha_missense.get(rsid))
             gtx_val = _truthy_data(results.gnomad_tx.get(rsid))
             af_val  = _truthy_data(results.alphafold.get(rsid))
+            gwas_val = _truthy_data(results.gwas_catalog.get(rsid))
+            cg_val  = _truthy_data(results.clingen.get(rsid))
             first_v = rsid_to_variants[rsid][0]
 
             row: Dict[str, Any] = dict(
@@ -224,6 +226,8 @@ async def annotate_variants_efficiently(
                 thousand_genomes_data=tkg_val,
                 alpha_missense_data=am_val,
                 alphafold_data=af_val,
+                gwas_catalog_data=gwas_val,
+                clingen_data=cg_val,
             )
             mid = getattr(first_v, 'marker_id', None)
             if mid is not None:
@@ -244,6 +248,8 @@ async def annotate_variants_efficiently(
             'thousand_genomes': ('thousand_genomes_data', sources.thousand_genomes),
             'alpha_missense':   ('alpha_missense_data',   sources.alpha_missense),
             'alphafold':        ('alphafold_data',        sources.alphafold),
+            'gwas_catalog':     ('gwas_catalog_data',     sources.gwas_catalog),
+            'clingen':          ('clingen_data',          sources.clingen),
         }
         stmt = insert(SharedVariantAnnotation).values(batch_rows)
         for _src, (col, svc) in local_col_map.items():
@@ -277,6 +283,8 @@ async def annotate_variants_efficiently(
             am_val  = _truthy_data(results.alpha_missense.get(rsid))
             gtx_val = _truthy_data(results.gnomad_tx.get(rsid))
             af_val  = _truthy_data(results.alphafold.get(rsid))
+            gwas_val = _truthy_data(results.gwas_catalog.get(rsid))
+            cg_val  = _truthy_data(results.clingen.get(rsid))
             remote  = remote_data.get(rsid, {})
 
             ann: Dict[str, Any] = {
@@ -293,6 +301,8 @@ async def annotate_variants_efficiently(
                 ('alpha_missense', am_val),
                 ('gnomad_tx',     gtx_val),
                 ('alphafold',     af_val),
+                ('gwas_catalog',  gwas_val),
+                ('clingen',       cg_val),
                 ('clinvar',       remote.get('clinvar')),
                 ('clinpgx',       remote.get('clinpgx')),
                 ('snpedia',       remote.get('snpedia')),

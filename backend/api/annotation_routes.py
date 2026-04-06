@@ -814,11 +814,42 @@ async def get_variant_details(
         scoring_annotations["gnomad"] = annotation.gnomad_data
     if annotation.thousand_genomes_data:
         scoring_annotations["thousand_genomes"] = annotation.thousand_genomes_data
+    if annotation.gwas_catalog_data:
+        scoring_annotations["gwas_catalog"] = annotation.gwas_catalog_data
+    if annotation.clingen_data:
+        scoring_annotations["clingen"] = annotation.clingen_data
+    if annotation.open_targets_data:
+        scoring_annotations["open_targets"] = annotation.open_targets_data
     response["pathogenicity_score"] = get_scoring_engine().score_variant(scoring_annotations)
 
-    # ── BigQuery enrichment (ChEMBL, FDA Drug, AlphaFold) ─────────
+    # ── Expose GWAS Catalog, ClinGen, Open Targets data in response ─────
+    gwas_raw = annotation.gwas_catalog_data
+    if gwas_raw and isinstance(gwas_raw, dict) and gwas_raw.get("found"):
+        response["gwas_catalog"] = {
+            "found": True,
+            "source": "gwas_catalog",
+            "associations": gwas_raw.get("associations", [])[:10],
+            "top_trait": gwas_raw.get("top_trait"),
+            "top_p_value": gwas_raw.get("top_p_value"),
+            "genome_wide_significant": gwas_raw.get("genome_wide_significant", False),
+        }
+
+    clingen_raw = annotation.clingen_data
+    if clingen_raw and isinstance(clingen_raw, dict) and clingen_raw.get("found"):
+        response["clingen"] = {
+            "found": True,
+            "source": "clingen",
+            "gene_symbol": clingen_raw.get("gene_symbol"),
+            "strongest_classification": clingen_raw.get("strongest_classification"),
+            "is_definitive": clingen_raw.get("is_definitive", False),
+            "is_disputed": clingen_raw.get("is_disputed", False),
+            "disease_count": clingen_raw.get("disease_count", 0),
+            "curations": clingen_raw.get("curations", [])[:8],
+        }
+
+    # ── BigQuery enrichment (ChEMBL, FDA Drug, AlphaFold) + Open Targets API ──
     # Uses cached data from the annotation row when available;
-    # falls back to live BigQuery queries, then persists results.
+    # falls back to live queries, then persists results.
     gene_symbol = None
     transcripts = response.get("transcripts", [])
     if transcripts:
@@ -868,6 +899,37 @@ async def get_variant_details(
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning("BigQuery enrichment failed: %s", e)
+
+    # ── Open Targets Platform (gene-disease associations) ────────────────
+    if gene_symbol and not (annotation.open_targets_data and isinstance(annotation.open_targets_data, dict) and annotation.open_targets_data.get("found")):
+        try:
+            from backend.services.open_targets_service import get_open_targets_service
+            ot_svc = get_open_targets_service()
+            ot_data = await ot_svc.lookup_by_gene(gene_symbol)
+            annotation.open_targets_data = ot_data
+            await db.commit()
+        except Exception as ot_exc:
+            import logging
+            logging.getLogger(__name__).debug("Open Targets lookup failed: %s", ot_exc)
+            ot_data = {}
+    else:
+        ot_data = annotation.open_targets_data or {}
+
+    if ot_data and isinstance(ot_data, dict) and ot_data.get("found"):
+        response["open_targets"] = {
+            "found": True,
+            "source": "open_targets",
+            "gene_symbol": ot_data.get("gene_symbol"),
+            "ensembl_id": ot_data.get("ensembl_id"),
+            "associations": ot_data.get("associations", [])[:10],
+            "top_disease": ot_data.get("top_disease"),
+            "max_score": ot_data.get("max_score"),
+            "has_strong_genetic_evidence": ot_data.get("has_strong_genetic_evidence", False),
+        }
+        # Feed into scoring if not already there
+        if "open_targets" not in scoring_annotations:
+            scoring_annotations["open_targets"] = ot_data
+            response["pathogenicity_score"] = get_scoring_engine().score_variant(scoring_annotations)
 
     return response
 

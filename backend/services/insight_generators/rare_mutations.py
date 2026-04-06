@@ -104,6 +104,7 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
         gene_conditions = []
         inheritance_pattern = 'unknown'
         penetrance = 'unknown'
+        review_statuses: list[str] = []
 
         if cv_local and cv_local.get('found'):
             clin_sigs = cv_local.get('clinical_significances', [])
@@ -157,6 +158,8 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
                         inheritance_pattern = 'x_linked'
                         break
 
+            review_statuses = cv_local.get('review_statuses', [])
+
             if not gene:
                 genes = cv_local.get('genes', [])
                 if genes:
@@ -175,16 +178,31 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
         if not gene:
             continue
 
-        # X-linked recessive sex filter: heterozygous females are carriers,
-        # not affected — they belong in carrier_status, not rare_mutations.
-        if inheritance_pattern == 'x_linked' and ctx.inferred_sex == 'female':
+        # Indel genotypes bypass allele verification. Without population frequency
+        # confirming rarity, require at least multi-submitter ClinVar evidence to
+        # avoid false positives from ambiguous D/I calls at multi-allelic positions.
+        if freq is None and is_indel_genotype(user_gt):
+            has_strong_evidence = any(
+                'multiple submitters' in s.lower() or 'expert panel' in s.lower()
+                or 'practice guideline' in s.lower()
+                for s in review_statuses
+            )
+            if not has_strong_evidence:
+                continue
+
+        # X-linked carrier filter: het females are carriers, not affected.
+        # Use the variant's chromosome as ground truth — condition names like
+        # "Rett syndrome" or "Fabry disease" don't contain "x-linked".
+        variant_chrom = getattr(variant, 'chromosome', None)
+        effective_x_linked = (inheritance_pattern == 'x_linked') or (variant_chrom == 'X')
+        if effective_x_linked and ctx.inferred_sex == 'female':
             if profile:
                 is_het = profile.is_het
             else:
                 is_het = is_heterozygous(user_gt)
             if is_het:
                 continue
-            continue
+            # Homozygous female on X — she IS affected, do not filter
 
         # Use scoring engine composite score for informational purposes only.
         # BUG-05 fix: Do NOT upgrade conflicting/uncertain classifications based
