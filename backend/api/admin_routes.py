@@ -1861,6 +1861,29 @@ async def clingen_etl_import(admin: User = Depends(require_admin)):
 
 
 # ======================================================================
+# Open Targets test endpoint
+# ======================================================================
+
+@router.get("/open-targets/test")
+async def open_targets_test(admin: User = Depends(require_admin)):
+    from ..services.open_targets_service import get_open_targets_service
+    svc = get_open_targets_service()
+    try:
+        result = await svc.lookup_by_gene("BRCA1")
+        return {
+            "status": "ok",
+            "reachable": True,
+            "test_gene": "BRCA1",
+            "found": result.get("found", False),
+            "association_count": len(result.get("associations", [])),
+            "top_disease": result.get("top_disease"),
+            "max_score": result.get("max_score"),
+        }
+    except Exception as exc:
+        return {"status": "error", "reachable": False, "error": str(exc)}
+
+
+# ======================================================================
 # Category Rules endpoints
 # ======================================================================
 

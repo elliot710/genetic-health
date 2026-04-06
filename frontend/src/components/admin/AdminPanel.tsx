@@ -348,6 +348,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const [etlLoading, setEtlLoading] = useState<Record<string, boolean>>({})
   const [etlRunning, setEtlRunning] = useState<Record<string, boolean>>({})
   const [etlFeedback, setEtlFeedback] = useState<{ source: string; message: string; type: 'success' | 'error' } | null>(null)
+  const [apiTestResults, setApiTestResults] = useState<Record<string, { reachable: boolean; detail?: string }>>({})
   const [etlProgress, setEtlProgress] = useState<{ running: boolean; step: string | null; rows: number; pct: number; total_elapsed: number; error: string | null; steps: { step: string; count: number; elapsed_s: number }[] } | null>(null)
   const etlPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // BigQuery state
@@ -935,6 +936,19 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
         arrayKeys: [] as string[],
       },
     },
+    {
+      key: 'open_targets', label: 'Open Targets Platform',
+      statusEndpoint: undefined as string | undefined,
+      importEndpoint: undefined as string | undefined,
+      testEndpoint: '/open-targets/test',
+      description: 'Gene-disease association scores from genetic, literature & animal model evidence (live GraphQL API)',
+      displayConfig: {
+        primaryKey: '' as string,
+        countKeys: [] as string[],
+        fileKeys: [] as string[],
+        arrayKeys: [] as string[],
+      },
+    },
   ]
 
   const fetchEtlStatus = useCallback(async (key: string, endpoint: string) => {
@@ -1017,6 +1031,25 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     }
     setEtlRunning(prev => ({ ...prev, [key]: false }))
     setTimeout(() => setEtlFeedback(prev => prev?.source === key ? null : prev), 30000)
+  }
+
+  const runApiTest = async (key: string, testEndpoint: string) => {
+    setEtlLoading(prev => ({ ...prev, [key]: true }))
+    try {
+      const res = await authFetch(`${API}${testEndpoint}`, { headers })
+      const data = await res.json()
+      if (data.reachable) {
+        const detail = data.found
+          ? `BRCA1: ${data.association_count} assoc · top: ${data.top_disease ?? '—'} (${data.max_score?.toFixed(2) ?? '—'})`
+          : 'Reachable but no data returned'
+        setApiTestResults(prev => ({ ...prev, [key]: { reachable: true, detail } }))
+      } else {
+        setApiTestResults(prev => ({ ...prev, [key]: { reachable: false, detail: data.error } }))
+      }
+    } catch {
+      setApiTestResults(prev => ({ ...prev, [key]: { reachable: false, detail: 'Network error' } }))
+    }
+    setEtlLoading(prev => ({ ...prev, [key]: false }))
   }
 
   // On mount: check if ClinVar ETL is already running and resume polling
@@ -2187,14 +2220,31 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className={`font-semibold ${theme.text.primary}`}>{src.label}</span>
-                            <Badge variant="outline" className="text-xs text-emerald-600 border-emerald-500/30">Local</Badge>
+                            {'testEndpoint' in src && src.testEndpoint
+                              ? <Badge variant="outline" className="text-xs text-blue-500 border-blue-500/30">Live API</Badge>
+                              : <Badge variant="outline" className="text-xs text-emerald-600 border-emerald-500/30">Local</Badge>
+                            }
                             {status && !isLoading && dc.primaryKey && (
                               <Badge variant="outline" className="text-xs text-sky-500 border-sky-500/30">
                                 {Number(status[dc.primaryKey] ?? 0).toLocaleString()} rows
                               </Badge>
                             )}
+                            {'testEndpoint' in src && src.testEndpoint && apiTestResults[src.key] && (
+                              <Badge variant="outline" className={`text-xs ${
+                                apiTestResults[src.key].reachable
+                                  ? 'text-green-500 border-green-500/30'
+                                  : 'text-red-500 border-red-500/30'
+                              }`}>
+                                {apiTestResults[src.key].reachable ? '✓ Reachable' : '✗ Unreachable'}
+                              </Badge>
+                            )}
                           </div>
                           <p className={`text-sm mt-0.5 ${theme.text.muted}`}>{src.description}</p>
+                          {'testEndpoint' in src && src.testEndpoint && apiTestResults[src.key]?.detail && (
+                            <p className={`text-xs mt-1 font-mono ${
+                              apiTestResults[src.key].reachable ? 'text-green-500/80' : 'text-red-500/80'
+                            }`}>{apiTestResults[src.key].detail}</p>
+                          )}
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
                           {src.statusEndpoint && (
@@ -2207,16 +2257,29 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                               <RefreshCw className={`h-3 w-3 ${isLoading ? 'animate-spin' : ''}`} />
                             </Button>
                           )}
-                          <Button
-                            size="sm" variant="default"
-                            disabled={!!isRunning}
-                            onClick={() => runEtlImport(src.key, src.importEndpoint)}
-                            className="bg-violet-600 hover:bg-violet-700"
-                          >
-                            {isRunning
-                              ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Importing…</>
-                              : <><Upload className="h-3 w-3 mr-1" /> Import</>}
-                          </Button>
+                          {'testEndpoint' in src && src.testEndpoint ? (
+                            <Button
+                              size="sm" variant="outline"
+                              disabled={!!isLoading}
+                              onClick={() => runApiTest(src.key, (src as { testEndpoint: string }).testEndpoint)}
+                              className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                            >
+                              {isLoading
+                                ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Testing…</>
+                                : <>Test Connection</>}
+                            </Button>
+                          ) : (
+                            <Button
+                              size="sm" variant="default"
+                              disabled={!!isRunning}
+                              onClick={() => runEtlImport(src.key, src.importEndpoint)}
+                              className="bg-violet-600 hover:bg-violet-700"
+                            >
+                              {isRunning
+                                ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Importing…</>
+                                : <><Upload className="h-3 w-3 mr-1" /> Import</>}
+                            </Button>
+                          )}
                         </div>
                       </div>
 
