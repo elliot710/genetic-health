@@ -1046,4 +1046,3 @@ class ClinGenGeneValidity(Base):
     __table_args__ = (
         Index('ix_clingen_gene_symbol', 'gene_symbol'),
     )
-    generated_at = Column(DateTime(timezone=True), server_default=func.now())
