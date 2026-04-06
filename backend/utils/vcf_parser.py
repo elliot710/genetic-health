@@ -360,14 +360,27 @@ class VCFParser:
                 "filter": fields[6],
                 "info": self._parse_info_field(fields[7])
             }
-            
-            # Add genotype information if available
-            if len(fields) > 9 and self.sample_names:
+
+            # Extract genotype from FORMAT (col 8) + first SAMPLE (col 9)
+            if len(fields) > 9:
                 format_fields = fields[8].split(':') if len(fields) > 8 else []
-                for i, sample in enumerate(self.sample_names):
-                    if i + 9 < len(fields):
-                        sample_data = fields[i + 9].split(':')
-                        variant[f"sample_{sample}"] = dict(zip(format_fields, sample_data))
+                sample_str = fields[9]
+                sample_data = sample_str.split(':')
+                sample_dict = dict(zip(format_fields, sample_data))
+
+                # Store full sample data as named entry (existing behaviour)
+                if self.sample_names:
+                    variant[f"sample_{self.sample_names[0]}"] = sample_dict
+                    for i, sample in enumerate(self.sample_names[1:], start=1):
+                        if i + 9 < len(fields):
+                            s_data = fields[i + 9].split(':')
+                            variant[f"sample_{sample}"] = dict(zip(format_fields, s_data))
+
+                # Convert GT allele-index notation → nucleotide genotype
+                gt_raw = sample_dict.get('GT', '')
+                genotype = self._gt_to_nucleotides(gt_raw, fields[3], fields[4])
+                variant['genotype'] = genotype
+                variant.setdefault('info', {})['original_genotype'] = gt_raw
 
             if not self._validate_variant(variant):
                 return None
@@ -377,7 +390,31 @@ class VCFParser:
         except Exception as e:
             print(f"Error parsing variant line {line_num}: {e}")
             return None
-    
+
+    def _gt_to_nucleotides(self, gt_raw: str, ref: str, alt: str) -> Optional[str]:
+        """Convert a VCF GT field (e.g. '0/1', '1|1', './.') to a nucleotide genotype.
+
+        allele index 0 = ref, 1 = first alt, etc.
+        Returns None for no-call genotypes.
+        """
+        if not gt_raw:
+            return None
+        sep = '|' if '|' in gt_raw else '/'
+        parts = gt_raw.split(sep)
+        alts = alt.split(',')
+        allele_map = {'.': None, '0': ref}
+        for i, a in enumerate(alts, start=1):
+            allele_map[str(i)] = a
+        resolved = []
+        for p in parts:
+            a = allele_map.get(p)
+            if a is None:
+                return None  # any no-call index → treat whole GT as no-call
+            resolved.append(a.strip().upper())
+        if not resolved:
+            return None
+        return '/'.join(resolved)
+
     def _parse_info_field(self, info_str: str) -> Dict[str, Any]:
         """Parse the INFO field from VCF"""
         info_dict = {}

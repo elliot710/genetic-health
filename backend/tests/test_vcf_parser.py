@@ -221,6 +221,78 @@ class TestParseVariantLine:
         assert variant is not None
         assert variant["info"]["AC"] == 2
 
+    def test_vcf_genotype_het(self, parser):
+        parser.sample_names = ["SAMPLE"]
+        line = "1\t100000\trs12345\tA\tT\t50\tPASS\t.\tGT\t0/1"
+        variant = parser._parse_variant_line(line, 0)
+        assert variant is not None
+        assert variant["genotype"] == "A/T"
+
+    def test_vcf_genotype_hom_ref(self, parser):
+        parser.sample_names = ["SAMPLE"]
+        line = "1\t100000\trs12345\tA\tT\t50\tPASS\t.\tGT\t0/0"
+        variant = parser._parse_variant_line(line, 0)
+        assert variant["genotype"] == "A/A"
+
+    def test_vcf_genotype_hom_alt(self, parser):
+        parser.sample_names = ["SAMPLE"]
+        line = "1\t100000\trs12345\tA\tT\t50\tPASS\t.\tGT\t1/1"
+        variant = parser._parse_variant_line(line, 0)
+        assert variant["genotype"] == "T/T"
+
+    def test_vcf_genotype_phased(self, parser):
+        parser.sample_names = ["SAMPLE"]
+        line = "1\t100000\trs12345\tA\tT\t50\tPASS\t.\tGT\t0|1"
+        variant = parser._parse_variant_line(line, 0)
+        assert variant["genotype"] == "A/T"
+
+    def test_vcf_genotype_no_call(self, parser):
+        parser.sample_names = ["SAMPLE"]
+        line = "1\t100000\trs12345\tA\tT\t50\tPASS\t.\tGT\t./."
+        variant = parser._parse_variant_line(line, 0)
+        assert variant["genotype"] is None
+
+    def test_vcf_genotype_multiallelic(self, parser):
+        parser.sample_names = ["SAMPLE"]
+        line = "1\t100000\trs12345\tA\tT,C\t50\tPASS\t.\tGT\t1/2"
+        variant = parser._parse_variant_line(line, 0)
+        assert variant["genotype"] == "T/C"
+
+    def test_vcf_genotype_with_extra_format_fields(self, parser):
+        parser.sample_names = ["SAMPLE"]
+        line = "1\t100000\trs12345\tA\tT\t50\tPASS\t.\tGT:DP:GQ\t0/1:30:99"
+        variant = parser._parse_variant_line(line, 0)
+        assert variant["genotype"] == "A/T"
+
+    def test_vcf_no_sample_column_genotype_none(self, parser):
+        line = "1\t100000\trs12345\tA\tT\t50\tPASS\t."
+        variant = parser._parse_variant_line(line, 0)
+        assert variant is not None
+        assert variant.get("genotype") is None
+
+
+class TestGtToNucleotides:
+    def test_het(self, parser):
+        assert parser._gt_to_nucleotides("0/1", "A", "T") == "A/T"
+
+    def test_hom_ref(self, parser):
+        assert parser._gt_to_nucleotides("0/0", "A", "T") == "A/A"
+
+    def test_hom_alt(self, parser):
+        assert parser._gt_to_nucleotides("1/1", "A", "T") == "T/T"
+
+    def test_phased(self, parser):
+        assert parser._gt_to_nucleotides("0|1", "G", "C") == "G/C"
+
+    def test_no_call(self, parser):
+        assert parser._gt_to_nucleotides("./.", "A", "T") is None
+
+    def test_missing_gt(self, parser):
+        assert parser._gt_to_nucleotides("", "A", "T") is None
+
+    def test_multiallelic(self, parser):
+        assert parser._gt_to_nucleotides("1/2", "A", "T,C") == "T/C"
+
 
 class TestParseCsvRow:
     def test_23andme_format(self, parser):
