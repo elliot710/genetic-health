@@ -195,14 +195,20 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
         # "Rett syndrome" or "Fabry disease" don't contain "x-linked".
         variant_chrom = getattr(variant, 'chromosome', None)
         effective_x_linked = (inheritance_pattern == 'x_linked') or (variant_chrom == 'X')
-        if effective_x_linked and ctx.inferred_sex == 'female':
+        if effective_x_linked:
             if profile:
                 is_het = profile.is_het
             else:
                 is_het = is_heterozygous(user_gt)
-            if is_het:
+
+            if ctx.inferred_sex == 'female' and is_het:
+                # Het female on X-linked condition = carrier, not affected
+                continue
+            elif ctx.inferred_sex == 'male' and is_het:
+                # Het call on X for a male is a genotyping artifact (males are hemizygous on X)
                 continue
             # Homozygous female on X — she IS affected, do not filter
+            # Hemizygous (hom-reported) male on X — he IS affected, do not filter
 
         # Use scoring engine composite score for informational purposes only.
         # BUG-05 fix: Do NOT upgrade conflicting/uncertain classifications based

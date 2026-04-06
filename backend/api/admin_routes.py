@@ -1805,9 +1805,15 @@ async def clinvar_etl_import(admin: User = Depends(require_admin)):
 # ======================================================================
 
 @router.get("/gwas-catalog-etl/progress")
-async def gwas_catalog_etl_progress(admin: User = Depends(require_admin)):
+async def gwas_catalog_etl_progress(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     from ..services.gwas_catalog_etl import get_etl_progress
-    return get_etl_progress()
+    from sqlalchemy import text
+    prog = get_etl_progress()
+    if not prog.get("running"):
+        result = await db.execute(text("SELECT COUNT(*) FROM gwas_catalog_associations"))
+        prog = dict(prog)
+        prog["rows"] = result.scalar() or 0
+    return prog
 
 
 @router.post("/gwas-catalog-etl/import")
@@ -1835,9 +1841,15 @@ async def gwas_catalog_etl_import(admin: User = Depends(require_admin)):
 # ======================================================================
 
 @router.get("/clingen-etl/progress")
-async def clingen_etl_progress(admin: User = Depends(require_admin)):
+async def clingen_etl_progress(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     from ..services.clingen_etl import get_etl_progress
-    return get_etl_progress()
+    from sqlalchemy import text
+    prog = get_etl_progress()
+    if not prog.get("running"):
+        result = await db.execute(text("SELECT COUNT(*) FROM clingen_gene_validity"))
+        prog = dict(prog)
+        prog["rows"] = result.scalar() or 0
+    return prog
 
 
 @router.post("/clingen-etl/import")
