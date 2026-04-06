@@ -466,3 +466,42 @@ class TestGetVariantStatistics:
         ]
         result = await parser.get_variant_statistics(variants)
         assert result["quality_stats"] == {}
+
+
+class TestFormatDetection:
+    @pytest.mark.asyncio
+    async def test_vcf_with_many_metadata_lines_uses_vcf_parser(self, parser):
+        many_meta = "\n".join(f"##meta_{i}=value_{i}" for i in range(50))
+        vcf_content = f"""{many_meta}
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE
+1\t752721\trs3131972\tA\tC\t.\tPASS\t.\tGT\t0/1
+1\t752918\trs200599638\tG\tT\t.\tPASS\t.\tGT\t1/1
+""".encode()
+        parser.sample_names = ["SAMPLE"]
+        variants = await parser.parse_vcf_content(vcf_content)
+        assert len(variants) == 2
+        assert variants[0]["rsid"] == "rs3131972"
+        assert variants[0]["genotype"] == "A/C"
+        assert variants[1]["genotype"] == "T/T"
+
+    @pytest.mark.asyncio
+    async def test_vcf_with_info_commas_not_routed_to_csv(self, parser):
+        vcf_content = b"""##fileformat=VCFv4.1
+##INFO=<ID=CSQ,Number=.,Type=String,Description="multi,value,info">
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE
+1\t100000\trs12345\tA\tT\t.\tPASS\tCSQ=x,y,z\tGT\t0/1
+"""
+        parser.sample_names = ["SAMPLE"]
+        variants = await parser.parse_vcf_content(vcf_content)
+        assert len(variants) == 1
+        assert variants[0]["genotype"] == "A/T"
+
+    @pytest.mark.asyncio
+    async def test_csv_without_vcf_header_uses_csv_parser(self, parser):
+        csv_content = b"""rsid,chromosome,position,genotype
+rs12345,1,100000,AG
+rs67890,2,200000,CT
+"""
+        variants = await parser.parse_vcf_content(csv_content)
+        assert len(variants) == 2
+        assert variants[0]["rsid"] == "rs12345"

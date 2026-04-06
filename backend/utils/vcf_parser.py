@@ -34,13 +34,17 @@ class VCFParser:
             # Better format detection - look for actual VCF structure
             has_vcf_header = False
             has_tab_separated = False
-            
-            for line in lines[:20]:  # Check first 20 lines
+
+            # Scan all comment/header lines for the #CHROM column header (VCF files
+            # can have 100+ ##metadata lines before #CHROM, so first-20 check fails).
+            for line in lines:
                 if line.startswith('#CHROM\tPOS\tID\tREF\tALT'):
                     has_vcf_header = True
                     break
-                elif not line.startswith('#') and '\t' in line and len(line.split('\t')) >= 8:
-                    has_tab_separated = True
+                if not line.startswith('#'):
+                    # Reached first data line without finding #CHROM header
+                    if '\t' in line and len(line.split('\t')) >= 8:
+                        has_tab_separated = True
                     break
             
             # Check if it looks like a CSV with comma separation
