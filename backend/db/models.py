@@ -1017,7 +1017,7 @@ class GwasCatalogAssociation(Base):
     ci_text = Column(Text, nullable=True)
     risk_allele_frequency = Column(Float, nullable=True)
     strongest_snp_risk_allele = Column(Text, nullable=True)
-    chromosome = Column(String(5), nullable=True)
+    chromosome = Column(Text, nullable=True)
     chromosome_position = Column(Integer, nullable=True)
     context = Column(Text, nullable=True)
     imported_at = Column(DateTime(timezone=True), server_default=func.now())
