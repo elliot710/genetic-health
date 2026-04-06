@@ -4,15 +4,15 @@ A full-stack genetic data analysis platform providing personalized health insigh
 
 The source code should follow clean code Architecture.
 The source code should include Unit tests for all the logical parts, with all the 3rd party or API calls being mocked. 
-The Source code should not include any documentations or md files. Comments should only be used in exceptional cases. the Code should be self explanatory.
+The source code should not include any documentations or md files. Comments should only be used in exceptional cases. The code should be self explanatory.
 Do not try anything more than 3 times, if you cannot find the solution or in a loop for 3 times, ask for feedback.
 Do not praise me or apologize, just be clear and respond with simple responses.
 Always do plan first and only after do start with the implementations. 
-Do not add Logs and debugs everwhere, those should be used and implemented with the confirmation only. if you added any debugging logs, clean up after the final iterations.
+Do not add logs and debugs everwhere, those should be used and implemented with the confirmation only. if you added any debugging logs, clean up after the final iterations.
 All the variables should have a meaningful names. 
 Methods should not be longer than 30 lines of codes, and each class should not be longer than 300 lines of code.
 If you need to convert anything, use extensions and utils.
-We will use Dependancy injection with proper namings. 
+We will use eependency injection with proper namings. 
 
 ## Quick Reference
 

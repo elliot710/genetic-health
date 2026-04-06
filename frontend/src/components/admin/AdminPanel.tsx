@@ -349,8 +349,10 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const [etlRunning, setEtlRunning] = useState<Record<string, boolean>>({})
   const [etlFeedback, setEtlFeedback] = useState<{ source: string; message: string; type: 'success' | 'error' } | null>(null)
   const [apiTestResults, setApiTestResults] = useState<Record<string, { reachable: boolean; detail?: string }>>({})
-  const [etlProgress, setEtlProgress] = useState<{ running: boolean; step: string | null; rows: number; pct: number; total_elapsed: number; error: string | null; steps: { step: string; count: number; elapsed_s: number }[] } | null>(null)
-  const etlPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [etlProgressByKey, setEtlProgressByKey] = useState<Record<string, { running: boolean; step: string | null; rows: number; pct: number; total_elapsed: number; error: string | null }>>({})
+  const etlPollRefs = useRef<Record<string, ReturnType<typeof setInterval>>>({})
+  // Legacy alias — etlProgress still referenced by ClinVar-specific render code elsewhere
+  const etlProgress = etlProgressByKey['clinvar'] ?? null
   // BigQuery state
   const [bqStatus, setBqStatus] = useState<Record<string, unknown> | null>(null)
   const [bqLoading, setBqLoading] = useState(false)
@@ -963,38 +965,49 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     setEtlLoading(prev => ({ ...prev, [key]: false }))
   }, [headers])
 
-  const startEtlProgressPolling = useCallback(() => {
-    if (etlPollRef.current) clearInterval(etlPollRef.current)
-    etlPollRef.current = setInterval(async () => {
+  const startEtlProgressPolling = useCallback((key: string, progressEndpoint: string) => {
+    if (etlPollRefs.current[key]) clearInterval(etlPollRefs.current[key])
+    etlPollRefs.current[key] = setInterval(async () => {
       try {
-        const res = await authFetch(`${API}/clinvar-etl/progress`, { headers })
+        const res = await authFetch(`${API}${progressEndpoint}`, { headers })
         if (res.ok) {
           const data = await res.json()
-          setEtlProgress(data)
+          setEtlProgressByKey(prev => ({ ...prev, [key]: data }))
+          if (key === 'clinvar') setEtlProgressByKey(prev => ({ ...prev, clinvar: data })) // keep legacy alias fed
           if (!data.running) {
-            clearInterval(etlPollRef.current!)
-            etlPollRef.current = null
-            setEtlRunning(prev => ({ ...prev, clinvar: false }))
+            clearInterval(etlPollRefs.current[key])
+            delete etlPollRefs.current[key]
+            setEtlRunning(prev => ({ ...prev, [key]: false }))
             if (data.step === 'complete') {
-              setEtlFeedback({ source: 'clinvar', message: `Import complete in ${data.total_elapsed}s`, type: 'success' })
-              const src = ETL_SOURCES.find(s => s.key === 'clinvar')
-              if (src?.statusEndpoint) fetchEtlStatus('clinvar', src.statusEndpoint)
+              const elapsed = data.total_elapsed ? ` in ${data.total_elapsed}s` : ''
+              const rows = data.rows ? ` · ${Number(data.rows).toLocaleString()} rows` : ''
+              setEtlFeedback({ source: key, message: `Import complete${elapsed}${rows}`, type: 'success' })
+              const src = ETL_SOURCES.find(s => s.key === key)
+              if (src?.statusEndpoint) fetchEtlStatus(key, src.statusEndpoint)
             } else if (data.step === 'error') {
-              setEtlFeedback({ source: 'clinvar', message: data.error || 'Import failed', type: 'error' })
+              setEtlFeedback({ source: key, message: data.error || 'Import failed', type: 'error' })
             }
-            setTimeout(() => setEtlFeedback(prev => prev?.source === 'clinvar' ? null : prev), 15000)
+            setTimeout(() => setEtlFeedback(prev => prev?.source === key ? null : prev), 15000)
           }
         }
       } catch { /* ignore */ }
     }, 2000)
   }, [authFetch, headers, fetchEtlStatus])
 
-  const runEtlImport = async (key: string, endpoint: string) => {
+  // Keys that support in-process progress polling
+  const PROGRESS_SOURCES: Record<string, string> = {
+    clinvar: '/clinvar-etl/progress',
+    gwas_catalog: '/gwas-catalog-etl/progress',
+    clingen: '/clingen-etl/progress',
+  }
+
+  const runEtlImport = async (key: string, endpoint: string | undefined) => {
+    if (!endpoint) return
     setEtlRunning(prev => ({ ...prev, [key]: true }))
     setEtlFeedback(null)
 
-    // ClinVar uses fire-and-forget + progress polling
-    if (key === 'clinvar') {
+    const progressEndpoint = PROGRESS_SOURCES[key]
+    if (progressEndpoint) {
       try {
         const res = await authFetch(`${API}${endpoint}`, { method: 'POST', headers })
         const data = await res.json()
@@ -1003,8 +1016,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
           setEtlRunning(prev => ({ ...prev, [key]: false }))
           return
         }
-        // started — begin polling
-        startEtlProgressPolling()
+        startEtlProgressPolling(key, progressEndpoint)
       } catch {
         setEtlFeedback({ source: key, message: 'Network error starting import', type: 'error' })
         setEtlRunning(prev => ({ ...prev, [key]: false }))
@@ -1012,14 +1024,13 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
       return
     }
 
-    // Other ETL sources: dispatched to worker, returns immediately with job_id
+    // Other ETL sources dispatched to worker
     try {
       const res = await authFetch(`${API}${endpoint}`, { method: 'POST', headers })
       if (res.ok) {
         const data = await res.json()
-        const msg = data.detail || JSON.stringify(data)
+        const msg = data.detail || (data.job_id ? `Job queued: ${data.job_id}` : 'Import started')
         setEtlFeedback({ source: key, message: msg, type: 'success' })
-        // Refresh status after queuing
         const src = ETL_SOURCES.find(s => s.key === key)
         if (src?.statusEndpoint) fetchEtlStatus(key, src.statusEndpoint)
       } else {
@@ -1052,19 +1063,21 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     setEtlLoading(prev => ({ ...prev, [key]: false }))
   }
 
-  // On mount: check if ClinVar ETL is already running and resume polling
+  // On mount: resume polling for any ETL source that's already running
   useEffect(() => {
-    authFetch(`${API}/clinvar-etl/progress`, { headers })
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (data?.running) {
-          setEtlProgress(data)
-          setEtlRunning(prev => ({ ...prev, clinvar: true }))
-          startEtlProgressPolling()
-        }
-      })
-      .catch(() => { /* ignore */ })
-    return () => { if (etlPollRef.current) clearInterval(etlPollRef.current) }
+    Object.entries(PROGRESS_SOURCES).forEach(([key, progressEndpoint]) => {
+      authFetch(`${API}${progressEndpoint}`, { headers })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (data?.running) {
+            setEtlProgressByKey(prev => ({ ...prev, [key]: data }))
+            setEtlRunning(prev => ({ ...prev, [key]: true }))
+            startEtlProgressPolling(key, progressEndpoint)
+          }
+        })
+        .catch(() => { /* ignore */ })
+    })
+    return () => { Object.values(etlPollRefs.current).forEach(clearInterval) }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch all ETL statuses on mount
@@ -2208,7 +2221,8 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                   const status = etlStatuses[src.key]
                   const isLoading = etlLoading[src.key]
                   const isRunning = etlRunning[src.key]
-                  const showProgress = src.key === 'clinvar' && isRunning && etlProgress
+                  const srcProgress = etlProgressByKey[src.key]
+                  const showProgress = !!isRunning && !!srcProgress?.running
                   const dc = src.displayConfig
                   return (
                     <div
@@ -2353,33 +2367,24 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                         </div>
                       )}
 
-                      {/* ClinVar live progress */}
-                      {showProgress && etlProgress && (
+                      {/* Live import progress (GWAS, ClinGen, ClinVar) */}
+                      {showProgress && srcProgress && (
                         <div className="mt-3 space-y-2">
                           <div className="flex items-center justify-between text-xs">
                             <span className={`font-medium capitalize ${theme.text.secondary}`}>
-                              Step: <span className="text-violet-400">{etlProgress.step ?? '…'}</span>
-                              {etlProgress.rows > 0 && (
-                                <span className={`ml-2 ${theme.text.muted}`}>({etlProgress.rows.toLocaleString()} rows)</span>
+                              Step: <span className="text-violet-400">{srcProgress.step ?? '…'}</span>
+                              {(srcProgress.rows ?? 0) > 0 && (
+                                <span className={`ml-2 ${theme.text.muted}`}>({srcProgress.rows.toLocaleString()} rows)</span>
                               )}
                             </span>
-                            <span className={theme.text.muted}>{etlProgress.pct}% · {etlProgress.total_elapsed}s</span>
+                            <span className={theme.text.muted}>{srcProgress.pct ?? 0}%{srcProgress.total_elapsed ? ` · ${srcProgress.total_elapsed}s` : ''}</span>
                           </div>
                           <div className={`w-full h-2 rounded-full overflow-hidden ${isDarkMode ? 'bg-white/10' : 'bg-gray-200'}`}>
                             <div
                               className="h-full rounded-full bg-linear-to-r from-violet-500 to-fuchsia-500 transition-all duration-500"
-                              style={{ width: `${etlProgress.pct}%` }}
+                              style={{ width: `${srcProgress.pct ?? 0}%` }}
                             />
                           </div>
-                          {etlProgress.steps.length > 0 && (
-                            <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
-                              {etlProgress.steps.map(s => (
-                                <span key={s.step} className={`text-xs ${theme.text.muted}`}>
-                                  ✓ {s.step}{s.count > 0 ? ` (${s.count.toLocaleString()})` : ''} {s.elapsed_s}s
-                                </span>
-                              ))}
-                            </div>
-                          )}
                         </div>
                       )}
                     </div>
