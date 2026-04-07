@@ -1046,3 +1046,11 @@ class ClinGenGeneValidity(Base):
     __table_args__ = (
         Index('ix_clingen_gene_symbol', 'gene_symbol'),
     )
+
+
+class OpenTargetsCache(Base):
+    __tablename__ = 'open_targets_cache'
+
+    gene_symbol = Column(String(50), primary_key=True)
+    data = Column(JSON, nullable=False)
+    fetched_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -5,6 +5,11 @@ import logging
 from typing import Any, Dict, List, Optional
 
 import aiohttp
+from sqlalchemy import select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+from ..db.database import async_session_factory
+from ..db.models import OpenTargetsCache
 
 logger = logging.getLogger(__name__)
 
@@ -140,16 +145,77 @@ class OpenTargetsService:
     async def lookup_genes_batch(
         self, gene_symbols: List[str]
     ) -> Dict[str, Dict[str, Any]]:
-        tasks = {gene: self.lookup_by_gene(gene) for gene in gene_symbols}
         results: Dict[str, Dict[str, Any]] = {}
-        total = len(tasks)
-        for idx, (gene, coro) in enumerate(tasks.items(), 1):
-            results[gene] = await coro
+        if not gene_symbols:
+            return results
+
+        cached = await self._load_from_cache(gene_symbols)
+        results.update(cached)
+
+        uncached = [g for g in gene_symbols if g not in cached]
+        if not uncached:
+            logger.info(f"Open Targets: all {len(gene_symbols)} genes served from cache")
+            return results
+
+        logger.info(
+            f"Open Targets: {len(cached)} cached, {len(uncached)} to query via API"
+        )
+        api_results = await self._query_api_batch(uncached)
+        results.update(api_results)
+
+        await self._persist_to_cache(api_results)
+        return results
+
+    async def _load_from_cache(self, gene_symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+        results: Dict[str, Dict[str, Any]] = {}
+        try:
+            batch_size = 5000
+            for i in range(0, len(gene_symbols), batch_size):
+                chunk = gene_symbols[i:i + batch_size]
+                async with async_session_factory() as session:
+                    rows = (await session.execute(
+                        select(OpenTargetsCache)
+                        .where(OpenTargetsCache.gene_symbol.in_(chunk))
+                    )).scalars().all()
+                for row in rows:
+                    results[row.gene_symbol] = row.data
+        except Exception as e:
+            logger.warning(f"Open Targets cache read failed: {e}")
+        return results
+
+    async def _query_api_batch(self, gene_symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+        results: Dict[str, Dict[str, Any]] = {}
+        total = len(gene_symbols)
+        for idx, gene in enumerate(gene_symbols, 1):
+            results[gene] = await self.lookup_by_gene(gene)
             if idx % 100 == 0 or idx == total:
                 found = sum(1 for d in results.values() if d and d.get('found'))
-                logger.info(f"Open Targets batch: {idx}/{total} genes queried ({found} with data)")
+                logger.info(f"Open Targets API: {idx}/{total} genes queried ({found} with data)")
             await asyncio.sleep(0.05)
         return results
+
+    async def _persist_to_cache(self, results: Dict[str, Dict[str, Any]]) -> None:
+        if not results:
+            return
+        try:
+            batch_size = 500
+            items = list(results.items())
+            for i in range(0, len(items), batch_size):
+                chunk = items[i:i + batch_size]
+                async with async_session_factory() as session:
+                    stmt = pg_insert(OpenTargetsCache).values([
+                        {"gene_symbol": gene, "data": data}
+                        for gene, data in chunk
+                    ])
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=["gene_symbol"],
+                        set_={"data": stmt.excluded.data, "fetched_at": text("NOW()")},
+                    )
+                    await session.execute(stmt)
+                    await session.commit()
+            logger.info(f"Open Targets: cached {len(results)} gene results to DB")
+        except Exception as e:
+            logger.warning(f"Open Targets cache write failed: {e}")
 
 
 def _row_to_association(row: Dict[str, Any]) -> Dict[str, Any]:
