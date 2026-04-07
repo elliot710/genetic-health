@@ -508,3 +508,23 @@ class TestGwasEnrichment:
 
         count = await generate_gwas_enrichment(ctx, {})
         assert count == 0
+
+
+class TestPValueDisplay:
+    def test_normal_p_value(self):
+        from backend.services.insight_generators.gwas_enrichment import _p_value_display
+        result = _p_value_display(2e-8)
+        assert "e-8" in result
+
+    def test_zero_p_value(self):
+        from backend.services.insight_generators.gwas_enrichment import _p_value_display
+        assert _p_value_display(0) == "< 1e-300"
+
+    def test_subnormal_p_value(self):
+        from backend.services.insight_generators.gwas_enrichment import _p_value_display
+        assert _p_value_display(5e-324) == "< 1e-300"
+
+    def test_very_small_but_normal(self):
+        from backend.services.insight_generators.gwas_enrichment import _p_value_display
+        result = _p_value_display(1e-200)
+        assert "e-200" in result

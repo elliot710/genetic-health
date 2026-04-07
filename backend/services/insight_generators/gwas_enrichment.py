@@ -36,7 +36,7 @@ def _gwas_confidence(p_value: float) -> str:
 
 
 def _p_value_display(p_value: float) -> str:
-    if p_value == 0:
+    if p_value == 0 or p_value < 1e-308:
         return "< 1e-300"
     exp = int(math.floor(math.log10(abs(p_value))))
     mantissa = p_value / (10 ** exp)
