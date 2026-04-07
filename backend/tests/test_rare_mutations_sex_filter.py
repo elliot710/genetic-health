@@ -62,6 +62,7 @@ def _make_profile(
     freq: float = None,
     annotation_result=None,
     variant=None,
+    chromosome: str = None,
 ):
     from backend.services.insight_generators.base import VariantProfile
     return VariantProfile(
@@ -71,6 +72,7 @@ def _make_profile(
         gene=gene,
         consequence="missense_variant",
         impact="MODERATE",
+        chromosome=chromosome,
         population_frequency=freq,
         clinical_significance="likely_pathogenic",
         is_benign=False,

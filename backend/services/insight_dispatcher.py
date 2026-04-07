@@ -23,8 +23,28 @@ from ..db.models import (
     UncommonMutation, DashboardCache,
 )
 from .insight_generators import ALL_GENERATORS, GeneratorContext, build_variant_profiles
+from .insight_generators.gwas_enrichment import generate_gwas_enrichment
 
 logger = logging.getLogger(__name__)
+
+
+def _collect_existing_dedup_keys(ctx: GeneratorContext) -> Dict[str, set]:
+    keys: Dict[str, set] = {}
+    rsid_maps = {
+        'cognitive': (ctx.registry.get('cognitive', {}).get('rsid', {}), 'domain'),
+        'personality': (ctx.registry.get('personality', {}).get('rsid', {}), 'trait'),
+        'sports': (ctx.registry.get('sports', {}).get('rsid', {}), 'category'),
+        'physical': (ctx.registry.get('physical', {}).get('rsid', {}), 'trait'),
+        'nutrition': (ctx.registry.get('nutrition', {}).get('rsid', {}), 'nutrient'),
+        'wellness': (ctx.registry.get('wellness', {}).get('rsid', {}), 'metric'),
+    }
+    for cat, (rmap, field) in rsid_maps.items():
+        cat_keys = set()
+        for info in rmap.values():
+            if field in info:
+                cat_keys.add(info[field])
+        keys[cat] = cat_keys
+    return keys
 
 # Re-use dataclasses from analysis_service
 from .analysis_service import AnnotationResult, AnalysisProgress, AnalysisCancelled
@@ -84,6 +104,7 @@ async def generate_comprehensive_insights(
         all_mapped_genes.update(cat_data.get('gene', {}).keys())
 
     interesting_variants = []
+    gwas_variants = []
     for v in variants:
         rsid = getattr(v, 'rsid', None)
         if not rsid:
@@ -98,11 +119,16 @@ async def generate_comprehensive_insights(
         if profile and profile.clinical_significance:
             interesting_variants.append(v)
             continue
+        ar = annotation_results.get(rsid)
+        if ar and ar.annotation_data:
+            gwas = ar.annotation_data.get('annotations', {}).get('gwas_catalog', {})
+            if gwas and gwas.get('genome_wide_significant'):
+                gwas_variants.append(v)
 
     logger.info(
         f"  PERF-03: pre-filtered {len(variants)} → {len(interesting_variants)} "
         f"potentially interesting variants ({len(all_mapped_rsids)} mapped rsids, "
-        f"{len(all_mapped_genes)} mapped genes)"
+        f"{len(all_mapped_genes)} mapped genes) + {len(gwas_variants)} GWAS-only"
     )
 
     insights_generated = 0
@@ -142,6 +168,30 @@ async def generate_comprehensive_insights(
 
     if failed_generators:
         logger.warning(f"  {len(failed_generators)} generator(s) failed: {', '.join(failed_generators)}")
+
+    # GWAS enrichment pass: add insights from genome-wide significant
+    # associations that weren't covered by registry-based generators
+    if gwas_variants:
+        try:
+            all_gwas_pool = interesting_variants + gwas_variants
+            async with async_session_factory() as gwas_session:
+                gwas_ctx = GeneratorContext(
+                    analysis_id=analysis_id,
+                    variants=all_gwas_pool,
+                    annotation_results=annotation_results,
+                    session=gwas_session,
+                    rsid_gene_map=rsid_gene_map,
+                    registry=registry,
+                    variant_profiles=variant_profiles,
+                    inferred_sex=inferred_sex,
+                )
+                existing_keys = _collect_existing_dedup_keys(gwas_ctx)
+                gwas_count = await generate_gwas_enrichment(gwas_ctx, existing_keys)
+                await gwas_session.commit()
+            insights_generated += gwas_count
+            logger.info(f"  GWAS enrichment: {gwas_count} additional insights")
+        except Exception as e:
+            logger.error(f"  GWAS enrichment: FAILED — {e}")
 
     return insights_generated
 

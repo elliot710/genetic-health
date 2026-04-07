@@ -37,6 +37,7 @@ class VariantProfile:
     gene: Optional[str]
     consequence: Optional[str]
     impact: Optional[str]
+    chromosome: Optional[str]
     # None = no frequency data available.  0.0 = monomorphic (not the same!).
     population_frequency: Optional[float]
     clinical_significance: Optional[str]   # First ClinVar sig, lowercased
@@ -747,6 +748,125 @@ def get_trait_description(trait: str, result: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Sex-linked condition filtering
+# ---------------------------------------------------------------------------
+
+_X_LINKED_FEMALE_ONLY_CONDITIONS = frozenset({
+    'rett syndrome', 'atypical rett syndrome',
+})
+
+_X_LINKED_RECESSIVE_GENES = frozenset({
+    'DMD', 'F8', 'F9', 'G6PD', 'OTC', 'AR', 'AVPR2', 'BTK',
+    'CYBB', 'GJB1', 'IL2RG', 'LAMP2', 'PDHA1', 'PLP1', 'SLC16A2',
+})
+
+
+def should_skip_sex_linked(
+    rsid: str,
+    condition: str,
+    gene: Optional[str],
+    chromosome: Optional[str],
+    inferred_sex: Optional[str],
+) -> bool:
+    if not inferred_sex or inferred_sex == 'unknown':
+        return False
+    if not chromosome or chromosome.upper() not in ('X', 'CHRX'):
+        return False
+    condition_lower = condition.lower().strip()
+    if inferred_sex == 'male' and condition_lower in _X_LINKED_FEMALE_ONLY_CONDITIONS:
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# GWAS trait → insight category mapping
+# ---------------------------------------------------------------------------
+
+_GWAS_CATEGORY_KEYWORDS: Dict[str, List[str]] = {
+    'cognitive': [
+        'intelligence', 'cognitive', 'educational attainment',
+        'general cognitive ability', 'fluid intelligence', 'reaction time',
+        'memory', 'cognitive performance',
+    ],
+    'personality': [
+        'neuroticism', 'extraversion', 'openness', 'conscientiousness',
+        'agreeableness', 'adventurousness', 'risk-taking', 'risk taking',
+        'loneliness', 'well-being', 'wellbeing', 'happiness',
+        'personality', 'subjective well-being',
+    ],
+    'sports': [
+        'grip strength', 'muscle', 'endurance', 'sprint',
+        'athletic', 'physical activity', 'exercise',
+        'hand grip strength', 'vo2 max',
+    ],
+    'physical': [
+        'height', 'eye color', 'hair color', 'skin pigmentation',
+        'freckles', 'male pattern baldness', 'body mass index',
+        'waist', 'hip circumference',
+    ],
+    'nutrition': [
+        'caffeine', 'lactose', 'vitamin', 'omega', 'folate',
+        'alcohol consumption', 'bitter taste', 'fatty acid',
+        'iron levels', 'zinc', 'selenium',
+    ],
+    'wellness': [
+        'sleep duration', 'insomnia', 'circadian', 'chronotype',
+        'longevity', 'telomere length', 'biological aging',
+        'morningness', 'stress',
+    ],
+}
+
+
+def classify_gwas_trait(trait: str) -> Optional[str]:
+    trait_lower = trait.lower()
+    for category, keywords in _GWAS_CATEGORY_KEYWORDS.items():
+        for keyword in keywords:
+            if keyword in trait_lower:
+                return category
+    return None
+
+
+def extract_gwas_insights(annotation_result) -> List[Dict[str, Any]]:
+    if not annotation_result or not annotation_result.annotation_data:
+        return []
+    gwas = annotation_result.annotation_data.get('annotations', {}).get('gwas_catalog', {})
+    if not gwas or not gwas.get('found'):
+        return []
+    insights = []
+    seen_categories: set = set()
+    for assoc in gwas.get('associations', []):
+        p_value = assoc.get('p_value')
+        if p_value is None or p_value > 5e-8:
+            continue
+        trait = assoc.get('trait', '')
+        category = classify_gwas_trait(trait)
+        if category and category not in seen_categories:
+            seen_categories.add(category)
+            insights.append({
+                'category': category,
+                'trait': trait,
+                'p_value': p_value,
+                'p_value_mlog': assoc.get('p_value_mlog'),
+                'study_accession': assoc.get('study_accession'),
+                'risk_allele_frequency': assoc.get('risk_allele_frequency'),
+            })
+    return insights
+
+
+# ---------------------------------------------------------------------------
+# ClinGen gene-disease validity check
+# ---------------------------------------------------------------------------
+
+def get_clingen_validity(annotation_result) -> Optional[str]:
+    if not annotation_result or not annotation_result.annotation_data:
+        return None
+    clingen = annotation_result.annotation_data.get('annotations', {}).get('clingen', {})
+    if not clingen or not clingen.get('found'):
+        return None
+    return clingen.get('strongest_classification')
+
+
+# ---------------------------------------------------------------------------
 # Generic map-driven generator
 # ---------------------------------------------------------------------------
 
@@ -832,6 +952,12 @@ async def generate_from_maps(
                 continue
 
             info = rsid_map[rsid]
+
+            # Sex-linked condition filtering
+            _chromosome = getattr(variant, 'chromosome', None)
+            _condition_name = info.get('condition', info.get('trait', info.get('drug', '')))
+            if should_skip_sex_linked(rsid, _condition_name, info.get('gene'), _chromosome, ctx.inferred_sex):
+                continue
 
             # Allele verification — confirm the user's genotype actually carries
             # the alternate (risk) allele from annotation data.  Both SNPs and
@@ -1112,6 +1238,8 @@ async def build_variant_profiles(
         score_benign = composite < ScoringEngine.BENIGN_THRESHOLD
         is_benign_flag = clinvar_benign or score_benign
 
+        chromosome = getattr(variant, 'chromosome', None)
+
         profiles[rsid] = VariantProfile(
             rsid=rsid,
             genotype=genotype,
@@ -1119,6 +1247,7 @@ async def build_variant_profiles(
             gene=gene,
             consequence=consequence,
             impact=impact,
+            chromosome=chromosome,
             population_frequency=pop_freq,
             clinical_significance=clin_sig,
             is_benign=is_benign_flag,
