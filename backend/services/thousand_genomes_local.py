@@ -64,6 +64,24 @@ _POP_NAMES = {
 }
 
 
+def _open_variant_file(pysam_mod, vcf_path: Path):
+    """Open pysam.VariantFile suppressing htslib header warnings.
+
+    The 1000G VCF has INFO tags like HGMD-PUBLIC_20204 with hyphens
+    invalid per VCF spec. htslib writes warnings to stderr directly,
+    bypassing Python logging, so we redirect fd 2 during the open.
+    """
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    old_stderr_fd = os.dup(2)
+    try:
+        os.dup2(devnull_fd, 2)
+        return pysam_mod.VariantFile(str(vcf_path))
+    finally:
+        os.dup2(old_stderr_fd, 2)
+        os.close(devnull_fd)
+        os.close(old_stderr_fd)
+
+
 class ThousandGenomesDirectService:
     """SQLite-backed 1000 Genomes lookup built from local VCF.
 
@@ -311,7 +329,7 @@ class ThousandGenomesDirectService:
         alt_upper = alt.upper()
 
         try:
-            vcf = pysam.VariantFile(str(vcf_path))
+            vcf = _open_variant_file(pysam, vcf_path)
         except Exception as e:
             logger.debug("1000G VariantFile open failed: %s", e)
             return None

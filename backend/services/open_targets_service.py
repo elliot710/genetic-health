@@ -142,8 +142,12 @@ class OpenTargetsService:
     ) -> Dict[str, Dict[str, Any]]:
         tasks = {gene: self.lookup_by_gene(gene) for gene in gene_symbols}
         results: Dict[str, Dict[str, Any]] = {}
-        for gene, coro in tasks.items():
+        total = len(tasks)
+        for idx, (gene, coro) in enumerate(tasks.items(), 1):
             results[gene] = await coro
+            if idx % 100 == 0 or idx == total:
+                found = sum(1 for d in results.values() if d and d.get('found'))
+                logger.info(f"Open Targets batch: {idx}/{total} genes queried ({found} with data)")
             await asyncio.sleep(0.05)
         return results
 

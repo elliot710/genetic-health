@@ -329,19 +329,26 @@ class ComprehensiveAnalysisService:
         progress.phase_progress = 0.0
         progress.current_step = "enriching_data"
         await self._update_progress(analysis_id, progress)
-        logger.info("Phase 3/4: BigQuery + Open Targets enrichment")
+        total_variants = len(annotation_results)
+        logger.info(f"Phase 3/4: BigQuery + Open Targets enrichment ({total_variants} variants)")
 
         with tracer.start_as_current_span("analysis.phase3.bigquery_enrichment"):
+            logger.info("Phase 3/4 [1/3]: Starting BigQuery enrichment (ChEMBL, FDA Drug)")
             await self._bulk_enrich_bigquery(annotation_results, analysis_id, progress)
+            logger.info("Phase 3/4 [1/3]: BigQuery enrichment complete")
 
         with tracer.start_as_current_span("analysis.phase3.open_targets"):
+            logger.info("Phase 3/4 [2/3]: Starting Open Targets enrichment")
             await self._bulk_enrich_open_targets(annotation_results)
+            logger.info("Phase 3/4 [2/3]: Open Targets enrichment complete")
 
+        logger.info("Phase 3/4 [3/3]: Enriching mappings from annotations")
         new_mappings = await self._enrich_mappings_from_annotations(annotation_results)
         if new_mappings > 0:
             await self._load_registry()
-            logger.info(f"Phase 3/4: {new_mappings} new multi-source mappings discovered")
+            logger.info(f"Phase 3/4 [3/3]: {new_mappings} new multi-source mappings discovered")
 
+        logger.info("Phase 3/4: complete")
         progress.phase_progress = 1.0
 
     async def _run_phase4_insights(self, analysis_id, variants, annotation_results, progress):
@@ -466,10 +473,14 @@ class ComprehensiveAnalysisService:
 
         unique_genes = list(gene_to_rsids.keys())
         if not unique_genes:
+            logger.info("Open Targets: no genes to enrich, skipping")
             return
 
+        logger.info(f"Open Targets: querying {len(unique_genes)} unique genes")
         results = await ot_service.lookup_genes_batch(unique_genes)
         enriched = 0
+        found_genes = sum(1 for d in results.values() if d and d.get('found'))
+        logger.info(f"Open Targets: {found_genes}/{len(unique_genes)} genes had data, persisting...")
 
         async with async_session_factory() as session:
             for gene, ot_data in results.items():
@@ -492,7 +503,7 @@ class ComprehensiveAnalysisService:
             if enriched:
                 await session.commit()
 
-        logger.info(f"Open Targets enrichment: {enriched} variants across {len(results)} genes")
+        logger.info(f"Open Targets: done — {enriched} variants enriched across {found_genes} genes")
 
     async def _enrich_mappings_from_annotations(
         self, annotation_results: Dict,
