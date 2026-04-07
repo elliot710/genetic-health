@@ -1,16 +1,20 @@
 import pytest
 from types import SimpleNamespace
 
-from backend.api.analysis_routes import (
+from backend.services.dashboard_serializers import (
     _dedup_by,
     _clean_trait_name,
     _to_list,
-    _extract_panel_rsids,
+)
+from backend.services.dashboard_service import (
+    extract_panel_rsids,
+    analysis_fingerprint,
+)
+from backend.services.dashboard_maps import (
     _populate_allele_string_map,
     _populate_am_map,
     _populate_cv_count_map,
     _populate_pharmgkb_map,
-    _analysis_fingerprint,
 )
 
 
@@ -80,22 +84,22 @@ class TestExtractPanelRsids:
             "health_risks": [{"associated_variants": ["rs123", "rs456"]}],
             "drug_responses": [{"variants_involved": ["rs789"]}],
         }
-        result = _extract_panel_rsids(data)
+        result = extract_panel_rsids(data)
         assert {"rs123", "rs456", "rs789"}.issubset(result)
 
     def test_extracts_direct_rsid_fields(self):
         data = {"rare_mutations": [{"rsid": "rs111"}]}
-        result = _extract_panel_rsids(data)
+        result = extract_panel_rsids(data)
         assert "rs111" in result
 
     def test_ignores_non_rs_values(self):
         data = {"physical_traits": [{"rsid": "GENE_NAME", "associated_variants": ["rs999"]}]}
-        result = _extract_panel_rsids(data)
+        result = extract_panel_rsids(data)
         assert "GENE_NAME" not in result
         assert "rs999" in result
 
     def test_empty_data(self):
-        assert _extract_panel_rsids({}) == set()
+        assert extract_panel_rsids({}) == set()
 
 
 class TestPopulateAlleleStringMap:
@@ -232,21 +236,21 @@ class TestPopulatePharmgkbMap:
 class TestAnalysisFingerprint:
     def test_produces_string(self):
         a = SimpleNamespace(id=1, analysis_status="complete", processed_variants=100)
-        result = _analysis_fingerprint([a])
+        result = analysis_fingerprint([a])
         assert isinstance(result, str)
 
     def test_sorts_analyses(self):
         a1 = SimpleNamespace(id=2, analysis_status="complete", processed_variants=50)
         a2 = SimpleNamespace(id=1, analysis_status="complete", processed_variants=100)
-        result = _analysis_fingerprint([a1, a2])
-        assert result == _analysis_fingerprint([a2, a1])
+        result = analysis_fingerprint([a1, a2])
+        assert result == analysis_fingerprint([a2, a1])
 
     def test_different_status_gives_different_fingerprint(self):
         a1 = SimpleNamespace(id=1, analysis_status="complete", processed_variants=100)
         a2 = SimpleNamespace(id=1, analysis_status="failed", processed_variants=100)
-        assert _analysis_fingerprint([a1]) != _analysis_fingerprint([a2])
+        assert analysis_fingerprint([a1]) != analysis_fingerprint([a2])
 
     def test_handles_none_processed_variants(self):
         a = SimpleNamespace(id=1, analysis_status="pending", processed_variants=None)
-        result = _analysis_fingerprint([a])
+        result = analysis_fingerprint([a])
         assert "1:pending:0" in result

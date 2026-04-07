@@ -21,6 +21,14 @@
 
 ---
 
+add faq and other static pages
+make design more consistent
+Also i want to check if we are using all of the data we have in the DB for our analysis and are displaying/using it so we do not sit on it and make sure are utilyzing it properly
+integrate sonarqube community edition
+
+
+
+
 ## 1. Critical Logical Errors
 
 ### 1.1 🔴 Indel genotypes bypass allele verification entirely

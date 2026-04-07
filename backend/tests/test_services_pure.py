@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 from backend.services.discovery_service import (
     _determine_variant_mappings,
     _infer_condition,
+    _extract_allele_frequency,
     CLINICAL_PANEL_MAP,
     CONSEQUENCE_PANEL_MAP,
 )
@@ -44,7 +45,7 @@ class TestDetermineVariantMappings:
         )
         assert "health" in result
 
-    def test_risk_factor_creates_health_mapping(self):
+    def test_risk_factor_creates_wellness_mapping(self):
         result = _determine_variant_mappings(
             rsid="rs12345",
             gene="APOE",
@@ -52,7 +53,7 @@ class TestDetermineVariantMappings:
             clinical_sigs=["Risk_factor"],
             pharmacogenomics={},
         )
-        assert "health" in result
+        assert "wellness" in result
 
     def test_high_impact_consequence_creates_health_mapping(self):
         result = _determine_variant_mappings(
@@ -146,6 +147,61 @@ class TestDetermineVariantMappings:
             pharmacogenomics={},
         )
         assert result["health"]["data"]["risk_multiplier"] > 1.0
+
+    def test_common_variant_skipped_by_af_gate(self):
+        result = _determine_variant_mappings(
+            rsid="rs12345",
+            gene="BRCA1",
+            consequence="missense_variant",
+            clinical_sigs=["Risk_factor"],
+            pharmacogenomics={},
+            population_data={"global_af": 0.15},
+        )
+        assert result == {}
+
+    def test_pathogenic_bypasses_af_gate(self):
+        result = _determine_variant_mappings(
+            rsid="rs12345",
+            gene="BRCA1",
+            consequence="missense_variant",
+            clinical_sigs=["Pathogenic"],
+            pharmacogenomics={},
+            population_data={"global_af": 0.05},
+        )
+        assert "health" in result
+
+    def test_low_af_variant_passes(self):
+        result = _determine_variant_mappings(
+            rsid="rs12345",
+            gene="BRCA1",
+            consequence="missense_variant",
+            clinical_sigs=["Pathogenic"],
+            pharmacogenomics={},
+            population_data={"global_af": 0.001},
+        )
+        assert "health" in result
+
+
+class TestExtractAlleleFrequency:
+    def test_global_af(self):
+        assert _extract_allele_frequency({"global_af": 0.05}) == 0.05
+
+    def test_af_key(self):
+        assert _extract_allele_frequency({"af": 0.1}) == 0.1
+
+    def test_frequencies_dict(self):
+        assert _extract_allele_frequency({"frequencies": {"global": 0.02}}) == 0.02
+
+    def test_none_data(self):
+        assert _extract_allele_frequency(None) is None
+
+    def test_empty_dict(self):
+        assert _extract_allele_frequency({}) is None
+
+
+class TestClinicalPanelMap:
+    def test_risk_factor_maps_to_wellness(self):
+        assert CLINICAL_PANEL_MAP['risk_factor'] == 'wellness'
 
 
 class TestInferCondition:

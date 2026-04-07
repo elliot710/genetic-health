@@ -293,6 +293,15 @@ class TestGtToNucleotides:
     def test_multiallelic(self, parser):
         assert parser._gt_to_nucleotides("1/2", "A", "T,C") == "T/C"
 
+    def test_alt_dot_hom_alt_maps_to_ref(self, parser):
+        assert parser._gt_to_nucleotides("1/1", "A", ".") == "A/A"
+
+    def test_alt_dot_het_maps_to_ref(self, parser):
+        assert parser._gt_to_nucleotides("0/1", "G", ".") == "G/G"
+
+    def test_multiallelic_with_dot(self, parser):
+        assert parser._gt_to_nucleotides("1/2", "A", ".,T") == "A/T"
+
 
 class TestParseCsvRow:
     def test_23andme_format(self, parser):

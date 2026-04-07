@@ -161,114 +161,32 @@ class VCFParser:
         return variants
 
     def _parse_csv_row(self, row: Dict[str, str], row_num: int) -> Optional[Dict[str, Any]]:
-        """Parse a single CSV row into variant format - supports multiple provider formats"""
         try:
-            # Handle different CSV column name variations from various providers
-            # RSID/SNP identifiers
-            rsid = (row.get('rsid') or row.get('RSID') or row.get('rs') or 
-                   row.get('SNP') or row.get('snp') or row.get('name') or 
-                   row.get('Name') or row.get('ID'))
-            
-            # Chromosome variations
-            chromosome = (row.get('chromosome') or row.get('CHROMOSOME') or 
-                         row.get('chr') or row.get('Chr') or row.get('CHR') or
-                         row.get('chrom') or row.get('Chrom') or row.get('CHROM'))
-            
-            # Position variations  
-            position = (row.get('position') or row.get('POSITION') or 
-                       row.get('pos') or row.get('Pos') or row.get('POS') or
-                       row.get('bp') or row.get('BP') or row.get('coordinate'))
-            
-            # Genotype/Allele variations
-            genotype = (row.get('genotype') or row.get('GENOTYPE') or 
-                       row.get('Genotype') or row.get('GT') or row.get('gt') or
-                       row.get('result') or row.get('RESULT') or row.get('Result') or
-                       row.get('alleles') or row.get('ALLELES') or row.get('call'))
-            
-            # Some providers have separate allele columns
-            if not genotype:
-                allele1 = (row.get('allele1') or row.get('ALLELE1') or 
-                          row.get('A1') or row.get('a1'))
-                allele2 = (row.get('allele2') or row.get('ALLELE2') or 
-                          row.get('A2') or row.get('a2'))
-                if allele1 and allele2:
-                    genotype = allele1 + allele2
-            
-            # Clean and normalize genotype
-            ref_allele = None
-            alt_allele = None
-            
-            if genotype:
-                # Remove quotes and whitespace
-                genotype = genotype.strip('"').strip()
-                
-                if genotype and genotype not in ['--', 'NN', '00', './.', '.|.']:
-                    # Handle different genotype formats
-                    if '/' in genotype:
-                        alleles = genotype.split('/')
-                    elif '|' in genotype:
-                        alleles = genotype.split('|')
-                    elif '\t' in genotype:
-                        alleles = genotype.split('\t')
-                    elif ' ' in genotype:
-                        alleles = genotype.split(' ')
-                    elif len(genotype) == 2:
-                        alleles = [genotype[0], genotype[1]]
-                    elif len(genotype) == 1:
-                        alleles = [genotype, genotype]  # Homozygous
-                    else:
-                        # For longer strings, try to extract valid nucleotides
-                        valid_bases = set('ATGC')
-                        extracted = [c for c in genotype if c in valid_bases]
-                        if len(extracted) >= 2:
-                            alleles = extracted[:2]
-                        elif len(extracted) == 1:
-                            alleles = [extracted[0], extracted[0]]
-                        else:
-                            alleles = ['N', 'N']
-                    
-                    # Clean alleles
-                    if len(alleles) >= 2:
-                        alleles = [a.strip().upper() for a in alleles if a.strip()]
-                        if alleles and all(a in 'ATGCN-' for a in alleles):
-                            ref_allele = alleles[0] if alleles[0] != '-' else 'N'
-                            alt_allele = alleles[1] if alleles[1] != '-' else alleles[0]
-            
-            # Skip if essential data is missing
+            rsid, chromosome, position, genotype = self._extract_csv_fields(row)
             if not chromosome or not position:
                 return None
-                
-            # Normalize and validate chromosome
+
             chromosome = self._normalize_chromosome(chromosome)
             if chromosome is None:
                 self._skipped_count += 1
                 return None
-            
-            # Convert position to integer
-            try:
-                position = str(position).strip('"').strip()
-                position = int(float(position))  # Handle scientific notation
-            except (ValueError, TypeError):
+
+            position = self._parse_position(position)
+            if position is None:
                 return None
-            
-            # Clean RSID
-            if rsid:
-                rsid = str(rsid).strip('"').strip()
-                if not rsid.startswith('rs') and rsid.isdigit():
-                    rsid = f"rs{rsid}"
-                # Drop rsid if it doesn't match expected pattern
-                if not RSID_PATTERN.match(rsid):
-                    rsid = None
-            
+
+            rsid = self._clean_rsid(rsid)
+            ref_allele, alt_allele = self._parse_csv_genotype(genotype)
+
             variant = {
                 "line_number": row_num + 1,
                 "chromosome": chromosome,
                 "position": position,
                 "id": rsid or f"variant_{row_num}",
-                "rsid": rsid,  # Add rsid field for database compatibility
-                "genotype": genotype,  # Store genotype at top level for analysis_variants
-                "ref_allele": ref_allele or "N",
-                "alt_allele": alt_allele or "N", 
+                "rsid": rsid,
+                "genotype": genotype,
+                "ref_allele": ref_allele,
+                "alt_allele": alt_allele,
                 "quality": None,
                 "filter": "PASS",
                 "info": {"source": "csv_upload", "original_genotype": genotype}
@@ -276,12 +194,81 @@ class VCFParser:
 
             if not self._validate_variant(variant):
                 return None
-
             return variant
-            
-        except Exception as e:
-            print(f"Error parsing CSV row {row_num}: {e}")
+        except Exception:
             return None
+
+    @staticmethod
+    def _extract_csv_fields(row: Dict[str, str]) -> tuple:
+        rsid = (row.get('rsid') or row.get('RSID') or row.get('rs') or
+                row.get('SNP') or row.get('snp') or row.get('name') or
+                row.get('Name') or row.get('ID'))
+        chromosome = (row.get('chromosome') or row.get('CHROMOSOME') or
+                      row.get('chr') or row.get('Chr') or row.get('CHR') or
+                      row.get('chrom') or row.get('Chrom') or row.get('CHROM'))
+        position = (row.get('position') or row.get('POSITION') or
+                    row.get('pos') or row.get('Pos') or row.get('POS') or
+                    row.get('bp') or row.get('BP') or row.get('coordinate'))
+        genotype = (row.get('genotype') or row.get('GENOTYPE') or
+                    row.get('Genotype') or row.get('GT') or row.get('gt') or
+                    row.get('result') or row.get('RESULT') or row.get('Result') or
+                    row.get('alleles') or row.get('ALLELES') or row.get('call'))
+        if not genotype:
+            allele1 = row.get('allele1') or row.get('ALLELE1') or row.get('A1') or row.get('a1')
+            allele2 = row.get('allele2') or row.get('ALLELE2') or row.get('A2') or row.get('a2')
+            if allele1 and allele2:
+                genotype = allele1 + allele2
+        return rsid, chromosome, position, genotype
+
+    @staticmethod
+    def _parse_csv_genotype(genotype: Optional[str]) -> tuple:
+        if not genotype:
+            return "N", "N"
+        genotype = genotype.strip('"').strip()
+        if not genotype or genotype in ('--', 'NN', '00', './.', '.|.'):
+            return "N", "N"
+
+        alleles = VCFParser._split_genotype_string(genotype)
+        if len(alleles) >= 2:
+            alleles = [a.strip().upper() for a in alleles if a.strip()]
+            if alleles and all(a in 'ATGCN-' for a in alleles):
+                ref = alleles[0] if alleles[0] != '-' else 'N'
+                alt = alleles[1] if alleles[1] != '-' else alleles[0]
+                return ref, alt
+        return "N", "N"
+
+    @staticmethod
+    def _split_genotype_string(genotype: str) -> list:
+        for sep in ('/', '|', '\t', ' '):
+            if sep in genotype:
+                return genotype.split(sep)
+        if len(genotype) == 2:
+            return [genotype[0], genotype[1]]
+        if len(genotype) == 1:
+            return [genotype, genotype]
+        valid_bases = set('ATGC')
+        extracted = [c for c in genotype if c in valid_bases]
+        if len(extracted) >= 2:
+            return extracted[:2]
+        if len(extracted) == 1:
+            return [extracted[0], extracted[0]]
+        return ['N', 'N']
+
+    @staticmethod
+    def _parse_position(raw_position) -> Optional[int]:
+        try:
+            return int(float(str(raw_position).strip('"').strip()))
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _clean_rsid(rsid) -> Optional[str]:
+        if not rsid:
+            return None
+        rsid = str(rsid).strip('"').strip()
+        if not rsid.startswith('rs') and rsid.isdigit():
+            rsid = f"rs{rsid}"
+        return rsid if RSID_PATTERN.match(rsid) else None
     
     @staticmethod
     def _normalize_chromosome(chrom: str) -> Optional[str]:
@@ -399,6 +386,8 @@ class VCFParser:
         """Convert a VCF GT field (e.g. '0/1', '1|1', './.') to a nucleotide genotype.
 
         allele index 0 = ref, 1 = first alt, etc.
+        Consumer VCFs may use ALT='.' with GT=1/1 for homozygous ref positions;
+        such allele indices are mapped back to the ref allele.
         Returns None for no-call genotypes.
         """
         if not gt_raw:
@@ -408,12 +397,12 @@ class VCFParser:
         alts = alt.split(',')
         allele_map = {'.': None, '0': ref}
         for i, a in enumerate(alts, start=1):
-            allele_map[str(i)] = a
+            allele_map[str(i)] = ref if a.strip() == '.' else a
         resolved = []
         for p in parts:
             a = allele_map.get(p)
             if a is None:
-                return None  # any no-call index → treat whole GT as no-call
+                return None
             resolved.append(a.strip().upper())
         if not resolved:
             return None

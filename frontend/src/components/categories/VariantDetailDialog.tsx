@@ -230,6 +230,45 @@ interface VariantDetails {
     max_score?: number
     has_strong_genetic_evidence?: boolean
   }
+  gnomad_tx?: {
+    found: boolean
+    gene?: string
+    consequence?: string
+    lof?: string
+    mean_expression?: number
+    transcript_count?: number
+    top_tissues?: Record<string, number>
+    transcripts?: Array<{
+      ensg?: string
+      symbol?: string
+      csq?: string
+      lof?: string
+      mean_expression?: number
+      top_tissues?: Record<string, number>
+    }>
+  }
+  gene_constraint?: {
+    pli?: number
+    loeuf?: number
+    mis_z?: number
+    syn_z?: number
+  }
+  clinvar_gene_stats?: {
+    total_submissions?: number
+    pathogenic_count?: number
+    uncertain_count?: number
+    conflict_count?: number
+  }
+  clinvar_local?: {
+    found: boolean
+    genes?: string[]
+    clinical_significances?: string[]
+    gene_conditions?: Array<{ gene?: string; conditions?: string[] }>
+    review_statuses?: string[]
+    has_conflicting_interpretations?: boolean
+    molecular_consequences?: string[]
+    allele_frequencies?: Record<string, number>
+  }
 }
 
 // ─── Props ──────────────────────────────────────────────────────
@@ -808,6 +847,11 @@ export default function VariantDetailDialog({
                 { key: 'alpha_missense', label: 'AlphaMissense', available: !!details.alpha_missense?.found || psKeys.includes('alpha_missense') },
                 { key: 'snpedia', label: 'SNPedia', available: !!details.snpedia?.found },
                 { key: 'publications', label: 'Literature', available: !!(details.publications && details.publications.count > 0) },
+                { key: 'gnomad_tx', label: 'gnomAD-tx', available: !!details.gnomad_tx?.found },
+                { key: 'gene_constraint', label: 'Gene Constraint', available: !!(details.gene_constraint?.pli != null || details.gene_constraint?.loeuf != null) },
+                { key: 'gwas', label: 'GWAS', available: !!details.gwas_catalog?.found },
+                { key: 'clingen', label: 'ClinGen', available: !!details.clingen?.found },
+                { key: 'open_targets', label: 'Open Targets', available: !!details.open_targets?.found },
               ]
               const available = sources.filter(s => s.available)
               const unavailable = sources.filter(s => !s.available)
@@ -1855,6 +1899,154 @@ export default function VariantDetailDialog({
               </div>
             )}
 
+            {/* ── gnomAD Transcript Expression ── */}
+            {details.gnomad_tx?.found && (
+              <div>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
+                  <Dna className="h-3.5 w-3.5" /> Transcript Expression
+                  <Badge variant="outline" className="bg-teal-500/10 text-teal-400 border-teal-500/20 text-[10px] ml-1">gnomAD-tx</Badge>
+                  {details.gnomad_tx.lof && (
+                    <Badge className={`text-[10px] ${details.gnomad_tx.lof === 'HC' ? 'bg-red-500/15 text-red-400 border-red-500/30' : 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30'}`}>
+                      {details.gnomad_tx.lof} LoF
+                    </Badge>
+                  )}
+                </h4>
+                <div className={`${cardBg} rounded-xl p-3 border ${border} space-y-2`}>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    {details.gnomad_tx.gene && (
+                      <div><span className={textSecondary}>Gene:</span> <span className={textPrimary}>{details.gnomad_tx.gene}</span></div>
+                    )}
+                    {details.gnomad_tx.consequence && (
+                      <div><span className={textSecondary}>Consequence:</span> <span className={textPrimary}>{details.gnomad_tx.consequence.replace(/_/g, ' ')}</span></div>
+                    )}
+                    {details.gnomad_tx.transcript_count != null && (
+                      <div><span className={textSecondary}>Transcripts:</span> <span className={textPrimary}>{details.gnomad_tx.transcript_count}</span></div>
+                    )}
+                    {details.gnomad_tx.mean_expression != null && (
+                      <div><span className={textSecondary}>Mean expression:</span> <span className={textPrimary}>{(details.gnomad_tx.mean_expression * 100).toFixed(1)}%</span></div>
+                    )}
+                  </div>
+                  {details.gnomad_tx.top_tissues && Object.keys(details.gnomad_tx.top_tissues).length > 0 && (
+                    <div>
+                      <p className={`text-[10px] ${textSecondary} mb-1`}>Top tissues (GTEx):</p>
+                      <div className="flex flex-wrap gap-1">
+                        {Object.entries(details.gnomad_tx.top_tissues)
+                          .sort(([, a], [, b]) => b - a)
+                          .slice(0, 6)
+                          .map(([tissue, expr]) => (
+                            <Badge key={tissue} variant="outline" className="text-[10px] px-1.5 py-0">
+                              {tissue.replace(/_/g, ' ')}: {(expr * 100).toFixed(0)}%
+                            </Badge>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* ── Gene Constraint ── */}
+            {details.gene_constraint && (details.gene_constraint.pli != null || details.gene_constraint.loeuf != null) && (
+              <div>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
+                  <Shield className="h-3.5 w-3.5" /> Gene Constraint
+                  <Badge variant="outline" className="bg-violet-500/10 text-violet-400 border-violet-500/20 text-[10px] ml-1">gnomAD</Badge>
+                </h4>
+                <div className={`${cardBg} rounded-xl p-3 border ${border}`}>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    {details.gene_constraint.pli != null && (
+                      <div>
+                        <span className={textSecondary}>pLI: </span>
+                        <span className={`font-medium ${details.gene_constraint.pli > 0.9 ? 'text-red-400' : details.gene_constraint.pli > 0.5 ? 'text-yellow-400' : 'text-green-400'}`}>
+                          {details.gene_constraint.pli.toFixed(4)}
+                        </span>
+                        <span className={`text-[10px] ${textSecondary} ml-1`}>
+                          {details.gene_constraint.pli > 0.9 ? '(LoF intolerant)' : details.gene_constraint.pli > 0.5 ? '(intermediate)' : '(LoF tolerant)'}
+                        </span>
+                      </div>
+                    )}
+                    {details.gene_constraint.loeuf != null && (
+                      <div>
+                        <span className={textSecondary}>LOEUF: </span>
+                        <span className={`font-medium ${details.gene_constraint.loeuf < 0.35 ? 'text-red-400' : details.gene_constraint.loeuf < 0.6 ? 'text-yellow-400' : 'text-green-400'}`}>
+                          {details.gene_constraint.loeuf.toFixed(3)}
+                        </span>
+                        <span className={`text-[10px] ${textSecondary} ml-1`}>
+                          {details.gene_constraint.loeuf < 0.35 ? '(highly constrained)' : details.gene_constraint.loeuf < 0.6 ? '(constrained)' : '(tolerant)'}
+                        </span>
+                      </div>
+                    )}
+                    {details.gene_constraint.mis_z != null && (
+                      <div><span className={textSecondary}>Missense Z: </span><span className={textPrimary}>{details.gene_constraint.mis_z.toFixed(2)}</span></div>
+                    )}
+                    {details.gene_constraint.syn_z != null && (
+                      <div><span className={textSecondary}>Synonymous Z: </span><span className={textPrimary}>{details.gene_constraint.syn_z.toFixed(2)}</span></div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── ClinVar Gene Stats ── */}
+            {details.clinvar_gene_stats && details.clinvar_gene_stats.total_submissions != null && details.clinvar_gene_stats.total_submissions > 0 && (
+              <div>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
+                  <Activity className="h-3.5 w-3.5" /> Gene-Level ClinVar
+                </h4>
+                <div className={`${cardBg} rounded-xl p-3 border ${border}`}>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div><span className={textSecondary}>Total submissions: </span><span className={textPrimary}>{details.clinvar_gene_stats.total_submissions}</span></div>
+                    {details.clinvar_gene_stats.pathogenic_count != null && (
+                      <div><span className={textSecondary}>Pathogenic/LP: </span><span className="text-red-400 font-medium">{details.clinvar_gene_stats.pathogenic_count}</span></div>
+                    )}
+                    {details.clinvar_gene_stats.uncertain_count != null && (
+                      <div><span className={textSecondary}>VUS: </span><span className="text-yellow-400">{details.clinvar_gene_stats.uncertain_count}</span></div>
+                    )}
+                    {details.clinvar_gene_stats.conflict_count != null && details.clinvar_gene_stats.conflict_count > 0 && (
+                      <div><span className={textSecondary}>Conflicting: </span><span className="text-amber-400">{details.clinvar_gene_stats.conflict_count}</span></div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── ClinVar Local ── */}
+            {details.clinvar_local?.found && (
+              <div>
+                <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
+                  <Activity className="h-3.5 w-3.5" /> ClinVar Local
+                  <Badge variant="outline" className="bg-orange-500/10 text-orange-400 border-orange-500/20 text-[10px] ml-1">Local DB</Badge>
+                  {details.clinvar_local.has_conflicting_interpretations && (
+                    <Badge className="text-[10px] bg-amber-500/15 text-amber-400 border-amber-500/30">Conflicting</Badge>
+                  )}
+                </h4>
+                <div className={`${cardBg} rounded-xl p-3 border ${border} space-y-2`}>
+                  {details.clinvar_local.clinical_significances && details.clinvar_local.clinical_significances.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {details.clinvar_local.clinical_significances.map((sig, i) => (
+                        <Badge key={i} className={`text-[10px] ${clinSigColor(sig)}`}>{sig.replace(/_/g, ' ')}</Badge>
+                      ))}
+                    </div>
+                  )}
+                  {details.clinvar_local.gene_conditions && details.clinvar_local.gene_conditions.length > 0 && (
+                    <div className="text-xs space-y-1">
+                      {details.clinvar_local.gene_conditions.slice(0, 5).map((gc, i) => (
+                        <div key={i}>
+                          {gc.gene && <span className="text-blue-400 font-medium">{gc.gene}: </span>}
+                          <span className={textSecondary}>{gc.conditions?.join(', ')}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {details.clinvar_local.review_statuses && details.clinvar_local.review_statuses.length > 0 && (
+                    <div className={`text-[10px] ${textSecondary}`}>
+                      Review: {details.clinvar_local.review_statuses.join(', ').replace(/_/g, ' ')}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* ── SNPedia ── */}
             {details.snpedia?.found && details.snpedia.summary && (
               <div>
@@ -1880,6 +2072,7 @@ export default function VariantDetailDialog({
               <div>
                 <h4 className={`text-xs font-semibold ${textSecondary} uppercase tracking-wider mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1`}>
                   <BookOpen className="h-3.5 w-3.5" /> Publications
+                  <Badge variant="outline" className="bg-blue-500/10 text-blue-400 border-blue-500/20 text-[10px] ml-1">LitVar</Badge>
                   <Badge variant="outline" className="text-[10px] px-1.5 py-0">
                     {details.publications.count}
                   </Badge>

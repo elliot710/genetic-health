@@ -711,3 +711,256 @@ class TestGetScoringEngine:
         e1 = get_scoring_engine()
         e2 = get_scoring_engine()
         assert e1 is e2
+
+
+class TestScoreAlphaFold:
+    def setup_method(self):
+        self.engine = ScoringEngine()
+
+    def test_none_data(self):
+        assert self.engine._score_alphafold(None) is None
+
+    def test_not_found(self):
+        assert self.engine._score_alphafold({"found": False}) is None
+
+    def test_high_confidence(self):
+        ev = self.engine._score_alphafold({"found": True, "global_confidence": 92.5})
+        assert ev is not None
+        assert ev.score == 0.60
+
+    def test_medium_confidence(self):
+        ev = self.engine._score_alphafold({"found": True, "global_confidence": 75.0})
+        assert ev is not None
+        assert ev.score == 0.45
+
+    def test_low_confidence(self):
+        ev = self.engine._score_alphafold({"found": True, "global_confidence": 55.0})
+        assert ev is not None
+        assert ev.score == 0.30
+
+    def test_very_low_confidence(self):
+        ev = self.engine._score_alphafold({"found": True, "global_confidence": 30.0})
+        assert ev is not None
+        assert ev.score == 0.15
+
+
+class TestScoreLitvar:
+    def setup_method(self):
+        self.engine = ScoringEngine()
+
+    def test_none_data(self):
+        assert self.engine._score_litvar(None) is None
+
+    def test_not_found(self):
+        assert self.engine._score_litvar({"found": False}) is None
+
+    def test_many_publications(self):
+        ev = self.engine._score_litvar({"found": True, "total_publications": 500})
+        assert ev is not None
+        assert ev.score == 0.55
+
+    def test_moderate_publications(self):
+        ev = self.engine._score_litvar({"found": True, "total_publications": 25})
+        assert ev is not None
+        assert ev.score == 0.50
+
+    def test_few_publications(self):
+        ev = self.engine._score_litvar({"found": True, "total_publications": 3})
+        assert ev is not None
+        assert ev.score == 0.40
+
+    def test_zero_publications(self):
+        assert self.engine._score_litvar({"found": True, "total_publications": 0}) is None
+
+
+class TestScoreGeneConstraint:
+    def setup_method(self):
+        self.engine = ScoringEngine()
+
+    def test_none_data(self):
+        assert self.engine._score_gene_constraint(None) is None
+
+    def test_no_pli_no_loeuf(self):
+        assert self.engine._score_gene_constraint({"pli": None, "loeuf": None}) is None
+
+    def test_low_loeuf_highly_constrained(self):
+        ev = self.engine._score_gene_constraint({"pli": None, "loeuf": 0.2})
+        assert ev is not None
+        assert ev.score == 0.75
+
+    def test_medium_loeuf(self):
+        ev = self.engine._score_gene_constraint({"pli": None, "loeuf": 0.5})
+        assert ev is not None
+        assert ev.score == 0.55
+
+    def test_high_loeuf_tolerant(self):
+        ev = self.engine._score_gene_constraint({"pli": None, "loeuf": 1.2})
+        assert ev is not None
+        assert ev.score == 0.25
+
+    def test_high_pli(self):
+        ev = self.engine._score_gene_constraint({"pli": 0.95, "loeuf": None})
+        assert ev is not None
+        assert ev.score == 0.70
+
+    def test_loeuf_preferred_over_pli(self):
+        ev = self.engine._score_gene_constraint({"pli": 0.95, "loeuf": 0.2})
+        assert ev is not None
+        assert ev.score == 0.75  # LOEUF takes priority
+
+
+class TestScoreClinvarGeneStats:
+    def setup_method(self):
+        self.engine = ScoringEngine()
+
+    def test_none_data(self):
+        assert self.engine._score_clinvar_gene_stats(None) is None
+
+    def test_too_few_submissions(self):
+        assert self.engine._score_clinvar_gene_stats({"total_submissions": 3, "pathogenic_count": 2}) is None
+
+    def test_high_pathogenic_ratio(self):
+        ev = self.engine._score_clinvar_gene_stats({"total_submissions": 100, "pathogenic_count": 40})
+        assert ev is not None
+        assert ev.score == 0.70
+
+    def test_medium_pathogenic_ratio(self):
+        ev = self.engine._score_clinvar_gene_stats({"total_submissions": 100, "pathogenic_count": 20})
+        assert ev is not None
+        assert ev.score == 0.55
+
+    def test_low_pathogenic_ratio(self):
+        ev = self.engine._score_clinvar_gene_stats({"total_submissions": 100, "pathogenic_count": 8})
+        assert ev is not None
+        assert ev.score == 0.40
+
+    def test_very_low_pathogenic_ratio(self):
+        ev = self.engine._score_clinvar_gene_stats({"total_submissions": 100, "pathogenic_count": 2})
+        assert ev is not None
+        assert ev.score == 0.20
+
+
+class TestScoreChembl:
+    def setup_method(self):
+        self.engine = ScoringEngine()
+
+    def test_none_data(self):
+        assert self.engine._score_chembl(None) is None
+
+    def test_not_found(self):
+        assert self.engine._score_chembl({"found": False}) is None
+
+    def test_no_drugs(self):
+        assert self.engine._score_chembl({"found": True, "drugs": []}) is None
+
+    def test_approved_with_warnings(self):
+        data = {
+            "found": True,
+            "drugs": [{"max_phase": 4}],
+            "warnings": [{"warning_type": "Black Box"}],
+        }
+        ev = self.engine._score_chembl(data)
+        assert ev is not None
+        assert ev.score == 0.65
+
+    def test_approved_no_warnings(self):
+        data = {"found": True, "drugs": [{"max_phase": 4}], "warnings": []}
+        ev = self.engine._score_chembl(data)
+        assert ev is not None
+        assert ev.score == 0.55
+
+    def test_many_drugs_no_approved(self):
+        data = {"found": True, "drugs": [{"max_phase": 2}] * 6, "warnings": []}
+        ev = self.engine._score_chembl(data)
+        assert ev is not None
+        assert ev.score == 0.45
+
+    def test_few_drugs_no_approved(self):
+        data = {"found": True, "drugs": [{"max_phase": 1}], "warnings": []}
+        ev = self.engine._score_chembl(data)
+        assert ev is not None
+        assert ev.score == 0.35
+
+
+class TestScoreFdaDrug:
+    def setup_method(self):
+        self.engine = ScoringEngine()
+
+    def test_none_data(self):
+        assert self.engine._score_fda_drug(None) is None
+
+    def test_not_found(self):
+        assert self.engine._score_fda_drug({"found": False}) is None
+
+    def test_no_labels(self):
+        assert self.engine._score_fda_drug({"found": True, "labels": []}) is None
+
+    def test_cyp_with_interactions(self):
+        data = {
+            "found": True,
+            "labels": [{"cyp_enzymes": ["CYP3A4"], "drug_interactions": "some text"}],
+        }
+        ev = self.engine._score_fda_drug(data)
+        assert ev is not None
+        assert ev.score == 0.60
+
+    def test_cyp_no_interactions(self):
+        data = {
+            "found": True,
+            "labels": [{"cyp_enzymes": ["CYP2D6"], "drug_interactions": ""}],
+        }
+        ev = self.engine._score_fda_drug(data)
+        assert ev is not None
+        assert ev.score == 0.50
+
+    def test_interactions_no_cyp(self):
+        data = {
+            "found": True,
+            "labels": [{"cyp_enzymes": [], "drug_interactions": "interacts with warfarin"}],
+        }
+        ev = self.engine._score_fda_drug(data)
+        assert ev is not None
+        assert ev.score == 0.45
+
+    def test_labels_only(self):
+        data = {
+            "found": True,
+            "labels": [{"cyp_enzymes": [], "drug_interactions": ""}],
+        }
+        ev = self.engine._score_fda_drug(data)
+        assert ev is not None
+        assert ev.score == 0.35
+
+
+class TestScoreGnomadTx:
+    def setup_method(self):
+        self.engine = ScoringEngine()
+
+    def test_none_data(self):
+        assert self.engine._score_gnomad_tx(None) is None
+
+    def test_not_found(self):
+        assert self.engine._score_gnomad_tx({"found": False}) is None
+
+    def test_hc_lof(self):
+        ev = self.engine._score_gnomad_tx({"found": True, "lof": "HC", "mean_expression": 0.8})
+        assert ev is not None
+        assert ev.score == 0.80
+
+    def test_lc_lof(self):
+        ev = self.engine._score_gnomad_tx({"found": True, "lof": "LC", "mean_expression": 0.3})
+        assert ev is not None
+        assert ev.score == 0.55
+
+    def test_high_expression_no_lof(self):
+        ev = self.engine._score_gnomad_tx({"found": True, "lof": None, "mean_expression": 0.7})
+        assert ev is not None
+        assert ev.score == 0.45
+
+    def test_moderate_expression_no_lof(self):
+        ev = self.engine._score_gnomad_tx({"found": True, "lof": None, "mean_expression": 0.3})
+        assert ev is not None
+        assert ev.score == 0.35
+
+    def test_low_expression_no_lof_returns_none(self):
+        assert self.engine._score_gnomad_tx({"found": True, "lof": None, "mean_expression": 0.05}) is None

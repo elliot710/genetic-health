@@ -95,8 +95,8 @@ def _make_annotation(rsid="rs12345", **kwargs):
 
 class TestCleanSnpediaText:
     def _fn(self):
-        from backend.api.annotation_routes import _clean_snpedia_text
-        return _clean_snpedia_text
+        from backend.utils.annotation_text import clean_snpedia_text
+        return clean_snpedia_text
 
     def test_empty_string(self):
         assert self._fn()("") == ""
@@ -187,8 +187,8 @@ class TestCleanSnpediaText:
 
 class TestIsNoiseCondition:
     def _fn(self):
-        from backend.api.annotation_routes import _is_noise_condition
-        return _is_noise_condition
+        from backend.utils.annotation_text import is_noise_condition
+        return is_noise_condition
 
     def test_not_provided(self):
         assert self._fn()("not provided") is True
@@ -214,8 +214,8 @@ class TestIsNoiseCondition:
 
 class TestSplitConditionString:
     def _fn(self):
-        from backend.api.annotation_routes import _split_condition_string
-        return _split_condition_string
+        from backend.utils.annotation_text import split_condition_string
+        return split_condition_string
 
     def test_simple_condition(self):
         parts = self._fn()("Breast Cancer")
@@ -253,8 +253,8 @@ class TestSplitConditionString:
 
 class TestIsHgvsName:
     def _fn(self):
-        from backend.api.annotation_routes import _is_hgvs_name
-        return _is_hgvs_name
+        from backend.utils.annotation_text import is_hgvs_name
+        return is_hgvs_name
 
     def test_coding_hgvs(self):
         assert self._fn()("NM_001234.5:c.123A>G") is True
@@ -289,8 +289,8 @@ class TestIsHgvsName:
 
 class TestBuildClinicalSummaryFromCache:
     def _fn(self):
-        from backend.api.annotation_routes import _build_clinical_summary_from_cache
-        return _build_clinical_summary_from_cache
+        from backend.services.clinical_summary_builder import build_clinical_summary_from_cache
+        return build_clinical_summary_from_cache
 
     def test_empty_annotation(self):
         fn = self._fn()
@@ -468,7 +468,7 @@ class TestGetClinicalSummary:
         )
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=cached_ann))
         app, _ = self._build_with_session(session)
-        with patch("backend.api.annotation_routes.select", return_value=MagicMock()):
+        with patch("backend.services.clinical_summary_builder.select", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.post("/api/annotations/clinical-summary", json={"rsid": "rs12345"})
                 assert resp.status_code == 200
@@ -477,8 +477,8 @@ class TestGetClinicalSummary:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=None))
         app, _ = self._build_with_session(session)
-        with patch("backend.api.annotation_routes.select", return_value=MagicMock()), \
-             patch("backend.api.annotation_routes.GeneticAPIService") as MockSvc:
+        with patch("backend.services.clinical_summary_builder.select", return_value=MagicMock()), \
+             patch("backend.services.clinical_summary_builder.GeneticAPIService") as MockSvc:
             instance = MagicMock()
             instance.__aenter__ = AsyncMock(return_value=instance)
             instance.__aexit__ = AsyncMock(return_value=False)
@@ -495,8 +495,8 @@ class TestGetClinicalSummary:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=None))
         app, _ = self._build_with_session(session)
-        with patch("backend.api.annotation_routes.select", return_value=MagicMock()), \
-             patch("backend.api.annotation_routes.GeneticAPIService") as MockSvc:
+        with patch("backend.services.clinical_summary_builder.select", return_value=MagicMock()), \
+             patch("backend.services.clinical_summary_builder.GeneticAPIService") as MockSvc:
             instance = MagicMock()
             instance.__aenter__ = AsyncMock(return_value=instance)
             instance.__aexit__ = AsyncMock(return_value=False)
@@ -515,7 +515,7 @@ class TestGetClinicalSummary:
         )
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=cached_ann))
         app, _ = self._build_with_session(session)
-        with patch("backend.api.annotation_routes.select", return_value=MagicMock()):
+        with patch("backend.services.clinical_summary_builder.select", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.post("/api/annotations/clinical-summary", json={"rsid": "rs12345"})
                 assert resp.status_code == 200
@@ -524,8 +524,8 @@ class TestGetClinicalSummary:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=None))
         app, _ = self._build_with_session(session)
-        with patch("backend.api.annotation_routes.select", return_value=MagicMock()), \
-             patch("backend.api.annotation_routes.GeneticAPIService") as MockSvc:
+        with patch("backend.services.clinical_summary_builder.select", return_value=MagicMock()), \
+             patch("backend.services.clinical_summary_builder.GeneticAPIService") as MockSvc:
             instance = MagicMock()
             instance.__aenter__ = AsyncMock(return_value=instance)
             instance.__aexit__ = AsyncMock(return_value=False)
@@ -663,8 +663,8 @@ class TestGetVariantDetails:
         ann = self._make_rich_annotation()
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=ann))
         app, _ = self._build_with_session(session)
-        with patch("backend.api.annotation_routes.select", return_value=MagicMock()), \
-             patch("backend.api.annotation_routes.AlphaMissenseService") as MockAM, \
+        with patch("backend.services.annotation_loader.select", return_value=MagicMock()), \
+             patch("backend.services.variant_detail_builder.AlphaMissenseService") as MockAM, \
              patch("backend.services.scoring_engine.get_scoring_engine") as mock_scoring, \
              patch("backend.services.bq_public.get_bq_public_service", side_effect=Exception("no bq")):
             MockAM.format_result_for_display = MagicMock(return_value={"am_pathogenicity": 0.92})
@@ -681,8 +681,8 @@ class TestGetVariantDetails:
         ann = self._make_rich_annotation()
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=ann))
         app, _ = self._build_with_session(session)
-        with patch("backend.api.annotation_routes.select", return_value=MagicMock()), \
-             patch("backend.api.annotation_routes.AlphaMissenseService") as MockAM, \
+        with patch("backend.services.annotation_loader.select", return_value=MagicMock()), \
+             patch("backend.services.variant_detail_builder.AlphaMissenseService") as MockAM, \
              patch("backend.services.scoring_engine.get_scoring_engine") as mock_scoring, \
              patch("backend.services.bq_public.get_bq_public_service", side_effect=Exception("no bq")):
             MockAM.format_result_for_display = MagicMock(return_value=None)
@@ -697,8 +697,8 @@ class TestGetVariantDetails:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=None))
         app, _ = self._build_with_session(session)
-        with patch("backend.api.annotation_routes.select", return_value=MagicMock()), \
-             patch("backend.api.annotation_routes.GeneticAPIService") as MockSvc:
+        with patch("backend.services.annotation_loader.select", return_value=MagicMock()), \
+             patch("backend.services.annotation_loader.GeneticAPIService") as MockSvc:
             instance = MagicMock()
             instance.__aenter__ = AsyncMock(return_value=instance)
             instance.__aexit__ = AsyncMock(return_value=False)
@@ -713,8 +713,8 @@ class TestGetVariantDetails:
         ann = self._make_rich_annotation()
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=ann))
         app, _ = self._build_with_session(session)
-        with patch("backend.api.annotation_routes.select", return_value=MagicMock()), \
-             patch("backend.api.annotation_routes.AlphaMissenseService") as MockAM, \
+        with patch("backend.services.annotation_loader.select", return_value=MagicMock()), \
+             patch("backend.services.variant_detail_builder.AlphaMissenseService") as MockAM, \
              patch("backend.services.scoring_engine.get_scoring_engine") as mock_scoring, \
              patch("backend.services.bq_public.get_bq_public_service") as mock_bq:
             MockAM.format_result_for_display = MagicMock(return_value={"am_class": "benign"})
@@ -730,9 +730,9 @@ class TestGetVariantDetails:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=None))
         app, _ = self._build_with_session(session)
-        with patch("backend.api.annotation_routes.select", return_value=MagicMock()), \
+        with patch("backend.services.annotation_loader.select", return_value=MagicMock()), \
              patch("backend.services.scoring_engine.get_scoring_engine") as mock_scoring, \
-             patch("backend.api.annotation_routes.GeneticAPIService") as MockSvc:
+             patch("backend.services.annotation_loader.GeneticAPIService") as MockSvc:
             mock_scoring.return_value.score_variant = MagicMock(return_value={"score": 0.1})
             instance = MagicMock()
             instance.__aenter__ = AsyncMock(return_value=instance)

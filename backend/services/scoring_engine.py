@@ -50,6 +50,13 @@ _SOURCE_WEIGHTS = {
     "polyphen":        0.05,   # Functional prediction
     "conservation":    0.05,   # Evolutionary conservation
     "splice_ai":       0.05,   # Splice site impact
+    "alphafold":       0.03,   # Structural confidence (low pLDDT = disordered)
+    "litvar":          0.03,   # Literature evidence (well-studied variant)
+    "gene_constraint":  0.05,  # Gene intolerance to LoF (pLI/LOEUF)
+    "clinvar_gene_stats": 0.05, # Gene-level ClinVar pathogenic burden
+    "chembl":          0.03,   # Druggability — known drug targets
+    "fda_drug":        0.03,   # FDA drug interactions / CYP involvement
+    "gnomad_tx":       0.05,   # LoF annotation + tissue expression
 }
 
 
@@ -152,6 +159,41 @@ class ScoringEngine:
 
         # 8. Open Targets (genetic association score)
         ev = self._score_open_targets(annotations.get("open_targets"))
+        if ev:
+            evidences.append(ev)
+
+        # 9. AlphaFold structural confidence
+        ev = self._score_alphafold(annotations.get("alphafold"))
+        if ev:
+            evidences.append(ev)
+
+        # 10. LitVar literature evidence
+        ev = self._score_litvar(annotations.get("litvar"))
+        if ev:
+            evidences.append(ev)
+
+        # 11. Gene constraint (pLI/LOEUF from gnomAD)
+        ev = self._score_gene_constraint(annotations.get("gene_constraint"))
+        if ev:
+            evidences.append(ev)
+
+        # 12. ClinVar gene-level burden (pathogenic ratio for the gene)
+        ev = self._score_clinvar_gene_stats(annotations.get("clinvar_gene_stats"))
+        if ev:
+            evidences.append(ev)
+
+        # 13. ChEMBL druggability (approved drugs targeting this gene)
+        ev = self._score_chembl(annotations.get("chembl"))
+        if ev:
+            evidences.append(ev)
+
+        # 14. FDA drug interactions / CYP involvement
+        ev = self._score_fda_drug(annotations.get("fda_drug"))
+        if ev:
+            evidences.append(ev)
+
+        # 15. gnomAD-tx LoF annotation + tissue expression
+        ev = self._score_gnomad_tx(annotations.get("gnomad_tx"))
         if ev:
             evidences.append(ev)
 
@@ -391,6 +433,224 @@ class ScoringEngine:
             weight=weight,
             label=f"OT: {disease[:50]} ({max_score:.2f})",
             raw_value=max_score,
+        )
+
+    def _score_alphafold(self, data: Optional[Dict]) -> Optional[SourceEvidence]:
+        """Score based on AlphaFold structural confidence (pLDDT).
+
+        Low global pLDDT indicates disordered/unstructured regions where
+        missense variants are LESS likely to be damaging. High pLDDT means
+        the region is well-structured and mutations more likely disruptive.
+        """
+        if not data or not data.get("found"):
+            return None
+        confidence = data.get("global_confidence")
+        if confidence is None:
+            return None
+        try:
+            confidence = float(confidence)
+        except (ValueError, TypeError):
+            return None
+        # pLDDT 0-100: >90 = very high confidence (structured),
+        # 70-90 = confident, 50-70 = low, <50 = very low (disordered)
+        if confidence >= 90:
+            score = 0.60
+        elif confidence >= 70:
+            score = 0.45
+        elif confidence >= 50:
+            score = 0.30
+        else:
+            score = 0.15
+        return SourceEvidence(
+            source="alphafold", score=score,
+            weight=_SOURCE_WEIGHTS["alphafold"],
+            label=f"AlphaFold pLDDT: {confidence:.1f}",
+            raw_value=confidence,
+        )
+
+    def _score_litvar(self, data: Optional[Dict]) -> Optional[SourceEvidence]:
+        """Score based on LitVar literature evidence.
+
+        More publications = better-studied variant = higher evidence weight.
+        This doesn't indicate pathogenicity direction — it increases confidence.
+        """
+        if not data or not data.get("found"):
+            return None
+        pub_count = data.get("total_publications", 0)
+        if not pub_count or pub_count < 1:
+            return None
+        if pub_count >= 100:
+            score = 0.55
+        elif pub_count >= 20:
+            score = 0.50
+        elif pub_count >= 5:
+            score = 0.45
+        else:
+            score = 0.40
+        return SourceEvidence(
+            source="litvar", score=score,
+            weight=_SOURCE_WEIGHTS["litvar"],
+            label=f"LitVar: {pub_count} publications",
+            raw_value=pub_count,
+        )
+
+    def _score_gene_constraint(self, data: Optional[Dict]) -> Optional[SourceEvidence]:
+        """Score based on gnomAD gene constraint metrics.
+
+        High pLI (>0.9) or low LOEUF (<0.35) indicates the gene is
+        intolerant to loss-of-function variants — mutations in such genes
+        are more likely to be pathogenic.
+        """
+        if not data:
+            return None
+        pli = data.get("pli")
+        loeuf = data.get("loeuf")
+        if pli is None and loeuf is None:
+            return None
+        score = 0.40
+        label_parts = []
+        if loeuf is not None:
+            if loeuf < 0.35:
+                score = 0.75
+                label_parts.append(f"LOEUF={loeuf:.2f} (highly constrained)")
+            elif loeuf < 0.6:
+                score = 0.55
+                label_parts.append(f"LOEUF={loeuf:.2f} (constrained)")
+            else:
+                score = 0.25
+                label_parts.append(f"LOEUF={loeuf:.2f} (tolerant)")
+        elif pli is not None:
+            if pli > 0.9:
+                score = 0.70
+                label_parts.append(f"pLI={pli:.2f} (LoF intolerant)")
+            elif pli > 0.5:
+                score = 0.50
+                label_parts.append(f"pLI={pli:.2f}")
+            else:
+                score = 0.25
+                label_parts.append(f"pLI={pli:.2f} (LoF tolerant)")
+        return SourceEvidence(
+            source="gene_constraint", score=score,
+            weight=_SOURCE_WEIGHTS["gene_constraint"],
+            label="; ".join(label_parts) if label_parts else "Gene constraint",
+            raw_value=data,
+        )
+
+    def _score_clinvar_gene_stats(self, data: Optional[Dict]) -> Optional[SourceEvidence]:
+        """Score gene-level ClinVar burden.
+
+        High pathogenic/total ratio = gene has many known pathogenic variants,
+        so new variants in this gene are more likely pathogenic.
+        """
+        if not data:
+            return None
+        total = data.get("total_submissions", 0)
+        pathogenic = data.get("pathogenic_count", 0)
+        if not total or total < 5:
+            return None
+        ratio = pathogenic / total
+        if ratio >= 0.30:
+            score = 0.70
+        elif ratio >= 0.15:
+            score = 0.55
+        elif ratio >= 0.05:
+            score = 0.40
+        else:
+            score = 0.20
+        return SourceEvidence(
+            source="clinvar_gene_stats", score=score,
+            weight=_SOURCE_WEIGHTS["clinvar_gene_stats"],
+            label=f"Gene ClinVar burden: {pathogenic}/{total} pathogenic ({ratio:.0%})",
+            raw_value=data,
+        )
+
+    def _score_chembl(self, data: Optional[Dict]) -> Optional[SourceEvidence]:
+        """Score based on ChEMBL druggability.
+
+        Genes targeted by approved drugs (max_phase=4) are pharmacogenomically
+        important — variants may affect drug response.
+        """
+        if not data or not data.get("found"):
+            return None
+        drugs = data.get("drugs", [])
+        if not drugs:
+            return None
+        approved = sum(1 for d in drugs if (d.get("max_phase") or 0) >= 4)
+        warnings = len(data.get("warnings", []))
+        if approved > 0 and warnings > 0:
+            score = 0.65
+        elif approved > 0:
+            score = 0.55
+        elif len(drugs) >= 5:
+            score = 0.45
+        else:
+            score = 0.35
+        return SourceEvidence(
+            source="chembl", score=score,
+            weight=_SOURCE_WEIGHTS["chembl"],
+            label=f"ChEMBL: {len(drugs)} drugs ({approved} approved)",
+            raw_value={"drug_count": len(drugs), "approved": approved},
+        )
+
+    def _score_fda_drug(self, data: Optional[Dict]) -> Optional[SourceEvidence]:
+        """Score based on FDA drug labels and CYP enzyme involvement.
+
+        CYP enzyme mentions indicate pharmacogenomic relevance — variants
+        in CYP genes or their targets may alter drug metabolism.
+        """
+        if not data or not data.get("found"):
+            return None
+        labels = data.get("labels", [])
+        if not labels:
+            return None
+        cyp_genes: set = set()
+        for lbl in labels:
+            cyp_genes.update(lbl.get("cyp_enzymes", []))
+        has_interactions = any(lbl.get("drug_interactions") for lbl in labels)
+        if cyp_genes and has_interactions:
+            score = 0.60
+        elif cyp_genes:
+            score = 0.50
+        elif has_interactions:
+            score = 0.45
+        else:
+            score = 0.35
+        return SourceEvidence(
+            source="fda_drug", score=score,
+            weight=_SOURCE_WEIGHTS["fda_drug"],
+            label=f"FDA: {len(labels)} labels, {len(cyp_genes)} CYP enzymes",
+            raw_value={"label_count": len(labels), "cyp_count": len(cyp_genes)},
+        )
+
+    def _score_gnomad_tx(self, data: Optional[Dict]) -> Optional[SourceEvidence]:
+        """Score from gnomAD transcript annotation + GTEx expression.
+
+        HC LoF = high-confidence loss-of-function (strong pathogenic signal).
+        High mean expression = variant in actively expressed gene.
+        """
+        if not data or not data.get("found"):
+            return None
+        lof = data.get("lof")
+        mean_expr = data.get("mean_expression")
+        if lof == "HC":
+            score = 0.80
+            label = "gnomAD-tx: HC LoF"
+        elif lof == "LC":
+            score = 0.55
+            label = "gnomAD-tx: LC LoF"
+        elif mean_expr is not None and mean_expr > 0.5:
+            score = 0.45
+            label = f"gnomAD-tx: high expression ({mean_expr:.2f})"
+        elif mean_expr is not None and mean_expr > 0.1:
+            score = 0.35
+            label = f"gnomAD-tx: moderate expression ({mean_expr:.2f})"
+        else:
+            return None
+        return SourceEvidence(
+            source="gnomad_tx", score=score,
+            weight=_SOURCE_WEIGHTS["gnomad_tx"],
+            label=label,
+            raw_value=data.get("lof") or data.get("mean_expression"),
         )
 
     # ------------------------------------------------------------------

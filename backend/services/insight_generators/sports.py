@@ -31,5 +31,5 @@ async def generate_sports_performance(ctx: GeneratorContext) -> int:
         ctx, rsid_map=rsid_map, gene_map=gene_map,
         dedup_field='category',
         build_from_rsid=from_rsid, build_from_gene=from_gene,
-        skip_benign_filter=True,
+        max_population_af=0.20,
     )

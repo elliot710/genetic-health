@@ -57,4 +57,5 @@ async def generate_health_risks(ctx: GeneratorContext) -> int:
         dedup_field='condition',
         build_from_rsid=from_rsid, build_from_gene=from_gene,
         filter_benign=True,
+        max_population_af=0.05,
     )

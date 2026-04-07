@@ -367,7 +367,7 @@ def get_user_genotype(variant) -> Optional[str]:
 #   DI or ID = heterozygous (one deleted copy, one reference copy)
 #   -- = no call / failed genotyping
 _INDEL_CODES = frozenset({'II', 'DD', 'DI', 'ID'})
-_NO_CALL_CODES = frozenset({'--', '00', 'NC'})
+_NO_CALL_CODES = frozenset({'--', '00', 'NC', './.', '.|.'})
 
 # ClinVar significance values that indicate a variant is NOT clinically
 # harmful. Used to filter out benign variants at insight generation time
@@ -760,6 +760,7 @@ async def generate_from_maps(
     build_from_gene: Callable,
     filter_benign: bool = False,
     skip_benign_filter: bool = False,
+    max_population_af: Optional[float] = None,
 ) -> int:
     """
     Generic loop shared by most category generators.
@@ -770,10 +771,11 @@ async def generate_from_maps(
         build_from_rsid(analysis_id, rsid, genotype, info) -> model | None
         build_from_gene(analysis_id, rsid, gene, consequence, info) -> model | None
         filter_benign: deprecated — kept for backward compat.
-        skip_benign_filter: set True for lifestyle/functional panels (sports,
-            nutrition, wellness, etc.) where ACMG-style pathogenicity scoring
-            does not apply.  Common functional variants legitimately score near
-            zero and must not be excluded by the benign composite threshold.
+        skip_benign_filter: deprecated — use max_population_af instead.
+        max_population_af: population allele frequency ceiling. Variants
+            above this threshold are skipped unless ClinVar explicitly
+            classifies them as pathogenic.  Clinical panels use 0.05,
+            lifestyle panels use 0.20.  None disables the gate.
     """
     items = []
     seen: set = set()
@@ -800,6 +802,24 @@ async def generate_from_maps(
         # at this position. Other variants in the same gene can still match.
         if effective_ref and is_homozygous_reference(genotype, effective_ref, alt_allele=_alt_allele):
             continue
+
+        # Population frequency gate — skip common variants that are too
+        # frequent to be clinically meaningful.  Variants with strong
+        # ClinVar pathogenic evidence bypass this gate.
+        if max_population_af is not None:
+            _prof = ctx.variant_profiles.get(rsid)
+            _var_freq = _prof.population_frequency if _prof else extract_frequency(annotation_result)
+            if _var_freq is not None and _var_freq > max_population_af:
+                _has_clinvar_path = False
+                if annotation_result and annotation_result.annotation_data:
+                    _cv_sigs = _get_all_clinvar_significances(
+                        annotation_result.annotation_data.get('annotations', {})
+                    )
+                    _has_clinvar_path = any(
+                        'pathogenic' in s.lower() for s in _cv_sigs
+                    )
+                if not _has_clinvar_path:
+                    continue
 
         # rsid-based matching
         if rsid in rsid_map:
@@ -903,8 +923,7 @@ async def generate_from_maps(
                 #   a) non-empty clinical_significance from ClinVar, OR
                 #   b) strong composite pathogenicity score (≥ 0.75)
                 _is_generic_variant_condition = (
-                    not skip_benign_filter
-                    and bool(re.search(r'\bvariant\s*$', _condition, re.IGNORECASE))
+                    bool(re.search(r'\bvariant\s*$', _condition, re.IGNORECASE))
                     and _condition.lower() not in ('unknown variant',)
                     and not info.get('clinical_significance', '').strip()
                 )
@@ -917,16 +936,21 @@ async def generate_from_maps(
                         rsid, _condition,
                     )
                     continue
-                # Filter benign/likely_benign variants when the composite
-                # pathogenicity score classifies them as benign — but ONLY
-                # for disease/clinical panels.  Lifestyle/functional panels
-                # (sports, nutrition, wellness, etc.) use skip_benign_filter=True
-                # because common functional variants legitimately score near 0.
-                if (not skip_benign_filter
-                        and settings.analysis.exclude_benign_from_panels
+                # Filter benign/likely_benign variants — applies to all panels.
+                # Lifestyle panels with max_population_af already filter common
+                # variants above, so this catches remaining benign-classified ones.
+                if (settings.analysis.exclude_benign_from_panels
                         and isinstance(_path_score, dict)
                         and _path_score.get('classification') in _BENIGN_CLASSIFICATIONS):
                     continue
+                # RC-7: When no scoring data exists and no ClinVar evidence,
+                # skip for clinical panels (health/carrier/drug) to prevent
+                # unscored variants from appearing as health risks.
+                if (not skip_benign_filter
+                        and max_population_af is not None and max_population_af <= 0.05
+                        and not isinstance(_path_score, dict)):
+                    if not info.get('clinical_significance', '').strip():
+                        continue
                 item = build_from_rsid(ctx.analysis_id, rsid, genotype or '', info_with_ref)
                 if item:
                     items.append(item)
@@ -957,14 +981,21 @@ async def generate_from_maps(
             ):
                 pass  # Qualifies by consequence type
             elif consequence is None and impact is None:
-                # No VEP data — check ClinVar significance as fallback
+                # No VEP data — check ClinVar significance as fallback.
+                # RC-6: Require rsid-specific ClinVar evidence, not just
+                # gene-level. A pathogenic variant at position X doesn't
+                # imply pathogenicity for an intron variant at position Y.
                 _cv_qualifies = False
                 if annotation_result and annotation_result.annotation_data:
                     cv_local = annotation_result.annotation_data.get('annotations', {}).get('clinvar_local', {})
                     if cv_local and cv_local.get('found'):
                         sigs = cv_local.get('clinical_significances', [])
                         sig_str = ' '.join(s.lower() for s in sigs)
-                        if any(kw in sig_str for kw in ('pathogenic', 'risk_factor', 'drug_response')):
+                        has_path_sig = any(kw in sig_str for kw in ('pathogenic', 'drug_response'))
+                        # Require the ClinVar record to match this specific rsid
+                        cv_rsid = cv_local.get('rsid') or cv_local.get('rs_id') or ''
+                        is_rsid_specific = str(cv_rsid) == str(rsid) or str(cv_rsid) == rsid.lstrip('rs')
+                        if has_path_sig and is_rsid_specific:
                             _cv_qualifies = True
                 if not _cv_qualifies:
                     continue
@@ -985,8 +1016,7 @@ async def generate_from_maps(
                     )
                 )
                 info_with_gt = {**info, '_ref_allele': effective_ref, '_genotype': genotype or '', '_pathogenicity_score': _path_score}
-                if (not skip_benign_filter
-                        and settings.analysis.exclude_benign_from_panels
+                if (settings.analysis.exclude_benign_from_panels
                         and isinstance(_path_score, dict)
                         and _path_score.get('classification') in _BENIGN_CLASSIFICATIONS):
                     continue
@@ -1018,6 +1048,9 @@ async def build_variant_profiles(
     from ..scoring_engine import get_scoring_engine, ScoringEngine
     scorer = get_scoring_engine()
     profiles: Dict[str, VariantProfile] = {}
+
+    gene_constraints = await _bulk_load_gene_constraints(rsid_gene_map)
+    clinvar_gene_stats = await _bulk_load_clinvar_gene_stats(rsid_gene_map)
 
     for idx, variant in enumerate(variants):
         if idx > 0 and idx % 200 == 0:
@@ -1054,6 +1087,10 @@ async def build_variant_profiles(
         annotations_dict: dict = {}
         if annotation_result and annotation_result.annotation_data:
             annotations_dict = annotation_result.annotation_data.get('annotations', {})
+        if gene and gene in gene_constraints:
+            annotations_dict = {**annotations_dict, 'gene_constraint': gene_constraints[gene]}
+        if gene and gene in clinvar_gene_stats:
+            annotations_dict = {**annotations_dict, 'clinvar_gene_stats': clinvar_gene_stats[gene]}
         pscore = scorer.score_variant(annotations_dict)
         composite = pscore.get('composite_score', 0.0)
 
@@ -1096,3 +1133,57 @@ async def build_variant_profiles(
 
     logger.info(f"Built {len(profiles)} variant profiles")
     return profiles
+
+
+async def _bulk_load_gene_constraints(rsid_gene_map: Dict[str, str]) -> Dict[str, dict]:
+    """Pre-load gene constraint data for all genes in one query."""
+    unique_genes = list(set(rsid_gene_map.values()))
+    if not unique_genes:
+        return {}
+    try:
+        from ...db.database import async_session_factory
+        from sqlalchemy import text
+        async with async_session_factory() as session:
+            result = await session.execute(
+                text(
+                    "SELECT gene, pli, loeuf, mis_z, syn_z "
+                    "FROM gnomad_gene_constraints WHERE gene = ANY(:genes)"
+                ),
+                {"genes": unique_genes},
+            )
+            return {
+                row[0]: {"pli": row[1], "loeuf": row[2], "mis_z": row[3], "syn_z": row[4]}
+                for row in result.all()
+            }
+    except Exception:
+        return {}
+
+
+async def _bulk_load_clinvar_gene_stats(rsid_gene_map: Dict[str, str]) -> Dict[str, dict]:
+    """Pre-load ClinVar gene-level stats for all genes in one query."""
+    unique_genes = list(set(rsid_gene_map.values()))
+    if not unique_genes:
+        return {}
+    try:
+        from ...db.database import async_session_factory
+        from sqlalchemy import text
+        async with async_session_factory() as session:
+            result = await session.execute(
+                text(
+                    "SELECT gene, total_submissions, pathogenic_likely_pathogenic, "
+                    "uncertain_significance, with_conflicts "
+                    "FROM clinvar_gene_stats WHERE gene = ANY(:genes)"
+                ),
+                {"genes": unique_genes},
+            )
+            return {
+                row[0]: {
+                    "total_submissions": row[1],
+                    "pathogenic_count": row[2],
+                    "uncertain_count": row[3],
+                    "conflict_count": row[4],
+                }
+                for row in result.all()
+            }
+    except Exception:
+        return {}

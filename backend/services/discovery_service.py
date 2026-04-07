@@ -13,7 +13,7 @@ from ..db.models import PendingDiscovery, VariantMapping
 CLINICAL_PANEL_MAP = {
     'pathogenic': 'health',
     'likely_pathogenic': 'health',
-    'risk_factor': 'health',
+    'risk_factor': 'wellness',
     'drug_response': 'drug',
     'protective': 'health',
 }
@@ -52,7 +52,7 @@ async def process_lookup_discoveries(
     created = 0
 
     # Generate variant mapping suggestions
-    mappings = _determine_variant_mappings(rsid, gene, consequence, clinical_sigs, pharmacogenomics)
+    mappings = _determine_variant_mappings(rsid, gene, consequence, clinical_sigs, pharmacogenomics, population_data)
 
     for mapping_cat, mapping_info in mappings.items():
         map_type = mapping_info['map_type']
@@ -116,16 +116,25 @@ def _determine_variant_mappings(
     consequence: str,
     clinical_sigs: list,
     pharmacogenomics: dict,
+    population_data: dict | None = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Determine which variant mappings should be suggested."""
     mappings: Dict[str, Dict[str, Any]] = {}
     sig_lower = [s.lower().replace(' ', '_') for s in clinical_sigs]
 
+    # RC-3: Skip common variants (AF > 1%) unless ClinVar pathogenic
+    allele_freq = _extract_allele_frequency(population_data)
+    has_pathogenic = any('pathogenic' in s for s in sig_lower)
+    if allele_freq is not None and allele_freq > 0.01 and not has_pathogenic:
+        return mappings
+
     # Health risk mapping for pathogenic/risk variants
+    # RC-4: risk_factor goes to wellness, not health
     has_health_signal = any(
         kw in sig for sig in sig_lower
-        for kw in ('pathogenic', 'risk_factor', 'likely_pathogenic')
+        for kw in ('pathogenic', 'likely_pathogenic')
     )
+    has_risk_factor = any('risk_factor' in sig for sig in sig_lower)
     if has_health_signal or consequence in CONSEQUENCE_PANEL_MAP:
         condition = _infer_condition(clinical_sigs, gene)
         mappings['health'] = {
@@ -136,6 +145,21 @@ def _determine_variant_mappings(
                 'risk_multiplier': 1.2 if 'pathogenic' in str(sig_lower) else 1.1,
             },
             'description': f"Health risk: {condition}" if condition else f"Health variant in {gene or 'unknown gene'}",
+        }
+
+    # RC-4: Route risk_factor to wellness panel instead of health
+    if has_risk_factor and 'health' not in mappings:
+        condition = _infer_condition(clinical_sigs, gene)
+        mappings['wellness'] = {
+            'map_type': 'rsid',
+            'key': rsid,
+            'data': {
+                'metric': condition or f"{gene or 'Unknown'} risk factor",
+                'predisposition': 'moderate',
+                'score': 0.5,
+                'recommendations': [f'Discuss {gene or "this variant"} with healthcare provider'],
+            },
+            'description': f"Wellness risk factor: {condition or gene}",
         }
 
     # Drug response mapping
@@ -159,6 +183,28 @@ def _determine_variant_mappings(
         }
 
     return mappings
+
+
+def _extract_allele_frequency(population_data: dict | None) -> float | None:
+    """Extract global allele frequency from population data."""
+    if not population_data or not isinstance(population_data, dict):
+        return None
+    af = population_data.get('global_af') or population_data.get('af')
+    if af is not None:
+        try:
+            return float(af)
+        except (ValueError, TypeError):
+            pass
+    frequencies = population_data.get('frequencies', {})
+    if isinstance(frequencies, dict):
+        for key in ('global', 'gnomad', 'gnomade', '1000genomes'):
+            val = frequencies.get(key)
+            if val is not None:
+                try:
+                    return float(val)
+                except (ValueError, TypeError):
+                    continue
+    return None
 
 
 def _infer_condition(clinical_sigs: list, gene: str | None) -> str | None:

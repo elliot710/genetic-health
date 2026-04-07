@@ -360,6 +360,12 @@ class TestIsNoCallGenotype:
     def test_valid_genotype_not_no_call(self):
         assert is_no_call_genotype("AG") is False
 
+    def test_vcf_dot_slash_dot_no_call(self):
+        assert is_no_call_genotype("./.") is True
+
+    def test_vcf_dot_pipe_dot_no_call(self):
+        assert is_no_call_genotype(".|.") is True
+
 
 class TestParseAlleles:
     def test_slash_separated(self):

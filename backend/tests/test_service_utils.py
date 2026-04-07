@@ -449,7 +449,7 @@ class TestAnnotationVariantDetails:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=None))
         app, _ = self._build(session)
-        with patch("backend.api.annotation_routes.select", return_value=MagicMock()):
+        with patch("backend.services.annotation_loader.select", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.get("/api/annotations/variant-details/rs99999")
                 assert resp.status_code in (200, 404, 500)
@@ -470,7 +470,7 @@ class TestAnnotationVariantDetails:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=None))
         app, _ = self._build(session)
-        with patch("backend.api.annotation_routes.select", return_value=MagicMock()):
+        with patch("backend.services.clinical_summary_builder.select", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.post("/api/annotations/clinical-summary",
                                    json={"rsid": "rs12345"})
