@@ -1,0 +1,607 @@
+{
+  "functions": {
+    "assess_drug_response": [
+      {
+        "in": [
+          "CYP2D6",
+          "A/G",
+          "A"
+        ],
+        "out": "intermediate"
+      },
+      {
+        "in": [
+          "CYP2D6",
+          "A/G",
+          null
+        ],
+        "out": "intermediate"
+      },
+      {
+        "in": [
+          "CYP2D6",
+          "G/G",
+          "A"
+        ],
+        "out": "poor"
+      },
+      {
+        "in": [
+          "CYP2D6",
+          "G/G",
+          null
+        ],
+        "out": "poor"
+      },
+      {
+        "in": [
+          "CYP2D6",
+          "A/A",
+          "A"
+        ],
+        "out": "normal"
+      },
+      {
+        "in": [
+          "CYP2D6",
+          "A/A",
+          null
+        ],
+        "out": "poor"
+      },
+      {
+        "in": [
+          "CYP2D6",
+          "--",
+          "A"
+        ],
+        "out": "normal"
+      },
+      {
+        "in": [
+          "CYP2D6",
+          "--",
+          null
+        ],
+        "out": "normal"
+      },
+      {
+        "in": [
+          "BRCA1",
+          "A/G",
+          "A"
+        ],
+        "out": "normal"
+      },
+      {
+        "in": [
+          "BRCA1",
+          "A/G",
+          null
+        ],
+        "out": "normal"
+      },
+      {
+        "in": [
+          "BRCA1",
+          "G/G",
+          "A"
+        ],
+        "out": "normal"
+      },
+      {
+        "in": [
+          "BRCA1",
+          "G/G",
+          null
+        ],
+        "out": "normal"
+      },
+      {
+        "in": [
+          "BRCA1",
+          "A/A",
+          "A"
+        ],
+        "out": "normal"
+      },
+      {
+        "in": [
+          "BRCA1",
+          "A/A",
+          null
+        ],
+        "out": "normal"
+      },
+      {
+        "in": [
+          "BRCA1",
+          "--",
+          "A"
+        ],
+        "out": "normal"
+      },
+      {
+        "in": [
+          "BRCA1",
+          "--",
+          null
+        ],
+        "out": "normal"
+      }
+    ],
+    "assess_risk_level": [
+      {
+        "in": [
+          1.5,
+          null
+        ],
+        "out": "moderate"
+      },
+      {
+        "in": [
+          1.5,
+          0.85
+        ],
+        "out": "high"
+      },
+      {
+        "in": [
+          1.5,
+          0.5
+        ],
+        "out": "average"
+      },
+      {
+        "in": [
+          1.5,
+          0.2
+        ],
+        "out": "low"
+      },
+      {
+        "in": [
+          0.7,
+          null
+        ],
+        "out": "low"
+      },
+      {
+        "in": [
+          0.7,
+          0.85
+        ],
+        "out": "high"
+      },
+      {
+        "in": [
+          0.7,
+          0.5
+        ],
+        "out": "average"
+      },
+      {
+        "in": [
+          0.7,
+          0.2
+        ],
+        "out": "low"
+      },
+      {
+        "in": [
+          2.5,
+          null
+        ],
+        "out": "moderate"
+      },
+      {
+        "in": [
+          2.5,
+          0.85
+        ],
+        "out": "high"
+      },
+      {
+        "in": [
+          2.5,
+          0.5
+        ],
+        "out": "moderate"
+      },
+      {
+        "in": [
+          2.5,
+          0.2
+        ],
+        "out": "moderate"
+      }
+    ],
+    "cognitive_adjust_percentile": [
+      {
+        "in": [
+          "A/G",
+          "A"
+        ],
+        "out": 55
+      },
+      {
+        "in": [
+          "A/G",
+          null
+        ],
+        "out": 55
+      },
+      {
+        "in": [
+          "G/G",
+          "A"
+        ],
+        "out": 60
+      },
+      {
+        "in": [
+          "G/G",
+          null
+        ],
+        "out": 60
+      },
+      {
+        "in": [
+          "A/A",
+          "A"
+        ],
+        "out": 40
+      },
+      {
+        "in": [
+          "A/A",
+          null
+        ],
+        "out": 60
+      },
+      {
+        "in": [
+          "--",
+          "A"
+        ],
+        "out": 60
+      },
+      {
+        "in": [
+          "--",
+          null
+        ],
+        "out": 60
+      }
+    ],
+    "zygosity_adjust": [
+      {
+        "in": [
+          "moderate",
+          "A/G",
+          "A"
+        ],
+        "out": "moderate"
+      },
+      {
+        "in": [
+          "moderate",
+          "A/G",
+          null
+        ],
+        "out": "moderate"
+      },
+      {
+        "in": [
+          "moderate",
+          "G/G",
+          "A"
+        ],
+        "out": "high"
+      },
+      {
+        "in": [
+          "moderate",
+          "G/G",
+          null
+        ],
+        "out": "high"
+      },
+      {
+        "in": [
+          "moderate",
+          "A/A",
+          "A"
+        ],
+        "out": "average"
+      },
+      {
+        "in": [
+          "moderate",
+          "A/A",
+          null
+        ],
+        "out": "high"
+      },
+      {
+        "in": [
+          "moderate",
+          "II",
+          "A"
+        ],
+        "out": "high"
+      },
+      {
+        "in": [
+          "moderate",
+          "II",
+          null
+        ],
+        "out": "high"
+      },
+      {
+        "in": [
+          "moderate",
+          "DD",
+          "A"
+        ],
+        "out": "high"
+      },
+      {
+        "in": [
+          "moderate",
+          "DD",
+          null
+        ],
+        "out": "high"
+      },
+      {
+        "in": [
+          "moderate",
+          "--",
+          "A"
+        ],
+        "out": "moderate"
+      },
+      {
+        "in": [
+          "moderate",
+          "--",
+          null
+        ],
+        "out": "moderate"
+      },
+      {
+        "in": [
+          "high",
+          "A/G",
+          "A"
+        ],
+        "out": "high"
+      },
+      {
+        "in": [
+          "high",
+          "A/G",
+          null
+        ],
+        "out": "high"
+      },
+      {
+        "in": [
+          "high",
+          "G/G",
+          "A"
+        ],
+        "out": "very_high"
+      },
+      {
+        "in": [
+          "high",
+          "G/G",
+          null
+        ],
+        "out": "very_high"
+      },
+      {
+        "in": [
+          "high",
+          "A/A",
+          "A"
+        ],
+        "out": "moderate"
+      },
+      {
+        "in": [
+          "high",
+          "A/A",
+          null
+        ],
+        "out": "very_high"
+      },
+      {
+        "in": [
+          "high",
+          "II",
+          "A"
+        ],
+        "out": "very_high"
+      },
+      {
+        "in": [
+          "high",
+          "II",
+          null
+        ],
+        "out": "very_high"
+      },
+      {
+        "in": [
+          "high",
+          "DD",
+          "A"
+        ],
+        "out": "very_high"
+      },
+      {
+        "in": [
+          "high",
+          "DD",
+          null
+        ],
+        "out": "very_high"
+      },
+      {
+        "in": [
+          "high",
+          "--",
+          "A"
+        ],
+        "out": "high"
+      },
+      {
+        "in": [
+          "high",
+          "--",
+          null
+        ],
+        "out": "high"
+      },
+      {
+        "in": [
+          "low",
+          "A/G",
+          "A"
+        ],
+        "out": "low"
+      },
+      {
+        "in": [
+          "low",
+          "A/G",
+          null
+        ],
+        "out": "low"
+      },
+      {
+        "in": [
+          "low",
+          "G/G",
+          "A"
+        ],
+        "out": "average"
+      },
+      {
+        "in": [
+          "low",
+          "G/G",
+          null
+        ],
+        "out": "average"
+      },
+      {
+        "in": [
+          "low",
+          "A/A",
+          "A"
+        ],
+        "out": "low"
+      },
+      {
+        "in": [
+          "low",
+          "A/A",
+          null
+        ],
+        "out": "average"
+      },
+      {
+        "in": [
+          "low",
+          "II",
+          "A"
+        ],
+        "out": "average"
+      },
+      {
+        "in": [
+          "low",
+          "II",
+          null
+        ],
+        "out": "average"
+      },
+      {
+        "in": [
+          "low",
+          "DD",
+          "A"
+        ],
+        "out": "average"
+      },
+      {
+        "in": [
+          "low",
+          "DD",
+          null
+        ],
+        "out": "average"
+      },
+      {
+        "in": [
+          "low",
+          "--",
+          "A"
+        ],
+        "out": "low"
+      },
+      {
+        "in": [
+          "low",
+          "--",
+          null
+        ],
+        "out": "low"
+      }
+    ]
+  },
+  "generators": {
+    "cognitive": [
+      {
+        "fields": {
+          "analysis_id": 1,
+          "associated_variants": [
+            "rs1003"
+          ],
+          "cognitive_domain": "Memory",
+          "enhancement_suggestions": [
+            "Do puzzles"
+          ],
+          "genetic_score": 70,
+          "percentile": 55
+        },
+        "table": "CognitiveProfile"
+      }
+    ],
+    "health": [
+      {
+        "fields": {
+          "analysis_id": 1,
+          "associated_variants": [
+            "rs1001"
+          ],
+          "condition": "Type 2 Diabetes",
+          "gene": "TCF7L2",
+          "pathogenicity_classification": "pathogenic",
+          "recommendations": [
+            "Maintain healthy weight"
+          ],
+          "review_status": null,
+          "risk_level": "moderate",
+          "risk_score": 0.6
+        },
+        "table": "HealthRisk"
+      }
+    ]
+  }
+}
