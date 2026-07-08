@@ -973,13 +973,12 @@ async def generate_from_maps(
             # consumer-array indel codes (D/I) are now verified.
             if genotype and not is_indel_genotype(genotype):
                 _, ann_alt = get_annotation_allele_parts(annotation_result)
-                # Fallback: use risk_allele stored directly in the mapping when
-                # annotation data doesn't carry allele information (BUG-01).
-                if ann_alt is None:
-                    ann_alt = info.get('risk_allele')
-                # FIX-02: skip when both annotation and mapping lack allele data.
+                # FIX-02: skip when annotation data lacks allele information.
                 # We cannot verify the user carries the risk allele vs reference,
                 # so omit rather than risk a false positive.
+                # (A prior info.get('risk_allele') fallback was removed — no
+                # variant_mappings row has ever populated risk_allele, so it was
+                # dead code; populating a real allele column is deferred — see U5.)
                 if ann_alt is None:
                     logger.debug(
                         "rsid %s: no allele data for SNP verification — skipping", rsid

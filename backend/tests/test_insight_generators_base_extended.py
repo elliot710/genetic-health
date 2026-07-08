@@ -531,8 +531,10 @@ class TestAssessDrugResponse:
         assert result == "intermediate"
 
     def test_pharmacogene_hom_alt_poor(self):
-        result = assess_drug_response("GG", "CYP2D6")
-        assert result == "poor"
+        # Confirmed hom-alt requires a known ref (U3/KTD3); without it the
+        # call is conservatively 'normal', not a fabricated 'poor'.
+        assert assess_drug_response("GG", "CYP2D6", ref_allele="A") == "poor"
+        assert assess_drug_response("GG", "CYP2D6") == "normal"
 
     def test_non_pharmacogene_normal(self):
         result = assess_drug_response("AG", "UNKNOWN_GENE")
