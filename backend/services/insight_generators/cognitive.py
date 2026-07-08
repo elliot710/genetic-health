@@ -1,6 +1,9 @@
 """Cognitive profile insight generator."""
 from ...db.models import CognitiveProfile
-from .base import GeneratorContext, generate_from_maps, is_heterozygous, is_homozygous_reference, is_no_call_genotype
+from .base import (
+    GeneratorContext, generate_from_maps, is_heterozygous,
+    is_homozygous_reference, is_no_call_genotype, is_indel_genotype,
+)
 
 
 def _adjust_percentile(percentile: int, genotype, ref_allele) -> int:
@@ -15,10 +18,16 @@ def _adjust_percentile(percentile: int, genotype, ref_allele) -> int:
     """
     if not genotype or is_homozygous_reference(genotype, ref_allele):
         return max(1, percentile - 10)
-    elif is_heterozygous(genotype):
+    if is_heterozygous(genotype):
         return min(99, percentile + 5)
-    else:
+    # Homozygous non-reference: apply the full-dosage boost ONLY when we can
+    # confirm non-reference (ref known, resolvable nucleotide homozygote).
+    # With an unknown reference or an indel D/I code we cannot distinguish
+    # hom-alt from hom-ref, so hold baseline rather than fabricating a boost
+    # from missing data (U3/U4/KTD3 — conservative policy).
+    if ref_allele and not is_indel_genotype(genotype):
         return min(99, percentile + 10)
+    return percentile
 
 
 async def generate_cognitive_profiles(ctx: GeneratorContext) -> int:
