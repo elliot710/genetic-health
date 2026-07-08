@@ -590,13 +590,17 @@ def zygosity_adjust(level: str, genotype: Optional[str], *, ref_allele: Optional
     elif is_heterozygous(genotype):
         new_idx = idx  # baseline — no change
     else:
-        # Homozygous non-reference: escalate unconditionally.
-        # The early hom-ref filter in generate_from_maps() removes variants
-        # that are confirmed-hom-ref when ref_allele IS known.  Variants
-        # arriving here without a known ref are more likely genuinely hom-alt
-        # (identical alleles that aren't reference) than secretly hom-ref, so
-        # escalate rather than silently preserving baseline risk.
-        new_idx = min(len(_SEVERITY_LADDER) - 1, idx + steps)
+        # Homozygous non-reference. Escalate ONLY when we can positively
+        # confirm the genotype is non-reference — i.e. ref_allele is known
+        # and the genotype is a resolvable nucleotide homozygote. When the
+        # reference is unknown (or the genotype is an indel D/I code with no
+        # allele-direction data), we cannot distinguish hom-alt from hom-ref,
+        # so preserve baseline rather than fabricating an escalation that
+        # inflates risk from missing data (U3/KTD3 — conservative policy).
+        if ref_allele and not is_indel_genotype(genotype):
+            new_idx = min(len(_SEVERITY_LADDER) - 1, idx + steps)
+        else:
+            new_idx = idx
 
     result = _SEVERITY_LADDER[new_idx]
     # Preserve original casing style (Title Case if original was)
@@ -714,10 +718,15 @@ def assess_drug_response(genotype: str, gene: str, ref_allele: Optional[str] = N
         if gt_upper[0] != gt_upper[1]:
             return 'intermediate'
         else:
-            # Homozygous non-reference — poor metabolizer.
-            # We reach here only if ref_allele was unavailable or didn't
-            # match the genotype, so this is genuinely non-reference.
-            return 'poor'
+            # Homozygous. Call 'poor' ONLY when we can confirm the genotype is
+            # non-reference: a confirmed hom-ref already returned 'normal'
+            # above, so a KNOWN ref reaching here means genuine hom-alt. With
+            # an unknown reference we cannot distinguish hom-alt from hom-ref,
+            # so do not fabricate a poor-metabolizer call from missing data
+            # (U3/KTD3 — conservative policy).
+            if ref_allele:
+                return 'poor'
+            return 'normal'
     return 'normal'
 
 

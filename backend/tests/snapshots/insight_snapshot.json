@@ -31,7 +31,7 @@
           "G/G",
           null
         ],
-        "out": "poor"
+        "out": "normal"
       },
       {
         "in": [
@@ -47,7 +47,7 @@
           "A/A",
           null
         ],
-        "out": "poor"
+        "out": "normal"
       },
       {
         "in": [
@@ -305,7 +305,7 @@
           "G/G",
           null
         ],
-        "out": "high"
+        "out": "moderate"
       },
       {
         "in": [
@@ -321,7 +321,7 @@
           "A/A",
           null
         ],
-        "out": "high"
+        "out": "moderate"
       },
       {
         "in": [
@@ -329,7 +329,7 @@
           "II",
           "A"
         ],
-        "out": "high"
+        "out": "moderate"
       },
       {
         "in": [
@@ -337,7 +337,7 @@
           "II",
           null
         ],
-        "out": "high"
+        "out": "moderate"
       },
       {
         "in": [
@@ -345,7 +345,7 @@
           "DD",
           "A"
         ],
-        "out": "high"
+        "out": "moderate"
       },
       {
         "in": [
@@ -353,7 +353,7 @@
           "DD",
           null
         ],
-        "out": "high"
+        "out": "moderate"
       },
       {
         "in": [
@@ -401,7 +401,7 @@
           "G/G",
           null
         ],
-        "out": "very_high"
+        "out": "high"
       },
       {
         "in": [
@@ -417,7 +417,7 @@
           "A/A",
           null
         ],
-        "out": "very_high"
+        "out": "high"
       },
       {
         "in": [
@@ -425,7 +425,7 @@
           "II",
           "A"
         ],
-        "out": "very_high"
+        "out": "high"
       },
       {
         "in": [
@@ -433,7 +433,7 @@
           "II",
           null
         ],
-        "out": "very_high"
+        "out": "high"
       },
       {
         "in": [
@@ -441,7 +441,7 @@
           "DD",
           "A"
         ],
-        "out": "very_high"
+        "out": "high"
       },
       {
         "in": [
@@ -449,7 +449,7 @@
           "DD",
           null
         ],
-        "out": "very_high"
+        "out": "high"
       },
       {
         "in": [
@@ -497,7 +497,7 @@
           "G/G",
           null
         ],
-        "out": "average"
+        "out": "low"
       },
       {
         "in": [
@@ -513,7 +513,7 @@
           "A/A",
           null
         ],
-        "out": "average"
+        "out": "low"
       },
       {
         "in": [
@@ -521,7 +521,7 @@
           "II",
           "A"
         ],
-        "out": "average"
+        "out": "low"
       },
       {
         "in": [
@@ -529,7 +529,7 @@
           "II",
           null
         ],
-        "out": "average"
+        "out": "low"
       },
       {
         "in": [
@@ -537,7 +537,7 @@
           "DD",
           "A"
         ],
-        "out": "average"
+        "out": "low"
       },
       {
         "in": [
@@ -545,7 +545,7 @@
           "DD",
           null
         ],
-        "out": "average"
+        "out": "low"
       },
       {
         "in": [
