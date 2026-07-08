@@ -597,8 +597,8 @@
             "Maintain healthy weight"
           ],
           "review_status": null,
-          "risk_level": "moderate",
-          "risk_score": 0.6
+          "risk_level": "high",
+          "risk_score": 0.8
         },
         "table": "HealthRisk"
       }

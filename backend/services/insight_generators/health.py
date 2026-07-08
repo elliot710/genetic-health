@@ -18,10 +18,13 @@ async def generate_health_risks(ctx: GeneratorContext) -> int:
     def from_rsid(aid, rsid, genotype, info):
         if _is_clingen_disputed(rsid):
             return None
-        annotation_result = ctx.annotation_results.get(rsid)
-        path_score = None
-        if annotation_result and annotation_result.annotation_data:
-            path_score = annotation_result.annotation_data.get('pathogenicity_score')
+        # Use the composite pathogenicity score computed in build_variant_profiles
+        # (threaded via info['_pathogenicity_score']). The annotation cache does
+        # not store a top-level 'pathogenicity_score' (ARCH-06 computes it lazily),
+        # so reading annotation_data here always yielded None and silently capped
+        # every health risk at the multiplier-only 'moderate' fallback.
+        _ps = info.get('_pathogenicity_score')
+        path_score = _ps if isinstance(_ps, dict) else None
         risk_level = assess_risk_level(
             genotype, info['risk_multiplier'],
             ref_allele=info.get('_ref_allele'),
@@ -30,7 +33,6 @@ async def generate_health_risks(ctx: GeneratorContext) -> int:
         recommendations = info.get('recommendations')
         if not recommendations or recommendations == ['Consult with healthcare provider']:
             recommendations = get_health_recommendations(info['condition'], risk_level)
-        _ps = info.get('_pathogenicity_score')
         _classification = _ps.get('classification') if isinstance(_ps, dict) else None
         return HealthRisk(
             analysis_id=aid, condition=info['condition'],
