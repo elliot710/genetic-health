@@ -302,7 +302,14 @@ class ScoringEngine:
                 raw_value=max_splice,
             ))
 
-        # Allele frequency (rarity as pathogenicity evidence)
+        # Allele frequency (rarity as pathogenicity evidence).
+        # NOTE: the main gnomAD CADD file carries no AF column — `af` here is
+        # populated by the gnomAD v2 exome fallback in local_annotation
+        # run_all_lookups (which writes results.gnomad[rsid]['af'] = af_nfe).
+        # So gnomad_af evidence is effectively sourced from gnomad_v2; when v2
+        # has no coverage for a variant, af is None and no AF evidence is added
+        # (absence is not scored as 0). This is correct — do not synthesize AF
+        # from the CADD path, which is conservation/pathogenicity-only.
         af = data.get("af")
         if af is not None:
             af_score = self._af_to_score(af)

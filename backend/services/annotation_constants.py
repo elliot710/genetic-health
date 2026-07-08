@@ -27,7 +27,14 @@ SOURCE_TO_COLUMN: Dict[str, str] = {
     'clinvar_local': 'clinvar_local',
     'gnomad': 'gnomad',
     'thousand_genomes': 'thousand_genomes',
-    'ensembl_vep': 'ensembl',  # ensembl_vep local uses the same ensembl_data column
+    # INTENTIONAL shared column: 'ensembl' (remote REST fallback) and
+    # 'ensembl_vep' (local VCF, authoritative) both produce VEP consequence
+    # annotations and write ensembl_data. During analysis there is a single
+    # writer (annotation_coordinator uses the local ensembl_vep source). The
+    # only overlap is an admin double-retrigger of both sources, where
+    # last-writer-toward-local is the desired outcome. Do NOT split these into
+    # separate columns — they are the same logical annotation.
+    'ensembl_vep': 'ensembl',
     'gnomad_tx': 'gnomad_tx',
     'chembl': 'chembl',
     'fda_drug': 'fda_drug',
