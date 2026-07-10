@@ -8,9 +8,19 @@ from alembic import context
 from backend.db.database import Base
 from backend.db.models import *  # Import all models for Alembic auto-detection
 
+import os
+
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
+
+# Override sqlalchemy.url from DATABASE_URL env var if set
+# (avoids hardcoding credentials in alembic.ini)
+_db_url = os.environ.get("DATABASE_URL")
+if _db_url:
+    # asyncpg driver is not supported by alembic directly; use psycopg2 sync URL
+    _db_url = _db_url.replace("postgresql+asyncpg://", "postgresql://")
+    config.set_main_option("sqlalchemy.url", _db_url)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
@@ -66,7 +76,7 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection, target_metadata=target_metadata,
         )
 
         with context.begin_transaction():

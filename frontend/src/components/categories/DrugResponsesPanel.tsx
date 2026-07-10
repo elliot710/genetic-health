@@ -9,8 +9,12 @@ import {
   SectionCard,
   StatusBadge,
   DisclaimerCard,
-  VariantLinks,
-  PathogenicityBar,
+  VariantInfoBox,
+  AlphaFoldBadge,
+  GeneContextBox,
+  AlphaFoldDetailBox,
+  GeneBurdenStrip,
+  ClickableRsidBadge,
   riskToSeverity,
   MasonryLayout,
   useGrouping,
@@ -185,30 +189,76 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
             return (
               <div
                 key={index}
-                className={`${theme.glass} border ${theme.border} rounded-xl p-5 cursor-pointer hover:border-blue-500/50 transition-all duration-300`}
+                className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 cursor-pointer hover:border-blue-500/50 transition-all duration-300 overflow-hidden`}
                 onClick={() => setSelectedItem(isExpanded ? null : itemKey)}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-3">
-                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{drug.drug}</h4>
-                    <StatusBadge
-                      label={`${(drug.risk?.charAt(0).toUpperCase() + drug.risk?.slice(1)) || 'Unknown'} Risk`}
-                      severity={riskToSeverity(drug.risk)}
-                    />
-                  </div>
-                  <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
+                <div className="flex items-start justify-between mb-1 gap-1">
+                  <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug flex-1 min-w-0`}>{drug.drug}</h4>
+                  <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap gap-1">
+                  <StatusBadge
+                    label={`${(drug.risk?.charAt(0).toUpperCase() + drug.risk?.slice(1)) || 'Unknown'} Risk`}
+                    severity={riskToSeverity(drug.risk)}
+                  />
                   <Badge variant="secondary" className="text-xs">{drug.gene}</Badge>
                   <Badge variant="outline" className="text-xs">{drug.response}</Badge>
+                  {drug.variants?.map(v => (
+                    <ClickableRsidBadge key={v} rsid={v} gene={drug.gene} genotype={data?.genotype_map?.[v]} alleleString={data?.allele_string_map?.[v]} token={token} isDarkMode={isDarkMode} />
+                  ))}
+                  {drug.variants?.[0] && data?.alphafold_map?.[drug.variants[0]] && (
+                    <AlphaFoldBadge
+                      confidence={data.alphafold_map[drug.variants[0]].confidence}
+                      highPct={data.alphafold_map[drug.variants[0]].high_confidence_pct}
+                      lowPct={data.alphafold_map[drug.variants[0]].low_confidence_pct}
+                    />
+                  )}
                 </div>
+                {drug.gene && data?.gene_stats_map?.[drug.gene] && (
+                  <GeneBurdenStrip gene={drug.gene} stats={data.gene_stats_map[drug.gene]} theme={theme} />
+                )}
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
                     <div className={`text-sm ${theme.textSecondary}`}>
                       <span className="font-medium">Genotype:</span> <span className="font-mono">{drug.genotype}</span>
                     </div>
+
+                    {/* PharmGKB / ClinPGx detail */}
+                    {drug.variants?.length && (() => {
+                      const pgkb = drug.variants.map(v => data?.pharmgkb_map?.[v]).find(Boolean)
+                      if (!pgkb) return null
+                      return (
+                        <div className={`rounded-lg p-2.5 border ${theme.border} ${theme.isDarkMode ? 'bg-white/3' : 'bg-blue-50/40'} space-y-1.5`}>
+                          <h5 className={`text-xs font-semibold ${theme.textSecondary} uppercase tracking-wide`}>PharmGKB / CPIC Data</h5>
+                          {pgkb.phenotype && (
+                            <p className={`text-xs ${theme.textPrimary}`}><span className={`font-medium ${theme.textSecondary}`}>Phenotype: </span>{pgkb.phenotype}</p>
+                          )}
+                          {pgkb.star_allele && (
+                            <p className={`text-xs ${theme.textPrimary}`}><span className={`font-medium ${theme.textSecondary}`}>Star allele: </span><span className="font-mono">{pgkb.star_allele}</span></p>
+                          )}
+                          {pgkb.haplotypes && pgkb.haplotypes.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              <span className={`text-xs font-medium ${theme.textSecondary}`}>Haplotypes:</span>
+                              {pgkb.haplotypes.map((h: string, i: number) => (
+                                <Badge key={i} variant="outline" className="text-[10px] font-mono">{h}</Badge>
+                              ))}
+                            </div>
+                          )}
+                          {pgkb.cpic_guideline && (
+                            <p className={`text-xs ${theme.textSecondary}`}>
+                              <span className="font-medium">CPIC: </span>
+                              {pgkb.cpic_guideline.startsWith('http') ? (
+                                <a href={pgkb.cpic_guideline} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline">
+                                  View guideline ↗
+                                </a>
+                              ) : pgkb.cpic_guideline}
+                            </p>
+                          )}
+                        </div>
+                      )
+                    })()}
 
                     {drug.recommendation && (
                       <div className="space-y-2">
@@ -220,8 +270,15 @@ export default function DrugResponsesPanel({ data, isDarkMode = false, token }: 
                       </div>
                     )}
 
-                    {drug.variants?.[0] && <PathogenicityBar rsid={drug.variants[0]} pathogenicityMap={data?.pathogenicity_map} theme={theme} />}
-                    <VariantLinks rsid={drug.variants?.[0]} gene={drug.gene} token={token} isDarkMode={isDarkMode} alphaMissense={drug.variants?.[0] ? data?.alpha_missense_map?.[drug.variants[0]] : undefined} clinvarCount={drug.variants?.[0] ? data?.clinvar_count_map?.[drug.variants[0]] : undefined} genotype={drug.variants?.[0] ? data?.genotype_map?.[drug.variants[0]] : undefined} />
+                    <VariantInfoBox rsid={drug.variants?.[0]} gene={drug.gene} token={token} isDarkMode={isDarkMode} alphaMissense={drug.variants?.[0] ? data?.alpha_missense_map?.[drug.variants[0]] : undefined} clinvarCount={drug.variants?.[0] ? data?.clinvar_count_map?.[drug.variants[0]] : undefined} genotype={drug.variants?.[0] ? data?.genotype_map?.[drug.variants[0]] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
+                    <GeneContextBox gene={drug.gene} stats={data?.gene_stats_map?.[drug.gene]} theme={theme} />
+                    {drug.variants?.[0] && data?.alphafold_map?.[drug.variants[0]] && (
+                      <AlphaFoldDetailBox
+                        rsid={drug.variants[0]}
+                        alphafoldData={data.alphafold_map[drug.variants[0]]}
+                        theme={theme}
+                      />
+                    )}
                   </div>
                 )}
               </div>

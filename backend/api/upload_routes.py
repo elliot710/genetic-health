@@ -2,12 +2,16 @@
 Upload routes for genetic data files with optimized variant storage.
 """
 import logging
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete, update
+from sqlalchemy.orm import selectinload
 
 from .auth_routes import get_current_user
+from ..core.config import MAX_UPLOAD_BYTES, settings
+from ..core.exceptions import FileParsingException
+from ..core.rate_limit import limiter
 from ..db.database import get_session, async_session_factory
 from ..db.models import GeneticAnalysis, AnalysisVariant, DashboardCache
 from ..utils.vcf_parser import VCFParser
@@ -26,211 +30,195 @@ async def _process_upload_background(
     variants_data: list,
     user_id: int,
 ):
-    """Background task: upload variants in batches, then auto-start analysis."""
     try:
         async with async_session_factory() as session:
-            uploader = VariantUploader(session)
-
-            async def report_progress(processed: int, total: int):
-                pct = min(95, int(processed / total * 100)) if total else 0
-                await session.execute(
-                    update(GeneticAnalysis)
-                    .where(GeneticAnalysis.id == analysis_id)
-                    .values(
-                        progress_percentage=pct,
-                        processed_variants=processed,
-                    )
-                )
-                await session.commit()
-
-            processed_count, new_count = await uploader.upload_variants(
-                analysis_id, variants_data, on_progress=report_progress,
-            )
-
-            # Variant upload complete — queue for the worker process
-            await session.execute(
-                update(GeneticAnalysis)
-                .where(GeneticAnalysis.id == analysis_id)
-                .values(
-                    total_variants=processed_count,
-                    processed_variants=0,
-                    progress_percentage=0,
-                    current_step='queued',
-                    analysis_status='pending',
-                    job_logs=None,
-                )
-            )
-            await session.commit()
-            logger.info(f"Upload complete for analysis {analysis_id} ({processed_count} variants). Queued for worker.")
-
-            # Notify user that upload is done and analysis is queued
-            try:
-                # Fetch filename for the notification
-                row = await session.execute(
-                    select(GeneticAnalysis.filename)
-                    .where(GeneticAnalysis.id == analysis_id)
-                )
-                fname = row.scalar_one_or_none() or "your file"
-                svc = get_notification_service()
-                await svc.create(
-                    user_id=user_id,
-                    type="upload_complete",
-                    title="Upload Complete",
-                    message=f"{fname!r} uploaded successfully — {processed_count:,} variants queued for analysis.",
-                    data={"analysis_id": analysis_id, "filename": fname, "total_variants": processed_count},
-                )
-            except Exception as ne:
-                logger.warning(f"Could not send upload notification: {ne}")
+            processed_count = await _run_variant_upload(session, analysis_id, variants_data)
+            await _finalize_upload(session, analysis_id, processed_count)
+            await _notify_upload_complete(session, analysis_id, user_id, processed_count)
     except Exception as e:
         logger.error(f"Background upload failed for analysis {analysis_id}: {e}")
-        try:
-            async with async_session_factory() as session:
-                await session.execute(
-                    update(GeneticAnalysis)
-                    .where(GeneticAnalysis.id == analysis_id)
-                    .values(
-                        analysis_status='failed',
-                        current_step=f'Upload error: {str(e)[:200]}',
-                    )
-                )
-                await session.commit()
-        except Exception:
-            logger.exception(f"Failed to mark analysis {analysis_id} as failed")
+        await _mark_upload_failed(analysis_id, user_id, str(e))
 
-        # Notify user that upload processing failed
-        try:
-            svc = get_notification_service()
-            await svc.create(
-                user_id=user_id,
-                type="upload_failed",
-                title="Upload Failed",
-                message=f"Failed to process uploaded file: {str(e)[:200]}",
-                data={"analysis_id": analysis_id},
+
+async def _run_variant_upload(session: AsyncSession, analysis_id: int, variants_data: list) -> int:
+    uploader = VariantUploader(session)
+
+    async def report_progress(processed: int, total: int):
+        pct = min(95, int(processed / total * 100)) if total else 0
+        await session.execute(
+            update(GeneticAnalysis).where(GeneticAnalysis.id == analysis_id)
+            .values(progress_percentage=pct, processed_variants=processed)
+        )
+        await session.commit()
+
+    processed_count, _ = await uploader.upload_variants(
+        analysis_id, variants_data, on_progress=report_progress,
+    )
+    return processed_count
+
+
+async def _finalize_upload(session: AsyncSession, analysis_id: int, processed_count: int):
+    await session.execute(
+        update(GeneticAnalysis).where(GeneticAnalysis.id == analysis_id)
+        .values(
+            total_variants=processed_count, processed_variants=0,
+            progress_percentage=0, current_step='queued',
+            analysis_status='pending', job_logs=None,
+        )
+    )
+    await session.commit()
+
+
+async def _notify_upload_complete(session: AsyncSession, analysis_id: int, user_id: int, processed_count: int):
+    try:
+        row = await session.execute(
+            select(GeneticAnalysis.filename).where(GeneticAnalysis.id == analysis_id)
+        )
+        fname = row.scalar_one_or_none() or "your file"
+        svc = get_notification_service()
+        await svc.create(
+            user_id=user_id, type="upload_complete", title="Upload Complete",
+            message=f"{fname!r} uploaded successfully — {processed_count:,} variants queued for analysis.",
+            data={"analysis_id": analysis_id, "filename": fname, "total_variants": processed_count},
+        )
+    except Exception:
+        pass
+
+
+async def _mark_upload_failed(analysis_id: int, user_id: int, error_msg: str):
+    try:
+        async with async_session_factory() as session:
+            await session.execute(
+                update(GeneticAnalysis).where(GeneticAnalysis.id == analysis_id)
+                .values(analysis_status='failed', current_step=f'Upload error: {error_msg[:200]}')
             )
-        except Exception as ne:
-            logger.warning(f"Could not send upload-failed notification: {ne}")
+            await session.commit()
+    except Exception:
+        logger.exception(f"Failed to mark analysis {analysis_id} as failed")
+    try:
+        svc = get_notification_service()
+        await svc.create(
+            user_id=user_id, type="upload_failed", title="Upload Failed",
+            message=f"Failed to process uploaded file: {error_msg[:200]}",
+            data={"analysis_id": analysis_id},
+        )
+    except Exception:
+        pass
+
+
+_VCF_EXTENSIONS = {'.vcf'}
+_CSV_EXTENSIONS = {'.csv', '.txt'}
+_UPLOAD_READ_CHUNK_BYTES = 1024 * 1024  # 1 MB
+
+
+async def _read_upload_within_limit(file: UploadFile) -> bytes:
+    """Read an UploadFile in chunks, aborting as soon as MAX_UPLOAD_BYTES is exceeded.
+
+    FastAPI/Starlette already spool the multipart body to disk before this endpoint
+    runs, so a Content-Length precheck here would not stop that buffering. Capping
+    the read is what actually prevents holding an oversized file in memory below.
+    """
+    chunks = []
+    total_bytes = 0
+    while True:
+        chunk = await file.read(_UPLOAD_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total_bytes += len(chunk)
+        if total_bytes > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File exceeds the maximum upload size of {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def _handle_upload(
+    file: UploadFile,
+    allowed_extensions: set,
+    file_type: str,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession,
+    current_user,
+):
+    if not file.filename or not any(file.filename.endswith(ext) for ext in allowed_extensions):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Only {', '.join(allowed_extensions)} files are supported",
+        )
+
+    content = await _read_upload_within_limit(file)
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty",
+        )
+
+    parser = VCFParser()
+    try:
+        variants_data = await parser.parse_vcf_content(content)
+    except FileParsingException as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    # Only persist the analysis row once parsing has succeeded, so a parse
+    # failure never leaves an orphaned row behind.
+    analysis = GeneticAnalysis(
+        user_id=current_user.id, filename=file.filename, file_type=file_type,
+        analysis_status='processing', current_step='uploading_variants', progress_percentage=0,
+    )
+    session.add(analysis)
+    await session.commit()
+    await session.refresh(analysis)
+    analysis_id = getattr(analysis, 'id')
+
+    background_tasks.add_task(
+        _process_upload_background, analysis_id=analysis_id,
+        variants_data=variants_data, user_id=current_user.id,
+    )
+
+    return JSONResponse({
+        "status": "uploading_variants",
+        "analysis_id": analysis_id,
+        "message": f"{file_type.upper()} file parsed, processing variants...",
+        "total_variants": len(variants_data),
+    })
 
 
 @router.post("/vcf")
+@limiter.limit(lambda: f"{settings.rate_limit.upload_per_hour}/hour")
 async def upload_vcf(
+    request: Request,
     file: UploadFile = File(...),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     session: AsyncSession = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
-    """Upload VCF file and process genetic variants with comprehensive analysis."""
     try:
-        if not file.filename or not file.filename.endswith('.vcf'):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only VCF files are supported"
-            )
-
-        # Read file content
-        content = await file.read()
-        
-        # Create analysis record
-        analysis = GeneticAnalysis(
-            user_id=current_user.id,
-            filename=file.filename,
-            file_type='vcf',
-            analysis_status='processing',
-            current_step='uploading_variants',
-            progress_percentage=0,
-        )
-        session.add(analysis)
-        await session.commit()
-        await session.refresh(analysis)
-
-        # Parse VCF into memory (fast)
-        parser = VCFParser()
-        variants_data = await parser.parse_vcf_content(content)
-        
-        analysis_id = getattr(analysis, 'id')
-
-        # Process variants + run analysis in background
-        background_tasks.add_task(
-            _process_upload_background,
-            analysis_id=analysis_id,
-            variants_data=variants_data,
-            user_id=current_user.id,
-        )
-
-        # Return immediately — SSE stream will provide real-time progress
-        return JSONResponse({
-            "status": "uploading_variants",
-            "analysis_id": analysis_id,
-            "message": "VCF file parsed, processing variants...",
-            "total_variants": len(variants_data),
-        })
-
+        return await _handle_upload(file, _VCF_EXTENSIONS, 'vcf', background_tasks, session, current_user)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"VCF upload error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process VCF file: {str(e)}"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to process VCF file: {str(e)}")
 
 
 @router.post("/csv")
+@limiter.limit(lambda: f"{settings.rate_limit.upload_per_hour}/hour")
 async def upload_csv(
+    request: Request,
     file: UploadFile = File(...),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     session: AsyncSession = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
-    """Upload CSV file and process genetic variants with comprehensive analysis."""
     try:
-        if not file.filename or not (file.filename.endswith('.csv') or file.filename.endswith('.txt')):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only CSV and TXT files are supported"
-            )
-
-        # Read file content
-        content = await file.read()
-        
-        # Create analysis record
-        analysis = GeneticAnalysis(
-            user_id=current_user.id,
-            filename=file.filename,
-            file_type='csv',
-            analysis_status='processing',
-            current_step='uploading_variants',
-            progress_percentage=0,
-        )
-        session.add(analysis)
-        await session.commit()
-        await session.refresh(analysis)
-
-        # Parse CSV into memory (fast)
-        parser = VCFParser()
-        variants_data = await parser.parse_vcf_content(content)
-        
-        analysis_id = getattr(analysis, 'id')
-
-        # Process variants + run analysis in background
-        background_tasks.add_task(
-            _process_upload_background,
-            analysis_id=analysis_id,
-            variants_data=variants_data,
-            user_id=current_user.id,
-        )
-
-        # Return immediately — SSE stream will provide real-time progress
-        return JSONResponse({
-            "status": "uploading_variants",
-            "analysis_id": analysis_id,
-            "message": "CSV file parsed, processing variants...",
-            "total_variants": len(variants_data),
-        })
-
+        return await _handle_upload(file, _CSV_EXTENSIONS, 'csv', background_tasks, session, current_user)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"CSV upload error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process CSV file: {str(e)}"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to process CSV file: {str(e)}")
 
 
 @router.delete("/data")

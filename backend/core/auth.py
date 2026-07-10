@@ -12,13 +12,18 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 if not SECRET_KEY:
     raise RuntimeError("SECRET_KEY environment variable must be set")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 120  # 2 hours
-REFRESH_TOKEN_EXPIRE_DAYS = 7
+ACCESS_TOKEN_EXPIRE_MINUTES = 43200  # 30 days
+REFRESH_TOKEN_EXPIRE_DAYS = 30
 
 # Cookie settings
 ACCESS_COOKIE = "access_token"
 REFRESH_COOKIE = "refresh_token"
-COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"  # True in production (HTTPS)
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
+# Secure defaults to True when ENVIRONMENT=production (HTTPS-only cookies), False otherwise
+# (local/dev default unchanged). An explicit COOKIE_SECURE env var always overrides.
+COOKIE_SECURE = os.getenv(
+    "COOKIE_SECURE", "true" if ENVIRONMENT == "production" else "false"
+).lower() == "true"
 COOKIE_SAMESITE: str = "lax"  # 'lax' allows top-level navigations; 'strict' blocks cross-site entirely
 COOKIE_DOMAIN: Optional[str] = os.getenv("COOKIE_DOMAIN")  # None = current domain only
 

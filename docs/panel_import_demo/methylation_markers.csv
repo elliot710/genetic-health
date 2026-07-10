@@ -1,8 +1,0 @@
-rsid,gene,description,category,is_active
-rs1801133,MTHFR,C677T - Reduced folate metabolism,folate_cycle,True
-rs1801131,MTHFR,A1298C - Reduced folate metabolism,folate_cycle,True
-rs4680,COMT,Val158Met - Catechol-O-methyltransferase,methylation_enzymes,True
-rs1805087,MTR,A2756G - Methionine synthase,methylation_enzymes,True
-rs1801394,MTRR,A66G - Methionine synthase reductase,methylation_enzymes,True
-rs234706,CBS,C699T - Cystathionine beta-synthase,transsulfuration,True
-rs2851391,CBS,CBS variant,transsulfuration,True

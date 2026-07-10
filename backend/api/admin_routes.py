@@ -581,9 +581,9 @@ async def bulk_review_discoveries(
 DEFAULT_SOURCES = [
     # Third-party HTTP APIs
     {"source_name": "ensembl", "display_name": "Ensembl VEP", "is_enabled": True, "source_type": "api", "description": "Variant Effect Predictor — gene consequences, transcript impact, regulatory annotations", "rate_limit": 15.0, "priority": 1},
-    {"source_name": "clinvar", "display_name": "ClinVar (NCBI)", "is_enabled": True, "source_type": "api", "description": "Clinical significance classifications, disease associations, review status", "rate_limit": 10.0, "priority": 2},
-    {"source_name": "clinpgx", "display_name": "ClinPGx", "is_enabled": True, "source_type": "api", "description": "Pharmacogenomic annotations — drug-gene interactions and dosing guidelines", "rate_limit": 1.0, "priority": 3},
-    {"source_name": "snpedia", "display_name": "SNPedia", "is_enabled": True, "source_type": "api", "description": "Community-curated variant wiki — genotype-phenotype associations and research summaries", "rate_limit": 2.0, "priority": 4},
+    {"source_name": "clinvar", "display_name": "ClinVar API (supplementary)", "is_enabled": True, "source_type": "api", "description": "Supplementary NCBI ClinVar API cache. Analysis uses ClinVar Local (local PG table, 100% filled) for all classification — this API column is optional extra context only. Backfilling 609k variants takes ~17hrs at 10 req/s.", "rate_limit": 10.0, "priority": 2},
+    {"source_name": "clinpgx", "display_name": "ClinPGx (supplementary)", "is_enabled": True, "source_type": "api", "description": "Supplementary ClinPGx/PharmGKB API cache for pharmacogenomics. Analysis uses this for drug response enrichment when populated. Backfilling 609k variants takes ~170hrs at 1 req/s.", "rate_limit": 1.0, "priority": 3},
+    {"source_name": "snpedia", "display_name": "SNPedia (supplementary)", "is_enabled": True, "source_type": "api", "description": "Supplementary SNPedia wiki cache. Populated on-demand during analysis for relevant variants only — not useful to bulk-backfill. Backfilling 609k variants takes ~85hrs at 2 req/s.", "rate_limit": 2.0, "priority": 4},
     # Local files (tabix/TSV in data_sources/)
     {"source_name": "alpha_missense", "display_name": "AlphaMissense", "is_enabled": True, "source_type": "file", "description": "AI-based missense pathogenicity predictions — bgzip tabix files in data_sources/alpha_missense/", "rate_limit": None, "priority": 5},
     {"source_name": "ensembl_vep", "display_name": "Ensembl VEP (Local)", "is_enabled": True, "source_type": "file", "description": "Local Ensembl VEP variant annotations — per-chromosome VCFs in data_sources/ensembl/ (SQLite cache)", "rate_limit": None, "priority": 6},
@@ -597,6 +597,10 @@ DEFAULT_SOURCES = [
     {"source_name": "chembl", "display_name": "ChEMBL (BigQuery)", "is_enabled": True, "source_type": "bigquery", "description": "Drug mechanisms, indications, and safety warnings for gene targets — ebi_chembl v33 public dataset", "rate_limit": None, "priority": 11},
     {"source_name": "fda_drug", "display_name": "FDA Drug Labels (BigQuery)", "is_enabled": True, "source_type": "bigquery", "description": "FDA drug labels with CYP enzyme interaction data and pharmacokinetics", "rate_limit": None, "priority": 12},
     {"source_name": "alphafold", "display_name": "AlphaFold (BigQuery)", "is_enabled": True, "source_type": "bigquery", "description": "DeepMind AlphaFold protein structure confidence scores (pLDDT)", "rate_limit": None, "priority": 13},
+    # EBI / ClinGen curated databases
+    {"source_name": "gwas_catalog", "display_name": "GWAS Catalog", "is_enabled": True, "source_type": "hybrid", "description": "EBI GWAS Catalog — rsID→trait associations with p-values and effect sizes. Download: data_sources/gwas_catalog/gwas_associations.tsv, ETL-imported into PostgreSQL", "rate_limit": None, "priority": 14},
+    {"source_name": "clingen", "display_name": "ClinGen Gene Validity", "is_enabled": True, "source_type": "hybrid", "description": "ClinGen gene-disease validity classifications (Definitive/Strong/Moderate/Limited). Download: data_sources/clingen/clingen_gene_validity.tsv, ETL-imported into PostgreSQL", "rate_limit": None, "priority": 15},
+    {"source_name": "open_targets", "display_name": "Open Targets Platform", "is_enabled": True, "source_type": "api", "description": "Open Targets Platform gene-disease scores aggregated from genetic, literature, and animal model evidence. Queried live via GraphQL API by gene symbol during annotation.", "rate_limit": 5.0, "priority": 16},
 ]
 
 # Shared source-to-column mapping — single source of truth
@@ -750,167 +754,66 @@ class BackfillResponse(BaseModel):
     confirmed_no_data: int
 
 
+def _extract_am_coords(ensembl_data) -> Optional[tuple]:
+    if not (ensembl_data and isinstance(ensembl_data, dict)
+            and ensembl_data.get('found') and ensembl_data.get('data')):
+        return None
+    e_data = ensembl_data['data']
+    e_entry = e_data[0] if isinstance(e_data, list) else e_data
+    chrom = e_entry.get('seq_region_name')
+    pos = e_entry.get('start')
+    parts = (e_entry.get('allele_string', '') or '').split('/')
+    if chrom and pos and len(parts) == 2 and len(parts[0]) == 1 and len(parts[1]) == 1:
+        return (str(chrom), int(pos), parts[0], parts[1])
+    return None
+
+
 @router.post("/annotation-sources/{source_name}/backfill", response_model=BackfillResponse)
 async def backfill_source(
     source_name: str,
-    limit: int = Query(100, ge=1, le=5000, description="Max variants to backfill in one request"),
+    limit: int = Query(100, ge=1, description="Max variants to backfill in one request"),
     db: AsyncSession = Depends(get_session),
     admin: User = Depends(require_admin),
 ):
-    """Backfill annotations from a specific source for variants that don't have data from it yet.
-    Use this after enabling a previously-disabled source to populate existing variants."""
+    """Enqueue a backfill WorkerJob for a specific annotation source.
+    The worker process will execute the backfill asynchronously."""
+    from ..db.models import WorkerJob
     if source_name not in SOURCE_TO_COLUMN:
         raise HTTPException(status_code=400, detail=f"Unknown source: {source_name}")
 
     col_name = SOURCE_TO_COLUMN[source_name]
     col = getattr(SharedVariantAnnotation, f'{col_name}_data')
 
-    # Find annotations missing data from this source
-    result = await db.execute(
-        select(SharedVariantAnnotation)
-        .where(col.is_(None))
-        .order_by(SharedVariantAnnotation.usage_count.desc())
-        .limit(limit)
+    # Quick count to check if there's anything to do
+    count_result = await db.execute(
+        select(func.count()).select_from(SharedVariantAnnotation).where(col.is_(None))
     )
-    annotations = result.scalars().all()
+    missing = count_result.scalar() or 0
 
-    if not annotations:
+    if missing == 0:
         return BackfillResponse(
             detail=f"No variants need backfilling from {source_name}",
             source=source_name, total_to_backfill=0,
             completed=0, failed=0, confirmed_no_data=0,
         )
 
-    from ..services.genetic_api_service import OptimizedGeneticAPIService
-    api_service = None
-    if source_name not in ('alpha_missense', 'clinvar_local', 'ensembl'):
-        api_service = OptimizedGeneticAPIService()
-        await api_service.initialize()
-
-    completed = 0
-    failed = 0
-    confirmed_no_data = 0
-
-    try:
-        for idx, ann in enumerate(annotations):
-            if idx > 0 and source_name not in ('alpha_missense', 'clinvar_local', 'ensembl'):
-                await asyncio.sleep(0.5)
-
-            try:
-                if source_name == 'alpha_missense':
-                    # Local lookup — needs Ensembl data for coordinates
-                    from ..utils.alpha_missense import get_alpha_missense_service
-                    ensembl_ann = ann.ensembl_data
-                    if ensembl_ann and isinstance(ensembl_ann, dict) and ensembl_ann.get('found') and ensembl_ann.get('data'):
-                        e_data = ensembl_ann['data']
-                        e_entry = e_data[0] if isinstance(e_data, list) else e_data
-                        chrom = e_entry.get('seq_region_name')
-                        pos = e_entry.get('start')
-                        allele_str = e_entry.get('allele_string', '')
-                        parts = allele_str.split('/') if allele_str else []
-                        if chrom and pos and len(parts) == 2 and len(parts[0]) == 1 and len(parts[1]) == 1:
-                            am_svc = get_alpha_missense_service()
-                            result_data = am_svc.lookup_comprehensive(str(chrom), int(pos), parts[0], parts[1])
-                            if result_data:
-                                ann.alpha_missense_data = result_data
-                                completed += 1
-                            else:
-                                ann.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense', 'reason': 'not_missense'}
-                                confirmed_no_data += 1
-                        else:
-                            ann.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense', 'reason': 'not_missense'}
-                            confirmed_no_data += 1
-                    else:
-                        # No Ensembl data to derive coordinates
-                        failed += 1
-                elif source_name == 'clinvar_local':
-                    from ..services.clinvar_local import get_clinvar_local_service
-                    cv_svc = get_clinvar_local_service()
-                    if cv_svc.is_loaded:
-                        result_data = await cv_svc.lookup(ann.rsid)
-                        if result_data:
-                            ann.clinvar_local_data = result_data
-                            completed += 1
-                        else:
-                            ann.clinvar_local_data = {'found': False, 'confirmed_no_data': True, 'source': 'clinvar_local'}
-                            confirmed_no_data += 1
-                    else:
-                        failed += 1
-                elif source_name == 'ensembl':
-                    from ..services.ensembl_vep_local import get_ensembl_vep_service
-                    vep_svc = get_ensembl_vep_service()
-                    if await vep_svc.ensure_loaded():
-                        result_data = await vep_svc.lookup(ann.rsid)
-                        if result_data and result_data.get('found'):
-                            ann.ensembl_data = result_data
-                            completed += 1
-                        else:
-                            ann.ensembl_data = {'found': False, 'confirmed_no_data': True, 'source': 'ensembl'}
-                            confirmed_no_data += 1
-                    else:
-                        # No local VEP data loaded — fall back to API
-                        if not api_service:
-                            from ..services.genetic_api_service import OptimizedGeneticAPIService
-                            api_service = OptimizedGeneticAPIService()
-                            await api_service.initialize()
-                        method = getattr(api_service, '_get_ensembl_annotation', None)
-                        if method:
-                            result_data = await method(ann.rsid)
-                            if result_data and isinstance(result_data, dict) and result_data.get('found', False):
-                                ann.ensembl_data = result_data
-                                completed += 1
-                            else:
-                                ann.ensembl_data = {'found': False, 'confirmed_no_data': True, 'source': 'ensembl'}
-                                confirmed_no_data += 1
-                        else:
-                            failed += 1
-                else:
-                    method = getattr(api_service, f'_get_{source_name}_annotation', None)
-                    if not method:
-                        failed += 1
-                        continue
-                    result_data = await method(ann.rsid)
-                    if result_data and isinstance(result_data, dict) and result_data.get('found', False):
-                        setattr(ann, f'{col_name}_data', result_data)
-                        completed += 1
-                    else:
-                        setattr(ann, f'{col_name}_data', {'found': False, 'confirmed_no_data': True, 'source': source_name})
-                        confirmed_no_data += 1
-
-                # Update annotation status
-                all_cols = {s: SOURCE_TO_COLUMN[s] for s in SOURCE_TO_COLUMN}
-                has_any_null = False
-                has_any_failed = False
-                for s, c in all_cols.items():
-                    d = getattr(ann, f'{c}_data', None)
-                    if d is None:
-                        has_any_null = True
-                    elif isinstance(d, dict) and not d.get('found', True) and not d.get('confirmed_no_data', False):
-                        has_any_failed = True
-
-                if not has_any_null and not has_any_failed:
-                    ann.annotation_status = 'completed'
-                    ann.failed_sources = None
-                elif has_any_failed:
-                    ann.annotation_status = 'partial'
-                ann.total_api_calls = (ann.total_api_calls or 0) + 1
-
-            except Exception as e:
-                logger.error(f"Backfill {source_name} error for {ann.rsid}: {e}")
-                failed += 1
-    finally:
-        if api_service:
-            await api_service.close()
-
+    job = WorkerJob(
+        job_type="backfill_source",
+        status="pending",
+        params={"source_name": source_name, "limit": limit},
+        requested_by=admin.id,
+    )
+    db.add(job)
     await db.commit()
+    await db.refresh(job)
 
     return BackfillResponse(
-        detail=f"Backfill from {source_name}: {completed} updated, {confirmed_no_data} confirmed no data, {failed} failed",
+        detail=f"Backfill job #{job.id} queued for {source_name} ({min(limit, missing):,} variants). Check Jobs tab for progress.",
         source=source_name,
-        total_to_backfill=len(annotations),
-        completed=completed,
-        failed=failed,
-        confirmed_no_data=confirmed_no_data,
+        total_to_backfill=min(limit, missing),
+        completed=0,
+        failed=0,
+        confirmed_no_data=0,
     )
 
 
@@ -922,34 +825,27 @@ class VepEtlResponse(BaseModel):
     total_variants: int = 0
     skipped_chromosomes: list = []
 
-@router.post("/ensembl-vep-etl/import", response_model=VepEtlResponse)
+@router.post("/ensembl-vep-etl/import")
 async def trigger_vep_etl(
     chromosomes: Optional[str] = Query(None, description="Comma-separated chromosome list, e.g. '1,2,X'. Omit for all available."),
     force_reload: bool = Query(False, description="Re-import already loaded chromosomes"),
     admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
 ):
-    """Import Ensembl VEP data from local VCF files into the ensembl_vep_variants table.
-    Only imports rsids that exist in genetic_markers (filtered ETL)."""
-    from ..services.ensembl_vep_etl import EnsemblVepETL
-
+    """Dispatch Ensembl VEP ETL to the background worker and return immediately."""
+    from ..db.models import WorkerJob
     chrom_list = [c.strip() for c in chromosomes.split(',')] if chromosomes else None
-
-    try:
-        etl = EnsemblVepETL()
-        result = await etl.run_import(
-            filter_to_known=True,
-            force_reload=force_reload,
-            chromosomes=chrom_list,
-        )
-        return VepEtlResponse(
-            detail=f"VEP ETL complete: {result.get('total_imported', 0)} variants from {len(result.get('imported', []))} chromosomes",
-            chromosomes_imported=result.get('imported', []),
-            total_variants=result.get('total_imported', 0),
-            skipped_chromosomes=result.get('skipped', []),
-        )
-    except Exception as e:
-        logger.error(f"VEP ETL failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"VEP ETL failed: {str(e)}")
+    job = WorkerJob(
+        job_type="etl_vep",
+        status="pending",
+        params={"chromosomes": chrom_list, "force_reload": force_reload},
+        requested_by=admin.id,
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    logger.info(f"VEP ETL job {job.id} queued by admin {admin.id}")
+    return {"job_id": job.id, "status": "pending", "detail": f"VEP ETL queued as worker job #{job.id} — monitor via Worker Jobs"}
 
 
 @router.get("/ensembl-vep-etl/status")
@@ -1431,28 +1327,19 @@ async def _retrigger_sources(
                     still_failed.append(src)
             elif src == 'alpha_missense':
                 from ..utils.alpha_missense import get_alpha_missense_service
-                ensembl_ann = annotation.ensembl_data
-                if ensembl_ann and isinstance(ensembl_ann, dict) and ensembl_ann.get('found') and ensembl_ann.get('data'):
-                    e_data = ensembl_ann['data']
-                    e_entry = e_data[0] if isinstance(e_data, list) else e_data
-                    chrom = e_entry.get('seq_region_name')
-                    pos = e_entry.get('start')
-                    allele_str = e_entry.get('allele_string', '')
-                    parts = allele_str.split('/') if allele_str else []
-                    if chrom and pos and len(parts) == 2 and len(parts[0]) == 1 and len(parts[1]) == 1:
-                        am_svc = get_alpha_missense_service()
-                        result_data = am_svc.lookup_comprehensive(str(chrom), int(pos), parts[0], parts[1])
-                        if result_data:
-                            annotation.alpha_missense_data = result_data
-                            updated.append(src)
-                        else:
-                            annotation.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense'}
-                            confirmed_no_data.append(src)
+                coords = _extract_am_coords(annotation.ensembl_data)
+                if coords:
+                    am_svc = get_alpha_missense_service()
+                    result_data = am_svc.lookup_comprehensive(*coords)
+                    if result_data:
+                        annotation.alpha_missense_data = result_data
+                        updated.append(src)
                     else:
-                        annotation.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense', 'reason': 'not_missense'}
+                        annotation.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense'}
                         confirmed_no_data.append(src)
                 else:
-                    still_failed.append(src)  # Need Ensembl data first
+                    annotation.alpha_missense_data = {'found': False, 'confirmed_no_data': True, 'source': 'alpha_missense', 'reason': 'not_missense'}
+                    confirmed_no_data.append(src)
         except Exception:
             still_failed.append(src)
 
@@ -1464,12 +1351,27 @@ async def _retrigger_sources(
         try:
             for src in remote_sources:
                 try:
+                    col = SOURCE_TO_COLUMN.get(src, src)
+                    # Guard: 'ensembl' shares ensembl_data with the authoritative
+                    # local 'ensembl_vep' writer. Never let this lower-priority
+                    # remote fetch clobber a value that's already populated —
+                    # skip instead of overwriting (see annotation_constants.py).
+                    if src == 'ensembl':
+                        existing = getattr(annotation, f'{col}_data', None)
+                        if isinstance(existing, dict) and existing.get('found'):
+                            logger.info(
+                                "Retrigger: skipping remote 'ensembl' fetch for rsid=%s — "
+                                "shared ensembl_data column is already populated "
+                                "(ensembl_vep is the authoritative writer); refusing to clobber",
+                                annotation.rsid,
+                            )
+                            continue
+
                     method = getattr(api_service, f'_get_{src}_annotation', None)
                     if not method:
                         still_failed.append(src)
                         continue
                     result_data = await method(annotation.rsid)
-                    col = SOURCE_TO_COLUMN.get(src, src)
                     if result_data and isinstance(result_data, dict) and result_data.get('found', False):
                         setattr(annotation, f'{col}_data', result_data)
                         updated.append(src)
@@ -1879,18 +1781,133 @@ async def clinvar_etl_status(admin: User = Depends(require_admin)):
     return await etl.get_import_status()
 
 
+@router.get("/clinvar-etl/progress")
+async def clinvar_etl_progress(admin: User = Depends(require_admin)):
+    """Return live progress of the running (or last) ClinVar ETL import."""
+    from ..services.clinvar_etl import get_etl_progress
+    return get_etl_progress()
+
+
 @router.post("/clinvar-etl/import")
 async def clinvar_etl_import(admin: User = Depends(require_admin)):
-    """Run full ClinVar ETL import (truncates + reimports all data).
-    This is a long-running operation — may take 5-15 minutes."""
-    from ..services.clinvar_etl import ClinVarETL
-    etl = ClinVarETL()
-    stats = await etl.run_full_import()
-    # Refresh the ClinVar local service cache count
-    from ..services.clinvar_local import get_clinvar_local_service
-    cv_svc = get_clinvar_local_service()
-    await cv_svc.ensure_loaded()
-    return stats
+    """Kick off a ClinVar ETL import in the background and return immediately.
+    Poll GET /clinvar-etl/progress for live status."""
+    from ..services.clinvar_etl import ClinVarETL, get_etl_progress
+
+    # Reject concurrent imports
+    prog = get_etl_progress()
+    if prog.get("running"):
+        return {"status": "already_running", "step": prog.get("step"), "pct": prog.get("pct")}
+
+    async def _run():
+        etl = ClinVarETL()
+        try:
+            await etl.run_full_import()
+            # Refresh the ClinVar local service cache count
+            from ..services.clinvar_local import get_clinvar_local_service
+            cv_svc = get_clinvar_local_service()
+            await cv_svc.ensure_loaded()
+        except Exception:
+            pass  # errors are recorded in _etl_progress
+
+    import asyncio as _asyncio
+    _asyncio.create_task(_run())
+    return {"status": "started"}
+
+
+# ======================================================================
+# GWAS Catalog ETL endpoints
+# ======================================================================
+
+@router.get("/gwas-catalog-etl/progress")
+async def gwas_catalog_etl_progress(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_session)):
+    from ..services.gwas_catalog_etl import get_etl_progress
+    from sqlalchemy import text
+    prog = get_etl_progress()
+    if not prog.get("running"):
+        result = await db.execute(text("SELECT COUNT(*) FROM gwas_catalog_associations"))
+        prog = dict(prog)
+        prog["rows"] = result.scalar() or 0
+    return prog
+
+
+@router.post("/gwas-catalog-etl/import")
+async def gwas_catalog_etl_import(admin: User = Depends(require_admin)):
+    from ..services.gwas_catalog_etl import run_gwas_etl, get_etl_progress
+    prog = get_etl_progress()
+    if prog.get("running"):
+        return {"status": "already_running", "step": prog.get("step"), "pct": prog.get("pct")}
+
+    async def _run():
+        try:
+            await run_gwas_etl()
+            from ..services.gwas_catalog_local import get_gwas_catalog_service
+            await get_gwas_catalog_service().ensure_loaded()
+        except Exception:
+            pass
+
+    import asyncio as _asyncio
+    _asyncio.create_task(_run())
+    return {"status": "started"}
+
+
+# ======================================================================
+# ClinGen ETL endpoints
+# ======================================================================
+
+@router.get("/clingen-etl/progress")
+async def clingen_etl_progress(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_session)):
+    from ..services.clingen_etl import get_etl_progress
+    from sqlalchemy import text
+    prog = get_etl_progress()
+    if not prog.get("running"):
+        result = await db.execute(text("SELECT COUNT(*) FROM clingen_gene_validity"))
+        prog = dict(prog)
+        prog["rows"] = result.scalar() or 0
+    return prog
+
+
+@router.post("/clingen-etl/import")
+async def clingen_etl_import(admin: User = Depends(require_admin)):
+    from ..services.clingen_etl import run_clingen_etl, get_etl_progress
+    prog = get_etl_progress()
+    if prog.get("running"):
+        return {"status": "already_running", "step": prog.get("step"), "pct": prog.get("pct")}
+
+    async def _run():
+        try:
+            await run_clingen_etl()
+            from ..services.clingen_local import get_clingen_service
+            await get_clingen_service().ensure_loaded()
+        except Exception:
+            pass
+
+    import asyncio as _asyncio
+    _asyncio.create_task(_run())
+    return {"status": "started"}
+
+
+# ======================================================================
+# Open Targets test endpoint
+# ======================================================================
+
+@router.get("/open-targets/test")
+async def open_targets_test(admin: User = Depends(require_admin)):
+    from ..services.open_targets_service import get_open_targets_service
+    svc = get_open_targets_service()
+    try:
+        result = await svc.lookup_by_gene("BRCA1")
+        return {
+            "status": "ok",
+            "reachable": True,
+            "test_gene": "BRCA1",
+            "found": result.get("found", False),
+            "association_count": len(result.get("associations", [])),
+            "top_disease": result.get("top_disease"),
+            "max_score": result.get("max_score"),
+        }
+    except Exception as exc:
+        return {"status": "error", "reachable": False, "error": str(exc)}
 
 
 # ======================================================================
@@ -2018,31 +2035,217 @@ async def gnomad_etl_status(admin: User = Depends(require_admin)):
 
 
 @router.post("/gnomad-etl/import")
-async def gnomad_etl_import(admin: User = Depends(require_admin)):
-    """Run full gnomAD ETL import (truncates + reimports all data).
-    This is a long-running operation — may take 30+ minutes for large files."""
-    from ..services.gnomad_etl import GnomadETL
-    etl = GnomadETL()
-    stats = await etl.run_full_import()
-    # Refresh the gnomAD local service cache count
-    from ..services.gnomad_local import get_gnomad_service
-    gnomad_svc = get_gnomad_service()
-    await gnomad_svc.ensure_loaded()
-    return stats
+async def gnomad_etl_import(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+):
+    """Dispatch gnomAD ETL to the background worker and return immediately."""
+    from ..db.models import WorkerJob
+    job = WorkerJob(job_type="etl_gnomad", status="pending", params={}, requested_by=admin.id)
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    logger.info(f"gnomAD ETL job {job.id} queued by admin {admin.id}")
+    return {"job_id": job.id, "status": "pending", "detail": f"gnomAD ETL queued as worker job #{job.id} — monitor via Worker Jobs"}
+
+
+@router.post("/gnomad/build-cadd-cache")
+async def gnomad_build_cadd_cache(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+):
+    """Queue a worker job to build the gnomAD CADD SQLite cache via sequential scan.
+
+    After this completes, all analysis gnomAD lookups hit SQLite (sub-second)
+    instead of doing 609K per-variant tabix seeks (~14 min).
+    """
+    from ..db.models import WorkerJob
+    job = WorkerJob(job_type="gnomad_build_cadd_cache", status="pending", params={}, requested_by=admin.id)
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    logger.info(f"gnomAD CADD cache build job {job.id} queued by admin {admin.id}")
+    return {"job_id": job.id, "status": "pending", "detail": f"gnomAD CADD cache build queued as worker job #{job.id}"}
+
+
+@router.post("/gnomad/refresh-ancestry-afs")
+async def gnomad_refresh_ancestry_afs(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+    fst_threshold: float = 0.70,
+    index_first: bool = False,
+):
+    """Queue a worker job to refresh ancestry_aims_panel with gnomAD v2 AFs.
+
+    Reads from local GRCh37 VCF files — no network calls needed.
+    Replaces the data previously loaded via the gnomAD GraphQL API.
+
+    index_first=true will create .tbi indexes for any unindexed VCF files first.
+    """
+    from ..db.models import WorkerJob
+    job = WorkerJob(
+        job_type="gnomad_refresh_ancestry_afs",
+        status="pending",
+        params={"fst_threshold": fst_threshold, "index_first": index_first},
+        requested_by=admin.id,
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    logger.info(f"gnomAD ancestry AF refresh job {job.id} queued by admin {admin.id}")
+    return {"job_id": job.id, "status": "pending", "detail": f"gnomAD ancestry AF refresh queued as worker job #{job.id}"}
+
+
+@router.get("/gnomad/v2-status")
+async def gnomad_v2_status(admin: User = Depends(require_admin)):
+    """Get gnomAD v2 VCF file availability and index status."""
+    from ..services.gnomad_v2_local import get_gnomad_v2_service
+    svc = get_gnomad_v2_service()
+    if not svc.is_loaded:
+        await svc.ensure_loaded()
+    return {
+        "file_count": svc.file_count,
+        "indexed_count": svc.indexed_count,
+        "pg_rows": svc._pg_count,
+        "ready": svc.has_pg_data or svc.indexed_count > 0,
+    }
+
+
+# ======================================================================
+# gnomAD v2 exome ETL endpoints
+# ======================================================================
+
+@router.get("/gnomad-v2-etl/status")
+async def gnomad_v2_etl_status(admin: User = Depends(require_admin)):
+    """Get current gnomAD v2 exome import status (row counts + file availability)."""
+    from ..services.gnomad_v2_etl import GnomadV2ETL
+    etl = GnomadV2ETL()
+    return await etl.get_import_status()
+
+
+@router.post("/gnomad-v2-etl/import")
+async def gnomad_v2_etl_import(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+):
+    """Dispatch gnomAD v2 exome ETL to the background worker and return immediately."""
+    from ..db.models import WorkerJob
+    # Prevent duplicate pending/processing jobs
+    existing = (await db.execute(
+        select(WorkerJob).where(
+            WorkerJob.job_type == "etl_gnomad_v2",
+            WorkerJob.status.in_(["pending", "processing"]),
+        )
+    )).scalars().first()
+    if existing:
+        return {"job_id": existing.id, "status": existing.status,
+                "detail": f"gnomAD v2 ETL already {existing.status} (job #{existing.id})"}
+    job = WorkerJob(job_type="etl_gnomad_v2", status="pending", params={}, requested_by=admin.id)
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    logger.info(f"gnomAD v2 ETL job {job.id} queued by admin {admin.id}")
+    return {"job_id": job.id, "status": "pending", "detail": f"gnomAD v2 ETL queued as worker job #{job.id} — monitor via Worker Jobs"}
+
+
+# ======================================================================
+# AlphaFold ETL endpoints
+# ======================================================================
+
+@router.get("/alphafold-etl/status")
+async def alphafold_etl_status(admin: User = Depends(require_admin)):
+    """Get AlphaFold local data status (SQLite DB protein count)."""
+    from ..services.alphafold_local import get_alphafold_local_service
+    svc = get_alphafold_local_service()
+    if not svc.available:
+        svc.ensure_loaded()
+    return {
+        "alphafold_proteins": svc.protein_count,
+        "loaded": svc.available,
+        "db_exists": svc._db_path.exists(),
+        "db_path": str(svc._db_path),
+    }
+
+
+@router.post("/alphafold-etl/import")
+async def alphafold_etl_import(
+    force: bool = Query(False, description="Rebuild even if DB already exists"),
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+):
+    """Dispatch AlphaFold ETL (download + build SQLite) to the background worker."""
+    from ..db.models import WorkerJob
+    # Prevent duplicate pending/processing jobs
+    existing = (await db.execute(
+        select(WorkerJob).where(
+            WorkerJob.job_type == "etl_alphafold",
+            WorkerJob.status.in_(["pending", "processing"]),
+        )
+    )).scalars().first()
+    if existing:
+        return {"job_id": existing.id, "status": existing.status,
+                "detail": f"AlphaFold ETL already {existing.status} (job #{existing.id})"}
+    job = WorkerJob(
+        job_type="etl_alphafold",
+        status="pending",
+        params={"force": force},
+        requested_by=admin.id,
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    logger.info(f"AlphaFold ETL job {job.id} queued by admin {admin.id}")
+    return {"job_id": job.id, "status": "pending", "detail": f"AlphaFold ETL queued as worker job #{job.id} — monitor via Worker Jobs"}
+
+
+@router.get("/ensembl-etl/status")
+async def ensembl_etl_status(admin: User = Depends(require_admin)):
+    """Get current Ensembl gene model import status (row counts + file availability)."""
+    import os
+    from pathlib import Path
+    from sqlalchemy import text as sa_text
+    from ..db.database import async_session_factory
+    async with async_session_factory() as session:
+        total = (await session.execute(sa_text("SELECT COUNT(*) FROM ensembl_genes"))).scalar() or 0
+        protein_coding = (await session.execute(
+            sa_text("SELECT COUNT(*) FROM ensembl_genes WHERE biotype = 'protein_coding'")
+        )).scalar() or 0
+        chromosomes = (await session.execute(
+            sa_text("SELECT COUNT(DISTINCT chromosome) FROM ensembl_genes")
+        )).scalar() or 0
+    data_dir = Path(os.environ.get(
+        "ENSEMBL_DATA_DIR",
+        os.path.join(os.path.dirname(__file__), "..", "..", "data_sources", "ensembl", "homo_sapiens"),
+    ))
+    fasta_base = data_dir / "fasta"
+    cdna_path = fasta_base / "cdna" / "Homo_sapiens.GRCh38.cdna.all.fa.gz"
+    ncrna_path = fasta_base / "ncrna" / "Homo_sapiens.GRCh38.ncrna.fa.gz"
+    if not cdna_path.exists():
+        cdna_path = data_dir / "cdna" / "Homo_sapiens.GRCh38.cdna.all.fa.gz"
+    if not ncrna_path.exists():
+        ncrna_path = data_dir / "ncrna" / "Homo_sapiens.GRCh38.ncrna.fa.gz"
+    return {
+        "ensembl_genes": total,
+        "protein_coding_genes": protein_coding,
+        "chromosomes": chromosomes,
+        "cdna_file_exists": cdna_path.exists(),
+        "ncrna_file_exists": ncrna_path.exists(),
+    }
 
 
 @router.post("/ensembl-etl/import")
-async def ensembl_etl_import(admin: User = Depends(require_admin)):
-    """Parse Ensembl cDNA/ncRNA FASTA headers and load gene models.
-    Usually completes in under 30 seconds."""
-    from ..services.ensembl_etl import EnsemblETL
-    etl = EnsemblETL()
-    stats = await etl.run_full_import()
-    from ..services.ensembl_vep_local import get_ensembl_local_service
-    svc = get_ensembl_local_service()
-    svc._gene_count = None  # Reset cache so next ensure_loaded re-checks
-    await svc.ensure_loaded()
-    return stats
+async def ensembl_etl_import(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+):
+    """Dispatch Ensembl gene model ETL to the background worker and return immediately."""
+    from ..db.models import WorkerJob
+    job = WorkerJob(job_type="etl_ensembl", status="pending", params={}, requested_by=admin.id)
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    logger.info(f"Ensembl ETL job {job.id} queued by admin {admin.id}")
+    return {"job_id": job.id, "status": "pending", "detail": f"Ensembl ETL queued as worker job #{job.id} — monitor via Worker Jobs"}
 
 
 # ======================================================================
@@ -2058,16 +2261,18 @@ async def thousand_genomes_etl_status(admin: User = Depends(require_admin)):
 
 
 @router.post("/1kg-etl/import")
-async def thousand_genomes_etl_import(admin: User = Depends(require_admin)):
-    """Run full 1000 Genomes Phase 3 ETL import (truncates + reimports).
-    Parses the Ensembl 1000GENOMES-phase_3.vcf.gz file (~1.5 GB)."""
-    from ..services.thousand_genomes_etl import ThousandGenomesETL
-    etl = ThousandGenomesETL()
-    stats = await etl.run_full_import()
-    from ..services.thousand_genomes_local import get_thousand_genomes_service
-    tkg_svc = get_thousand_genomes_service()
-    await tkg_svc.ensure_loaded()
-    return stats
+async def thousand_genomes_etl_import(
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+):
+    """Dispatch 1000 Genomes ETL to the background worker and return immediately."""
+    from ..db.models import WorkerJob
+    job = WorkerJob(job_type="etl_1kg", status="pending", params={}, requested_by=admin.id)
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    logger.info(f"1000 Genomes ETL job {job.id} queued by admin {admin.id}")
+    return {"job_id": job.id, "status": "pending", "detail": f"1000 Genomes ETL queued as worker job #{job.id} — monitor via Worker Jobs"}
 
 
 # ======================================================================
@@ -2186,6 +2391,7 @@ async def list_worker_jobs(
             "params": j.params,
             "result": j.result,
             "error": j.error,
+            "job_logs": j.job_logs,
             "requested_by_email": email,
             "requested_by_username": uname,
             "created_at": j.created_at.isoformat() if j.created_at else None,
@@ -2254,3 +2460,38 @@ async def reset_source_sentinels(
         source=source_name,
         reset_count=reset_count,
     )
+
+
+# ======================================================================
+# Mapping enrichment endpoint
+# ======================================================================
+
+@router.post("/enrich-mappings")
+async def enrich_variant_mappings(
+    categories: Optional[str] = Query(None, description="Comma-separated category filter"),
+    dry_run: bool = Query(False, description="Preview changes without writing"),
+    revise_all: bool = Query(False, description="Re-evaluate ALL mappings, not just generic ones"),
+    admin: User = Depends(require_admin),
+):
+    """Enrich existing variant_mappings with proper conditions from all
+    available sources.
+
+    Multi-source resolution:
+    1. ClinVar variant-level conditions
+    2. ClinVar gene-level conditions (clinvar_gene_conditions)
+    3. Ensembl gene descriptions (ensembl_genes)
+
+    By default only updates rows with generic '{gene} variant' names.
+    With revise_all=True, re-evaluates every active mapping and upgrades
+    conditions when a higher-priority source is available.
+    Named conditions are never downgraded to generic ones.
+    """
+    from ..services.multi_source_categorizer import enrich_generic_mappings
+
+    cat_list = [c.strip() for c in categories.split(",")] if categories else None
+    stats = await enrich_generic_mappings(dry_run=dry_run, categories=cat_list, revise_all=revise_all)
+    logger.info(
+        f"Mapping enrichment {'(dry run)' if dry_run else ''}{' (revise all)' if revise_all else ''}: "
+        f"{stats['total_updated']}/{stats['total_checked']} updated"
+    )
+    return stats

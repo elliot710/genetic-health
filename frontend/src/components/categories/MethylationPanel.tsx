@@ -13,9 +13,13 @@ import {
   StatusBadge,
   DisclaimerCard,
   capacityToSeverity,
-  VariantLinks,
-  PathogenicityBar,
+  VariantInfoBox,
+  GeneContextBox,
+  AlphaFoldDetailBox,
+  AlphaFoldBadge,
+  GeneBurdenStrip,
   ZygosityBadge,
+  ClickableRsidBadge,
   formatLabel,
   MasonryLayout,
   useGrouping,
@@ -37,7 +41,7 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
     const seen = new Set<string>()
     const result: string[] = []
     for (const profile of profiles) {
-      for (const rec of profile.supplement_recommendations || []) {
+      for (const rec of (Array.isArray(profile.supplement_recommendations) ? profile.supplement_recommendations : [])) {
         const key = rec.toLowerCase().trim()
         if (!seen.has(key)) {
           seen.add(key)
@@ -173,34 +177,44 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
             return (
               <div
                 key={geneKey}
-                className={`${theme.glass} border ${theme.border} rounded-xl p-5 hover:border-purple-500/50 transition-all duration-300 cursor-pointer`}
+                className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 hover:border-purple-500/50 transition-all duration-300 cursor-pointer`}
                 onClick={() => setSelectedGene(isExpanded ? null : geneKey)}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-3">
-                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{item.gene}</h4>
-                    <StatusBadge
-                      label={formatLabel(capacity)}
-                      severity={capacityToSeverity(capacity)}
-                    />
+                <div className="flex items-start justify-between mb-1 gap-1">
+                  <div className="flex-1 min-w-0">
+                    {description ? (
+                      <p className={`text-sm font-semibold ${theme.textPrimary} leading-snug`}>{description}</p>
+                    ) : (
+                      <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug`}>{item.gene}</h4>
+                    )}
                   </div>
-                  <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
+                  <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
-                {rsid && (
-                  <>
-                    <Badge variant="secondary" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>
-                    <ZygosityBadge genotype={data?.genotype_map?.[rsid]} />
-                  </>
-                )}
-
-                {description && (
-                  <p className={`text-sm ${theme.textSecondary} mt-2 line-clamp-2`}>{description}</p>
+                <div className="flex flex-wrap gap-1 mb-2">
+                  <StatusBadge
+                    label={formatLabel(capacity)}
+                    severity={capacityToSeverity(capacity)}
+                  />
+                  <Badge variant="secondary" className="text-xs font-medium">{item.gene}</Badge>
+                  {rsid && (
+                    <>
+                      <ClickableRsidBadge rsid={rsid} gene={item.gene} genotype={data?.genotype_map?.[rsid]} alleleString={data?.allele_string_map?.[rsid]} token={token} isDarkMode={isDarkMode} />
+                    </>
+                  )}
+                  <AlphaFoldBadge
+                    confidence={data?.alphafold_map?.[rsid]?.confidence}
+                    highPct={data?.alphafold_map?.[rsid]?.high_confidence_pct}
+                    lowPct={data?.alphafold_map?.[rsid]?.low_confidence_pct}
+                  />
+                </div>
+                {item.gene && data?.gene_stats_map?.[item.gene] && (
+                  <GeneBurdenStrip gene={item.gene} stats={data.gene_stats_map[item.gene]} theme={theme} />
                 )}
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
-                    {item.supplement_recommendations?.length > 0 && (
+                    {Array.isArray(item.supplement_recommendations) && item.supplement_recommendations.length > 0 && (
                       <div className="space-y-2">
                         <span className={`text-xs font-semibold ${theme.textSecondary} uppercase tracking-wider`}>Recommendations</span>
                         {item.supplement_recommendations.map((rec: string, i: number) => (
@@ -211,8 +225,15 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
                         ))}
                       </div>
                     )}
-                    {rsid && <PathogenicityBar rsid={rsid} pathogenicityMap={data?.pathogenicity_map} theme={theme} />}
-                    <VariantLinks rsid={rsid} gene={item.gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} />
+                    <VariantInfoBox rsid={rsid} gene={item.gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
+                    <GeneContextBox gene={item.gene} stats={item.gene ? data?.gene_stats_map?.[item.gene] : undefined} theme={theme} />
+                    {rsid && data?.alphafold_map?.[rsid] && (
+                      <AlphaFoldDetailBox
+                        rsid={rsid}
+                        alphafoldData={data.alphafold_map[rsid]}
+                        theme={theme}
+                      />
+                    )}
                   </div>
                 )}
               </div>

@@ -5,9 +5,9 @@ services:
     environment:
       POSTGRES_DB: genetic_health_db
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     shm_size: 1gb
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -15,13 +15,13 @@ services:
     command:
       - "postgres"
       - "-c" 
-      - "shared_buffers=512MB"
+      - "shared_buffers=2GB"
       - "-c"
-      - "work_mem=32MB"
+      - "work_mem=16MB"
       - "-c"
-      - "maintenance_work_mem=256MB"
+      - "maintenance_work_mem=512MB"
       - "-c"
-      - "effective_cache_size=2GB"
+      - "effective_cache_size=8GB"
       - "-c"
       - "random_page_cost=1.1"
       - "-c"
@@ -34,6 +34,12 @@ services:
       - "max_wal_size=2GB"
       - "-c"
       - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "log_min_duration_statement=2000"
+      - "-c"
+      - "log_connections=on"
+      - "-c"
+      - "log_disconnections=on"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -46,11 +52,11 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/genetic_health_db
+      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/genetic_health_db
       - NCBI_API_KEY=${NCBI_API_KEY}
       - ALPHA_MISSENSE_DATA_DIR=/app/data_sources/alpha_missense
       - CLINVAR_DATA_DIR=/app/data_sources/clinvar
@@ -59,27 +65,26 @@ services:
       - TKG_DATA_DIR=/app/data_sources/1000G
       - GOOGLE_APPLICATION_CREDENTIALS=/app/genetic-health-490017-b854a959d61b.json
       - GEMINI_API_KEY=${GEMINI_API_KEY}
-      # OpenTelemetry — traces go to the OTel Collector (→ Jaeger + spanmetrics → Prometheus for SPM).
+      - AI_INSIGHTS_ENABLED=${AI_INSIGHTS_ENABLED:-true} — traces go to the OTel Collector (→ Jaeger + spanmetrics → Prometheus for SPM).
       # Set OTEL_EXPORTER_OTLP_ENDPOINT='' in your .env to disable tracing.
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
       - OTEL_SERVICE_NAME=dna-toolkit-backend
       - OTEL_CONSOLE_EXPORT=${OTEL_CONSOLE_EXPORT:-false}
-    volumes:
-      - .:/app
-      - /app/.venv  # Exclude virtual environment from volume mount
-    depends_on:
-      postgres:
-        condition: service_healthy
-      otel-collector:
-        condition: service_started
-    restart: unless-stopped
+      - EXTRA_CORS_ORIGINS=${EXTRA_CORS_ORIGINS:-}
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-    command: ["uv", "run", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "backend"]
+    volumes:
+      - ./data_sources:/app/data_sources
+    command: ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir backend"]
 
   # Jaeger — distributed tracing UI + SPM (http://localhost:16686)
   # Receives traces via OTLP gRPC from the OTel Collector.
@@ -87,8 +92,8 @@ services:
   jaeger:
     image: jaegertracing/all-in-one:1.57
     ports:
-      - "16686:16686"   # Jaeger UI
-      - "4317:4317"     # OTLP gRPC (internal — collector → jaeger)
+      - "127.0.0.1:16686:16686"   # Jaeger UI (localhost only)
+      - "127.0.0.1:4317:4317"     # OTLP gRPC (localhost only — collector → jaeger)
     environment:
       - COLLECTOR_OTLP_ENABLED=true
       # SPM: read RED metrics from Prometheus
@@ -99,6 +104,11 @@ services:
       - PROMETHEUS_QUERY_DURATION_UNIT=ms
       - PROMETHEUS_QUERY_NORMALIZE_CALLS=true
       - PROMETHEUS_QUERY_NORMALIZE_DURATION=true
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - jaeger_data:/badger
     depends_on:
@@ -114,9 +124,13 @@ services:
     volumes:
       - ./otel-collector-config.yaml:/etc/otel/config.yaml:ro
     ports:
-      - "4318:4318"     # OTLP HTTP (backend → collector)
-      - "4319:4317"     # OTLP gRPC (exposed for external tools, mapped to avoid conflict)
-      - "8889:8889"     # Prometheus metrics endpoint (collector exposes RED metrics)
+      - "127.0.0.1:4318:4318"     # OTLP HTTP (localhost only — backend → collector)
+      - "127.0.0.1:8889:8889"     # Prometheus metrics endpoint (localhost only)
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       - jaeger
     restart: unless-stopped
@@ -129,11 +143,17 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=7d
       - --web.enable-remote-write-receiver
+      - --web.enable-lifecycle
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
     ports:
-      - "9090:9090"     # Prometheus UI (http://localhost:9090)
+      - "127.0.0.1:9090:9090"     # Prometheus UI (localhost only)
     restart: unless-stopped
 
   # Analysis Worker — completely separate process from the API server.
@@ -146,7 +166,7 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/genetic_health_db
+      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/genetic_health_db
       - NCBI_API_KEY=${NCBI_API_KEY}
       - ALPHA_MISSENSE_DATA_DIR=/app/data_sources/alpha_missense
       - CLINVAR_DATA_DIR=/app/data_sources/clinvar
@@ -155,6 +175,7 @@ services:
       - TKG_DATA_DIR=/app/data_sources/1000G
       - GOOGLE_APPLICATION_CREDENTIALS=/app/genetic-health-490017-b854a959d61b.json
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - AI_INSIGHTS_ENABLED=${AI_INSIGHTS_ENABLED:-true}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
       - OTEL_SERVICE_NAME=dna-toolkit-worker
       - OTEL_CONSOLE_EXPORT=${OTEL_CONSOLE_EXPORT:-false}
@@ -163,29 +184,179 @@ services:
     volumes:
       - .:/app
       - /app/.venv
+      - ./data_sources:/app/data_sources
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
     command: ["uv", "run", "python", "-m", "backend.worker"]
 
+  # Grafana — dashboards over Prometheus (RED metrics + host/container stats) and Jaeger traces.
+  # Access via https://grafana.epigenic.xyz (proxied by nginx)
+  grafana:
+    image: grafana/grafana:11.5.2
+    ports:
+      - "127.0.0.1:3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_SERVER_ROOT_URL=https://grafana.epigenic.xyz
+      - GF_SERVER_DOMAIN=grafana.epigenic.xyz
+      - GF_SERVER_PROTOCOL=http
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_SECURITY_COOKIE_SECURE=false
+      - GF_SECURITY_COOKIE_SAMESITE=lax
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+      - GF_PLUGINS_ENABLE_ALPHA=false
+      - GF_METRICS_ENABLED=true
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # node-exporter — host-level metrics (CPU, RAM, disk, network I/O) → Prometheus
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    restart: unless-stopped
+
+  # cAdvisor — per-container resource usage metrics → Prometheus
+  # Security: privileged removed; /var/run (docker.sock) and /var/lib/docker not
+  # needed in containerd mode. Only the containerd socket is mounted read-only.
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.2
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /:/rootfs:ro
+      - /sys:/sys:ro
+      - /cgroup:/cgroup:ro
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
+    command:
+      - --containerd=/run/containerd/containerd.sock
+      - --containerd-namespace=moby
+      - --docker=false
+    restart: unless-stopped
+
+  # Nginx reverse proxy — routes epigenic.xyz → frontend:3000, api.epigenic.xyz → backend:8000
+  nginx:
+    image: nginx:alpine
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "80:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped
+
   # Next.js Frontend
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
     ports:
-      - "3000:3000"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules  # Exclude node_modules from volume mount
+      - "127.0.0.1:3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     depends_on:
       - backend
+    restart: unless-stopped
+
+  sonarqube-db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: sonarqube
+      POSTGRES_USER: sonarqube
+      POSTGRES_PASSWORD: ${SONARQUBE_DB_PASSWORD:-sonarqube}
+    volumes:
+      - sonarqube_db:/var/lib/postgresql/data
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sonarqube"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  sonarqube:
+    image: sonarqube:25.3.0.104237-community
+    ports:
+      - "127.0.0.1:9000:9000"
+    environment:
+      SONAR_JDBC_URL: jdbc:postgresql://sonarqube-db:5432/sonarqube
+      SONAR_JDBC_USERNAME: sonarqube
+      SONAR_JDBC_PASSWORD: ${SONARQUBE_DB_PASSWORD:-sonarqube}
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      sonarqube-db:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
   postgres_data:
   jaeger_data:
   prometheus_data:
+  grafana_data:
+  sonarqube_data:
+  sonarqube_extensions:
+  sonarqube_logs:
+  sonarqube_db:

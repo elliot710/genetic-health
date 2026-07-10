@@ -419,17 +419,17 @@ class GnomadETL:
                 return None
 
             I_GENE = _find('gene', 'gene_symbol', 'symbol')
-            I_TX = _find('transcript', 'canonical_transcript')
-            I_PLI = _find('pli', 'pLI')
-            I_LOEUF = _find('loeuf', 'oe_lof_upper', 'LOEUF')
-            I_MIS_Z = _find('mis_z', 'missense_z', 'mis_z_score')
-            I_SYN_Z = _find('syn_z', 'synonymous_z', 'syn_z_score')
-            I_OBS_LOF = _find('obs_lof', 'n_lof', 'observed_lof')
-            I_EXP_LOF = _find('exp_lof', 'expected_lof')
-            I_OBS_MIS = _find('obs_mis', 'n_mis', 'observed_mis')
-            I_EXP_MIS = _find('exp_mis', 'expected_mis')
-            I_OBS_SYN = _find('obs_syn', 'n_syn', 'observed_syn')
-            I_EXP_SYN = _find('exp_syn', 'expected_syn')
+            I_TX = _find('transcript', 'canonical_transcript', 'mane_select')
+            I_PLI = _find('pli', 'pLI', 'lof.pli', 'lof_hc_lc.pli')
+            I_LOEUF = _find('loeuf', 'oe_lof_upper', 'LOEUF', 'lof.oe_ci.upper')
+            I_MIS_Z = _find('mis_z', 'missense_z', 'mis_z_score', 'mis.z_score')
+            I_SYN_Z = _find('syn_z', 'synonymous_z', 'syn_z_score', 'syn.z_score')
+            I_OBS_LOF = _find('obs_lof', 'n_lof', 'observed_lof', 'lof.obs')
+            I_EXP_LOF = _find('exp_lof', 'expected_lof', 'lof.exp')
+            I_OBS_MIS = _find('obs_mis', 'n_mis', 'observed_mis', 'mis.obs')
+            I_EXP_MIS = _find('exp_mis', 'expected_mis', 'mis.exp')
+            I_OBS_SYN = _find('obs_syn', 'n_syn', 'observed_syn', 'syn.obs')
+            I_EXP_SYN = _find('exp_syn', 'expected_syn', 'syn.exp')
 
             if I_GENE is None:
                 logger.warning("gnomAD constraint file: no gene column found in: %s", header[:10])

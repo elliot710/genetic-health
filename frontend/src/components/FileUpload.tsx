@@ -9,6 +9,7 @@ import {
 import { getTheme } from '../utils/theme'
 import { apiUrl } from '@/lib/api'
 import { Button } from '@/components/ui/button'
+import { Disclaimer } from '@/components/Disclaimer'
 import type { DashboardData } from '@/components/categories/types'
 
 interface FileUploadProps {
@@ -259,6 +260,8 @@ export default function FileUpload({ onAnalysisComplete, token, isDarkMode }: Fi
 
   return (
     <div className="max-w-4xl mx-auto space-y-8">
+      <Disclaimer />
+
       {/* Main Upload Area */}
       <div className={`rounded-2xl shadow-lg border overflow-hidden backdrop-blur-xl ${theme.glass} ${theme.glassBorder}`}>
         <div

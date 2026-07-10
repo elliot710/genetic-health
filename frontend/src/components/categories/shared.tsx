@@ -61,7 +61,7 @@ export function CategoryHeader({
       <CardHeader>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className={`p-3 rounded-xl bg-gradient-to-br ${gradientFrom} ${gradientTo} border ${borderColor}`}>
+            <div className={`p-3 rounded-xl bg-linear-to-br ${gradientFrom} ${gradientTo} border ${borderColor}`}>
               <Icon className={`h-6 w-6 ${iconColorClass}`} />
             </div>
             <div>
@@ -105,7 +105,7 @@ export function EmptyState({
     <Card className={`${theme.glass} border ${theme.border} ring-0`}>
       <CardContent className="py-12">
         <div className="flex flex-col items-center gap-4 text-center">
-          <div className={`p-4 rounded-xl bg-gradient-to-br ${gradientFrom} ${gradientTo} border ${borderColor}`}>
+          <div className={`p-4 rounded-xl bg-linear-to-br ${gradientFrom} ${gradientTo} border ${borderColor}`}>
             <Icon className={`h-8 w-8 ${iconColorClass}`} />
           </div>
           <div>
@@ -406,7 +406,313 @@ export function PathogenicityBar({ rsid, pathogenicityMap, theme }: Pathogenicit
   )
 }
 
+// ─── Variant Info Box (consistent across all panels) ──────────
+
+interface VariantInfoBoxProps {
+  rsid?: string
+  gene?: string
+  token?: string
+  isDarkMode?: boolean
+  alphaMissense?: { score?: number; classification?: string } | null
+  clinvarCount?: number
+  genotype?: string
+  pathogenicityMap?: Record<string, { score: number; classification: string; confidence: string; evidence_count: number }>
+  theme: ThemeClasses
+}
+
+/**
+ * Compact labeled "Associated Variants" box used in the expanded section
+ * of every category panel. Shows pathogenicity score + variant links.
+ */
+export function VariantInfoBox({
+  rsid, gene, token, isDarkMode = false, alphaMissense, clinvarCount, genotype, pathogenicityMap, theme,
+}: VariantInfoBoxProps) {
+  const validRsid = rsid && rsid.startsWith('rs')
+  if (!validRsid) return null
+  return (
+    <div>
+      <h5 className={`text-xs font-semibold ${theme.textSecondary} uppercase tracking-wide mb-1.5`}>Associated Variants</h5>
+      <div className={`rounded-lg p-2.5 border ${theme.border} ${theme.isDarkMode ? 'bg-white/3' : 'bg-gray-50/60'} space-y-2`}>
+        <PathogenicityBar rsid={rsid!} pathogenicityMap={pathogenicityMap} theme={theme} />
+        <VariantLinks
+          rsid={rsid}
+          gene={gene}
+          token={token}
+          isDarkMode={isDarkMode}
+          alphaMissense={alphaMissense}
+          clinvarCount={clinvarCount}
+          genotype={genotype}
+        />
+      </div>
+    </div>
+  )
+}
+
+// ─── Gene Context Box ──────────────────────────────────────────
+
+import type { GeneStats } from './types'
+
+interface GeneContextBoxProps {
+  gene?: string
+  stats?: GeneStats
+  theme: ThemeClasses
+}
+
+// ─── AlphaFold Protein Confidence Badge ────────────────────────
+
+interface AlphaFoldBadgeProps {
+  confidence?: number | null
+  highPct?: number
+  lowPct?: number
+}
+
+/**
+ * Compact inline badge showing AlphaFold global confidence for the protein.
+ * Green ≥ 70%, amber 50–69%, red < 50%.
+ */
+export function AlphaFoldBadge({ confidence, highPct, lowPct }: AlphaFoldBadgeProps) {
+  if (confidence == null) return null
+  const pct = Math.round(confidence)
+  const color = pct >= 70 ? 'text-green-400 border-green-500/30 bg-green-500/10' :
+                pct >= 50 ? 'text-amber-400 border-amber-500/30 bg-amber-500/10' :
+                            'text-red-400 border-red-500/30 bg-red-500/10'
+  return (
+    <span
+      title={`AlphaFold protein structure confidence: ${pct}% global${highPct ? ` · ${Math.round(highPct * 100)}% very high confidence residues` : ''}${lowPct ? ` · ${Math.round(lowPct * 100)}% very low confidence (disordered)` : ''}`}
+      className={`inline-flex items-center gap-1 text-[10px] font-medium rounded px-1.5 py-0.5 border ${color}`}
+    >
+      <svg className="h-2.5 w-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+      </svg>
+      AF {pct}%
+    </span>
+  )
+}
+
+/**
+ * Expanded section: gene-level ClinVar burden + known disease associations.
+ * Shows how many pathogenic variants are known for this gene and what diseases
+ * are associated, with OMIM links.
+ */
+export function GeneContextBox({ gene, stats, theme }: GeneContextBoxProps) {
+  const [showAll, setShowAll] = React.useState(false)
+  if (!stats) return null
+  const conditions = stats.conditions || []
+  const visible = showAll ? conditions : conditions.slice(0, 4)
+  const hasMore = conditions.length > 4
+
+  const burdenColor =
+    stats.pathogenic_lp >= 100 ? 'text-red-400' :
+    stats.pathogenic_lp >= 20  ? 'text-orange-400' :
+    stats.pathogenic_lp > 0    ? 'text-yellow-400' : 'text-gray-400'
+
+  return (
+    <div>
+      <h5 className={`text-xs font-semibold ${theme.textSecondary} uppercase tracking-wide mb-1.5`}>
+        Gene Context
+      </h5>
+      <div className={`rounded-lg p-2.5 border ${theme.border} ${theme.isDarkMode ? 'bg-white/3' : 'bg-gray-50/60'} space-y-2`}>
+        {/* Burden stats row */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+          <span className={`font-semibold ${theme.textPrimary}`}>{gene}</span>
+          {stats.pathogenic_lp > 0 && (
+            <span className={`font-medium ${burdenColor}`}>
+              {stats.pathogenic_lp.toLocaleString()} pathogenic/LP
+            </span>
+          )}
+          {stats.vus > 0 && (
+            <span className={`${theme.textSecondary}`}>
+              {stats.vus.toLocaleString()} VUS
+            </span>
+          )}
+          {stats.total_submissions > 0 && (
+            <span className={`${theme.textSecondary}`}>
+              {stats.total_submissions.toLocaleString()} submissions
+            </span>
+          )}
+          {stats.gene_mim && (
+            <a
+              href={`https://omim.org/entry/${stats.gene_mim}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-400 hover:text-blue-300 transition-colors"
+              onClick={e => e.stopPropagation()}
+            >
+              OMIM:{stats.gene_mim} ↗
+            </a>
+          )}
+        </div>
+        {/* Disease associations */}
+        {conditions.length > 0 && (
+          <div>
+            <span className={`text-[10px] font-semibold ${theme.textSecondary} uppercase tracking-wide`}>
+              Known associations ({conditions.length})
+            </span>
+            <div className="flex flex-wrap gap-1 mt-1">
+              {visible.map((c, i) => (
+                c.disease_mim ? (
+                  <a
+                    key={i}
+                    href={`https://omim.org/entry/${c.disease_mim}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`inline-flex items-center gap-1 text-[10px] rounded px-1.5 py-0.5 border ${theme.border} ${theme.isDarkMode ? 'bg-white/5 hover:bg-white/10' : 'bg-gray-100/80 hover:bg-gray-200/80'} ${theme.textSecondary} hover:text-blue-400 transition-colors`}
+                    onClick={e => e.stopPropagation()}
+                  >
+                    {c.disease_name} ↗
+                  </a>
+                ) : (
+                  <a
+                    key={i}
+                    href={`https://omim.org/search?search=${encodeURIComponent(c.disease_name)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`inline-flex items-center gap-1 text-[10px] rounded px-1.5 py-0.5 border ${theme.border} ${theme.isDarkMode ? 'bg-white/5 hover:bg-white/10' : 'bg-gray-100/80 hover:bg-gray-200/80'} ${theme.textSecondary} hover:text-blue-400 transition-colors`}
+                    onClick={e => e.stopPropagation()}
+                  >
+                    {c.disease_name}
+                  </a>
+                )
+              ))}
+              {hasMore && !showAll && (
+                <button
+                  className={`text-[10px] ${theme.textSecondary} hover:${theme.textPrimary} underline`}
+                  onClick={e => { e.stopPropagation(); setShowAll(true) }}
+                >
+                  +{conditions.length - 4} more
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Compact single-line gene burden strip for collapsed cards.
+ * Shows "153 pathogenic · 5 diseases" in secondary text under the badges.
+ */
+export function GeneBurdenStrip({ gene, stats, theme }: GeneContextBoxProps) {
+  if (!stats) return null
+  const parts: string[] = []
+  if (stats.pathogenic_lp > 0) parts.push(`${stats.pathogenic_lp.toLocaleString()} pathogenic`)
+  if (stats.conditions.length > 0) parts.push(`${stats.conditions.length} known disease${stats.conditions.length !== 1 ? 's' : ''}`)
+  if (parts.length === 0) return null
+  return (
+    <p className={`text-[10px] ${theme.textSecondary} mt-1`}>
+      {gene} · {parts.join(' · ')}
+    </p>
+  )
+}
+
+// ─── AlphaFold Structural Detail Box ───────────────────────────
+
+interface AlphaFoldDetailBoxProps {
+  rsid?: string
+  alphafoldData?: {
+    confidence?: number | null
+    high_confidence_pct?: number
+    low_confidence_pct?: number
+    protein_name?: string
+  } | null
+  theme: ThemeClasses
+}
+
+/**
+ * Expanded section: full AlphaFold protein structure confidence breakdown.
+ * Shows pLDDT score visually with per-region breakdown and clinical interpretation.
+ * High confidence (≥70%) = reliable structure prediction → variant likely disrupts real domain.
+ * Low confidence (<50%) = intrinsically disordered region → variant effect harder to predict.
+ */
+export function AlphaFoldDetailBox({ rsid, alphafoldData, theme }: AlphaFoldDetailBoxProps) {
+  if (!alphafoldData || alphafoldData.confidence == null) return null
+
+  const pct = Math.round(alphafoldData.confidence)
+  const highPct = Math.round((alphafoldData.high_confidence_pct ?? 0) * 100)
+  const lowPct = Math.round((alphafoldData.low_confidence_pct ?? 0) * 100)
+  const rawProteinName = alphafoldData.protein_name
+  const proteinName = Array.isArray(rawProteinName)
+    ? rawProteinName[0] || null
+    : rawProteinName || null
+
+  const confidenceColor =
+    pct >= 70 ? 'text-green-400' : pct >= 50 ? 'text-amber-400' : 'text-red-400'
+  const barColor =
+    pct >= 70 ? 'bg-green-500' : pct >= 50 ? 'bg-amber-500' : 'bg-red-500'
+
+  const interpretation =
+    pct >= 90 ? 'Very high confidence — structure is highly reliable. Variant likely disrupts a well-defined structural domain.' :
+    pct >= 70 ? 'Confident structure. Variant falls in a region with reliable 3D prediction — functional impact is assessable.' :
+    pct >= 50 ? 'Low confidence — this region may be partially disordered. Structural impact harder to predict.' :
+                'Very low confidence — intrinsically disordered region. AlphaFold structure not reliable here.'
+
+  return (
+    <div>
+      <h5 className={`text-xs font-semibold ${theme.textSecondary} uppercase tracking-wide mb-1.5`}>
+        AlphaFold Protein Structure
+      </h5>
+      <div className={`rounded-lg p-2.5 border ${theme.border} ${theme.isDarkMode ? 'bg-white/3' : 'bg-gray-50/60'} space-y-2`}>
+        {/* Protein name */}
+        {proteinName && (
+          <p className={`text-xs font-medium ${theme.textPrimary} truncate`} title={proteinName}>
+            {proteinName}
+          </p>
+        )}
+        {/* Global confidence bar */}
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <span className={`text-xs ${theme.textSecondary}`}>Global model confidence (pLDDT)</span>
+            <span className={`text-sm font-bold font-mono ${confidenceColor}`}>{pct}%</span>
+          </div>
+          <div className={`h-2 rounded-full ${theme.isDarkMode ? 'bg-white/10' : 'bg-gray-200'} overflow-hidden`}>
+            <div className={`h-full rounded-full ${barColor} transition-all`} style={{ width: `${pct}%` }} />
+          </div>
+        </div>
+        {/* pLDDT region breakdown */}
+        {(highPct > 0 || lowPct > 0) && (
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div className={`rounded px-1.5 py-1 ${theme.isDarkMode ? 'bg-green-500/10' : 'bg-green-50'}`}>
+              <div className="text-[10px] text-green-400 font-semibold">{highPct}%</div>
+              <div className={`text-[9px] ${theme.textSecondary}`}>Very high</div>
+              <div className={`text-[9px] ${theme.textSecondary}`}>(pLDDT ≥90)</div>
+            </div>
+            <div className={`rounded px-1.5 py-1 ${theme.isDarkMode ? 'bg-amber-500/10' : 'bg-amber-50'}`}>
+              <div className="text-[10px] text-amber-400 font-semibold">{Math.max(0, 100 - highPct - lowPct)}%</div>
+              <div className={`text-[9px] ${theme.textSecondary}`}>Confident</div>
+              <div className={`text-[9px] ${theme.textSecondary}`}>(50–89)</div>
+            </div>
+            <div className={`rounded px-1.5 py-1 ${theme.isDarkMode ? 'bg-red-500/10' : 'bg-red-50'}`}>
+              <div className="text-[10px] text-red-400 font-semibold">{lowPct}%</div>
+              <div className={`text-[9px] ${theme.textSecondary}`}>Disordered</div>
+              <div className={`text-[9px] ${theme.textSecondary}`}>(pLDDT &lt;50)</div>
+            </div>
+          </div>
+        )}
+        {/* Clinical interpretation */}
+        <p className={`text-[10px] ${theme.textSecondary} leading-relaxed`}>
+          {interpretation}
+        </p>
+        {/* Link to AlphaFold DB */}
+        {rsid && (
+          <a
+            href={`https://alphafold.ebi.ac.uk/search/text/${rsid}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={e => e.stopPropagation()}
+            className="inline-flex items-center gap-1 text-[10px] text-blue-400 hover:text-blue-300 transition-colors"
+          >
+            View in AlphaFold DB ↗
+          </a>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── Research Links (inline compact) ───────────────────────────
+
 
 const DB_LINKS: Record<string, (rsid: string) => string> = {
   dbSNP: (rsid) => `https://www.ncbi.nlm.nih.gov/snp/${rsid}`,
@@ -556,7 +862,7 @@ export function ZygosityBadge({ genotype }: { genotype?: string }) {
       variant="outline"
       className={`text-xs ${isHomo ? 'bg-red-500/10 text-red-500 border-red-500/20' : 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20'}`}
     >
-      {isHomo ? 'Homozygous' : 'Heterozygous'}
+      {isHomo ? 'Homo' : 'Het'}
     </Badge>
   )
 }
@@ -611,12 +917,93 @@ export function reviewStatusStars(reviewStatus?: string | null): number {
   return 0
 }
 
+// ─── Genotype Allele Tiles ─────────────────────────────────────
+
+/**
+ * Renders per-allele colored boxes matching the VariantDetailDialog style.
+ * - Ref allele → green box
+ * - Alt allele → orange box
+ * - Unknown → gray box
+ * When `alleleString` is absent, tiles are shown without ref/alt coloring.
+ */
+export function GenotypeAlleleTiles({ genotype, alleleString }: { genotype?: string; alleleString?: string }) {
+  if (!genotype) return null
+
+  const gt = genotype.trim().toUpperCase()
+  const isIndel = /^[DI]{1,2}$/.test(gt)
+
+  // Parse allele_string ("REF/ALT" or "REF/ALT1,ALT2" or just "REF") when available
+  let ref: string | undefined
+  let alts: string[] = []
+  if (alleleString) {
+    const parts = alleleString.split('/')
+    ref = parts[0]?.toUpperCase()
+    alts = parts.slice(1).flatMap(p => p.split(',').map(a => a.trim().toUpperCase())).filter(Boolean)
+  }
+
+  // Split genotype into individual allele tokens
+  const rawAlleles = gt.includes('/') ? gt.split('/') : gt.split('')
+  const alleles = rawAlleles.filter(a => a && a !== '/')
+
+  // Determine D/I directionality for indels from ref/alt lengths
+  let dIsRef: boolean | null = null
+  let indelBothAlt = false  // true when alts go both directions from ref (e.g. CC/C,CCC)
+  if (isIndel && ref !== undefined && alts.length > 0) {
+    const refLen = ref === '-' || ref === '.' ? 0 : ref.length
+    const altLens = alts.map(a => a === '-' || a === '.' ? 0 : a.length)
+    const hasShorter = altLens.some(l => l < refLen)
+    const hasLonger = altLens.some(l => l > refLen)
+    if (hasShorter && hasLonger) {
+      indelBothAlt = true  // both D and I map to different alts — neither is ref
+    } else {
+      dIsRef = refLen <= (altLens[0] ?? 0)
+    }
+  }
+
+  return (
+    <span className="inline-flex items-center gap-px font-mono">
+      {alleles.map((a, i) => {
+        let isRef = false
+        let isAlt = false
+        if (isIndel) {
+          if (indelBothAlt) {
+            isAlt = true  // both D and I are alternate alleles
+          } else if (dIsRef !== null) {
+            isRef = dIsRef ? a === 'D' : a === 'I'
+            isAlt = dIsRef ? a === 'I' : a === 'D'
+          }
+        } else if (ref) {
+          isRef = a === ref
+          // If we have explicit alts, check membership; otherwise anything non-ref is alt
+          isAlt = alts.length > 0 ? alts.includes(a) : a !== ref
+        }
+        return (
+          <span
+            key={i}
+            title={isRef ? 'Reference allele' : isAlt ? 'Alternate allele' : undefined}
+            className={`inline-flex items-center justify-center w-4 h-4 rounded text-[9px] font-bold border ${
+              isAlt
+                ? 'bg-orange-500/20 text-orange-300 border-orange-500/40'
+                : isRef
+                  ? 'bg-green-500/15 text-green-400 border-green-500/30'
+                  : 'bg-gray-500/10 text-gray-400 border-gray-500/20'
+            }`}
+          >
+            {a}
+          </span>
+        )
+      })}
+    </span>
+  )
+}
+
 // ─── Clickable Rsid Badge (with zygosity) ──────────────────────
 
 interface ClickableRsidBadgeProps {
   rsid: string
   gene?: string
   genotype?: string
+  alleleString?: string
   token?: string
   isDarkMode?: boolean
 }
@@ -625,7 +1012,7 @@ interface ClickableRsidBadgeProps {
  * A mono-font rsid badge that opens the VariantDetailDialog on click.
  * Reusable across any panel that displays rsids.
  */
-export function ClickableRsidBadge({ rsid, gene, genotype, token, isDarkMode = false }: ClickableRsidBadgeProps) {
+export function ClickableRsidBadge({ rsid, gene, genotype, alleleString, token, isDarkMode = false }: ClickableRsidBadgeProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const validRsid = rsid && rsid !== 'Unknown' && rsid.startsWith('rs')
 
@@ -633,10 +1020,11 @@ export function ClickableRsidBadge({ rsid, gene, genotype, token, isDarkMode = f
     <>
       <Badge
         variant="outline"
-        className={`text-xs font-mono ${validRsid && token ? 'cursor-pointer hover:bg-blue-500/10 hover:border-blue-500/40 transition-colors' : ''}`}
+        className={`inline-flex items-center gap-1 text-xs font-mono ${validRsid && token ? 'cursor-pointer hover:bg-blue-500/10 hover:border-blue-500/40 transition-colors' : ''}`}
         onClick={validRsid && token ? (e: React.MouseEvent) => { e.stopPropagation(); setDialogOpen(true) } : undefined}
       >
-        {rsid}{genotype ? ` ${genotype}` : ''}
+        <span>{rsid}</span>
+        {genotype && <GenotypeAlleleTiles genotype={genotype} alleleString={alleleString} />}
       </Badge>
       <ZygosityBadge genotype={genotype} />
       {validRsid && token && (
@@ -715,10 +1103,14 @@ const SKIP_CONDITIONS = new Set([
 export function cleanCondition(raw?: string | null): string {
   if (!raw) return 'Unknown'
   // Convert snake_case to spaced words first
-  let cleaned = raw.replace(/[_]+/g, ' ').trim()
+  const cleaned = raw.replace(/[_]+/g, ' ').trim()
   if (!cleaned.includes('|') && !cleaned.includes(';')) {
     // Title-case if it looks like a slug (all lowercase, no capitals)
     if (cleaned === cleaned.toLowerCase()) {
+      return toTitleCase(cleaned)
+    }
+    // Title-case if the string is entirely uppercase (e.g. ClinVar condition names)
+    if (cleaned === cleaned.toUpperCase() && cleaned.length > 3) {
       return toTitleCase(cleaned)
     }
     return cleaned
@@ -765,8 +1157,8 @@ export function MasonryLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex flex-col md:flex-row gap-4">
-      <div className="flex-1 space-y-4">{col1}</div>
-      <div className="flex-1 space-y-4">{col2}</div>
+      <div className="flex-1 min-w-0 space-y-4">{col1}</div>
+      <div className="flex-1 min-w-0 space-y-4">{col2}</div>
     </div>
   )
 }
@@ -803,7 +1195,7 @@ export function useGrouping<T>(
   const toggleGroup = (key: string) => {
     setCollapsedGroups(prev => {
       const next = new Set(prev)
-      next.has(key) ? next.delete(key) : next.add(key)
+      if (next.has(key)) { next.delete(key) } else { next.add(key) }
       return next
     })
   }

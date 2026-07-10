@@ -387,7 +387,7 @@ export default function AnalysisProgressLoader({
                   </div>
                 ) : (
                   <div>
-                    <strong>Processing your genetic data...</strong> We're analyzing {progress.total_variants.toLocaleString()} variants 
+                    <strong>Processing your genetic data... It may take a while, depending on available resources.</strong> We're analyzing {progress.total_variants.toLocaleString()} variants 
                     across 14 comprehensive categories including health, nutrition, drug responses, physical traits, sports performance, 
                     intelligence, personality, ancestry, wellness, methylation, and detoxification pathways.
                   </div>

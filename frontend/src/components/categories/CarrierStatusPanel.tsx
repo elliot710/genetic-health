@@ -12,9 +12,12 @@ import {
   SectionCard,
   StatusBadge,
   DisclaimerCard,
-  VariantLinks,
-  PathogenicityBar,
+  VariantInfoBox,
   ClickableRsidBadge,
+  GeneContextBox,
+  AlphaFoldDetailBox,
+  AlphaFoldBadge,
+  GeneBurdenStrip,
   carrierStatusToSeverity,
   MasonryLayout,
   cleanCondition,
@@ -81,14 +84,24 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
   // Map raw API data to our display model, deduplicating by rsid set
   const allCarriers: MappedCarrier[] = useMemo(() => {
     if (!hasRealData) return []
-    const raw = carrierData.map((c) => ({
-      condition: c.condition,
-      gene: c.gene || extractGene(c.condition),
-      rsids: c.associated_variants || [],
-      status: c.carrier_status || c.status || 'Unknown',
-      inheritance: c.inheritance_pattern || c.inheritance || 'Unknown',
-      counselingRecommended: c.genetic_counseling_recommended ?? false,
-    }))
+    const raw = carrierData.map((c) => {
+      // Resolve gene: API field → extract from condition → gene_symbol_map fallback
+      let gene = c.gene || extractGene(c.condition)
+      if (!gene && c.associated_variants?.length) {
+        for (const v of c.associated_variants) {
+          const mapped = data?.gene_symbol_map?.[v]
+          if (mapped) { gene = mapped; break }
+        }
+      }
+      return {
+        condition: c.condition,
+        gene,
+        rsids: c.associated_variants || [],
+        status: c.carrier_status || c.status || 'Unknown',
+        inheritance: c.inheritance_pattern || c.inheritance || 'Unknown',
+        counselingRecommended: c.genetic_counseling_recommended ?? false,
+      }
+    })
 
     // Deduplicate: merge entries that share the same rsid set
     const byRsidKey = new Map<string, MappedCarrier>()
@@ -385,26 +398,29 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
             return (
               <div
                 key={index}
-                className={`${theme.glass} border ${theme.border} rounded-xl p-5 cursor-pointer hover:border-teal-500/50 transition-all duration-300`}
+                className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 cursor-pointer hover:border-teal-500/50 transition-all duration-300 overflow-hidden`}
                 onClick={() => setSelectedItem(isExpanded ? null : itemKey)}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-3">
-                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{cleanCondition(carrier.condition)}</h4>
-                    <StatusBadge
-                      label={statusLabel(carrier.status)}
-                      severity={carrierStatusToSeverity(carrier.status)}
-                    />
-                  </div>
-                  <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
+                <div className="flex items-start justify-between mb-1 gap-1">
+                  <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug flex-1 min-w-0`}>{cleanCondition(carrier.condition)}</h4>
+                  <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
-                {/* Badges: gene + clickable rsids */}
-                <div className="flex flex-wrap gap-1.5 mb-1">
+                {/* Badges: status + gene + clickable rsids */}
+                <div className="flex flex-wrap gap-1 mb-1">
+                  <StatusBadge
+                    label={statusLabel(carrier.status)}
+                    severity={carrierStatusToSeverity(carrier.status)}
+                  />
                   {carrier.gene && <Badge variant="secondary" className="text-xs">{carrier.gene}</Badge>}
                   {carrier.rsids.map(rsid => (
-                    <ClickableRsidBadge key={rsid} rsid={rsid} gene={carrier.gene} genotype={data?.genotype_map?.[rsid]} token={token} isDarkMode={isDarkMode} />
+                    <ClickableRsidBadge key={rsid} rsid={rsid} gene={carrier.gene} genotype={data?.genotype_map?.[rsid]} alleleString={data?.allele_string_map?.[rsid]} token={token} isDarkMode={isDarkMode} />
                   ))}
+                  <AlphaFoldBadge
+                    confidence={data?.alphafold_map?.[carrier.rsids?.[0]]?.confidence}
+                    highPct={data?.alphafold_map?.[carrier.rsids?.[0]]?.high_confidence_pct}
+                    lowPct={data?.alphafold_map?.[carrier.rsids?.[0]]?.low_confidence_pct}
+                  />
                 </div>
 
                 {/* Collapsed description */}
@@ -412,6 +428,10 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
                   {carrier.inheritance !== 'Unknown' ? `${carrier.inheritance.replace(/_/g, ' ')} inheritance` : 'Inheritance pattern not specified'}
                   {carrier.counselingRecommended ? ' · Genetic counseling recommended' : ''}
                 </p>
+                {/* Gene burden strip when collapsed */}
+                {!isExpanded && carrier.gene && data?.gene_stats_map?.[carrier.gene] && (
+                  <GeneBurdenStrip gene={carrier.gene} stats={data.gene_stats_map[carrier.gene]} theme={theme} />
+                )}
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
@@ -427,12 +447,14 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
                     
                     {carrier.rsids.length > 0 && carrier.rsids.map(rsid => (
                       <React.Fragment key={rsid}>
-                        <PathogenicityBar rsid={rsid} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
-                        <div className="mb-2 flex items-center gap-2">
-                          <VariantLinks rsid={rsid} gene={carrier.gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} />
-                        </div>
+                        <VariantInfoBox rsid={rsid} gene={carrier.gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
                       </React.Fragment>
                     ))}
+
+                    {/* Gene context: ClinVar burden + known diseases */}
+                    {carrier.gene && data?.gene_stats_map?.[carrier.gene] && (
+                      <GeneContextBox gene={carrier.gene} stats={data.gene_stats_map[carrier.gene]} theme={theme} />
+                    )}
 
                     {/* Single dialog for the open rsid */}
                     {openDialogRsid && carrier.rsids.includes(openDialogRsid) && (
@@ -444,6 +466,13 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
                         isDarkMode={isDarkMode}
                         open={true}
                         onOpenChange={open => { if (!open) setOpenDialogRsid(null) }}
+                      />
+                    )}
+                    {carrier.rsids?.[0] && data?.alphafold_map?.[carrier.rsids[0]] && (
+                      <AlphaFoldDetailBox
+                        rsid={carrier.rsids[0]}
+                        alphafoldData={data.alphafold_map[carrier.rsids[0]]}
+                        theme={theme}
                       />
                     )}
                   </div>

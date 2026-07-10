@@ -132,6 +132,15 @@ class ComprehensiveAnalysisService:
     and populates all category tables with insights.
     """
 
+    _COMPLETED_PHASES = {
+        'initializing': 0,
+        'annotating_variants': 0,
+        'annotation_complete': 1,
+        'enriching_data': 1,
+        'generating_insights': 2,
+        'completed': 4,
+    }
+
     def __init__(self, user_id: Optional[int] = None):
         self.user_id = user_id
         self.api_service = None
@@ -196,12 +205,6 @@ class ComprehensiveAnalysisService:
     # ------------------------------------------------------------------
 
     async def process_analysis(self, analysis_id: int, strategy: str = 'comprehensive') -> Dict[str, Any]:
-        """Process genetic analysis with efficient annotation reuse and comprehensive insights.
-
-        Resume-aware: if the analysis was interrupted mid-run, it detects the
-        last completed phase via ``current_step`` and skips work that was
-        already persisted to the database.
-        """
         start_time = time.time()
         log_collector = JobLogCollector.get_instance()
         log_collector.set_active_job(analysis_id)
@@ -216,267 +219,209 @@ class ComprehensiveAnalysisService:
         try:
             await self.initialize_services()
             await self._load_registry()
-
             analysis, variants = await self._load_analysis_data(analysis_id)
 
             if not variants:
-                logger.warning(f"No variants found for analysis {analysis_id}")
-                return {
-                    "success": True,
-                    "analysis_id": analysis_id,
-                    "status": "completed",
-                    "processed_variants": 0,
-                    "total_variants": 0,
-                    "message": "No variants found"
-                }
+                return self._empty_result(analysis_id)
 
-            # Determine resume point from prior run's current_step
-            resume_step = getattr(analysis, 'current_step', None) or 'initializing'
-            # Map step names to completed phase numbers
-            _completed_phases = {
-                'initializing': 0,
-                'annotating_variants': 0,   # Phase 2 was in progress (not done)
-                'enriching_data': 1,         # Phase 2 done, Phase 3 in progress
-                'generating_insights': 2,    # Phases 2+3 done, Phase 4 in progress
-                'completed': 4,
-            }
-            last_completed_phase = _completed_phases.get(resume_step, 0)
-            is_resume = last_completed_phase > 0
-            if is_resume:
-                logger.info(f"Resuming analysis {analysis_id} from step '{resume_step}' "
-                            f"(phases 1-{last_completed_phase} already done)")
+            from ..utils.sex_inferrer import infer_biological_sex
+            self._inferred_sex = infer_biological_sex(variants)
+            await self._update_db(analysis_id, inferred_sex=self._inferred_sex)
 
-            logger.info(f"Starting comprehensive analysis for {len(variants)} variants")
-            logger.info(f"  Analysis ID: {analysis_id} | Strategy: {strategy} | User: {self.user_id}")
-            logger.info(f"  Registry: {len(self._registry)} categories, "
-                        f"{sum(len(v.get('rsid', {})) + len(v.get('gene', {})) for v in self._registry.values())} mappings")
-
-            progress = AnalysisProgress(
-                total_variants=len(variants),
-                processed_variants=0,
-                annotated_variants=0,
-                new_annotations=0,
-                reused_annotations=0,
-                current_step="classifying_variants",
-                status="processing",
-                phase=1,
-                phase_progress=0.0,
-            )
+            progress = self._initial_progress(len(variants))
             await self._update_progress(analysis_id, progress)
 
-            # ── Phase 1: Build gene map (always — cheap, in-memory only) ──
-            phase_start = time.time()
-            logger.info("═══ Phase 1/4: Building gene map ═══")
-            all_rsids = [str(v.rsid) for v in variants if v.rsid]
-            has_position = sum(1 for v in variants if v.chromosome and v.position)
-            logger.info(f"  Input: {len(all_rsids)} RSIDs, {has_position} with chr:pos")
-            with tracer.start_as_current_span("analysis.phase1.build_gene_map") as span:
-                span.set_attribute("variant.count", len(variants))
-                await self._build_rsid_gene_map(variants)
-                span.set_attribute("rsid.count", len(all_rsids))
-            unmapped = len(all_rsids) - len(self._rsid_gene_map)
-            logger.info(f"═══ Phase 1/4 complete ({time.time() - phase_start:.1f}s) ═══")
-            logger.info(f"  Gene map coverage: {len(self._rsid_gene_map)}/{len(all_rsids)} "
-                        f"({100 * len(self._rsid_gene_map) / max(1, len(all_rsids)):.1f}%) | "
-                        f"{unmapped} unmapped")
-            progress.phase = 1
-            progress.phase_progress = 1.0
-
-            # ── Phase 2: Annotate variants ──
-            # Even on resume we re-load existing annotations from DB.  When
-            # Phase 2 was already completed the bulk of variants will be found
-            # in shared_variant_annotations and reused instantly.
-            from ..db.database import async_session_factory
-
-            progress.phase = 2
-            progress.phase_progress = 0.0
-            progress.current_step = "annotating_variants"
-            await self._update_progress(analysis_id, progress)
-            logger.info("═══ Phase 2/4: Annotating variants ═══")
-            phase_start = time.time()
-
-            with tracer.start_as_current_span("analysis.phase2.annotate_variants") as span:
-                span.set_attribute("variant.count", len(variants))
-                annotation_service = SharedVariantAnnotationService()
-                annotation_results = await self._annotate_variants_efficiently(
-                    variants, analysis_id, annotation_service, progress,
-                    update_progress_fn=self._update_progress,
-                )
-                span.set_attribute("annotation.reused", progress.reused_annotations)
-                span.set_attribute("annotation.new", progress.new_annotations)
-            progress.phase_progress = 1.0
-            phase_elapsed = time.time() - phase_start
-            total_annotated = progress.reused_annotations + progress.new_annotations
-            logger.info(f"═══ Phase 2/4 complete ({phase_elapsed:.1f}s) ═══")
-            logger.info(f"  Reused: {progress.reused_annotations} | New: {progress.new_annotations} | "
-                        f"Total annotated: {total_annotated}/{len(variants)} "
-                        f"({100 * total_annotated / max(1, len(variants)):.1f}%)")
-            if phase_elapsed > 0:
-                logger.info(f"  Throughput: {total_annotated / phase_elapsed:.0f} variants/sec")
-
-            # ── Phase 2.5: Correct ref_allele from authoritative sources ──
-            # Consumer CSV uploads naively use genotype[0] as ref_allele.
-            # Now that we have ClinVar/gnomAD/Ensembl data, correct the
-            # genetic_markers.ref_allele column with the true reference.
+            await self._run_phase1_gene_map(analysis_id, variants, progress)
+            annotation_results = await self._run_phase2_annotations(analysis_id, variants, progress)
             await self._correct_ref_alleles(variants, annotation_results)
-
-            # ── Phase 3: BigQuery enrichment (own session, periodic commits) ──
-            progress.phase = 3
-            progress.phase_progress = 0.0
-            progress.current_step = "enriching_data"
+            progress.current_step = "annotation_complete"
             await self._update_progress(analysis_id, progress)
-            logger.info("═══ Phase 3/4: BigQuery enrichment ═══")
-            enabled_sources = await self._load_enabled_sources()
-            bq_source_names = {'chembl', 'fda_drug', 'alphafold'}
-            enabled_bq = bq_source_names & set(enabled_sources) if enabled_sources else bq_source_names
-            logger.info(f"  Input: {len(annotation_results)} annotated variants | "
-                        f"{len(set(self._rsid_gene_map.values()))} unique genes in map")
-            logger.info(f"  BigQuery sources: {sorted(enabled_bq) if enabled_bq else 'none enabled'}")
-            phase_start = time.time()
-            with tracer.start_as_current_span("analysis.phase3.bigquery_enrichment") as span:
-                span.set_attribute("annotation.count", len(annotation_results))
-                await self._bulk_enrich_bigquery(annotation_results, analysis_id, progress)
-            phase_elapsed = time.time() - phase_start
-            progress.phase_progress = 1.0
-            logger.info(f"═══ Phase 3/4 complete ({phase_elapsed:.1f}s) ═══")
 
-            # ── Phase 3.5: Multi-source mapping enrichment ──────────
-            # Cross-reference annotated variants against multi-source
-            # categorizer to discover new mappings from user's data.
-            ms_start = time.time()
-            new_mappings = await self._enrich_mappings_from_annotations(
-                annotation_results
+            await self._run_phase3_enrichment(analysis_id, annotation_results, progress)
+            insights_generated = await self._run_phase4_insights(
+                analysis_id, variants, annotation_results, progress,
             )
-            if new_mappings > 0:
-                # Reload registry to include newly created mappings
-                await self._load_registry()
-                logger.info(f"  Multi-source enrichment: {new_mappings} new mappings "
-                            f"({time.time() - ms_start:.1f}s), registry reloaded")
-
-            # ── Phase 4: Generate insights (own session, committed at end) ──
-            progress.phase = 4
-            progress.phase_progress = 0.0
-            progress.current_step = "generating_insights"
-            await self._update_progress(analysis_id, progress)
-            # Count how many annotations have real data for context
-            annotated_with_data = sum(1 for ar in annotation_results.values()
-                                      if ar.annotation_data and ar.annotation_data.get('annotations'))
-            logger.info("═══ Phase 4/4: Generating insights ═══")
-            logger.info(f"  Input: {annotated_with_data}/{len(annotation_results)} variants with annotation data")
-            phase_start = time.time()
-
-            with tracer.start_as_current_span("analysis.phase4.generate_insights") as span:
-                insights_generated = await self._generate_comprehensive_insights(
-                    variants, annotation_results, analysis_id, None, progress
-                )
-                span.set_attribute("insights.generated", insights_generated)
-            phase_elapsed = time.time() - phase_start
-            logger.info(f"═══ Phase 4/4 complete ({phase_elapsed:.1f}s) ═══")
-            logger.info(f"  Total insights: {insights_generated} | "
-                        f"Rate: {insights_generated / max(0.1, phase_elapsed):.0f} insights/sec")
-
-            progress.current_step = "completed"
-            progress.status = "completed"
-            progress.processed_variants = len(variants)
-            progress.phase = 4
-            progress.phase_progress = 1.0
-            await self._update_progress(analysis_id, progress, force_percentage=100)
-
-            # Invalidate dashboard cache so next load picks up new results
-            try:
-                async with async_session_factory() as inv_session:
-                    await inv_session.execute(
-                        DashboardCache.__table__.delete().where(
-                            DashboardCache.user_id == analysis.user_id
-                        )
-                    )
-                    await inv_session.commit()
-            except Exception:
-                logger.debug("Dashboard cache invalidation skipped (table may not exist yet)")
+            await self._finalize_analysis(analysis_id, analysis, variants, progress)
 
             processing_time = time.time() - start_time
-
             root_span.set_attribute("analysis.processing_time_s", round(processing_time, 2))
             root_span.set_attribute("analysis.variants_processed", len(variants))
-            root_span.set_attribute("analysis.insights_generated", insights_generated)
-
-            logger.info("╔══════════════════════════════════════════╗")
-            logger.info(f"║  Analysis {analysis_id} completed in {processing_time:.1f}s")
-            logger.info(f"║  Variants: {len(variants)} total, {len(annotation_results)} annotated")
-            logger.info(f"║  Annotations: {progress.reused_annotations} reused, {progress.new_annotations} new")
-            logger.info(f"║  Gene map: {len(self._rsid_gene_map)} RSIDs → {len(set(self._rsid_gene_map.values()))} genes")
-            logger.info(f"║  Insights: {insights_generated} generated")
-            logger.info(f"║  Throughput: {len(variants) / max(0.1, processing_time):.0f} variants/sec overall")
-            logger.info("╚══════════════════════════════════════════╝")
+            logger.info(f"Analysis {analysis_id} completed in {processing_time:.1f}s — "
+                        f"{len(variants)} variants, {insights_generated} insights")
 
             return {
-                "success": True,
-                "analysis_id": analysis_id,
-                "status": "completed",
-                "processed_variants": len(variants),
-                "total_variants": len(variants),
+                "success": True, "analysis_id": analysis_id, "status": "completed",
+                "processed_variants": len(variants), "total_variants": len(variants),
                 "reused_annotations": progress.reused_annotations,
                 "new_annotations": progress.new_annotations,
                 "insights_generated": insights_generated,
-                "processing_time": processing_time
+                "processing_time": processing_time,
             }
 
         except AnalysisCancelled as e:
             root_span.set_attribute("analysis.cancelled", True)
-            logger.info(f"Analysis {analysis_id} was cancelled: {e}")
-            # Status already set by user action (paused/stopped) — don't overwrite
-            return {
-                "success": False,
-                "analysis_id": analysis_id,
-                "status": "cancelled",
-                "error": str(e),
-                "processing_time": time.time() - start_time
-            }
+            logger.info(f"Analysis {analysis_id} cancelled: {e}")
+            return {"success": False, "analysis_id": analysis_id, "status": "cancelled",
+                    "error": str(e), "processing_time": time.time() - start_time}
 
         except Exception as e:
             root_span.record_exception(e)
-            root_span.set_attribute("error", True)
-            logger.error(f"Analysis {analysis_id} failed: {str(e)}", exc_info=True)
+            logger.error(f"Analysis {analysis_id} failed: {e}", exc_info=True)
             try:
                 await self._update_analysis_status(analysis_id, "failed", f"Failed: {str(e)}")
-            except Exception:
-                pass
-            return {
-                "success": False,
-                "analysis_id": analysis_id,
-                "status": "failed",
-                "error": str(e),
-                "processing_time": time.time() - start_time
-            }
+            except Exception as status_update_error:
+                # The failure above is already returned to the caller; if we can't
+                # even persist "failed" status, log it so a stuck "processing" row
+                # in the DB can be traced back to this secondary failure.
+                logger.warning(
+                    f"Could not persist failed status for analysis {analysis_id}: {status_update_error}"
+                )
+            return {"success": False, "analysis_id": analysis_id, "status": "failed",
+                    "error": str(e), "processing_time": time.time() - start_time}
 
         finally:
             otel_context.detach(_ctx_token)
             root_span.end()
-            # Persist logs to DB before clearing from memory
-            try:
-                logs = log_collector.get_logs(analysis_id)
-                if logs:
-                    from ..db.database import async_session_factory
-                    async with async_session_factory() as session:
-                        await session.execute(
-                            update(GeneticAnalysis)
-                            .where(GeneticAnalysis.id == analysis_id)
-                            .values(job_logs=logs)
-                        )
-                        await session.commit()
-            except Exception as e:
-                logger.debug(f"Failed to persist job logs: {e}")
-            log_collector.clear_active_job()
-            try:
-                if self.api_service:
-                    await self.api_service.close()
-            except Exception:
-                pass
-            try:
-                from .bq_public import get_bq_public_service
-                get_bq_public_service().clear_gene_cache(analysis_id)
-            except Exception:
-                pass
+            await self._persist_logs_and_cleanup(analysis_id, log_collector)
+
+    def _empty_result(self, analysis_id: int) -> Dict[str, Any]:
+        return {"success": True, "analysis_id": analysis_id, "status": "completed",
+                "processed_variants": 0, "total_variants": 0, "message": "No variants found"}
+
+    def _initial_progress(self, variant_count: int) -> AnalysisProgress:
+        return AnalysisProgress(
+            total_variants=variant_count, processed_variants=0,
+            annotated_variants=0, new_annotations=0, reused_annotations=0,
+            current_step="classifying_variants", status="processing",
+            phase=1, phase_progress=0.0,
+        )
+
+    async def _run_phase1_gene_map(self, analysis_id: int, variants, progress):
+        logger.info(f"Phase 1/4: Building gene map for {len(variants)} variants")
+        with tracer.start_as_current_span("analysis.phase1.build_gene_map") as span:
+            span.set_attribute("variant.count", len(variants))
+            await self._build_rsid_gene_map(variants)
+        progress.phase = 1
+        progress.phase_progress = 1.0
+        logger.info(f"Phase 1/4 complete: {len(self._rsid_gene_map)} genes mapped")
+
+    async def _run_phase2_annotations(self, analysis_id, variants, progress):
+        from ..db.database import async_session_factory
+
+        progress.phase = 2
+        progress.phase_progress = 0.0
+        progress.current_step = "annotating_variants"
+        await self._update_progress(analysis_id, progress)
+        logger.info("Phase 2/4: Annotating variants")
+
+        with tracer.start_as_current_span("analysis.phase2.annotate_variants") as span:
+            span.set_attribute("variant.count", len(variants))
+            annotation_service = SharedVariantAnnotationService()
+            annotation_results = await self._annotate_variants_efficiently(
+                variants, analysis_id, annotation_service, progress,
+                update_progress_fn=self._update_progress,
+            )
+            span.set_attribute("annotation.reused", progress.reused_annotations)
+            span.set_attribute("annotation.new", progress.new_annotations)
+
+        progress.phase_progress = 1.0
+        logger.info(f"Phase 2/4 complete: reused={progress.reused_annotations}, "
+                     f"new={progress.new_annotations}")
+        return annotation_results
+
+    async def _run_phase3_enrichment(self, analysis_id, annotation_results, progress):
+        progress.phase = 3
+        progress.phase_progress = 0.0
+        progress.current_step = "enriching_data"
+        await self._update_progress(analysis_id, progress)
+        total_variants = len(annotation_results)
+        logger.info(f"Phase 3/4: BigQuery + Open Targets enrichment ({total_variants} variants)")
+
+        with tracer.start_as_current_span("analysis.phase3.bigquery_enrichment"):
+            logger.info("Phase 3/4 [1/3]: Starting BigQuery enrichment (ChEMBL, FDA Drug)")
+            await self._bulk_enrich_bigquery(annotation_results, analysis_id, progress)
+            logger.info("Phase 3/4 [1/3]: BigQuery enrichment complete")
+
+        with tracer.start_as_current_span("analysis.phase3.open_targets"):
+            logger.info("Phase 3/4 [2/3]: Starting Open Targets enrichment")
+            await self._bulk_enrich_open_targets(annotation_results)
+            logger.info("Phase 3/4 [2/3]: Open Targets enrichment complete")
+
+        logger.info("Phase 3/4 [3/3]: Enriching mappings from annotations")
+        new_mappings = await self._enrich_mappings_from_annotations(annotation_results)
+        if new_mappings > 0:
+            await self._load_registry()
+            logger.info(f"Phase 3/4 [3/3]: {new_mappings} new multi-source mappings discovered")
+
+        logger.info("Phase 3/4: complete")
+        progress.phase_progress = 1.0
+
+    async def _run_phase4_insights(self, analysis_id, variants, annotation_results, progress):
+        progress.phase = 4
+        progress.phase_progress = 0.0
+        progress.current_step = "generating_insights"
+        await self._update_progress(analysis_id, progress)
+        logger.info("Phase 4/4: Generating insights")
+
+        with tracer.start_as_current_span("analysis.phase4.generate_insights") as span:
+            insights_generated = await self._generate_comprehensive_insights(
+                variants, annotation_results, analysis_id, None, progress,
+            )
+            span.set_attribute("insights.generated", insights_generated)
+
+        logger.info(f"Phase 4/4 complete: {insights_generated} insights generated")
+        return insights_generated
+
+    async def _finalize_analysis(self, analysis_id, analysis, variants, progress):
+        progress.current_step = "completed"
+        progress.status = "completed"
+        progress.processed_variants = len(variants)
+        progress.phase = 4
+        progress.phase_progress = 1.0
+        await self._update_progress(analysis_id, progress, force_percentage=100)
+
+        try:
+            from ..db.database import async_session_factory
+            async with async_session_factory() as inv_session:
+                await inv_session.execute(
+                    DashboardCache.__table__.delete().where(
+                        DashboardCache.user_id == analysis.user_id
+                    )
+                )
+                await inv_session.commit()
+        except Exception as e:
+            # Best-effort: the analysis itself already completed successfully
+            # above, so a stale dashboard cache is a display-lag issue only.
+            logger.warning(f"Dashboard cache invalidation failed for analysis {analysis_id}: {e}")
+
+    async def _persist_logs_and_cleanup(self, analysis_id: int, log_collector):
+        # Everything below is post-completion housekeeping: the analysis's
+        # annotations/insights are already committed, so failures here are
+        # logged and swallowed rather than turned into a failed analysis.
+        try:
+            logs = log_collector.get_logs(analysis_id)
+            if logs:
+                from ..db.database import async_session_factory
+                async with async_session_factory() as session:
+                    await session.execute(
+                        update(GeneticAnalysis)
+                        .where(GeneticAnalysis.id == analysis_id)
+                        .values(job_logs=logs)
+                    )
+                    await session.commit()
+        except Exception as e:
+            logger.warning(f"Failed to persist job_logs for analysis {analysis_id}: {e}")
+        log_collector.clear_active_job()
+        try:
+            if self.api_service:
+                await self.api_service.close()
+        except Exception as e:
+            logger.warning(f"Failed to close api_service for analysis {analysis_id}: {e}")
+        try:
+            from .bq_public import get_bq_public_service
+            get_bq_public_service().clear_gene_cache(analysis_id)
+        except Exception as e:
+            logger.warning(f"Failed to clear gene cache for analysis {analysis_id}: {e}")
 
     # ------------------------------------------------------------------
     # Delegated method stubs
@@ -517,6 +462,59 @@ class ComprehensiveAnalysisService:
             update_progress_fn=self._update_progress,
         )
 
+    async def _bulk_enrich_open_targets(self, annotation_results):
+        """Enrich annotations with Open Targets gene-disease associations."""
+        from .open_targets_service import get_open_targets_service
+        from ..db.database import async_session_factory
+        from ..db.models import SharedVariantAnnotation
+
+        ot_service = get_open_targets_service()
+        genes_seen: dict = {}
+        gene_to_rsids: dict = {}
+
+        for rsid, ar in annotation_results.items():
+            gene = self._rsid_gene_map.get(rsid)
+            if not gene:
+                continue
+            existing_ot = ar.annotation_data.get('annotations', {}).get('open_targets')
+            if existing_ot and isinstance(existing_ot, dict) and existing_ot.get('found'):
+                continue
+            gene_to_rsids.setdefault(gene, []).append(rsid)
+
+        unique_genes = list(gene_to_rsids.keys())
+        if not unique_genes:
+            logger.info("Open Targets: no genes to enrich, skipping")
+            return
+
+        logger.info(f"Open Targets: querying {len(unique_genes)} unique genes")
+        results = await ot_service.lookup_genes_batch(unique_genes)
+        enriched = 0
+        found_genes = sum(1 for d in results.values() if d and d.get('found'))
+        logger.info(f"Open Targets: {found_genes}/{len(unique_genes)} genes had data, persisting...")
+
+        async with async_session_factory() as session:
+            for gene, ot_data in results.items():
+                if not ot_data or not ot_data.get('found'):
+                    continue
+                for rsid in gene_to_rsids.get(gene, []):
+                    ar = annotation_results.get(rsid)
+                    if ar and ar.annotation_data:
+                        ar.annotation_data.setdefault('annotations', {})['open_targets'] = ot_data
+                        enriched += 1
+
+                first_rsid = gene_to_rsids[gene][0] if gene_to_rsids.get(gene) else None
+                if first_rsid:
+                    from sqlalchemy import update
+                    await session.execute(
+                        update(SharedVariantAnnotation)
+                        .where(SharedVariantAnnotation.rsid == first_rsid)
+                        .values(open_targets_data=ot_data)
+                    )
+            if enriched:
+                await session.commit()
+
+        logger.info(f"Open Targets: done — {enriched} variants enriched across {found_genes} genes")
+
     async def _enrich_mappings_from_annotations(
         self, annotation_results: Dict,
     ) -> int:
@@ -525,14 +523,22 @@ class ComprehensiveAnalysisService:
         Scans annotation_results (already fetched during Phase 2/3) and runs
         the multi-source categorizer on each. New mappings are created directly,
         so the insight generator in Phase 4 can use them.
+
+        Loads condition hints from clinvar_gene_conditions and ensembl_genes so
+        that variants without ClinVar data still get meaningful condition names
+        instead of generic "{gene} variant".
         """
         from ..db.database import async_session_factory
         from ..db.models import VariantMapping
-        from .multi_source_categorizer import categorize_variant
+        from .multi_source_categorizer import categorize_variant, load_condition_hints
         from sqlalchemy.dialects.postgresql import insert as pg_insert
 
         new_mappings = 0
         batch_count = 0
+
+        # Pre-load condition hints for all genes in the rsid→gene map
+        all_genes = list(set(self._rsid_gene_map.values()))
+        condition_hints = await load_condition_hints(all_genes)
 
         async with async_session_factory() as session:
             for rsid, ar in annotation_results.items():
@@ -545,9 +551,12 @@ class ComprehensiveAnalysisService:
                 # Get gene from rsid→gene map
                 gene_hint = self._rsid_gene_map.get(rsid)
 
-                suggestions = categorize_variant(rsid, annotations, gene_hint=gene_hint)
+                suggestions = categorize_variant(
+                    rsid, annotations, gene_hint=gene_hint,
+                    condition_hints=condition_hints,
+                )
                 for s in suggestions:
-                    if s.confidence < 0.4:
+                    if s.confidence < 0.5:
                         continue
                     stmt = pg_insert(VariantMapping).values(
                         category=s.category,
@@ -571,8 +580,8 @@ class ComprehensiveAnalysisService:
                         result = await session.execute(stmt)
                         if result.rowcount > 0:
                             new_mappings += 1
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("Failed to upsert variant_mapping for %s: %s", rsid, e)
 
                 batch_count += 1
                 if batch_count % 5000 == 0:
@@ -592,6 +601,7 @@ class ComprehensiveAnalysisService:
             self._rsid_gene_map, self._registry, progress,
             check_cancelled_fn=self._check_if_cancelled,
             update_progress_fn=self._update_progress,
+            inferred_sex=getattr(self, '_inferred_sex', None),
         )
 
     async def regenerate_insights(self, analysis_id: int) -> Dict[str, Any]:
@@ -605,42 +615,28 @@ class ComprehensiveAnalysisService:
 
     async def _update_progress(self, analysis_id: int, progress: AnalysisProgress,
                                *, force_percentage: Optional[int] = None):
-        try:
-            from ..db.database import async_session_factory
-            pct = force_percentage if force_percentage is not None else progress.progress_percentage
-
-            async with async_session_factory() as session:
-                # Single UPDATE with status guard — no separate SELECT needed
-                await session.execute(
-                    update(GeneticAnalysis)
-                    .where(
-                        GeneticAnalysis.id == analysis_id,
-                        GeneticAnalysis.analysis_status.notin_(['paused', 'stopped']),
-                    )
-                    .values(
-                        progress_percentage=pct,
-                        processed_variants=progress.processed_variants,
-                        current_step=progress.current_step,
-                        analysis_status=progress.status,
-                        estimated_completion=progress.estimated_completion
-                    )
-                )
-                await session.commit()
-        except Exception as e:
-            logger.error(f"Failed to update progress: {e}")
+        pct = force_percentage if force_percentage is not None else progress.progress_percentage
+        await self._update_db(
+            analysis_id,
+            progress_percentage=pct,
+            processed_variants=progress.processed_variants,
+            current_step=progress.current_step,
+            analysis_status=progress.status,
+            estimated_completion=progress.estimated_completion,
+            guard_paused=True,
+        )
 
     async def _update_analysis_status(self, analysis_id: int, status: str, step: str):
+        await self._update_db(analysis_id, analysis_status=status, current_step=step)
+
+    async def _update_db(self, analysis_id: int, *, guard_paused: bool = False, **values):
         try:
             from ..db.database import async_session_factory
             async with async_session_factory() as session:
-                await session.execute(
-                    update(GeneticAnalysis)
-                    .where(GeneticAnalysis.id == analysis_id)
-                    .values(
-                        analysis_status=status,
-                        current_step=step
-                    )
-                )
+                q = update(GeneticAnalysis).where(GeneticAnalysis.id == analysis_id)
+                if guard_paused:
+                    q = q.where(GeneticAnalysis.analysis_status.notin_(['paused', 'stopped']))
+                await session.execute(q.values(**values))
                 await session.commit()
         except Exception as e:
-            logger.error(f"Failed to update status: {e}")
+            logger.error(f"Failed to update analysis {analysis_id}: {e}")

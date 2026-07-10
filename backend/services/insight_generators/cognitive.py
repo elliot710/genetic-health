@@ -1,16 +1,40 @@
 """Cognitive profile insight generator."""
 from ...db.models import CognitiveProfile
-from .base import GeneratorContext, generate_from_maps, is_heterozygous, is_homozygous_reference, is_no_call_genotype
+from .base import (
+    GeneratorContext, generate_from_maps, is_heterozygous,
+    is_homozygous_reference, is_no_call_genotype, is_indel_genotype,
+)
+
+
+def _adjust_percentile(percentile: int, genotype, ref_allele) -> int:
+    """Apply zygosity-aware percentile adjustment.
+
+    - hom-ref / missing: -10 (user carries no risk allele)
+    - het (one copy): +5 (intermediate dosage effect)
+    - hom-alt (two copies): +10 (full dosage effect)
+
+    Using a step ratio of 0.5/1.0 between het and hom-alt is consistent
+    with additive genetic models: one copy confers half the effect of two.
+    """
+    if not genotype or is_homozygous_reference(genotype, ref_allele):
+        return max(1, percentile - 10)
+    if is_heterozygous(genotype):
+        return min(99, percentile + 5)
+    # Homozygous non-reference: apply the full-dosage boost ONLY when we can
+    # confirm non-reference (ref known, resolvable nucleotide homozygote).
+    # With an unknown reference or an indel D/I code we cannot distinguish
+    # hom-alt from hom-ref, so hold baseline rather than fabricating a boost
+    # from missing data (U3/U4/KTD3 — conservative policy).
+    if ref_allele and not is_indel_genotype(genotype):
+        return min(99, percentile + 10)
+    return percentile
 
 
 async def generate_cognitive_profiles(ctx: GeneratorContext) -> int:
     def from_rsid(aid, rsid, genotype, info):
-        percentile = info['percentile']
-        if is_homozygous_reference(genotype, info.get('_ref_allele')) or not genotype:
-            percentile = max(1, percentile - 10)
-        elif not is_heterozygous(genotype):
-            # Homozygous alternate — stronger effect
-            percentile = min(99, percentile + 10)
+        percentile = _adjust_percentile(
+            info['percentile'], genotype, info.get('_ref_allele')
+        )
         return CognitiveProfile(
             analysis_id=aid, cognitive_domain=info['domain'],
             genetic_score=info['score'], percentile=percentile,
@@ -24,12 +48,7 @@ async def generate_cognitive_profiles(ctx: GeneratorContext) -> int:
         percentile = info['percentile']
         if consequence in ('missense_variant', 'stop_gained'):
             percentile = min(95, percentile + 10)
-        # Apply zygosity adjustment to percentile
-        if genotype and ref_allele:
-            if is_homozygous_reference(genotype, ref_allele):
-                percentile = max(1, percentile - 10)
-            elif not is_heterozygous(genotype):
-                percentile = min(99, percentile + 10)
+        percentile = _adjust_percentile(percentile, genotype or None, ref_allele)
         return CognitiveProfile(
             analysis_id=aid, cognitive_domain=info['domain'],
             genetic_score=info['score'], percentile=percentile,
@@ -41,5 +60,6 @@ async def generate_cognitive_profiles(ctx: GeneratorContext) -> int:
     return await generate_from_maps(
         ctx, rsid_map=rsid_map, gene_map=gene_map,
         dedup_field='domain',
-        build_from_rsid=from_rsid, build_from_gene=from_gene
+        build_from_rsid=from_rsid, build_from_gene=from_gene,
+        max_population_af=0.20,
     )

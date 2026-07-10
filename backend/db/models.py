@@ -12,9 +12,11 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, index=True, nullable=False)
     username = Column(String, unique=True, index=True, nullable=False)
-    hashed_password = Column(String, nullable=False)
+    hashed_password = Column(String, nullable=True)
     full_name = Column(String)
     avatar_url = Column(String, nullable=True)
+    google_id = Column(String, unique=True, nullable=True, index=True)
+    auth_provider = Column(String(20), default="local", nullable=False)
     is_active = Column(Boolean, default=True)
     is_verified = Column(Boolean, default=False)
     is_admin = Column(Boolean, default=False)
@@ -22,7 +24,7 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Relationship to genetic analyses
-    genetic_analyses = relationship("GeneticAnalysis", back_populates="user")
+    genetic_analyses = relationship("GeneticAnalysis", back_populates="user", cascade="all, delete-orphan")
     saved_variants = relationship("SavedVariant", back_populates="user", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     # Notification preferences — JSON map of type → bool, e.g. {"analysis_completed": true}
@@ -98,7 +100,7 @@ class GeneticAnalysis(Base):
     __tablename__ = "genetic_analyses"
     
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     filename = Column(String, nullable=False)
     file_type = Column(String, nullable=False)  # 'vcf' or 'csv'
     analysis_results = Column(JSON)  # Store the complete analysis results
@@ -117,7 +119,8 @@ class GeneticAnalysis(Base):
     
     # Persisted job logs (JSON array of {ts, level, msg} entries)
     job_logs = Column(JSON, nullable=True)
-    
+    inferred_sex = Column(String(10), nullable=True)  # 'male', 'female', 'unknown'
+
     # Relationship to user
     user = relationship("User", back_populates="genetic_analyses")
     
@@ -136,7 +139,7 @@ class GeneticMarker(Base):
     chromosome = Column(String, nullable=False)
     position = Column(Integer, nullable=False)
     ref_allele = Column(String, nullable=False)
-    alt_alleles = Column(String)  # Comma-separated list of all observed alt alleles
+    alt_alleles = Column(String, nullable=False, default='')  # Comma-separated list of all observed alt alleles
     gene_symbol = Column(String(50))  # Cached gene symbol (PERF-04) — filled after first analysis
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -160,10 +163,10 @@ class AnalysisVariant(Base):
     marker_id = Column(Integer, ForeignKey("genetic_markers.id"), nullable=False)
     
     # User-specific data (genotype varies per person)
-    genotype = Column(String)
+    genotype = Column(String, nullable=False, default='./.')
     quality = Column(String)
     filter_status = Column(String)
-    info = Column(JSON)
+    info = Column(JSON, nullable=False, default=dict)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # Relationships
@@ -205,7 +208,7 @@ class HealthRisk(Base):
     analysis_id = Column(Integer, ForeignKey("genetic_analyses.id", ondelete="CASCADE"), nullable=False)
     condition = Column(String, nullable=False)
     risk_level = Column(String, nullable=False)  # 'low', 'moderate', 'high'
-    risk_score = Column(String)
+    risk_score = Column(Float, nullable=True)
     associated_variants = Column(JSON)  # List of variant IDs
     recommendations = Column(JSON)  # List of recommendations
     gene = Column(String(100))  # Gene symbol (FE-01)
@@ -305,6 +308,7 @@ class CarrierStatus(Base):
     inheritance_pattern = Column(String)  # 'autosomal_recessive', 'x-linked', etc.
     associated_variants = Column(JSON)
     genetic_counseling_recommended = Column(Boolean, default=False)
+    gene = Column(String, nullable=True)
 
 class WellnessMetric(Base):
     __tablename__ = "wellness_metrics"
@@ -363,6 +367,9 @@ class SharedVariantAnnotation(Base):
     chembl_data = Column(JSON)  # ChEMBL drug mechanisms, indications, warnings (BigQuery)
     fda_drug_data = Column(JSON)  # FDA drug label CYP interactions (BigQuery)
     alphafold_data = Column(JSON)  # AlphaFold protein structure confidence (BigQuery)
+    gwas_catalog_data = Column(JSON)  # GWAS Catalog trait associations (local TSV)
+    clingen_data = Column(JSON)  # ClinGen gene validity classifications (local TSV)
+    open_targets_data = Column(JSON)  # Open Targets Platform gene-disease association scores (API)
     
     # Metadata for tracking and reuse
     first_annotated_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -903,6 +910,36 @@ class ThousandGenomesVariant(Base):
     )
 
 
+class GnomadV2Variant(Base):
+    """gnomAD v2.1.1 exome variant — population AFs from per-chromosome VCFs (GRCh37).
+    Primary lookup table for gnomAD population frequency data."""
+    __tablename__ = "gnomad_v2_variants"
+
+    id = Column(BigInteger, primary_key=True)
+    chrom = Column(String, nullable=False)
+    pos = Column(Integer, nullable=False)
+    ref = Column(String, nullable=False)
+    alt = Column(String, nullable=False)
+    rsid = Column(String)
+    af = Column(Float)
+    af_afr = Column(Float)
+    af_amr = Column(Float)
+    af_eas = Column(Float)
+    af_nfe = Column(Float)
+    af_sas = Column(Float)
+    af_fin = Column(Float)
+    af_asj = Column(Float)
+    ac = Column(Integer)
+    an = Column(Integer)
+    data_source = Column(String, default='gnomad_v2_vcf')
+    imported_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index('ix_gnomad_v2_rsid', 'rsid'),
+        Index('ix_gnomad_v2_chrom_pos', 'chrom', 'pos'),
+    )
+
+
 class DashboardCache(Base):
     """Pre-computed dashboard JSON per user.
 
@@ -935,6 +972,7 @@ class WorkerJob(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+    job_logs = Column(JSON, nullable=True)
 
     __table_args__ = (
         Index('ix_worker_jobs_status', 'status'),
@@ -958,4 +996,61 @@ class AiInsightCache(Base):
     cache_key = Column(String, unique=True, nullable=False, index=True)
     result = Column(JSON, nullable=False)
     provider = Column(String, nullable=True)
-    generated_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class GwasCatalogAssociation(Base):
+    """GWAS Catalog variant-trait associations imported from the EBI full download."""
+    __tablename__ = 'gwas_catalog_associations'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    rsid = Column(Text, nullable=True, index=True)
+    pubmed_id = Column(Text, nullable=True)
+    study_accession = Column(Text, nullable=True)
+    trait = Column(Text, nullable=True)
+    mapped_trait = Column(Text, nullable=True)
+    mapped_trait_uri = Column(Text, nullable=True)
+    reported_genes = Column(Text, nullable=True)
+    mapped_genes = Column(Text, nullable=True)
+    p_value = Column(Float, nullable=True)
+    p_value_mlog = Column(Float, nullable=True)
+    or_beta = Column(Float, nullable=True)
+    ci_text = Column(Text, nullable=True)
+    risk_allele_frequency = Column(Float, nullable=True)
+    strongest_snp_risk_allele = Column(Text, nullable=True)
+    chromosome = Column(Text, nullable=True)
+    chromosome_position = Column(Integer, nullable=True)
+    context = Column(Text, nullable=True)
+    imported_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index('ix_gwas_catalog_rsid', 'rsid'),
+    )
+
+
+class ClinGenGeneValidity(Base):
+    """ClinGen gene-disease validity classifications."""
+    __tablename__ = 'clingen_gene_validity'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    gene_symbol = Column(String(64), nullable=False, index=True)
+    gene_hgnc_id = Column(String(32), nullable=True)
+    disease_label = Column(Text, nullable=True)
+    disease_mondo_id = Column(String(32), nullable=True)
+    moi = Column(String(64), nullable=True)
+    classification = Column(String(64), nullable=True)
+    classification_date = Column(String(32), nullable=True)
+    gcep = Column(Text, nullable=True)
+    report_url = Column(Text, nullable=True)
+    imported_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index('ix_clingen_gene_symbol', 'gene_symbol'),
+    )
+
+
+class OpenTargetsCache(Base):
+    __tablename__ = 'open_targets_cache'
+
+    gene_symbol = Column(String(50), primary_key=True)
+    data = Column(JSON, nullable=False)
+    fetched_at = Column(DateTime(timezone=True), server_default=func.now())

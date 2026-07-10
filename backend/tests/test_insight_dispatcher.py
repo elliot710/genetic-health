@@ -1,0 +1,53 @@
+import logging
+
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from backend.services.analysis_service import AnalysisProgress
+from backend.services.insight_dispatcher import generate_comprehensive_insights
+
+
+def _mock_session_ctx():
+    mock_session = MagicMock()
+    mock_session.execute = AsyncMock()
+    mock_session.commit = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=mock_session)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return ctx
+
+
+def _make_progress():
+    return AnalysisProgress(
+        total_variants=0, processed_variants=0, annotated_variants=0,
+        new_annotations=0, reused_annotations=0,
+        current_step="generating_insights", status="processing",
+    )
+
+
+class TestGeneratorFaultIsolation:
+    @pytest.mark.asyncio
+    async def test_generator_exception_is_logged_with_name_and_others_still_run(self, caplog):
+        async def ok_generator(ctx):
+            return 3
+
+        async def boom_generator(ctx):
+            raise RuntimeError("synthetic generator failure")
+
+        fake_generators = [("boom_panel", boom_generator), ("ok_panel", ok_generator)]
+
+        with patch("backend.services.insight_dispatcher.async_session_factory",
+                   return_value=_mock_session_ctx()), \
+             patch("backend.services.insight_dispatcher.delete"), \
+             patch("backend.services.insight_dispatcher.ALL_GENERATORS", fake_generators), \
+             patch("backend.services.insight_dispatcher.build_variant_profiles",
+                   AsyncMock(return_value={})), \
+             caplog.at_level(logging.ERROR, logger="backend.services.insight_dispatcher"):
+            total_insights = await generate_comprehensive_insights(
+                variants=[], annotation_results={}, analysis_id=1,
+                rsid_gene_map={}, registry={}, progress=_make_progress(),
+            )
+
+        # ok_panel's insights are not dropped just because boom_panel failed
+        assert total_insights == 3
+        assert any("boom_panel" in r.message for r in caplog.records)

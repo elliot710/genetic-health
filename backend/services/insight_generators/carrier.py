@@ -5,7 +5,7 @@ from .base import (
     GeneratorContext, get_user_genotype, get_ref_allele,
     is_homozygous_reference, is_heterozygous, is_no_call_genotype,
     is_indel_genotype, _parse_alleles, indel_d_is_ref,
-    get_annotation_allele_parts,
+    get_annotation_allele_parts, is_clinvar_benign, extract_frequency,
 )
 
 logger = logging.getLogger(__name__)
@@ -104,6 +104,13 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
 
         # Registry-based matching
         if variant_rsid in carrier_rsid_map:
+            # RC-5: Skip variants where all sources agree benign
+            if is_clinvar_benign(annotation_result):
+                continue
+            # Skip common variants (AF > 5%) unless ClinVar pathogenic
+            _freq = extract_frequency(annotation_result)
+            if _freq and _freq > 0.05:
+                continue
             info = carrier_rsid_map[variant_rsid]
             cond = info['condition']
             if cond not in seen_conditions:
@@ -120,13 +127,19 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
                 if actual_status == 'unaffected':
                     seen_conditions.discard(cond)
                     continue
+                # Resolve gene symbol from registry info, annotation, or marker
+                reg_gene = info.get('gene', '')
+                if not reg_gene:
+                    mkr = getattr(variant, 'marker', None)
+                    reg_gene = getattr(mkr, 'gene_symbol', '') or ''
                 carrier_results.append(CarrierStatus(
                     analysis_id=ctx.analysis_id,
                     condition=cond,
                     carrier_status=actual_status,
                     inheritance_pattern=info.get('inheritance', 'autosomal_recessive'),
                     associated_variants=[variant_rsid],
-                    genetic_counseling_recommended=info.get('counseling', False)
+                    genetic_counseling_recommended=info.get('counseling', False),
+                    gene=reg_gene or None,
                 ))
 
         # ClinVar-local annotation-based discovery
@@ -193,7 +206,8 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
             carrier_status=status,
             inheritance_pattern=inheritance,
             associated_variants=[variant_rsid],
-            genetic_counseling_recommended=needs_counseling
+            genetic_counseling_recommended=needs_counseling,
+            gene=gene_name or None,
         ))
 
     # Prioritize counseling-recommended conditions

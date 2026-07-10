@@ -10,9 +10,12 @@ import {
   SectionCard,
   StatusBadge,
   DisclaimerCard,
-  VariantLinks,
-  PathogenicityBar,
-  ZygosityBadge,
+  VariantInfoBox,
+  GeneContextBox,
+  AlphaFoldDetailBox,
+  AlphaFoldBadge,
+  GeneBurdenStrip,
+  ClickableRsidBadge,
   capacityToSeverity,
   formatLabel,
   MasonryLayout,
@@ -209,37 +212,41 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
           {items.map((trait, index) => {
             const itemKey = `wellness-${index}`
             const isExpanded = selectedItem === itemKey
+            const resolvedGene = (trait.gene && trait.gene !== 'Multiple') ? trait.gene : (trait.associated_variants?.[0] ? data?.gene_symbol_map?.[trait.associated_variants[0]] : undefined)
             return (
               <div
                 key={index}
-                className={`${theme.glass} border ${theme.border} rounded-xl p-5 cursor-pointer hover:border-green-500/50 transition-all duration-300`}
+                className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 cursor-pointer hover:border-green-500/50 transition-all duration-300 overflow-hidden`}
                 onClick={() => setSelectedItem(isExpanded ? null : itemKey)}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-3">
-                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{cleanCondition(trait.name)}</h4>
-                    <StatusBadge
-                      label={formatLabel(trait.value)}
-                      severity={capacityToSeverity(trait.value)}
-                    />
-                  </div>
-                  <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
+                <div className="flex items-start justify-between mb-1 gap-1">
+                  <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug flex-1 min-w-0`}>{cleanCondition(trait.name)}</h4>
+                  <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap gap-1">
+                  <StatusBadge
+                    label={formatLabel(trait.value)}
+                    severity={capacityToSeverity(trait.value)}
+                  />
                   {trait.associated_variants && trait.associated_variants.length > 0
                     ? trait.associated_variants.map((v, i) => (
-                        <React.Fragment key={i}>
-                          <Badge variant="secondary" className="text-xs font-mono">{v}{data?.genotype_map?.[v] ? ` ${data.genotype_map[v]}` : ''}</Badge>
-                          <ZygosityBadge genotype={data?.genotype_map?.[v]} />
-                        </React.Fragment>
+                        <ClickableRsidBadge key={i} rsid={v} genotype={data?.genotype_map?.[v]} alleleString={data?.allele_string_map?.[v]} token={token} isDarkMode={isDarkMode} />
                       ))
                     : trait.gene && trait.gene !== 'Multiple' && (
                         <Badge variant="secondary" className="text-xs">{trait.gene}</Badge>
                       )
                   }
                   <Badge variant="outline" className="text-xs">{trait.category}</Badge>
+                  <AlphaFoldBadge
+                    confidence={data?.alphafold_map?.[trait.associated_variants?.[0]]?.confidence}
+                    highPct={data?.alphafold_map?.[trait.associated_variants?.[0]]?.high_confidence_pct}
+                    lowPct={data?.alphafold_map?.[trait.associated_variants?.[0]]?.low_confidence_pct}
+                  />
                 </div>
+                {resolvedGene && data?.gene_stats_map?.[resolvedGene] && (
+                  <GeneBurdenStrip gene={resolvedGene} stats={data.gene_stats_map[resolvedGene]} theme={theme} />
+                )}
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
@@ -259,8 +266,15 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
                       </div>
                     )}
 
-                    {trait.associated_variants?.[0] && <PathogenicityBar rsid={trait.associated_variants[0]} pathogenicityMap={data?.pathogenicity_map} theme={theme} />}
-                    <VariantLinks rsid={trait.associated_variants?.[0]} gene={trait.gene !== 'Multiple' ? trait.gene : undefined} token={token} isDarkMode={isDarkMode} alphaMissense={trait.associated_variants?.[0] ? data?.alpha_missense_map?.[trait.associated_variants[0]] : undefined} clinvarCount={trait.associated_variants?.[0] ? data?.clinvar_count_map?.[trait.associated_variants[0]] : undefined} genotype={trait.associated_variants?.[0] ? data?.genotype_map?.[trait.associated_variants[0]] : undefined} />
+                    <VariantInfoBox rsid={trait.associated_variants?.[0]} gene={resolvedGene} token={token} isDarkMode={isDarkMode} alphaMissense={trait.associated_variants?.[0] ? data?.alpha_missense_map?.[trait.associated_variants[0]] : undefined} clinvarCount={trait.associated_variants?.[0] ? data?.clinvar_count_map?.[trait.associated_variants[0]] : undefined} genotype={trait.associated_variants?.[0] ? data?.genotype_map?.[trait.associated_variants[0]] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
+                    <GeneContextBox gene={resolvedGene} stats={resolvedGene ? data?.gene_stats_map?.[resolvedGene] : undefined} theme={theme} />
+                    {trait.associated_variants?.[0] && data?.alphafold_map?.[trait.associated_variants?.[0]] && (
+                      <AlphaFoldDetailBox
+                        rsid={trait.associated_variants?.[0]}
+                        alphafoldData={data.alphafold_map[trait.associated_variants?.[0]]}
+                        theme={theme}
+                      />
+                    )}
                   </div>
                 )}
               </div>

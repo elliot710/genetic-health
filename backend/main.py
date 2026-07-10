@@ -7,6 +7,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import os
+
 from .api import auth_routes, upload_routes, annotation_routes, variant_routes
 from .api.analysis_routes import router as analysis_router
 from .api.admin_routes import router as admin_router
@@ -14,7 +16,13 @@ from .api.insights_routes import router as insights_router
 from .api.notification_routes import router as notification_ws_router, notification_router
 from .api.sharing_routes import router as sharing_router
 from .core.telemetry import configure_telemetry
-from .db.database import init_db
+from .core.rate_limit import limiter
+from .db.database import init_db, async_session_factory
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+
+logger = logging.getLogger(__name__)
 
 # Configure logging — show INFO from our services
 logging.basicConfig(
@@ -47,6 +55,18 @@ async def lifespan(app: FastAPI):
     # The 'worker' Docker service polls the DB and runs them in a completely
     # separate process so the FastAPI event loop is never touched by analysis code.
     print("🚀 API server started (analysis handled by worker service)")
+
+    # Load categorizer domain data (gene→category map, condition keywords, exclusion
+    # keywords) from the CategoryRule DB table.  Must run after the DB is ready.
+    from .services.multi_source_categorizer import init_categorizer_data
+    try:
+        await init_categorizer_data()
+    except Exception as _e:
+        print(f"⚠️ Categorizer data load failed: {_e} — analysis may use empty gene map")
+
+    # Log which data source files are available on disk with tabix indexes
+    from .services.datasource_utils import log_data_source_availability
+    log_data_source_availability()
 
     # Check ClinVar PG availability (instant — just counts rows)
     from .services.clinvar_local import get_clinvar_local_service
@@ -81,6 +101,20 @@ async def lifespan(app: FastAPI):
             print(f"⚠️ gnomAD cache preload failed: {e}")
     asyncio.create_task(_preload_gnomad_cache())
     print("⏳ gnomAD cache: preloading CADD TSV cache in background...")
+
+    # Initialize gnomAD v2 (ancestry population AFs — GRCh37 VCFs)
+    try:
+        from .services.gnomad_v2_local import get_gnomad_v2_service
+        gnomad_v2_svc = get_gnomad_v2_service()
+        await gnomad_v2_svc.ensure_loaded()
+        if gnomad_v2_svc.is_loaded:
+            print(f"✅ gnomAD v2: {gnomad_v2_svc.file_count} VCF files, {gnomad_v2_svc.indexed_count} tabix-indexed")
+            if gnomad_v2_svc.indexed_count == 0:
+                print("  ↳ Run admin → gnomAD → Refresh ancestry AFs (with index_first=true) to index them")
+        else:
+            print("ℹ️ gnomAD v2: no VCF files found in data_sources/gnomad_v2/")
+    except Exception as e:
+        print(f"⚠️ gnomAD v2 init failed: {e}")
 
     # Check gnomAD BigQuery availability
     try:
@@ -123,7 +157,6 @@ async def lifespan(app: FastAPI):
         while True:
             await asyncio.sleep(86400)  # Run once per day
             try:
-                from .db.database import async_session_factory
                 from sqlalchemy import text as sa_text
                 async with async_session_factory() as s:
                     result = await s.execute(
@@ -156,7 +189,7 @@ async def lifespan(app: FastAPI):
                 async with async_session_factory() as s:
                     # Find recently completed/failed analyses not yet notified
                     rows = await s.execute(
-                        sa_text(
+                        sa_text2(
                             """
                             SELECT a.id, a.user_id, a.analysis_status, a.filename,
                                    a.progress_percentage, a.total_variants
@@ -224,10 +257,22 @@ try:
 except Exception:
     pass  # OTel instrumentation is optional
 
-# Configure CORS
+# Per-IP rate limiting — disabled by default (see core/rate_limit.py); registered
+# before CORS so CORS remains the outermost middleware, added last, unaffected.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
+# Configure CORS — base origins always allowed; extend via EXTRA_CORS_ORIGINS env var
+# e.g. EXTRA_CORS_ORIGINS=https://epigenic.xyz,https://www.epigenic.xyz
+_base_origins = [
+    "http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001",
+    "https://epigenic.xyz", "https://www.epigenic.xyz",
+]
+_extra = [o.strip() for o in os.environ.get("EXTRA_CORS_ORIGINS", "").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001"],
+    allow_origins=_base_origins + _extra,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],

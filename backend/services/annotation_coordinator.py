@@ -25,6 +25,48 @@ from .analysis_service import AnnotationResult, AnalysisProgress
 
 logger = logging.getLogger(__name__)
 
+_BQ_COL_MAP: Dict[str, str] = {
+    'chembl': 'chembl_data',
+    'fda_drug': 'fda_drug_data',
+    'alphafold': 'alphafold_data',
+}
+
+
+def _truthy_data(d: Any) -> Optional[Dict]:
+    return d if (d and d.get('found')) else None
+
+
+def _build_annotation_link_values(
+    rsid_to_variants: Dict[str, List],
+    chunk_rsids: List[str],
+    rsid_to_shared_id: Dict[str, int],
+    analysis_id: int,
+) -> List[Dict]:
+    link_values = []
+    for rsid in chunk_rsids:
+        shared_id = rsid_to_shared_id.get(rsid)
+        if shared_id is None:
+            continue
+        for v in rsid_to_variants[rsid]:
+            link_values.append(dict(
+                analysis_id=analysis_id,
+                analysis_variant_id=getattr(v, 'id'),
+                shared_annotation_id=shared_id,
+                rsid=rsid,
+            ))
+    return link_values
+
+
+async def _insert_annotation_links(session, link_values: List[Dict]) -> None:
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    if not link_values:
+        return
+    link_stmt = pg_insert(VariantAnnotation).values(link_values)
+    link_stmt = link_stmt.on_conflict_do_nothing(
+        constraint='uq_variant_annotations_analysis_variant'
+    )
+    await session.execute(link_stmt)
+
 
 async def _fetch_remote_api_data(rsids: List[str]) -> Dict[str, Dict[str, Any]]:
     """Fetch only remote API columns from shared_variant_annotations.
@@ -150,9 +192,6 @@ async def annotate_variants_efficiently(
     logger.info("  2c: upserting to shared_variant_annotations...")
     from sqlalchemy.dialects.postgresql import insert
 
-    def _found(d: Any) -> Optional[Dict]:
-        return d if (d and d.get('found')) else None
-
     annotation_results: Dict[str, AnnotationResult] = {}
     BATCH = 500
     total = len(unique_rsids)
@@ -164,12 +203,15 @@ async def annotate_variants_efficiently(
 
         batch_rows = []
         for rsid in chunk_rsids:
-            cv_val  = _found(results.clinvar.get(rsid))
-            gn_val  = _found(results.gnomad.get(rsid))
-            ens_val = _found(results.ensembl.get(rsid))
-            tkg_val = _found(results.thousand_genomes.get(rsid))
-            am_val  = _found(results.alpha_missense.get(rsid))
-            gtx_val = _found(results.gnomad_tx.get(rsid))
+            cv_val  = _truthy_data(results.clinvar.get(rsid))
+            gn_val  = _truthy_data(results.gnomad.get(rsid))
+            ens_val = _truthy_data(results.ensembl.get(rsid))
+            tkg_val = _truthy_data(results.thousand_genomes.get(rsid))
+            am_val  = _truthy_data(results.alpha_missense.get(rsid))
+            gtx_val = _truthy_data(results.gnomad_tx.get(rsid))
+            af_val  = _truthy_data(results.alphafold.get(rsid))
+            gwas_val = _truthy_data(results.gwas_catalog.get(rsid))
+            cg_val  = _truthy_data(results.clingen.get(rsid))
             first_v = rsid_to_variants[rsid][0]
 
             row: Dict[str, Any] = dict(
@@ -183,6 +225,9 @@ async def annotate_variants_efficiently(
                 ensembl_data=ens_val,
                 thousand_genomes_data=tkg_val,
                 alpha_missense_data=am_val,
+                alphafold_data=af_val,
+                gwas_catalog_data=gwas_val,
+                clingen_data=cg_val,
             )
             mid = getattr(first_v, 'marker_id', None)
             if mid is not None:
@@ -202,6 +247,9 @@ async def annotate_variants_efficiently(
             'ensembl':          ('ensembl_data',          sources.ensembl_vep),
             'thousand_genomes': ('thousand_genomes_data', sources.thousand_genomes),
             'alpha_missense':   ('alpha_missense_data',   sources.alpha_missense),
+            'alphafold':        ('alphafold_data',        sources.alphafold),
+            'gwas_catalog':     ('gwas_catalog_data',     sources.gwas_catalog),
+            'clingen':          ('clingen_data',          sources.clingen),
         }
         stmt = insert(SharedVariantAnnotation).values(batch_rows)
         for _src, (col, svc) in local_col_map.items():
@@ -220,36 +268,23 @@ async def annotate_variants_efficiently(
         async with async_session_factory() as session:
             db_result = await session.execute(stmt)
             rsid_to_shared_id = {row.rsid: row.id for row in db_result.all()}
-
-            # Create variant_annotation links (no-op if already linked)
-            link_values = []
-            for rsid in chunk_rsids:
-                shared_id = rsid_to_shared_id.get(rsid)
-                if shared_id is None:
-                    continue
-                for v in rsid_to_variants[rsid]:
-                    link_values.append(dict(
-                        analysis_id=analysis_id,
-                        analysis_variant_id=getattr(v, 'id'),
-                        shared_annotation_id=shared_id,
-                        rsid=rsid,
-                    ))
-            if link_values:
-                link_stmt = insert(VariantAnnotation).values(link_values)
-                link_stmt = link_stmt.on_conflict_do_nothing(
-                    constraint='uq_variant_annotations_analysis_variant'
-                )
-                await session.execute(link_stmt)
+            link_values = _build_annotation_link_values(
+                rsid_to_variants, chunk_rsids, rsid_to_shared_id, analysis_id
+            )
+            await _insert_annotation_links(session, link_values)
             await session.commit()
 
         # Build annotation_results for this chunk
         for rsid in chunk_rsids:
-            cv_val  = _found(results.clinvar.get(rsid))
-            gn_val  = _found(results.gnomad.get(rsid))
-            ens_val = _found(results.ensembl.get(rsid))
-            tkg_val = _found(results.thousand_genomes.get(rsid))
-            am_val  = _found(results.alpha_missense.get(rsid))
-            gtx_val = _found(results.gnomad_tx.get(rsid))
+            cv_val  = _truthy_data(results.clinvar.get(rsid))
+            gn_val  = _truthy_data(results.gnomad.get(rsid))
+            ens_val = _truthy_data(results.ensembl.get(rsid))
+            tkg_val = _truthy_data(results.thousand_genomes.get(rsid))
+            am_val  = _truthy_data(results.alpha_missense.get(rsid))
+            gtx_val = _truthy_data(results.gnomad_tx.get(rsid))
+            af_val  = _truthy_data(results.alphafold.get(rsid))
+            gwas_val = _truthy_data(results.gwas_catalog.get(rsid))
+            cg_val  = _truthy_data(results.clingen.get(rsid))
             remote  = remote_data.get(rsid, {})
 
             ann: Dict[str, Any] = {
@@ -265,6 +300,9 @@ async def annotate_variants_efficiently(
                 ('thousand_genomes', tkg_val),
                 ('alpha_missense', am_val),
                 ('gnomad_tx',     gtx_val),
+                ('alphafold',     af_val),
+                ('gwas_catalog',  gwas_val),
+                ('clingen',       cg_val),
                 ('clinvar',       remote.get('clinvar')),
                 ('clinpgx',       remote.get('clinpgx')),
                 ('snpedia',       remote.get('snpedia')),
@@ -402,7 +440,6 @@ async def _backfill_local_sources(
     # BigQuery backfill (ChEMBL, FDA Drug, AlphaFold)
     bq_source_names = {'chembl', 'fda_drug', 'alphafold'}
     enabled_bq = bq_source_names & set(enabled_sources) if enabled_sources else bq_source_names
-    bq_col_map = {'chembl': 'chembl_data', 'fda_drug': 'fda_drug_data', 'alphafold': 'alphafold_data'}
     if enabled_bq:
         missing_bq = {}
         for rsid, data in existing_annotations.items():
@@ -456,8 +493,8 @@ async def _backfill_local_sources(
                     bq_result = await bq_svc.enrich_variant(gene, needed, analysis_id=analysis_id)
                     update_vals = {}
                     for src, src_data in bq_result.items():
-                        if src in bq_col_map and src_data:
-                            update_vals[bq_col_map[src]] = src_data
+                        if src in _BQ_COL_MAP and src_data:
+                            update_vals[_BQ_COL_MAP[src]] = src_data
                             existing_annotations[rsid]['annotations'][src] = src_data
                     if update_vals:
                         pending_updates.append((rsid, update_vals))
@@ -521,10 +558,6 @@ async def bulk_annotate_locally(
     annotation_results: Dict[str, AnnotationResult] = {}
     batch_size = 500
     saved_count = 0
-
-    def _val(data):
-        return data if data and data.get('found') else None
-
     last_progress_update = time.time()
 
     for i in range(0, len(unique_rsids), batch_size):
@@ -532,12 +565,12 @@ async def bulk_annotate_locally(
 
         batch_values = []
         for rsid in chunk_rsids:
-            cv_val = _val(cv_map.get(rsid))
-            gn_val = _val(gn_map.get(rsid))
-            ens_val = _val(ens_map.get(rsid))
-            tkg_val = _val(tkg_map.get(rsid))
-            am_val = _val(am_map.get(rsid))
-            gtx_val = _val(gtx_map.get(rsid))
+            cv_val = _truthy_data(cv_map.get(rsid))
+            gn_val = _truthy_data(gn_map.get(rsid))
+            ens_val = _truthy_data(ens_map.get(rsid))
+            tkg_val = _truthy_data(tkg_map.get(rsid))
+            am_val = _truthy_data(am_map.get(rsid))
+            gtx_val = _truthy_data(gtx_map.get(rsid))
             first_variant = rsid_to_variants[rsid][0]
             marker_id = getattr(first_variant, 'marker_id', None)
 
@@ -593,37 +626,21 @@ async def bulk_annotate_locally(
 
             result = await session.execute(stmt)
             rsid_to_shared_id = {row.rsid: row.id for row in result.all()}
-
-            link_values = []
-            for rsid in chunk_rsids:
-                shared_id = rsid_to_shared_id.get(rsid)
-                if shared_id is None:
-                    continue
-                for v in rsid_to_variants[rsid]:
-                    link_values.append(dict(
-                        analysis_id=analysis_id,
-                        analysis_variant_id=getattr(v, 'id'),
-                        shared_annotation_id=shared_id,
-                        rsid=rsid,
-                    ))
-            if link_values:
-                link_stmt = insert(VariantAnnotation).values(link_values)
-                link_stmt = link_stmt.on_conflict_do_nothing(
-                    constraint='uq_variant_annotations_analysis_variant'
-                )
-                await session.execute(link_stmt)
-
+            link_values = _build_annotation_link_values(
+                rsid_to_variants, chunk_rsids, rsid_to_shared_id, analysis_id
+            )
+            await _insert_annotation_links(session, link_values)
             await session.commit()
 
         for idx_in_chunk, rsid in enumerate(chunk_rsids):
             if idx_in_chunk > 0 and idx_in_chunk % 50 == 0:
                 await asyncio.sleep(0)
-            cv_val = _val(cv_map.get(rsid))
-            gn_val = _val(gn_map.get(rsid))
-            ens_val = _val(ens_map.get(rsid))
-            tkg_val = _val(tkg_map.get(rsid))
-            am_val = _val(am_map.get(rsid))
-            gtx_val = _val(gtx_map.get(rsid))
+            cv_val = _truthy_data(cv_map.get(rsid))
+            gn_val = _truthy_data(gn_map.get(rsid))
+            ens_val = _truthy_data(ens_map.get(rsid))
+            tkg_val = _truthy_data(tkg_map.get(rsid))
+            am_val = _truthy_data(am_map.get(rsid))
+            gtx_val = _truthy_data(gtx_map.get(rsid))
 
             ann_data: Dict[str, Any] = {
                 'rsid': rsid,
@@ -697,18 +714,26 @@ async def bulk_enrich_bigquery(
     check_cancelled_fn: Optional[Callable] = None,
     update_progress_fn: Optional[Callable] = None,
 ):
-    """Bulk-enrich annotations with BigQuery data (ChEMBL, FDA Drug, AlphaFold)."""
+    """Bulk-enrich annotations with BigQuery data (ChEMBL, FDA Drug).
+    AlphaFold is handled locally via alphafold_local.py when the DB is available.
+    """
     from .variant_loader import load_enabled_sources as _load_enabled_sources
 
     if enabled_sources is None:
         enabled_sources = await _load_enabled_sources()
 
-    bq_source_names = {'chembl', 'fda_drug', 'alphafold'}
+    bq_source_names = {'chembl', 'fda_drug'}  # alphafold moved to local
+    # If alphafold was explicitly requested and local DB is not present, fall back to BQ
+    if 'alphafold' in (enabled_sources or []):
+        from .alphafold_local import get_alphafold_local_service
+        af_svc = get_alphafold_local_service()
+        if not af_svc.available:
+            logger.info("AlphaFold local DB not available — adding to BigQuery fallback")
+            bq_source_names = bq_source_names | {'alphafold'}
+
     enabled_bq = bq_source_names & set(enabled_sources) if enabled_sources else bq_source_names
     if not enabled_bq:
         return
-
-    bq_col_map = {'chembl': 'chembl_data', 'fda_drug': 'fda_drug_data', 'alphafold': 'alphafold_data'}
 
     gene_to_rsids: Dict[str, List[str]] = {}
     for rsid, ar in annotation_results.items():
@@ -743,7 +768,7 @@ async def bulk_enrich_bigquery(
 
         async with async_session_factory() as session:
             from sqlalchemy import and_
-            bq_columns = [getattr(SharedVariantAnnotation, bq_col_map[s]) for s in enabled_bq]
+            bq_columns = [getattr(SharedVariantAnnotation, _BQ_COL_MAP[s]) for s in enabled_bq]
             filters = [col.isnot(None) for col in bq_columns]
 
             BATCH_SIZE = 30000
@@ -777,7 +802,7 @@ async def bulk_enrich_bigquery(
                 for sa in rows:
                     ar = annotation_results.get(sa.rsid)
                     if ar and ar.annotation_data:
-                        for src, col in bq_col_map.items():
+                        for src, col in _BQ_COL_MAP.items():
                             data = getattr(sa, col, None)
                             if data:
                                 ar.annotation_data.setdefault('annotations', {})[src] = data
@@ -855,8 +880,8 @@ async def bulk_enrich_bigquery(
                 update_vals = {}
                 mem_updates = {}
                 for src, src_data in bq_result.items():
-                    if src in bq_col_map and src_data and src_data.get('found'):
-                        update_vals[bq_col_map[src]] = src_data
+                    if src in _BQ_COL_MAP and src_data and src_data.get('found'):
+                        update_vals[_BQ_COL_MAP[src]] = src_data
                         mem_updates[src] = src_data
 
                 if not update_vals:
@@ -882,10 +907,13 @@ async def bulk_enrich_bigquery(
             await _flush_pending()
 
         except Exception as inner_e:
+            # Best-effort: try to save whatever enrichment was pending before
+            # propagating the original error below — a failure of this last-
+            # chance flush must not mask inner_e, so it's only logged here.
             try:
                 await _flush_pending()
-            except Exception:
-                pass
+            except Exception as flush_error:
+                logger.warning(f"BigQuery enrichment retry-flush failed: {flush_error}")
             raise inner_e
 
         logger.info(f"BigQuery enrichment complete: {enriched_genes}/{len(genes_to_process)} genes "

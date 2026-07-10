@@ -387,20 +387,35 @@ class OptimizedGeneticAPIService:
         return await self.annotate_variant(rsid)
     
     async def _get_ensembl_annotation(self, rsid: str) -> Optional[Dict[str, Any]]:
-        """Get Ensembl VEP annotation."""
+        """Get Ensembl VEP annotation — local SQLite cache first, remote API fallback."""
+        # Try local VEP service first (fast, no network)
+        try:
+            from .ensembl_vep_local import get_ensembl_vep_service
+            vep_svc = get_ensembl_vep_service()
+            local_result = await vep_svc.lookup_or_scan(rsid)
+            if local_result and local_result.get('found'):
+                return {
+                    'found': True,
+                    'source': 'ensembl_local',
+                    'data': local_result.get('data', local_result),
+                }
+        except Exception as e:
+            logger.debug(f"Local VEP lookup failed for {rsid}: {e}")
+
+        # Fall back to remote Ensembl REST API
         try:
             url = self.endpoints['ensembl_vep'].url.format(rsid=rsid)
             response = await self._make_request('ensembl_vep', url)
-            
+
             if response.success and response.data:
                 return {
                     'found': True,
                     'source': 'ensembl',
                     'data': response.data
                 }
-            
+
             return {'found': False, 'source': 'ensembl', 'error': response.error}
-            
+
         except Exception as e:
             logger.error(f"Ensembl annotation error for {rsid}: {e}")
             return {'found': False, 'source': 'ensembl', 'error': str(e)}
@@ -565,6 +580,30 @@ class OptimizedGeneticAPIService:
             logger.error(f"SNPedia annotation error for {rsid}: {e}")
             return {'found': False, 'source': 'snpedia', 'error': str(e)}
     
+    async def _get_litvar_annotation(self, rsid: str) -> Optional[Dict[str, Any]]:
+        """Get LitVar2 literature annotation for a variant."""
+        try:
+            url = 'https://www.ncbi.nlm.nih.gov/research/litvar2-api/variant/autocomplete'
+            params = {'query': rsid}
+            response = await self._make_request('clinvar', url, params=params)
+            if response.success and isinstance(response.data, list):
+                match = next(
+                    (v for v in response.data if v.get('rsid') == rsid), None
+                )
+                if match and match.get('pmids_count', 0) > 0:
+                    return {
+                        'found': True,
+                        'source': 'litvar',
+                        'total_publications': match.get('pmids_count', 0),
+                        'gene': match.get('gene', []),
+                        'name': match.get('name'),
+                        'clinical_significance': match.get('data_clinical_significance', []),
+                    }
+            return {'found': False, 'source': 'litvar'}
+        except Exception as e:
+            logger.error(f"LitVar annotation error for {rsid}: {e}")
+            return {'found': False, 'source': 'litvar', 'error': str(e)}
+    
     async def batch_annotate_variants(self, rsids: List[str], strategy: str = 'comprehensive', enabled_sources: Optional[List[str]] = None) -> Dict[str, Optional[Dict[str, Any]]]:
         """Annotate multiple variants with each API source running independently.
         
@@ -592,6 +631,7 @@ class OptimizedGeneticAPIService:
             ('clinvar', self._get_clinvar_annotation, 5),
             ('clinpgx', self._get_clinpgx_annotation, 2),
             ('snpedia', self._get_snpedia_annotation, 2),
+            ('litvar', self._get_litvar_annotation, 3),
         ]
 
         # Filter to enabled sources only
@@ -821,11 +861,30 @@ class GeneticAPIService:
         return summary
 
     async def get_litvar_publications(self, rsid: str) -> Dict[str, Any]:
-        """Get literature publications for a variant."""
+        """Get literature publications for a variant from LitVar2 API."""
         if not self._initialized:
             await self.initialize()
-        # LitVar not implemented in optimized service, return empty result
-        return {'rsid': rsid, 'publications': [], 'count': 0}
+        try:
+            url = 'https://www.ncbi.nlm.nih.gov/research/litvar2-api/variant/autocomplete'
+            params = {'query': rsid}
+            response = await self._make_request('clinvar', url, params=params)
+            if response.success and isinstance(response.data, list) and response.data:
+                match = next(
+                    (v for v in response.data if v.get('rsid') == rsid), None
+                )
+                if match:
+                    return {
+                        'rsid': rsid,
+                        'found': True,
+                        'source': 'litvar',
+                        'total_publications': match.get('pmids_count', 0),
+                        'gene': match.get('gene', []),
+                        'name': match.get('name'),
+                        'clinical_significance': match.get('data_clinical_significance', []),
+                    }
+            return {'rsid': rsid, 'found': False, 'source': 'litvar'}
+        except Exception:
+            return {'rsid': rsid, 'found': False, 'source': 'litvar'}
 
     async def get_clinpgx_drug_info(self, gene: str) -> Dict[str, Any]:
         """Get pharmacogenomic info for a gene from ClinPGx."""

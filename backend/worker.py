@@ -34,7 +34,8 @@ import logging
 import os
 import signal
 import sys
-from typing import Set
+from datetime import datetime
+from typing import Optional, Set
 
 from sqlalchemy import select, text, update
 from sqlalchemy.sql import func
@@ -170,8 +171,253 @@ async def _execute_job(job_id: int, job_type: str, params: dict) -> dict:
         return await categorizer.run(categories=cat_list)
     elif job_type == "purge_deleted":
         return await _purge_deleted_analyses(params)
+    elif job_type == "etl_vep":
+        from backend.services.ensembl_vep_etl import EnsemblVepETL
+        p = params or {}
+        etl = EnsemblVepETL()
+        return await etl.run_import(
+            filter_to_known=True,
+            force_reload=p.get("force_reload", False),
+            chromosomes=p.get("chromosomes"),
+        )
+    elif job_type == "etl_gnomad":
+        from backend.services.gnomad_etl import GnomadETL
+        return await GnomadETL().run_full_import()
+    elif job_type == "gnomad_build_cadd_cache":
+        from backend.services.gnomad_local import get_gnomad_service
+        svc = get_gnomad_service()
+        if not svc.is_loaded:
+            await svc.ensure_loaded()
+        return await svc.build_cadd_cache()
+    elif job_type == "gnomad_refresh_ancestry_afs":
+        from backend.services.gnomad_v2_local import get_gnomad_v2_service
+        svc = get_gnomad_v2_service()
+        if not svc.is_loaded:
+            await svc.ensure_loaded()
+        p = params or {}
+        if p.get("index_first"):
+            index_result = await svc.index_all_files()
+            logger.info("gnomAD v2 indexing: %s", index_result)
+        return await svc.bulk_refresh_ancestry_panel(fst_threshold=p.get("fst_threshold", 0.70))
+    elif job_type == "etl_ensembl":
+        from backend.services.ensembl_etl import EnsemblETL
+        return await EnsemblETL().run_full_import()
+    elif job_type == "etl_1kg":
+        from backend.services.thousand_genomes_etl import ThousandGenomesETL
+        return await ThousandGenomesETL().run_full_import()
+    elif job_type == "etl_gnomad_v2":
+        from backend.services.gnomad_v2_etl import GnomadV2ETL
+        result = await GnomadV2ETL().run_full_import()
+        # Refresh PG count in the singleton so next analysis uses PG path
+        from backend.services.gnomad_v2_local import get_gnomad_v2_service
+        await get_gnomad_v2_service().refresh_pg_count()
+        return result
+    elif job_type == "etl_alphafold":
+        from backend.scripts.build_alphafold_local import run_etl
+        p = params or {}
+        result_path = await asyncio.to_thread(run_etl, force=p.get("force", False))
+        return {"db_path": str(result_path)}
+    elif job_type == "backfill_source":
+        return await _backfill_source(params or {}, job_id=job_id)
     else:
         raise ValueError(f"Unknown job type: {job_type}")
+
+
+async def _backfill_source(params: dict, job_id: Optional[int] = None) -> dict:
+    """Backfill annotations for a single source on variants that are missing it.
+
+    Runs entirely inside the worker process so it never blocks the API server.
+    Commits in batches of BATCH_SIZE to avoid long-running transactions.
+    """
+    from sqlalchemy import select, func
+    from backend.db.models import SharedVariantAnnotation
+    from backend.services.annotation_constants import SOURCE_TO_COLUMN
+
+    source_name = params.get("source_name")
+    limit = int(params.get("limit", 5000))
+
+    if not source_name or source_name not in SOURCE_TO_COLUMN:
+        raise ValueError(f"Unknown source_name: {source_name!r}")
+
+    col_name = SOURCE_TO_COLUMN[source_name]
+    col = getattr(SharedVariantAnnotation, f'{col_name}_data')
+
+    async with session_factory() as sess:
+        rows = (await sess.execute(
+            select(SharedVariantAnnotation)
+            .where(col.is_(None))
+            .order_by(SharedVariantAnnotation.usage_count.desc())
+            .limit(limit)
+        )).scalars().all()
+
+    if not rows:
+        return {"source": source_name, "completed": 0, "confirmed_no_data": 0,
+                "failed": 0, "total": 0}
+
+    api_service = None
+    is_api_source = source_name not in ('alpha_missense', 'clinvar_local', 'ensembl')
+    if is_api_source:
+        from backend.services.genetic_api_service import OptimizedGeneticAPIService
+        api_service = OptimizedGeneticAPIService()
+        await api_service.initialize()
+
+    completed = failed = confirmed_no_data = 0
+    BATCH_SIZE = 200
+    LOG_INTERVAL = 50
+    DB_LOG_FLUSH_INTERVAL = 50
+    start_ts = asyncio.get_event_loop().time()
+    _log_buffer: list[dict] = []
+
+    def _append_log(msg: str) -> None:
+        _log_buffer.append({"ts": datetime.utcnow().strftime("%H:%M:%S"), "level": "INFO", "msg": msg})
+
+    async def _flush_logs_to_db() -> None:
+        if job_id is None or not _log_buffer:
+            return
+        snapshot = list(_log_buffer)
+        try:
+            async with session_factory() as sess:
+                await sess.execute(
+                    update(WorkerJob).where(WorkerJob.id == job_id).values(job_logs=snapshot)
+                )
+                await sess.commit()
+        except Exception:
+            pass
+
+    source_type = "API (rate-limited)" if is_api_source else "local"
+    start_msg = f"[backfill {source_name}] starting {len(rows)} rows via {source_type}"
+    logger.info(start_msg)
+    _append_log(start_msg)
+
+    try:
+        for idx, ann in enumerate(rows):
+            if idx > 0 and idx % LOG_INTERVAL == 0:
+                await asyncio.sleep(0)
+                elapsed = asyncio.get_event_loop().time() - start_ts
+                rate = idx / elapsed if elapsed > 0 else 0
+                remaining = len(rows) - idx
+                eta_s = int(remaining / rate) if rate > 0 else 0
+                eta_str = f"{eta_s // 3600}h {(eta_s % 3600) // 60}m" if eta_s >= 60 else f"{eta_s}s"
+                pct = 100 * idx // len(rows)
+                progress_msg = (
+                    f"[backfill {source_name}] {idx}/{len(rows)} ({pct}%) "
+                    f"— updated={completed} no-data={confirmed_no_data} failed={failed} "
+                    f"| {rate * 60:.1f}/min | ETA {eta_str}"
+                )
+                logger.info(progress_msg)
+                _append_log(progress_msg)
+                if idx % DB_LOG_FLUSH_INTERVAL == 0:
+                    await _flush_logs_to_db()
+
+            try:
+                if source_name == 'alpha_missense':
+                    from backend.api.admin_routes import _extract_am_coords
+                    from backend.utils.alpha_missense import get_alpha_missense_service
+                    coords = _extract_am_coords(ann.ensembl_data)
+                    if coords:
+                        am_svc = get_alpha_missense_service()
+                        result_data = am_svc.lookup_comprehensive(*coords)
+                        if result_data:
+                            ann.alpha_missense_data = result_data
+                            completed += 1
+                        else:
+                            ann.alpha_missense_data = {'found': False, 'confirmed_no_data': True,
+                                                       'source': 'alpha_missense', 'reason': 'not_missense'}
+                            confirmed_no_data += 1
+                    else:
+                        ann.alpha_missense_data = {'found': False, 'confirmed_no_data': True,
+                                                   'source': 'alpha_missense', 'reason': 'not_missense'}
+                        confirmed_no_data += 1
+
+                elif source_name == 'clinvar_local':
+                    from backend.services.clinvar_local import get_clinvar_local_service
+                    cv_svc = get_clinvar_local_service()
+                    if not cv_svc.is_loaded:
+                        await cv_svc.ensure_loaded()
+                    if cv_svc.is_loaded:
+                        result_data = await cv_svc.lookup(ann.rsid)
+                        if result_data:
+                            ann.clinvar_local_data = result_data
+                            completed += 1
+                        else:
+                            ann.clinvar_local_data = {'found': False, 'confirmed_no_data': True,
+                                                      'source': 'clinvar_local'}
+                            confirmed_no_data += 1
+                    else:
+                        failed += 1
+
+                elif source_name == 'ensembl':
+                    from backend.services.ensembl_vep_local import get_ensembl_vep_service
+                    vep_svc = get_ensembl_vep_service()
+                    if await vep_svc.ensure_loaded():
+                        result_data = await vep_svc.lookup(ann.rsid)
+                        if result_data and result_data.get('found'):
+                            ann.ensembl_data = result_data
+                            completed += 1
+                        else:
+                            ann.ensembl_data = {'found': False, 'confirmed_no_data': True, 'source': 'ensembl'}
+                            confirmed_no_data += 1
+                    else:
+                        failed += 1
+
+                else:
+                    if idx > 0:
+                        await asyncio.sleep(0.5)  # rate limit: 2 req/s max
+                    method = getattr(api_service, f'_get_{source_name}_annotation', None)
+                    if not method:
+                        failed += 1
+                        continue
+                    result_data = await method(ann.rsid)
+                    if result_data and isinstance(result_data, dict) and result_data.get('found', False):
+                        setattr(ann, f'{col_name}_data', result_data)
+                        completed += 1
+                    else:
+                        setattr(ann, f'{col_name}_data', {'found': False, 'confirmed_no_data': True,
+                                                          'source': source_name})
+                        confirmed_no_data += 1
+
+                ann.total_api_calls = (ann.total_api_calls or 0) + 1
+
+            except Exception as e:
+                logger.error("[backfill %s] error for %s: %s", source_name, ann.rsid, e)
+                failed += 1
+
+            if (idx + 1) % BATCH_SIZE == 0:
+                async with session_factory() as sess:
+                    for r in rows[max(0, idx + 1 - BATCH_SIZE):idx + 1]:
+                        await sess.merge(r)
+                    await sess.commit()
+                commit_msg = f"[backfill {source_name}] committed batch {idx + 1}/{len(rows)}"
+                logger.info(commit_msg)
+                _append_log(commit_msg)
+                await _flush_logs_to_db()
+
+    finally:
+        if api_service:
+            await api_service.close()
+
+    committed_count = (len(rows) // BATCH_SIZE) * BATCH_SIZE
+    if committed_count < len(rows):
+        async with session_factory() as sess:
+            for r in rows[committed_count:]:
+                await sess.merge(r)
+            await sess.commit()
+
+    elapsed_total = asyncio.get_event_loop().time() - start_ts
+    done_msg = (
+        f"[backfill {source_name}] done in {elapsed_total:.1f}s "
+        f"— updated={completed} no-data={confirmed_no_data} failed={failed} / total={len(rows)}"
+    )
+    logger.info(done_msg)
+    _append_log(done_msg)
+    await _flush_logs_to_db()
+    return {
+        "source": source_name,
+        "completed": completed,
+        "confirmed_no_data": confirmed_no_data,
+        "failed": failed,
+        "total": len(rows),
+    }
 
 
 async def _purge_deleted_analyses(params: dict) -> dict:
@@ -450,6 +696,9 @@ async def _preload_local_services() -> None:
     These are all read-once, cache-forever operations.  Doing them at startup
     means the first job doesn't incur a cold-load penalty inline.
     """
+    from backend.services.datasource_utils import log_data_source_availability
+    log_data_source_availability()
+
     from backend.services.clinvar_local import get_clinvar_local_service
     cv = get_clinvar_local_service()
     ok = await cv.ensure_loaded()
@@ -463,7 +712,20 @@ async def _preload_local_services() -> None:
     from backend.services.gnomad_local import get_gnomad_cache_service
     gc = get_gnomad_cache_service()
     ok = await gc.ensure_loaded()
-    logger.info(f"gnomAD cache: {gc.variant_count} variants {'cached' if ok else '(no CADD TSV files found)'}")
+    if ok:
+        logger.info(f"gnomAD cache: {gc.variant_count} variants cached")
+    elif gc.has_tabix_files:
+        logger.info(f"gnomAD CADD: {len(gc._tsv_files or [])} indexed TSV file(s) available — tabix queries enabled")
+    else:
+        logger.info("gnomAD cache: no CADD TSV files found — position queries unavailable")
+
+    from backend.services.gnomad_v2_local import get_gnomad_v2_service
+    gn2 = get_gnomad_v2_service()
+    await gn2.ensure_loaded()
+    if gn2.is_loaded:
+        logger.info(f"gnomAD v2: {gn2.file_count} VCF files, {gn2.indexed_count} tabix-indexed")
+    else:
+        logger.info("gnomAD v2: no VCF files found")
 
     from backend.services.thousand_genomes_local import get_thousand_genomes_service
     tkg = get_thousand_genomes_service()
@@ -476,7 +738,12 @@ async def _preload_local_services() -> None:
     vep = get_ensembl_vep_service()
     async def _load_vep():
         ok = await vep.ensure_loaded()
-        logger.info(f"Ensembl VEP: {vep.variant_count} variants {'loaded' if ok else '(no VCF files found)'}")
+        if ok and vep._db is not None:
+            logger.info(f"Ensembl VEP: {vep.variant_count} variants loaded from SQLite cache")
+        elif ok and vep._vcf_available:
+            logger.info("Ensembl VEP: no SQLite cache — tabix position queries available")
+        else:
+            logger.info("Ensembl VEP: no VCF files found — annotation unavailable")
     asyncio.create_task(_load_vep())
     logger.info("Ensembl VEP: loading in background...")
 

@@ -1,402 +1,526 @@
-# Architecture Documentation
+# Genetic Health Analysis Toolkit — Architecture
 
-> Last updated: 2026-03-18 — based on full codebase audit of all backend services, DB schema, insights pipeline, annotation sources, and frontend integration.
+> Last updated: March 2026  
+> Status: Active development, running in production on 204.168.200.44  
+> Stack: FastAPI · SQLAlchemy 2.0 async · PostgreSQL · Next.js 15 · Docker
+
+---
+
+## Table of Contents
+
+1. [System Overview](#1-system-overview)
+2. [Container Architecture](#2-container-architecture)
+3. [Backend Structure](#3-backend-structure)
+4. [Frontend Structure](#4-frontend-structure)
+5. [Database Schema](#5-database-schema)
+6. [Analysis Pipeline](#6-analysis-pipeline)
+7. [Insight Generation Pipeline](#7-insight-generation-pipeline)
+8. [External Data Sources](#8-external-data-sources)
+9. [Authentication & Security](#9-authentication--security)
+10. [Key Design Decisions](#10-key-design-decisions)
 
 ---
 
 ## 1. System Overview
 
-The Genetic Health Analysis Toolkit is a full-stack platform that:
-1. Accepts raw genetic data (VCF or consumer CSV)
-2. Parses and deduplicates genetic markers into a global catalog
-3. Annotates variants against 6+ local/remote data sources
-4. Scores variant pathogenicity using a weighted composite engine
-5. Generates 14 categories of health/trait insights via a map-driven generator system
-6. Presents results on a dashboard with per-category panels
+A full-stack genomics analysis platform that ingests personal DNA data (VCF or CSV), annotates every genetic variant against multiple clinical and population databases, then uses a rule-based insight generation pipeline to produce actionable health reports across 14 categories.
 
-### Services
+```
+┌───────────────────────────────────────────────────────────────┐
+│  User                                                         │
+│   Upload VCF/CSV ──► Annotation Pipeline ──► 14 Insight Panels│
+│                       (async worker)         (interactive UI) │
+└───────────────────────────────────────────────────────────────┘
+```
 
-| Service | Technology | Container |
-|---------|-----------|-----------|
-| Frontend | Next.js 15, React, Tailwind CSS 4, shadcn/ui | `dna_toolkit-frontend-1` |
-| Backend API | FastAPI, SQLAlchemy 2.0 (async), Python 3.13 | `dna_toolkit-backend-1` |
-| Background Worker | Same image, `worker.py` entry point | `dna_toolkit-worker-1` |
-| Database | PostgreSQL 16 | `dna_toolkit-postgres-1` |
+**Current data scale (production DB, March 2026):**
+- 731,703 genetic markers stored
+- 609,346 shared variant annotations (Ensembl data: 609,178 found; ClinVar local: 30,364; AlphaMissense: 28,012; gnomAD: **2 found** — see Section 8)
+- ~4.5 GB shared annotation cache (16 GB with 1000 Genomes)
+- 237,000+ variant mappings across all categories
+- health_risks: 1,057 rows stored (262 very_high, 424 high, 328 moderate)
 
 ---
 
-## 2. Data Flow Pipeline
+## 2. Container Architecture
 
 ```
-User uploads CSV/VCF
-        │
-        ▼
-┌─────────────────────┐
-│  variant_uploader.py │  Parse file → create GeneticMarker rows (dedup by rsid)
-│                      │  Create AnalysisVariant rows (user genotype per marker)
-└────────┬────────────┘
-         │
-         ▼
-┌─────────────────────────────┐
-│  analysis_queue.py / worker │  Picks up PENDING analyses, dispatches to
-│                              │  ComprehensiveAnalysisService.process_analysis()
-└────────┬────────────────────┘
-         │
-         ▼
-╔═════════════════════════════════════════════════════════════════╗
-║  ComprehensiveAnalysisService  (analysis_service.py)           ║
-║                                                                 ║
-║  Phase 1: Build rsid→gene map  (ClinVar PG + Ensembl local)    ║
-║           ↓                                                     ║
-║  Phase 2: Annotate variants                                     ║
-║           • Check SharedVariantAnnotation cache (reuse)         ║
-║           • Bulk local annotation (6 sources)                   ║
-║           • Backfill missing sources for cached annotations     ║
-║           • Score pathogenicity (scoring_engine.py)              ║
-║           ↓                                                     ║
-║  Phase 3: BigQuery enrichment (optional, currently disabled)    ║
-║           ↓                                                     ║
-║  Phase 4: Generate insights (14 generators)                     ║
-║           • Build VariantProfile for every variant (ONCE)       ║
-║           • Run each generator with shared GeneratorContext     ║
-║           • Store results in per-category DB tables              ║
-╚═════════════════════════════════════════════════════════════════╝
+docker-compose.yml
+│
+├─ frontend    (Next.js 15, port 3000)   — Turbopack dev server
+├─ backend     (FastAPI, port 8000)      — API server only, no analysis
+├─ worker      (Python)                  — Runs analysis jobs from DB queue
+└─ postgres    (PostgreSQL 15, port 5432)— Single shared database
+```
+
+### Service Separation Philosophy
+
+Analysis work was intentionally moved from FastAPI to a separate `worker` service. The FastAPI process only handles HTTP requests; the worker polls the `worker_jobs` table and executes full analysis pipelines without touching the API event loop. This prevents long-running genomic computations from blocking API responses.
+
+### URLs & Credentials (Development)
+
+| Service | URL |
+|---------|-----|
+| Frontend | http://localhost:3000 |
+| Backend API + Docs | http://localhost:8000/docs |
+| PostgreSQL | localhost:5432 |
+
+Login: `elliotalderson710@gmail.com` / `Victor123!`  
+Login field is `username` (not `email`) — auth uses OAuth2PasswordRequestForm.
+
+---
+
+## 3. Backend Structure
+
+```
+backend/
+├── main.py                    # FastAPI app: CORS, router mounts, startup/shutdown lifecycle
+├── worker.py                  # Worker process: polls worker_jobs, runs analysis
+├── api/                       # 9 route handlers
+│   ├── auth_routes.py         # POST /auth/login, /auth/register, GET /auth/me
+│   ├── upload_routes.py       # POST /upload (VCF/CSV), DELETE /upload/data
+│   ├── analysis_routes.py     # /api/analysis — start, status, results, dashboard-data
+│   ├── annotation_routes.py   # /api/annotations — variant details, clinical summary, literature
+│   ├── variant_routes.py      # /api/variants — multi-source lookup, saved variants
+│   ├── admin_routes.py        # /api/admin — users, panels, markers, discoveries
+│   ├── insights_routes.py     # /api/insights — AI-generated text summaries (Gemini)
+│   ├── health_routes.py       # /health — health check
+│   └── notification_routes.py # /ws/notifications — WebSocket + REST notifications
+├── services/                  # 30+ service modules
+│   ├── analysis_service.py    # Orchestrator: coordinates annotation + insight phases
+│   ├── variant_loader.py      # Load variants from DB into VariantLite objects + gene map
+│   ├── annotation_coordinator.py # Decides reuse vs new API call for each variant
+│   ├── shared_annotation_service.py # Reads/writes SharedVariantAnnotation cache
+│   ├── insight_dispatcher.py  # Dispatches all 16 generators in correct order
+│   ├── insight_generators/    # 16 generators (see §7)
+│   ├── genetic_api_service.py # Multi-API hub (Ensembl, ClinVar, PharmGKB, SNPedia, LitVar)
+│   ├── ensembl_vep_local.py   # Local VEP: SQLite cache + VCF file scan fallback
+│   ├── clinvar_local.py       # ClinVar PostgreSQL reader (2.6 GB table)
+│   ├── gnomad_local.py        # gnomAD PostgreSQL + CADD SQLite cache reader
+│   ├── gnomad_bigquery.py     # gnomAD Google BigQuery fallback
+│   ├── thousand_genomes_local.py # 1000 Genomes PostgreSQL reader (16 GB table)
+│   ├── local_annotation.py    # Aggregates all local sources into unified annotation dict
+│   ├── auto_categorizer.py    # Auto-assigns categories to variants from annotation signals
+│   ├── multi_source_categorizer.py # Merges categorizer results into VariantMapping rows
+│   ├── scoring_engine.py      # Composite pathogenicity scoring (ClinVar + gnomAD + AM)
+│   ├── knowledge_graph.py     # Builds gene/condition relationship graphs
+│   ├── discovery_service.py   # Auto-discovers new panel markers (pending_discoveries table)
+│   ├── insights_service.py    # Gemini LLM summaries (separate from rule-based generators)
+│   ├── bq_public.py           # Google BigQuery public genomics datasets (ChEMBL, FDA)
+│   ├── user_service.py        # User CRUD, password hashing, JWT creation
+│   ├── notification_service.py # Push notifications via WebSocket + DB
+│   ├── job_logs.py            # Per-job structured logging into genetic_analyses.job_logs
+│   └── api_endpoints.py       # Centralized API endpoint config + rate limits
+├── core/
+│   ├── config.py              # Settings (Pydantic BaseSettings) — env vars
+│   ├── auth.py                # JWT HS256, 10-day expiry, bcrypt password hashing
+│   ├── container.py           # Lightweight DI container (singletons + transients)
+│   ├── exceptions.py          # Custom exception hierarchy
+│   └── telemetry.py           # OpenTelemetry tracing configuration
+└── db/
+    ├── database.py            # Async SQLAlchemy 2.0 engine + session factory
+    ├── models.py              # All ORM models (~500 lines)
+    ├── schemas.py             # Pydantic request/response schemas
+    ├── annotation_schemas.py  # TypedDicts for annotation JSON shapes
+    └── datasource_models.py   # ORM models for local data source tables (ClinVar, gnomAD, etc.)
+```
+
+### Startup Lifecycle (`main.py` lifespan)
+
+1. `init_db()` — Ensure schema exists
+2. Install `JobLogHandler` on analysis-related loggers
+3. Validate ClinVar PG availability (instant row count)
+4. Validate gnomAD PG availability (instant row count)
+5. Start gnomAD SQLite CADD cache preload in background task
+6. Validate 1000 Genomes PG availability
+7. Start Ensembl VEP SQLite cache preload in background task
+8. Schedule nightly purge task (hard-deletes soft-deleted analyses > 30 days)
+9. Schedule analysis completion watcher (polls every 12s, creates notifications)
+
+---
+
+## 4. Frontend Structure
+
+```
+frontend/src/
+├── app/
+│   ├── layout.tsx             # Root layout
+│   ├── page.tsx               # SPA entry: AuthForm → FileUpload → Dashboard flow
+│   └── globals.css
+├── components/
+│   ├── Dashboard.tsx          # Navigation + lazy-loaded panel orchestrator (14 tabs)
+│   ├── AuthForm.tsx           # Login/register with dark/light mode toggle
+│   ├── FileUpload.tsx         # Drag-drop VCF/CSV with chunked upload + progress
+│   ├── VariantSearch.tsx      # Direct rsid/gene lookup with annotation display
+│   ├── SettingsPanel.tsx      # User profile, password change, data deletion
+│   ├── SmartInsights.tsx      # Gemini AI insight panel (per section)
+│   ├── GeneticAnnotation.tsx  # Standalone annotation viewer (unused in main flow)
+│   ├── KnowledgeGraph.tsx     # Gene/condition relationship graph visualizer
+│   ├── AnalysisProgressLoader.tsx # Polling progress bar during analysis
+│   ├── categories/            # 15 files: 13 active panels + shared utilities
+│   │   ├── shared.tsx         # CategoryHeader, SectionCard, VariantLinks, VariantDetailTrigger
+│   │   ├── types.ts           # TypeScript interfaces for all 14 category data shapes
+│   │   ├── VariantDetailDialog.tsx  # Annotation overlay (Ensembl, ClinVar, gnomAD, etc.)
+│   │   ├── GenomicCharts.tsx  # Recharts-based: CapacityChart, DrugResponseChart, TraitRadarChart
+│   │   ├── ResearchLinks.tsx  # External links (dbSNP, ClinVar, SNPedia, PubMed)
+│   │   ├── HealthPanel.tsx    # Health risks + risk level badges
+│   │   ├── DrugResponsesPanel.tsx  # Drug response predictions + metabolism charts
+│   │   ├── AncestryPanel.tsx  # Population composition + haplogroups
+│   │   ├── CarrierStatusPanel.tsx  # Autosomal recessive/dominant carrier flags
+│   │   ├── FoodNutritionPanel.tsx  # Nutrient metabolism + dietary recommendations
+│   │   ├── SportsPanel.tsx    # Athletic performance genetic factors
+│   │   ├── PhysicalTraitsPanel.tsx # Physical characteristic predictions
+│   │   ├── IntelligencePanel.tsx   # Cognitive profile + percentile scores
+│   │   ├── PersonalityPanel.tsx    # Personality traits + behavioral insights
+│   │   ├── WellnessPanel.tsx  # Wellness metric optimization
+│   │   ├── MethylationPanel.tsx    # Methylation cycle capacity
+│   │   ├── DetoxPanel.tsx     # Detoxification phase capacity
+│   │   ├── RareMutationsPanel.tsx  # Clinically significant rare variants
+│   │   └── UncommonMutationsPanel.tsx # Low-frequency variants (0.1%–5%)
+│   ├── admin/
+│   │   └── AdminPanel.tsx     # User management, panel marker CRUD, discovery approvals
+│   ├── dashboard/             # Sub-components for dashboard navigation
+│   └── ui/                    # shadcn/ui primitives (button, dialog, card, badge, etc.)
+├── utils/
+│   └── theme.ts               # Centralized glassmorphism theme (getGlassBackground, etc.)
+├── hooks/
+│   └── use-mobile.ts          # Mobile viewport detection hook
+└── lib/
+    └── utils.ts               # cn() utility (clsx + tailwind-merge)
+```
+
+### Panel Data Flow
+
+Each category panel follows the same pattern:
+```
+Dashboard renders panel ──► panel fetches GET /api/analysis/dashboard-data?section=X
+                            ──► deserializes typed response
+                            ──► renders with glassmorphism theme
+                            ──► VariantDetailDialog on click (fetches /api/annotations/variant/{rsid})
+```
+
+All API calls use direct `fetch()` with `Authorization: Bearer {token}` header. No API client abstraction.
+
+---
+
+## 5. Database Schema
+
+### Core Tables
+
+| Table | Size | Purpose |
+|-------|------|---------|
+| `users` | — | User accounts (is_admin, is_verified) |
+| `genetic_analyses` | — | Analysis records (status, progress, job_logs JSONB) |
+| `worker_jobs` | — | Job queue for worker process |
+| `notifications` | — | User notifications (WebSocket + REST) |
+
+### Variant Deduplication Architecture
+
+| Table | Size | Purpose |
+|-------|------|---------|
+| `genetic_markers` | 98 MB | Global catalog of all unique variants (rsid, chr, pos, ref, alt). Never deleted. 731K rows. |
+| `analysis_variants` | 367 MB | Links analysis → marker + user genotype. Cascade-deleted with analysis. |
+| `shared_variant_annotations` | 4.5 GB | External API results per marker (13 JSON columns). Never deleted — accumulates as shared cache. 714K annotated rows. |
+| `variant_annotations` | 133 MB | User-specific references to shared annotations. |
+| `variant_lookup_cache` | — | Processed variant response cache with usage counting. |
+
+This deduplication means repeated uploads of the same rsid across all users never re-fetches external APIs.
+
+### Insight Tables (all cascade-delete on analysis)
+
+All 14 insight tables follow the same pattern:
+
+| Table | Key Columns |
+|-------|------------|
+| `health_risks` | condition, risk_level (String), risk_score (String "0.8"), associated_variants (JSON array), recommendations (JSON array) |
+| `drug_responses` | drug, metabolism_type, response_level, variants_involved (JSON array) |
+| `physical_traits` | trait, result, confidence, associated_variants (JSON array) |
+| `nutrition_traits` | nutrient, sensitivity_level, dietary_recommendations (JSON array) |
+| `sports_performance` | sport_type, advantage_level, sport_recommendations (JSON array) |
+| `cognitive_profiles` | cognitive_area, performance_level, percentile, enhancement_suggestions (JSON array) |
+| `personality_traits` | trait_name, trait_level, behavioral_insights (JSON array) |
+| `ancestry_results` | population, composition (JSON), maternal_haplogroup (JSON), neanderthal_variants (JSON) |
+| `carrier_status` | condition, carrier_type, associated_variants (JSON array) |
+| `wellness_metrics` | metric, optimization_level, lifestyle_recommendations (JSON array) |
+| `methylation_profiles` | pathway, capacity_level, supplement_recommendations (JSON array) |
+| `detoxification_profiles` | phase, capacity, support_recommendations (JSON array) |
+| `rare_mutations` | gene, condition, clinical_significance, clinical_actions (JSON array), monitoring_recommendations (JSON array) |
+| `uncommon_mutations` | gene, consequence_type, lifestyle_implications (JSON array), monitoring_suggestions (JSON array) |
+
+### Mapping Tables
+
+| Table | Size | Purpose |
+|-------|------|---------|
+| `variant_mappings` | 126 MB | Replaces static registry. Stores category↔variant mappings. 237K rows. |
+| `category_rules` | — | Templates for auto-categorizer output shapes |
+| `pending_discoveries` | — | Auto-discovered markers awaiting admin approval |
+
+`variant_mappings` schema:
+```
+category  | map_type | key (rsid or gene) | data (JSON) | sources (JSON array)
+```
+
+**Distribution (current DB):**
+```
+uncommon  | rsid: 224,115     health     | rsid: 9,435
+rare      | rsid:   4,974     drug       | rsid:   884
+carrier   | rsid:     669     cognitive  | rsid:   440 + gene: 12
+physical  | rsid:     539     sports     | rsid:   414
+nutrition | rsid:     385     detox      | rsid:   231 + gene: 10
+methylation| rsid:   243     wellness   | rsid:   309
+personality| rsid:   165     ancestry   | rsid:   137
+```
+
+### Local Data Source Tables (datasource_models.py)
+
+| Table | Size | Content |
+|-------|------|---------|
+| `thousand_genomes_variants` | 16 GB | 1000 Genomes Phase 3 population allele frequencies |
+| `clinvar_variants` | 2.6 GB | ClinVar variant clinical significance annotations |
+| `clinvar_gene_stats` | 8 MB | Per-gene pathogenicity statistics from ClinVar |
+| `clinvar_gene_conditions` | 1 MB | Gene → condition associations from ClinVar |
+| `ensembl_genes` | 7 MB | Gene symbols, biotypes, chromosomal positions |
+| `ancestry_aims_panel` | 123 MB | Ancestry Informative Markers panel |
+
+---
+
+## 6. Analysis Pipeline
+
+```
+POST /upload
+    │
+    ▼
+variant_uploader.py
+    │  parse VCF/CSV lines into (rsid, chr, pos, ref, alt, genotype) tuples
+    │  batch 1000 at a time
+    │  upsert into genetic_markers (dedup by rsid)
+    │  insert into analysis_variants (analysis_id, marker_id, genotype)
+    │
+    ▼
+worker_jobs INSERT (analysis_id, params)
+    │
+    ▼ (worker process picks up job)
+    │
+analysis_service.py — process_analysis()
+    │
+    ├─ Phase 1 (0%–2%):   variant_loader.py
+    │                      Load VariantLite objects from DB
+    │                      Build rsid_gene_map from ClinVar (rsid → gene)
+    │                      Correct ref alleles from local sources
+    │
+    ├─ Phase 2 (2%–30%):  annotation_coordinator.py
+    │                      For each variant:
+    │                        Check SharedVariantAnnotation for existing data
+    │                        If exists + fresh: reuse (no API call)
+    │                        If missing/stale: call genetic_api_service.py
+    │                          → Ensembl VEP (local SQLite cache first, remote fallback)
+    │                          → ClinVar local PG
+    │                          → gnomAD local PG + CADD cache
+    │                          → 1000 Genomes local PG
+    │                          → PharmGKB/ClinPGx API
+    │                          → SNPedia API
+    │                          → LitVar API
+    │                      Store result in shared_variant_annotations
+    │
+    ├─ Phase 3 (30%–90%): bq_public.py (optional BigQuery enrichment)
+    │                      → ChEMBL drug mechanisms
+    │                      → FDA drug interaction labels
+    │                      → AlphaFold protein structures
+    │
+    ├─ Phase 3.5:          multi_source_categorizer.py
+    │                      auto_categorizer.py assigns categories from annotation signals
+    │                      Results stored as new VariantMapping rows
+    │
+    └─ Phase 4 (90%–100%): insight_dispatcher.py
+                           Dispatch all 16 insight generators in sequence
+                           Populate 14 insight tables
+                           Update analysis_status = 'completed'
+```
+
+### Resume Logic
+
+If the worker crashes mid-analysis, it can resume from the last completed phase by reading `genetic_analyses.current_step`:
+
+```
+'initializing'         → restart from Phase 1
+'annotating_variants'  → restart annotation (Phase 2) — NOTE: cannot tell if partial
+'enriching_data'       → skip to Phase 3
+'generating_insights'  → skip to Phase 4
+'completed'            → no-op
 ```
 
 ---
 
-## 3. Database Architecture
+## 7. Insight Generation Pipeline
 
-### 3.1 Core Tables
+### Generator Context
 
-| Table | Purpose | Lifecycle |
-|-------|---------|-----------|
-| `users` | Accounts | Persistent |
-| `genetic_analyses` | Analysis header (status, progress, logs) | Soft-deletable |
-| `genetic_markers` | Global variant catalog (rsid, chr, pos, ref, alt) | **Never deleted** |
-| `analysis_variants` | User → marker link + genotype | CASCADE delete with analysis |
-| `shared_variant_annotations` | Per-marker annotation cache (1 row per rsid) | **Never deleted** |
-| `variant_annotations` | User-specific refs to shared annotations | CASCADE delete |
+Before dispatching generators, `insight_dispatcher.py` builds a shared `GeneratorContext`:
+- All `VariantLite` objects for the analysis
+- All `AnnotationResult` objects (pre-fetched)
+- `VariantProfile` per rsid (pre-computed: ref allele, gene, consequence, impact, frequency, is_hom_ref, is_het, composite score, pathogenicity score)
+- `rsid_gene_map` (ClinVar rsid → gene symbol)
+- `variant_profiles` dict (rsid → VariantProfile)
 
-### 3.2 Annotation Columns on `shared_variant_annotations`
+### The 16 Generators
 
-| Column | Source | Type |
-|--------|--------|------|
-| `ensembl_data` | Ensembl VEP (local VCF + remote API) | JSON |
-| `clinvar_data` | ClinVar API (remote) | JSON |
-| `clinvar_local_data` | ClinVar PostgreSQL tables | JSON |
-| `gnomad_data` | gnomAD (local TSV + SQLite cache + BigQuery) | JSON |
-| `gnomad_tx_data` | gnomAD transcript annotation (tabix) | JSON |
-| `thousand_genomes_data` | 1000 Genomes Phase 3 (PostgreSQL) | JSON |
-| `alpha_missense_data` | AlphaMissense (tabix) | JSON |
-| `pharmgkb_data` | ClinPGx API (misnamed column) | JSON |
-| `snpedia_data` | SNPedia API | JSON |
-| `litvar_data` | LitVar/PubMed API | JSON |
-| `chembl_data` | ChEMBL (BigQuery) | JSON |
-| `fda_drug_data` | FDA drug labels (BigQuery) | JSON |
-| `alphafold_data` | AlphaFold (BigQuery) | JSON |
+| Generator | Table | Method |
+|-----------|-------|--------|
+| `health.py` | `health_risks` | `generate_from_maps()` with `assess_risk_level()` |
+| `drug_response.py` | `drug_responses` | Custom gene-based multi-drug loop |
+| `physical_traits.py` | `physical_traits` | `generate_from_maps()` + `boost_if_pathogenic()` |
+| `nutrition.py` | `nutrition_traits` | `generate_from_maps()` + `boost_if_pathogenic()` |
+| `sports.py` | `sports_performance` | `generate_from_maps()` + `boost_if_pathogenic()` |
+| `cognitive.py` | `cognitive_profiles` | Custom percentile model (±10 per zygosity) |
+| `personality.py` | `personality_traits` | `generate_from_maps()` + `boost_if_pathogenic()` |
+| `ancestry.py` | `ancestry_results` | Custom AIMs genotype likelihood + haplogroup extraction |
+| `carrier.py` | `carrier_status` | Custom zygosity classification + ClinVar discovery |
+| `wellness.py` | `wellness_metrics` | `generate_from_maps()` + `boost_if_pathogenic()` |
+| `methylation.py` | `methylation_profiles` | `generate_from_maps()` + `boost_if_pathogenic()` |
+| `detox.py` | `detoxification_profiles` | `generate_from_maps()` + `boost_if_pathogenic()` |
+| `rare_mutations.py` | `rare_mutations` | Custom ClinVar significance inspection (<1% frequency) |
+| `uncommon_mutations.py` | `uncommon_mutations` | Custom consequence filter, capped at 500 results |
 
-### 3.3 Insight Tables (all CASCADE delete with analysis)
+### generate_from_maps() Core Logic
 
-`health_risks`, `drug_responses`, `physical_traits`, `nutrition_traits`, `sports_performance`, `cognitive_profiles`, `personality_traits`, `ancestry_results`, `carrier_status`, `wellness_metrics`, `methylation_profiles`, `detoxification_profiles`, `rare_mutations`, `uncommon_mutations`
+All map-driven generators share the same 3-step variant processing loop in `base.py`:
 
-### 3.4 Configuration Tables
+```
+for variant in ctx.variants:
+    1. Skip if no-call genotype (./. or .|.)
+    2. Skip if homozygous reference (user carries no risk allele)
+    3. PATH A — RSID match (rsid in rsid_map):
+         a. Skip if ClinVar-confirmed benign
+         b. For non-indels: verify user allele matches expected risk allele
+              (includes strand-flip complement fallback)
+         c. For indels: SKIP allele verification — accepted on rsid presence alone
+         d. Build insight from mapping data
+    4. PATH B — Gene match (Ensembl/ClinVar gene in gene_map):
+         a. Skip if ClinVar-confirmed benign
+         b. Require HIGH or MODERATE VEP consequence (or pathogenic ClinVar)
+         c. Build insight from gene mapping data
+```
 
-| Table | Purpose |
-|-------|---------|
-| `variant_mappings` | rsid/gene → category mappings (manual + auto-discovered) |
-| `panel_marker_configs` | Panel↔marker associations (admin UI) |
-| `category_rules` | Auto-categorization rules engine |
-| `annotation_source_configs` | Enable/disable annotation sources |
-| `pending_discoveries` | Auto-discovered markers awaiting admin approval |
+### Risk Assessment Logic
 
-### 3.5 Data Source Tables (ETL-populated)
+`assess_risk_level()` in `base.py` blends three signals:
 
-| Table | Row Count | Source File |
-|-------|-----------|-------------|
-| `clinvar_variants` | ~8.7M | `data_sources/clinvar/` TSV + VCF |
-| `clinvar_gene_conditions` | — | `gene_condition_source_id.txt` |
-| `clinvar_gene_stats` | — | `gene_specific_summary.txt` |
-| `gnomad_variants` | ~0 (ETL not run) | `data_sources/gnomad/*.tsv.gz` |
-| `gnomad_gene_constraints` | — | BigQuery |
-| `ancestry_aims_panel` | ~60K (FST≥0.70) | Migration 010 (from 1000G) |
+1. **Pathogenicity composite score** (0.0–1.0, from scoring_engine.py):
+   - ≥ 0.80 → `high`
+   - ≥ 0.60 → `high` if multiplier ≥ 2.0, else `moderate`
+   - ≥ 0.30 → `moderate` if multiplier ≥ 2.0, else `average`
+   - < 0.30 → fallback to multiplier-only thresholds
+
+2. **Risk multiplier** (from `VariantMapping.data['risk_multiplier']`):
+   - ≥ 1.7 → at least `moderate`  
+   - ≥ 1.2 → at least `low`
+
+3. **Zygosity adjustment** (±1 step on severity ladder):
+   - Homozygous alt → +1 step
+   - Heterozygous → no change
+   - Homozygous ref → −1 step (but only if ref_allele is known)
+
+**Severity ladder:** `low → average → moderate → high → very_high`
+
+**Risk-to-score:** `low=0.2, average=0.4, moderate=0.6, high=0.8, very_high=0.95`
+
+### Scoring Engine (`scoring_engine.py`)
+
+Computes composite pathogenicity score per variant from:
+- ClinVar clinical significance classification
+- gnomAD allele frequency (rare = more concerning)
+- AlphaMissense missense pathogenicity score
+- CADD PHRED score
+- VEP consequence severity
+
+Used in `analysis_routes.py /api/analysis/dashboard-data` and `annotation_routes.py /api/annotations/variant/{rsid}`.
 
 ---
 
-## 4. Variant Mapping System (Registry)
+## 8. External Data Sources
 
-### 4.1 How Mappings Work
+### Local (PostgreSQL/SQLite — no API cost)
 
-The `variant_mappings` table is the **central knowledge base** that maps genetic variants to health insights. Each row contains:
+| Source | Storage | Size | Content |
+|--------|---------|------|---------|
+| ClinVar | PostgreSQL | 2.6 GB | Clinical significance for 2.6M variants; provides ref/alt alleles for allele verification |
+| gnomAD (current) | flat TSV (`data_sources/gnomad/`) | varies | **CADD PHRED, conservation (PhyloP), SpliceAI scores only. No AF columns.** Allele frequency scoring via `gnomad_af` source is non-functional for 99.99% of variants (only 2/609K have `gnomad_data.found=true`). |
+| gnomAD v2.1.1 (downloading) | `data_sources/gnomad_v2/` exomes | ~35 GB | NFE sub-pop AFs (bgr, est, nwe, seu, swe, fin, asj). ETL pipeline not yet built. chr22 done. |
+| 1000 Genomes | PostgreSQL | 16 GB | Phase 3 allele frequencies across 26 populations |
+| Ensembl VEP | SQLite cache + VCF | varies | Variant consequence & gene annotations; `allele_string` is the primary allele verification source for 609K variants |
+| AlphaMissense | flat TSV (`data_sources/alpha_missense/`) | varies | Missense variant pathogenicity predictions (am_pathogenicity, am_class) |
+| Ancestry AIMs | PostgreSQL | 123 MB | 60,220 Ancestry Informative Markers; ~1,440 have gnomAD NFE subpop_freqs |
 
-```
-category: 'health' | 'drug' | 'carrier' | 'physical' | ...
-map_type: 'rsid' | 'gene'
-key:      'rs7903146' (for rsid) or 'CYP2D6' (for gene)
-data:     JSON with category-specific fields
-```
+### Remote APIs (rate-limited)
 
-At analysis time, `_load_registry()` loads all active mappings into an in-memory dict:
-```python
-registry[category][map_type][key] = data
-# e.g. registry['health']['rsid']['rs7903146'] = {"condition": "Type 2 Diabetes", "risk_multiplier": 1.4}
-```
+| Source | Rate Limit | Purpose |
+|--------|-----------|---------|
+| Ensembl REST | fallback only | VEP consequence when local cache misses |
+| ClinPGx/PharmGKB | 2.0 req/s | Pharmacogenomic drug-gene interactions |
+| SNPedia | moderate | Phenotype associations, wiki-style |
+| LitVar/PubMed | moderate | Literature citations per variant |
+| NCBI | 10 req/s (with API key) | Gene/variant metadata |
 
-### 4.2 Two Sources of Mappings
+### Optional Cloud (BigQuery)
 
-1. **Manual (curated)**: ~100 hand-picked mappings with evidence-based risk multipliers
-2. **Auto-discovered (~20,000)**: Generated by `auto_categorizer.py` running `category_rules` against ClinVar data
-
-### 4.3 Auto-Categorization Rules Engine
-
-`category_rules` table defines rules like:
-- `clinvar_significance = 'Pathogenic'` → category `health`, risk_multiplier=3.0
-- `gene_list = 'CYP2D6,CYP2C19,...'` → category `drug`
-- `clinvar_condition_keyword = 'cancer'` → category `health`
-
-The auto-categorizer (`auto_categorizer.py`) queries ClinVar, creates `variant_mappings` rows with `is_auto_discovered=true`, capped at 2,000 per category.
-
-### 4.4 Data Shape by Category
-
-**Health rsid map:**
-```json
-{"condition": "Type 2 Diabetes", "risk_multiplier": 1.4}
-```
-
-**Drug rsid map:**
-```json
-{"gene": "CYP2C9", "drugs": ["warfarin", "phenytoin"]}
-```
-
-**Drug gene map:**
-```json
-{"gene": "CYP2D6", "drugs": [["drug_name", "response_type", "recommendation"]]}
-```
-
-**Carrier rsid map:**
-```json
-{"condition": "Sickle Cell Disease", "status": "non-carrier"}
-```
-
-**Trait-based categories (physical, nutrition, sports, cognitive, personality, wellness, methylation, detox):**
-```json
-{"trait": "...", "category": "...", "metric": "...", ...category-specific-fields}
-```
+Requires GOOGLE_APPLICATION_CREDENTIALS:
+- gnomAD BigQuery (fallback when local PG empty — practically used for most variants since local gnomAD has no AF data)
+- ChEMBL drug mechanisms
+- FDA drug interaction labels
+- AlphaFold protein structure data
 
 ---
 
-## 5. Insight Generation Pipeline
+## 9. Authentication & Security
 
-### 5.1 Generator Architecture
-
-All 14 generators follow the same contract:
-```python
-async def generate_X(ctx: GeneratorContext) -> int:
-    # Returns count of insight rows created
-```
-
-`GeneratorContext` carries:
-- `variants`: All user variants (VariantLite objects)
-- `annotation_results`: Dict[rsid → AnnotationResult] with annotation JSON
-- `variant_profiles`: Dict[rsid → VariantProfile] — pre-computed per-variant enrichment
-- `registry`: category → {rsid: {}, gene: {}} mapping dicts
-- `rsid_gene_map`: rsid → gene symbol lookup
-
-### 5.2 Map-Driven Generation (`generate_from_maps`)
-
-Most generators (health, drug, physical, nutrition, sports, cognitive, personality, wellness, methylation, detox) delegate to `generate_from_maps()` in `base.py`, which:
-
-1. Iterates ALL user variants
-2. For each variant with an rsid:
-   a. Gets genotype, ref allele from annotations
-   b. **Skips homozygous reference** (user doesn't carry risk allele)
-   c. **Skips ClinVar-benign** variants (defense-in-depth)
-   d. Checks rsid_map for direct match → calls `build_from_rsid()`
-   e. Extracts gene/consequence → checks gene_map → calls `build_from_gene()`
-3. Deduplicates by `dedup_field` (e.g., condition name)
-
-### 5.3 Standalone Generators
-
-- **Carrier status**: Custom logic — uses ClinVar data to discover carrier variants beyond the registry. Classifies as `affected`/`carrier`/`unaffected` based on genotype vs ref/alt alleles.
-- **Rare mutations**: Finds ClinVar pathogenic variants with population frequency < 1%. Uses allele verification (including strand-flip correction).
-- **Uncommon mutations**: Finds variants with functional consequences at 0.1%–5% frequency.
-- **Ancestry**: Uses AIMs panel (ancestry-informative markers) with log-likelihood model across 5 super-populations.
-
-### 5.4 Zygosity-Aware Risk Assessment
-
-The system adjusts risk/trait levels based on genotype:
-- **Homozygous reference**: De-escalate (user doesn't carry the variant)
-- **Heterozygous**: Baseline level (one copy of the variant)
-- **Homozygous alternate**: Escalate (two copies of the variant)
-
-Functions: `is_homozygous_reference()`, `is_heterozygous()`, `zygosity_adjust()`
-
-### 5.5 Pathogenicity Scoring Engine
-
-`scoring_engine.py` aggregates evidence from all annotation sources:
-
-| Source | Weight | Score Range |
-|--------|--------|------------|
-| ClinVar (API) | 0.30 | 0.0 (benign) – 1.0 (pathogenic) |
-| ClinVar (local) | 0.30 | 0.0 – 1.0 |
-| CADD PHRED | 0.15 | Normalized from PHRED scale |
-| AlphaMissense | 0.15 | Direct am_pathogenicity value |
-| gnomAD AF | 0.10 | Rarity as pathogenicity proxy |
-| SIFT | 0.05 | Inverted (low = deleterious) |
-| PolyPhen | 0.05 | Direct score |
-| Conservation | 0.05 | PhyloP normalized |
-| SpliceAI | 0.05 | Direct max score |
-
-Classification thresholds: pathogenic ≥ 0.80, likely_pathogenic ≥ 0.60, uncertain ≥ 0.30
+- **Algorithm**: JWT HS256 with 10-day expiry
+- **Transport**: `Authorization: Bearer {token}` header (frontend) / can be HttpOnly cookie
+- **Password hashing**: bcrypt via `passlib`
+- **Route protection**: All routes use `Depends(get_current_user)` except `/auth/login`, `/auth/register`, `/health`
+- **CORS**: Allows `localhost:3000` and `localhost:3001` only
+- **Admin guard**: `Depends(require_admin)` on all `/api/admin/*` routes
 
 ---
 
-## 6. Annotation Sources
+## 10. Key Design Decisions
 
-### 6.1 Local Sources (no external API calls)
+### Shared Annotation Cache (Deduplication)
 
-| Source | File/Table | Genome Build | Lookup Method |
-|--------|-----------|-------------|---------------|
-| ClinVar Local | `clinvar_variants` (PG) | GRCh37/38 | rsid + allele_id |
-| Ensembl VEP | `data_sources/ensembl/` VCFs → SQLite cache | GRCh38 | rsid |
-| gnomAD CADD | `data_sources/gnomad/*.tsv.gz` → SQLite cache | GRCh38 | chr:pos:ref:alt |
-| gnomAD-tx | `data_sources/gnomad/*tx_annotated*` (tabix) | GRCh37 | chr:pos |
-| AlphaMissense | `data_sources/alpha_missense/` (tabix) | hg19/hg38 | chr:pos:ref:alt |
-| 1000 Genomes | PostgreSQL import from VCF | GRCh37 | rsid, chr:pos |
+`shared_variant_annotations` accumulates API responses forever and is never deleted, even when users delete their data. This means:
+- Repeated analyses of common variants (rs53576, APOE variants) never re-fetch
+- Two users uploading 23andMe data sharing millions of common variants get instant annotation reuse
+- 714K rows already cached after a handful of analyses
 
-### 6.2 Remote API Sources
+Trade-off: Table grows indefinitely and currently sits at 4.5 GB with 13 JSON columns (each can be 10–500 KB per row).
 
-| Source | Service File | Status |
-|--------|-------------|--------|
-| Ensembl REST | `genetic_api_service.py` | Available but not used for bulk |
-| ClinVar NCBI | `genetic_api_service.py` | Rate-limited (10 req/s) |
-| ClinPGx | `genetic_api_service.py` | Rate-limited (2 req/s) |
-| SNPedia | `genetic_api_service.py` | Available |
-| LitVar/PubMed | `genetic_api_service.py` | Available |
+### Worker/API Separation
 
-### 6.3 BigQuery Sources (optional)
+The worker and API run as separate Docker services reading from the same database. The API creates a `worker_jobs` row; the worker polls and executes. This means:
+- No async event loop contamination with long-running analysis code
+- Worker can be scaled independently
+- Crash in worker doesn't take down the API
+- Trade-off: No in-process job cancellation; must set DB flag and worker must poll it
 
-ChEMBL drug mechanisms, FDA drug labels, AlphaFold protein structure — currently disabled in production.
+### VariantMapping Replaces Static Registry
 
----
+Before migration 014, a static `variant_registry.py` file contained hardcoded rsid→condition maps. This was replaced by the `variant_mappings` table which:
+- Can be updated at runtime via admin panel
+- Supports auto-discovery of new markers via `discovery_service.py`
+- Enables per-source tracking (`sources` JSON column)
+- Trade-off: Admin panel needed for all mapping changes; no migration history without Alembic
 
-## 7. Frontend Architecture
+### Insight Generators vs LLM Insights
 
-### 7.1 Component Hierarchy
+Two separate insight systems exist:
+1. **Rule-based generators** (`insight_generators/`) — populate DB tables deterministically
+2. **Gemini AI summaries** (`insights_service.py`) — generate on-demand text summaries fetched by `SmartInsights.tsx`
 
-```
-page.tsx (SPA entry point)
-├── AuthForm.tsx         — Login/register
-├── FileUpload.tsx       — Drag-drop VCF/CSV upload
-├── Dashboard.tsx        — Category panel orchestrator
-│   ├── HealthPanel.tsx
-│   ├── DrugResponsesPanel.tsx
-│   ├── AncestryPanel.tsx
-│   ├── CarrierPanel.tsx
-│   ├── ... (13 category panels)
-│   └── VariantDetailDialog.tsx  — Annotation detail overlay
-├── VariantSearch.tsx    — Variant lookup interface
-├── SettingsPanel.tsx    — User profile
-└── AdminPanel.tsx       — Admin management
-```
+These systems are independent. The rule-based pipeline runs once per analysis; LLM summaries are generated lazily when the user opens a panel and cached in `ai_insight_cache`.
 
-### 7.2 Data Flow
+### Known Code Duplication (DRY Violations)
 
-1. Frontend calls `GET /api/analysis/dashboard-data` with analysis ID
-2. Backend queries all 14 insight tables + analysis header
-3. Returns JSON blob consumed by each category panel
-4. Panels render risk levels, recommendations, associated variants
-5. `VariantDetailDialog` fetches detailed annotation for a specific variant
-
-### 7.3 State Management
-
-- No global state manager (Redux, Zustand, etc.)
-- React hooks + localStorage for theme/token persistence
-- Each panel fetches its own data from the shared dashboard response
-
----
-
-## 8. Key Design Decisions
-
-### 8.1 Deduplication Architecture
-
-Genetic markers and annotations are stored globally and never deleted. When a user deletes their analysis, only `analysis_variants` and insight tables are cascade-deleted. This avoids redundant API calls for markers already seen across users.
-
-### 8.2 Lightweight Variant Loading (VariantLite)
-
-For analyses with 600K+ variants, the system avoids SQLAlchemy ORM overhead by loading variants as Core SQL rows into `VariantLite` dataclasses. This eliminates a 60-90 second event-loop stall from ORM materialization.
-
-### 8.3 Shared Annotation Service
-
-`shared_annotation_service.py` manages the annotation cache layer. Before making any external/local lookup, it checks `shared_variant_annotations` for existing data. Only missing variants trigger new lookups.
-
-### 8.4 Variant Profiles (Single Source of Truth)
-
-`build_variant_profiles()` runs ONCE before all generators, pre-computing:
-- Effective reference allele (annotation-preferred over marker)
-- Gene, consequence, impact
-- Population frequency
-- Zygosity classification (hom-ref, het, hom-alt)
-- ClinVar significance
-- Composite pathogenicity score
-
-All generators read from profiles rather than re-extracting from raw annotation JSON.
-
-### 8.5 Background Worker Architecture
-
-The `worker.py` process polls for pending analyses and runs them asynchronously. The worker pre-loads all local data sources at startup (ClinVar PG, gnomAD cache, Ensembl VEP cache, 1000 Genomes) to avoid repeated initialization.
-
----
-
-## 9. File Organization
-
-### Backend Services (~35 files)
-
-```
-services/
-├── analysis_service.py          # Main orchestrator (1800 LOC)
-├── analysis_queue.py            # Background job queue
-├── shared_annotation_service.py # Annotation cache layer
-├── scoring_engine.py            # Pathogenicity scoring
-├── auto_categorizer.py          # Category rules engine
-├── variant_uploader.py          # VCF/CSV parsing
-├── local_annotation.py          # Local source dispatch
-├── clinvar_local.py             # ClinVar PG queries
-├── clinvar_etl.py               # ClinVar file import
-├── clinvar_direct.py            # ClinVar direct file access
-├── ensembl_local.py             # Gene lookup service
-├── ensembl_vep_local.py         # VEP VCF → SQLite cache
-├── ensembl_vep_etl.py           # VEP ETL pipeline
-├── ensembl_etl.py               # Ensembl data ETL
-├── gnomad_local.py              # gnomAD PG queries
-├── gnomad_cache.py              # gnomAD SQLite cache
-├── gnomad_etl.py                # gnomAD file import
-├── gnomad_bigquery.py           # gnomAD BigQuery access + backfill
-├── gnomad_tx.py                 # gnomAD transcript annotation
-├── datasource_utils.py          # Shared data source utilities (VCF parsing, cache, type coercion)
-├── thousand_genomes_local.py    # 1000G PG queries
-├── thousand_genomes_etl.py      # 1000G import
-├── thousand_genomes_direct.py   # 1000G direct file access
-├── genetic_api_service.py       # Remote API hub
-├── api_endpoints.py             # API config + rate limits
-├── discovery_service.py         # Auto-discovery of markers
-├── insights_service.py          # Insight aggregation/API
-├── knowledge_graph.py           # Variant-gene-disease graph
-├── annotation_constants.py      # Annotation constants
-├── job_logs.py                  # Job log collector
-├── user_service.py              # User CRUD + auth
-├── health_insights.py           # DEAD — legacy mock
-├── drug_response.py             # DEAD — legacy mock
-└── insight_generators/          # 15 files (see §5)
-```
-
-### Key Counts (from latest analysis run)
-
-- **User variants**: 609,346 (consumer CSV)
-- **Genetic markers**: 731,703 (global catalog)
-- **Variant mappings**: 20,105 across 12 categories
-- **ClinVar records**: 8,690,147
-- **1000 Genomes records**: 112,777,885
-- **Ensembl VEP cache**: 712,732 variants
-- **gnomAD PG**: Empty (ETL not run), 419 in SQLite cache
-- **Insights generated**: 249 per analysis
+- **`GENE_CATEGORY_MAP`** — hardcoded gene→category map appears in `multi_source_categorizer.py` (authoritative), `auto_categorizer.py` (copy), and `discovery_service.py` (incompatible copy using wrong subcategory names like `pharmacogenomic` instead of `drug`).
+- **`_SEVERE_EXCLUSION_KW`** — 30 severe-disease exclusion keywords duplicated in `multi_source_categorizer.py` and `auto_categorizer.py`.
+- **`annotation_constants.py`** — `SOURCE_TO_COLUMN` maps `ensembl_vep → 'ensembl'` (same column as the `ensembl` source). When both are active, the second write silently overwrites the first.
+- **`GeneticAPIService` / `OptimizedGeneticAPIService`** — these are the **same class** in `genetic_api_service.py` exported under two names. Different import aliases are used across routes. Pick one name.
+- **`VariantLite` / `_MarkerLite`** — defined in `analysis_service.py` but imported from there by `variant_loader.py`. This creates a backwards dependency. These dataclasses should live in `variant_loader.py`.

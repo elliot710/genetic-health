@@ -289,6 +289,29 @@ tabix.fetch(chrom_clean, pos - 1, pos)         # 0-based half-open interval
 # Matches rows where fields[2].upper()==ref AND fields[3].upper()==alt
 ```
 
+### 3c. gnomAD v2 exomes (the real AF source) & BigQuery fallback
+
+The CADD file/cache in 3a **never carries allele frequency** — the source TSV
+has no af/ac/an columns, regardless of the build-mismatch bug above. It is
+conservation/pathogenicity-only (CADD, SIFT, PolyPhen, PhyloP, SpliceAI).
+
+Real population allele frequency comes from a separate source:
+**gnomAD v2.1.1 exomes** (`gnomad_v2_local.py`, GRCh37, PG table
+`gnomad_v2_variants` + tabix VCF fallback). `local_annotation.run_all_lookups`
+merges its per-population AFs into `results.gnomad[rsid]['af']` (af_nfe) for
+any rsid the CADD-derived path didn't already resolve. This is the only path
+that feeds `scoring_engine._score_gnomad`'s `gnomad_af` evidence and the UI's
+allele-frequency display. Variants with only CADD/conservation data carry no
+`af` key at all — absence is not scored or displayed as zero.
+
+`gnomad_bigquery.py` is a creds-gated remote fallback (checks for
+`google-cloud-bigquery` + credentials via `is_available()`). It is reachable
+only from `GnomadLocalService.lookup()`/`lookup_by_position()` when
+`local_only` is not set, which in practice means **admin/ETL retrigger flows
+only** (`admin_routes.py`). The per-user analysis pipeline calls
+`lookup_batch()`/`lookup_batch_by_position()` instead, which have no
+BigQuery code path — BigQuery cannot be reached from analysis.
+
 ---
 
 ## 4. Ensembl VEP VCF Files

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db.database import get_session
 from ..db.models import User, DashboardShare, DashboardCache
 from .auth_routes import get_current_user
+from ..services.dashboard_service import build_dashboard_for_user
 from ..services.notification_service import get_notification_service
 
 logger = logging.getLogger(__name__)
@@ -177,7 +178,11 @@ async def get_shared_dashboard(
     if cached and cached.dashboard_json:
         return cached.dashboard_json
 
-    # No cache yet — return placeholder
+    # No cache — build on demand from owner's completed analyses
+    dashboard_data = await build_dashboard_for_user(db, owner_id)
+    if dashboard_data:
+        return dashboard_data
+
     return {
         "summary": {
             "total_variants": 0,

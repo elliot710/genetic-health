@@ -10,9 +10,13 @@ import {
   SectionCard,
   StatusBadge,
   DisclaimerCard,
-  VariantLinks,
-  PathogenicityBar,
+  VariantInfoBox,
+  GeneContextBox,
+  AlphaFoldDetailBox,
+  AlphaFoldBadge,
+  GeneBurdenStrip,
   ZygosityBadge,
+  ClickableRsidBadge,
   sensitivityToSeverity,
   formatLabel,
   MasonryLayout,
@@ -183,32 +187,39 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
             const itemKey = `nutrition-${index}`
             const isExpanded = selectedItem === itemKey
             const rsid = trait.gene?.startsWith('rs') ? trait.gene : undefined
-            const gene = !trait.gene?.startsWith('rs') ? trait.gene : undefined
+            const gene = !trait.gene?.startsWith('rs') ? trait.gene : (rsid ? data?.gene_symbol_map?.[rsid] : undefined)
             return (
               <div
                 key={index}
-                className={`${theme.glass} border ${theme.border} rounded-xl p-5 cursor-pointer hover:border-green-500/50 transition-all duration-300`}
+                className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 cursor-pointer hover:border-green-500/50 transition-all duration-300 overflow-hidden`}
                 onClick={() => setSelectedItem(isExpanded ? null : itemKey)}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-lg bg-green-500/10">
-                      <Icon className="h-5 w-5 text-green-400" />
+                <div className="flex items-start justify-between mb-1 gap-1">
+                  <div className="flex items-start gap-1.5 flex-1 min-w-0">
+                    <div className="p-1.5 rounded-lg bg-green-500/10 shrink-0">
+                      <Icon className="h-4 w-4 text-green-400" />
                     </div>
-                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{cleanCondition(trait.trait)}</h4>
-                    <StatusBadge
-                      label={formatLabel(trait.status)}
-                      severity={sensitivityToSeverity(trait.sensitivity)}
-                    />
+                    <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug`}>{cleanCondition(trait.trait)}</h4>
                   </div>
-                  <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
+                  <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
-                <div className="flex flex-wrap gap-1.5">
-                  {rsid && <Badge variant="secondary" className="text-xs font-mono">{rsid}{data?.genotype_map?.[rsid] ? ` ${data.genotype_map[rsid]}` : ''}</Badge>}
-                  {rsid && <ZygosityBadge genotype={data?.genotype_map?.[rsid]} />}
+                <div className="flex flex-wrap gap-1">
+                  <StatusBadge
+                    label={formatLabel(trait.status)}
+                    severity={sensitivityToSeverity(trait.sensitivity)}
+                  />
+                  {rsid && <ClickableRsidBadge rsid={rsid} gene={gene} genotype={data?.genotype_map?.[rsid]} alleleString={data?.allele_string_map?.[rsid]} token={token} isDarkMode={isDarkMode} />}
                   {gene && <Badge variant="outline" className="text-xs">{gene}</Badge>}
+                  <AlphaFoldBadge
+                    confidence={data?.alphafold_map?.[rsid]?.confidence}
+                    highPct={data?.alphafold_map?.[rsid]?.high_confidence_pct}
+                    lowPct={data?.alphafold_map?.[rsid]?.low_confidence_pct}
+                  />
                 </div>
+                {gene && data?.gene_stats_map?.[gene] && (
+                  <GeneBurdenStrip gene={gene} stats={data.gene_stats_map[gene]} theme={theme} />
+                )}
 
                 {isExpanded && (
                   <div className={`mt-4 pt-4 border-t ${theme.border} space-y-3`}>
@@ -224,11 +235,18 @@ export default function FoodNutritionPanel({ isDarkMode = false, data, token }: 
                         ))}
                       </div>
                     )}
-                    {rsid && <PathogenicityBar rsid={rsid} pathogenicityMap={data?.pathogenicity_map} theme={theme} />}
-                    <VariantLinks rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} />
+                    <VariantInfoBox rsid={rsid} gene={gene} token={token} isDarkMode={isDarkMode} alphaMissense={rsid ? data?.alpha_missense_map?.[rsid] : undefined} clinvarCount={rsid ? data?.clinvar_count_map?.[rsid] : undefined} genotype={rsid ? data?.genotype_map?.[rsid] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
+                    <GeneContextBox gene={gene} stats={gene ? data?.gene_stats_map?.[gene] : undefined} theme={theme} />
+                    {rsid && data?.alphafold_map?.[rsid] && (
+                      <AlphaFoldDetailBox
+                        rsid={rsid}
+                        alphafoldData={data.alphafold_map[rsid]}
+                        theme={theme}
+                      />
+                    )}
                   </div>
-                )}
-              </div>
+            )}
+          </div>
             )
           })}
         </MasonryLayout>

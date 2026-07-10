@@ -29,10 +29,7 @@ from ..db.database import async_session_factory
 from ..db.datasource_models import ClinVarSummaryRecord, ClinVarVcfRecord
 from ..db.models import ClinVarVariant, ClinVarGeneCondition, ClinVarGeneStats, GeneticMarker
 from .datasource_utils import (
-    load_known_rsids,
-    get_marker_fingerprint,
     get_file_fingerprint,
-    is_cache_valid,
     save_cache_meta,
     open_cache_db,
 )
@@ -246,38 +243,38 @@ class ClinVarDirectService:
         if not tsv_path:
             logger.warning("ClinVar direct: variant_summary.txt.gz not found in %s", _CLINVAR_DATA_DIR)
             return
-        marker_fp = await get_marker_fingerprint()
         file_fp = get_file_fingerprint(tsv_path)
-        schema_ok = False
-        if is_cache_valid(_SQLITE_FILE, _META_FILE, marker_fp, file_fp):
+
+        # Use existing cache if source file is unchanged (marker_fp not required —
+        # allows pre-built caches to load on a fresh server with no uploaded data).
+        if _SQLITE_FILE.exists() and _META_FILE.exists():
             try:
                 meta = json.loads(_META_FILE.read_text())
-                schema_ok = meta.get("schema_version") == _CACHE_SCHEMA_VERSION
+                if (
+                    meta.get("file_fingerprint") == file_fp
+                    and meta.get("schema_version") == _CACHE_SCHEMA_VERSION
+                    and meta.get("variant_count", 0) > 0
+                ):
+                    self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE)
+                    row = self._db.execute("SELECT COUNT(*) FROM clinvar_data").fetchone()
+                    self._variant_count = row[0] if row else 0
+                    logger.info("ClinVar direct: opened cache with %d variants", self._variant_count)
+                    return
             except Exception:
-                schema_ok = False
+                pass
 
-        if schema_ok:
-            self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE)
-            row = self._db.execute("SELECT COUNT(*) FROM clinvar_data").fetchone()
-            self._variant_count = row[0] if row else 0
-            logger.info("ClinVar direct: opened cache with %d variants", self._variant_count)
-            return
         logger.info(
-            "ClinVar direct: building cache from %s (schema v%d)...",
+            "ClinVar direct: building full cache from %s (schema v%d) — all clinical variants...",
             tsv_path.name, _CACHE_SCHEMA_VERSION,
         )
-        known_rsids = await load_known_rsids()
-        if not known_rsids:
-            logger.warning("ClinVar direct: no rsids in genetic_markers — skipping build")
-            return
-        count = await asyncio.to_thread(self._scan_tsv_to_sqlite, tsv_path, known_rsids)
-        save_cache_meta(_META_FILE, marker_fp, file_fp, count,
+        count = await asyncio.to_thread(self._scan_tsv_to_sqlite, tsv_path)
+        save_cache_meta(_META_FILE, "all_variants", file_fp, count,
                         extra={"schema_version": _CACHE_SCHEMA_VERSION})
         self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE)
         self._variant_count = count
         logger.info("ClinVar direct cache built: %d variants", count)
 
-    def _scan_tsv_to_sqlite(self, tsv_path: Path, known_rsids: set) -> int:
+    def _scan_tsv_to_sqlite(self, tsv_path: Path) -> int:
         tmp = _SQLITE_FILE.with_suffix(".tmp")
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
         if tmp.exists():
@@ -298,7 +295,7 @@ class ClinVarDirectService:
                     rec = ClinVarSummaryRecord.from_row(row)
                 except Exception:
                     continue
-                if not rec.rsid or rec.rsid not in known_rsids:
+                if not rec.rsid:
                     continue
                 ann = rec.to_annotation()
                 if rec.rsid not in aggregated:

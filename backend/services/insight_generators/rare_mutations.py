@@ -5,7 +5,8 @@ from ...db.models import RareMutation
 from .base import (
     GeneratorContext, extract_gene_and_consequence, extract_frequency,
     get_user_genotype, _get_effective_ref_allele, is_homozygous_reference,
-    is_no_call_genotype, is_indel_genotype,
+    is_no_call_genotype, is_indel_genotype, get_annotation_allele_parts,
+    is_heterozygous,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,9 +51,10 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
             if is_no_call_genotype(user_gt):
                 continue
             effective_ref = _get_effective_ref_allele(variant, annotation_result)
+            _, _ann_alt = get_annotation_allele_parts(annotation_result) if annotation_result else (None, None)
             if effective_ref:
                 gt = user_gt.upper()
-                if is_homozygous_reference(gt, effective_ref):
+                if is_homozygous_reference(gt, effective_ref, alt_allele=_ann_alt):
                     continue
                 # Strand-flip: if none of the alleles match ref on forward strand,
                 # try reverse complement — hom-ref on minus strand means no variant.
@@ -102,6 +104,7 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
         gene_conditions = []
         inheritance_pattern = 'unknown'
         penetrance = 'unknown'
+        review_statuses: list[str] = []
 
         if cv_local and cv_local.get('found'):
             clin_sigs = cv_local.get('clinical_significances', [])
@@ -123,24 +126,39 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
                 elif 'risk' in raw_sig:
                     clinical_significance = 'risk_factor'
 
-            gene_conditions = cv_local.get('gene_conditions', [])
-            if gene_conditions:
-                diseases = [gc.get('disease', '') for gc in gene_conditions
-                            if gc.get('disease') and gc.get('disease', '').lower() != 'not provided']
-                disease_association = '; '.join(diseases[:3]) if diseases else ''
+            # ClinVar local stores conditions as a flat list of strings under
+            # 'conditions' (not 'gene_conditions' which is a different legacy format).
+            raw_conditions = cv_local.get('conditions', [])
+            # Fallback: legacy dict-list format [{"disease": "..."}]
+            if not raw_conditions:
+                raw_conditions = [gc.get('disease', '') for gc in cv_local.get('gene_conditions', [])
+                                  if gc.get('disease')]
+            if raw_conditions:
+                _skip = {'not provided', 'not specified', 'see cases', 'not applicable', 'none', ''}
+                # Each condition string may itself be semicolon-separated (multiple conditions in one entry)
+                flat_conditions: list[str] = []
+                for raw_c in raw_conditions:
+                    for part in raw_c.split(';'):
+                        p = part.strip()
+                        if p and p.lower() not in _skip:
+                            flat_conditions.append(p)
+                if flat_conditions:
+                    disease_association = '; '.join(flat_conditions[:3])
 
-                # Infer inheritance from disease name
-                for gc in gene_conditions:
-                    d = gc.get('disease', '').lower()
-                    if 'dominant' in d:
+                # Infer inheritance pattern from condition names
+                for d in flat_conditions:
+                    dl = d.lower()
+                    if 'dominant' in dl:
                         inheritance_pattern = 'autosomal_dominant'
                         break
-                    elif 'recessive' in d:
+                    elif 'recessive' in dl:
                         inheritance_pattern = 'autosomal_recessive'
                         break
-                    elif 'x-linked' in d:
+                    elif 'x-linked' in dl:
                         inheritance_pattern = 'x_linked'
                         break
+
+            review_statuses = cv_local.get('review_statuses', [])
 
             if not gene:
                 genes = cv_local.get('genes', [])
@@ -159,6 +177,38 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
 
         if not gene:
             continue
+
+        # Indel genotypes bypass allele verification. Without population frequency
+        # confirming rarity, require at least multi-submitter ClinVar evidence to
+        # avoid false positives from ambiguous D/I calls at multi-allelic positions.
+        if freq is None and is_indel_genotype(user_gt):
+            has_strong_evidence = any(
+                'multiple submitters' in s.lower() or 'expert panel' in s.lower()
+                or 'practice guideline' in s.lower()
+                for s in review_statuses
+            )
+            if not has_strong_evidence:
+                continue
+
+        # X-linked carrier filter: het females are carriers, not affected.
+        # Use the variant's chromosome as ground truth — condition names like
+        # "Rett syndrome" or "Fabry disease" don't contain "x-linked".
+        variant_chrom = getattr(variant, 'chromosome', None)
+        effective_x_linked = (inheritance_pattern == 'x_linked') or (variant_chrom == 'X')
+        if effective_x_linked:
+            if profile:
+                is_het = profile.is_het
+            else:
+                is_het = is_heterozygous(user_gt)
+
+            if ctx.inferred_sex == 'female' and is_het:
+                # Het female on X-linked condition = carrier, not affected
+                continue
+            elif ctx.inferred_sex == 'male' and is_het:
+                # Het call on X for a male is a genotyping artifact (males are hemizygous on X)
+                continue
+            # Homozygous female on X — she IS affected, do not filter
+            # Hemizygous (hom-reported) male on X — he IS affected, do not filter
 
         # Use scoring engine composite score for informational purposes only.
         # BUG-05 fix: Do NOT upgrade conflicting/uncertain classifications based

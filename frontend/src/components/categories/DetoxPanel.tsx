@@ -14,9 +14,12 @@ import {
   DisclaimerCard,
   capacityToSeverity,
   sensitivityToSeverity,
-  VariantLinks,
-  PathogenicityBar,
-  ZygosityBadge,
+  VariantInfoBox,
+  GeneContextBox,
+  AlphaFoldDetailBox,
+  AlphaFoldBadge,
+  GeneBurdenStrip,
+  ClickableRsidBadge,
   formatLabel,
   MasonryLayout,
 } from './shared'
@@ -201,49 +204,54 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
               const isExpanded = expandedGene === key
               const capacity = item.detox_capacity || 'normal'
               const sensitivity = item.toxin_sensitivity
+              const rsid = item.associated_variants?.[0]
 
               return (
                 <div
                   key={key}
-                  className={`${theme.glass} border ${theme.border} rounded-xl p-5 hover:border-green-500/50 transition-all duration-300 cursor-pointer`}
+                  className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 hover:border-green-500/50 transition-all duration-300 cursor-pointer`}
                   onClick={() => setExpandedGene(isExpanded ? null : key)}
                 >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3 flex-wrap">
-                      <h4 className={`font-bold text-base ${theme.textPrimary}`}>{item.gene}</h4>
-                      <StatusBadge
-                        label={formatLabel(capacity)}
-                        severity={capacityToSeverity(capacity)}
-                      />
-                      {sensitivity && (
-                        <StatusBadge
-                          label={`Sensitivity: ${formatLabel(sensitivity)}`}
-                          severity={sensitivityToSeverity(sensitivity)}
-                          showIcon={false}
-                        />
+                  <div className="flex items-start justify-between mb-1 gap-1">
+                    <div className="flex-1 min-w-0">
+                      {Array.isArray(item.support_recommendations) && item.support_recommendations[0] ? (
+                        <p className={`text-sm font-semibold ${theme.textPrimary} leading-snug`}>{item.support_recommendations[0]}</p>
+                      ) : (
+                        <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug`}>{item.gene}</h4>
                       )}
                     </div>
-                    <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
+                    <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                   </div>
 
-                  {item.associated_variants?.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mt-2">
-                      {item.associated_variants.map((v: string) => (
-                        <React.Fragment key={v}>
-                          <Badge variant="secondary" className="text-xs font-mono">{v}{data?.genotype_map?.[v] ? ` ${data.genotype_map[v]}` : ''}</Badge>
-                          <ZygosityBadge genotype={data?.genotype_map?.[v]} />
-                        </React.Fragment>
-                      ))}
-                    </div>
-                  )}
-
-                  {item.support_recommendations?.[0] && (
-                    <p className={`text-sm ${theme.textSecondary} mt-2 line-clamp-2`}>{item.support_recommendations[0]}</p>
+                  <div className="flex flex-wrap gap-1">
+                    <StatusBadge
+                      label={formatLabel(capacity)}
+                      severity={capacityToSeverity(capacity)}
+                    />
+                    {sensitivity && (
+                      <StatusBadge
+                        label={`Sensitivity: ${formatLabel(sensitivity)}`}
+                        severity={sensitivityToSeverity(sensitivity)}
+                        showIcon={false}
+                      />
+                    )}
+                    <Badge variant="secondary" className="text-xs font-medium">{item.gene}</Badge>
+                    {item.associated_variants?.length > 0 && item.associated_variants.map((v: string) => (
+                      <ClickableRsidBadge key={v} rsid={v} gene={item.gene} genotype={data?.genotype_map?.[v]} alleleString={data?.allele_string_map?.[v]} token={token} isDarkMode={isDarkMode} />
+                    ))}
+                    <AlphaFoldBadge
+                      confidence={data?.alphafold_map?.[rsid]?.confidence}
+                      highPct={data?.alphafold_map?.[rsid]?.high_confidence_pct}
+                      lowPct={data?.alphafold_map?.[rsid]?.low_confidence_pct}
+                    />
+                  </div>
+                  {item.gene && data?.gene_stats_map?.[item.gene] && (
+                    <GeneBurdenStrip gene={item.gene} stats={data.gene_stats_map[item.gene]} theme={theme} />
                   )}
 
                   {isExpanded && (
                     <div className={`mt-4 pt-4 border-t ${theme.border} space-y-4`}>
-                      {item.support_recommendations?.length > 0 && (
+                      {Array.isArray(item.support_recommendations) && item.support_recommendations.length > 0 && (
                         <div>
                           <h5 className={`text-sm font-semibold ${theme.textPrimary} mb-2`}>Support Recommendations</h5>
                           <div className="space-y-2">
@@ -257,8 +265,7 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                         </div>
                       )}
 
-                      {item.associated_variants?.[0] && <PathogenicityBar rsid={item.associated_variants[0]} pathogenicityMap={data?.pathogenicity_map} theme={theme} />}
-                      <VariantLinks
+                      <VariantInfoBox
                         rsid={item.associated_variants?.[0]}
                         gene={item.gene}
                         token={token}
@@ -266,7 +273,17 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                         alphaMissense={item.associated_variants?.[0] ? data?.alpha_missense_map?.[item.associated_variants[0]] : undefined}
                         clinvarCount={item.associated_variants?.[0] ? data?.clinvar_count_map?.[item.associated_variants[0]] : undefined}
                         genotype={item.associated_variants?.[0] ? data?.genotype_map?.[item.associated_variants[0]] : undefined}
+                        pathogenicityMap={data?.pathogenicity_map}
+                        theme={theme}
                       />
+                      <GeneContextBox gene={item.gene} stats={item.gene ? data?.gene_stats_map?.[item.gene] : undefined} theme={theme} />
+                      {rsid && data?.alphafold_map?.[rsid] && (
+                        <AlphaFoldDetailBox
+                          rsid={rsid}
+                          alphafoldData={data.alphafold_map[rsid]}
+                          theme={theme}
+                        />
+                      )}
                     </div>
                   )}
                 </div>

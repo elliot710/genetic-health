@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { Shield, Users, Settings, Plus, Trash2, Pencil, Check, X, ChevronRight, Download, Upload, Database, Lightbulb, RefreshCw, AlertTriangle, Minus, Info, Activity, Play, Pause, Square, Clock, FileText, Zap, Sparkles, HardDrive, Scale, RotateCcw, Layers } from 'lucide-react'
+import { Shield, Users, Settings, Plus, Trash2, Pencil, Check, X, ChevronRight, Download, Upload, Database, Lightbulb, RefreshCw, AlertTriangle, Minus, Info, Activity, Play, Pause, Square, Clock, FileText, Zap, Sparkles, HardDrive, Scale, RotateCcw, Layers, CheckCircle, XCircle } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -150,6 +150,7 @@ interface WorkerJob {
   params: Record<string, unknown> | null
   result: Record<string, unknown> | null
   error: string | null
+  job_logs: Array<{ ts: string; level: string; msg: string }> | null
   requested_by_email: string | null
   requested_by_username: string | null
   created_at: string | null
@@ -232,14 +233,15 @@ interface AdminPanelProps {
 
 export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps) {
   // --- Tab routing via URL hash ---
-  const VALID_TABS = ['users', 'registry', 'discoveries', 'sources', 'data', 'rules', 'annotations', 'jobs'] as const
+  const VALID_TABS = ['users', 'registry', 'discoveries', 'data', 'rules', 'annotations', 'jobs'] as const
   type AdminTab = typeof VALID_TABS[number]
 
   const [activeTab, setActiveTab] = useState<AdminTab>(() => {
     if (typeof window !== 'undefined') {
       const hash = window.location.hash.slice(1) // e.g. "admin/data"
       const sub = hash.startsWith('admin/') ? hash.slice(6) : ''
-      if (VALID_TABS.includes(sub as AdminTab)) return sub as AdminTab
+      const resolvedSub = sub === 'sources' ? 'data' : sub
+      if (VALID_TABS.includes(resolvedSub as AdminTab)) return resolvedSub as AdminTab
     }
     return 'users'
   })
@@ -257,8 +259,9 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     const onHashChange = () => {
       const hash = window.location.hash.slice(1)
       if (hash.startsWith('admin/')) {
-        const sub = hash.slice(6) as AdminTab
-        if (VALID_TABS.includes(sub)) setActiveTab(sub)
+        const sub = hash.slice(6)
+        const resolvedSub = sub === 'sources' ? 'data' : sub
+        if (VALID_TABS.includes(resolvedSub as AdminTab)) setActiveTab(resolvedSub as AdminTab)
       }
     }
     window.addEventListener('hashchange', onHashChange)
@@ -345,6 +348,11 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const [etlLoading, setEtlLoading] = useState<Record<string, boolean>>({})
   const [etlRunning, setEtlRunning] = useState<Record<string, boolean>>({})
   const [etlFeedback, setEtlFeedback] = useState<{ source: string; message: string; type: 'success' | 'error' } | null>(null)
+  const [apiTestResults, setApiTestResults] = useState<Record<string, { reachable: boolean; detail?: string }>>({})
+  const [etlProgressByKey, setEtlProgressByKey] = useState<Record<string, { running: boolean; step: string | null; rows: number; pct: number; total_elapsed: number; error: string | null }>>({})
+  const etlPollRefs = useRef<Record<string, ReturnType<typeof setInterval>>>({})
+  // Legacy alias — etlProgress still referenced by ClinVar-specific render code elsewhere
+  const etlProgress = etlProgressByKey['clinvar'] ?? null
   // BigQuery state
   const [bqStatus, setBqStatus] = useState<Record<string, unknown> | null>(null)
   const [bqLoading, setBqLoading] = useState(false)
@@ -368,11 +376,18 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
 
   // Utility state
   const [autoCategorizing, setAutoCategorizing] = useState(false)
+  const [autoCatStatus, setAutoCatStatus] = useState<string | null>(null)
+  const [enrichingMappings, setEnrichingMappings] = useState<'dry_run' | 'apply' | null>(null)
+  const [enrichReviseAll, setEnrichReviseAll] = useState(false)
   const [purgingDeleted, setPurgingDeleted] = useState(false)
   const [purgeOlderThanDays, setPurgeOlderThanDays] = useState('0')
   const [utilityFeedback, setUtilityFeedback] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
   const [resettingSentinels, setResettingSentinels] = useState<string | null>(null)
   const [sentinelFeedback, setSentinelFeedback] = useState<{ source: string; message: string; type: 'success' | 'error' } | null>(null)
+  const [gnomadCacheJobId, setGnomadCacheJobId] = useState<number | null>(null)
+  const [gnomadCacheStatus, setGnomadCacheStatus] = useState<string | null>(null)
+  const [gnomadAncestryJobId, setGnomadAncestryJobId] = useState<number | null>(null)
+  const [gnomadAncestryStatus, setGnomadAncestryStatus] = useState<string | null>(null)
 
   const headers = useMemo(() => ({ 'Content-Type': 'application/json' }), [])
   // Wrap fetch to always send HttpOnly auth cookie
@@ -824,11 +839,118 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
 
   // --- ETL Management ---
   const ETL_SOURCES = [
-    { key: 'clinvar', label: 'ClinVar', statusEndpoint: '/clinvar-etl/status', importEndpoint: '/clinvar-etl/import', description: 'Clinical variant database (VCF → PostgreSQL)' },
-    { key: 'gnomad', label: 'gnomAD', statusEndpoint: '/gnomad-etl/status', importEndpoint: '/gnomad-etl/import', description: 'Genome aggregation database (TSV → PostgreSQL)' },
-    { key: '1kg', label: '1000 Genomes', statusEndpoint: '/1kg-etl/status', importEndpoint: '/1kg-etl/import', description: 'Phase 3 population frequencies (VCF → PostgreSQL)' },
-    { key: 'vep', label: 'Ensembl VEP', statusEndpoint: '/ensembl-vep-etl/status', importEndpoint: '/ensembl-vep-etl/import', description: 'Variant Effect Predictor annotations (VCF → SQLite/PG)' },
-    { key: 'ensembl', label: 'Ensembl Genes', statusEndpoint: null, importEndpoint: '/ensembl-etl/import', description: 'Gene models from cDNA/ncRNA FASTA headers' },
+    {
+      key: 'clinvar', label: 'ClinVar',
+      statusEndpoint: '/clinvar-etl/status', importEndpoint: '/clinvar-etl/import',
+      description: 'Clinical variant database (VCF → PostgreSQL)',
+      displayConfig: {
+        primaryKey: 'clinvar_variants',
+        countKeys: ['clinvar_gene_conditions', 'clinvar_gene_stats'] as string[],
+        fileKeys: ['tsv_file_exists', 'vcf_file_exists'] as string[],
+        arrayKeys: [] as string[],
+      },
+    },
+    {
+      key: 'gnomad', label: 'gnomAD',
+      statusEndpoint: '/gnomad-etl/status', importEndpoint: '/gnomad-etl/import',
+      description: 'Genome aggregation database (TSV → PostgreSQL)',
+      displayConfig: {
+        primaryKey: 'gnomad_variants',
+        countKeys: ['gnomad_gene_constraints'] as string[],
+        fileKeys: [] as string[],
+        arrayKeys: ['variant_files'] as string[],
+      },
+    },
+    {
+      key: '1kg', label: '1000 Genomes',
+      statusEndpoint: '/1kg-etl/status', importEndpoint: '/1kg-etl/import',
+      description: 'Phase 3 population frequencies (VCF → PostgreSQL)',
+      displayConfig: {
+        primaryKey: 'thousand_genomes_variants',
+        countKeys: [] as string[],
+        fileKeys: [] as string[],
+        arrayKeys: [] as string[],
+      },
+    },
+    {
+      key: 'vep', label: 'Ensembl VEP',
+      statusEndpoint: '/ensembl-vep-etl/status', importEndpoint: '/ensembl-vep-etl/import',
+      description: 'Variant Effect Predictor annotations (VCF → PostgreSQL)',
+      displayConfig: {
+        primaryKey: 'variant_count',
+        countKeys: [] as string[],
+        fileKeys: ['loaded'] as string[],
+        arrayKeys: ['available_vcf_files'] as string[],
+      },
+    },
+    {
+      key: 'ensembl', label: 'Ensembl Genes',
+      statusEndpoint: '/ensembl-etl/status', importEndpoint: '/ensembl-etl/import',
+      description: 'Gene models from cDNA/ncRNA FASTA headers',
+      displayConfig: {
+        primaryKey: 'ensembl_genes',
+        countKeys: ['protein_coding_genes', 'chromosomes'] as string[],
+        fileKeys: ['cdna_file_exists', 'ncrna_file_exists'] as string[],
+        arrayKeys: [] as string[],
+      },
+    },
+    {
+      key: 'gnomad_v2', label: 'gnomAD v2 Exome',
+      statusEndpoint: '/gnomad-v2-etl/status', importEndpoint: '/gnomad-v2-etl/import',
+      description: 'v2.1.1 exome population AFs — GRCh37 (VCF → PostgreSQL)',
+      displayConfig: {
+        primaryKey: 'gnomad_v2_variants',
+        countKeys: ['with_rsid'] as string[],
+        fileKeys: [] as string[],
+        arrayKeys: ['vcf_files'] as string[],
+      },
+    },
+    {
+      key: 'alphafold', label: 'AlphaFold',
+      statusEndpoint: '/alphafold-etl/status', importEndpoint: '/alphafold-etl/import',
+      description: 'Protein structure confidence (EBI tar → SQLite)',
+      displayConfig: {
+        primaryKey: 'alphafold_proteins',
+        countKeys: [] as string[],
+        fileKeys: ['loaded', 'db_exists'] as string[],
+        arrayKeys: [] as string[],
+      },
+    },
+    {
+      key: 'gwas_catalog', label: 'GWAS Catalog',
+      statusEndpoint: '/gwas-catalog-etl/progress', importEndpoint: '/gwas-catalog-etl/import',
+      description: 'EBI GWAS Catalog trait associations (zip → PostgreSQL)',
+      displayConfig: {
+        primaryKey: 'rows',
+        countKeys: [] as string[],
+        fileKeys: [] as string[],
+        arrayKeys: [] as string[],
+      },
+    },
+    {
+      key: 'clingen', label: 'ClinGen Gene Validity',
+      statusEndpoint: '/clingen-etl/progress', importEndpoint: '/clingen-etl/import',
+      description: 'ClinGen gene-disease validity classifications (CSV → PostgreSQL)',
+      displayConfig: {
+        primaryKey: 'rows',
+        countKeys: [] as string[],
+        fileKeys: [] as string[],
+        arrayKeys: [] as string[],
+      },
+    },
+    {
+      key: 'open_targets', label: 'Open Targets Platform',
+      statusEndpoint: undefined as string | undefined,
+      importEndpoint: undefined as string | undefined,
+      testEndpoint: '/open-targets/test',
+      description: 'Gene-disease association scores from genetic, literature & animal model evidence (live GraphQL API)',
+      displayConfig: {
+        primaryKey: '' as string,
+        countKeys: [] as string[],
+        fileKeys: [] as string[],
+        arrayKeys: [] as string[],
+      },
+    },
   ]
 
   const fetchEtlStatus = useCallback(async (key: string, endpoint: string) => {
@@ -843,16 +965,72 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     setEtlLoading(prev => ({ ...prev, [key]: false }))
   }, [headers])
 
-  const runEtlImport = async (key: string, endpoint: string) => {
+  const startEtlProgressPolling = useCallback((key: string, progressEndpoint: string) => {
+    if (etlPollRefs.current[key]) clearInterval(etlPollRefs.current[key])
+    etlPollRefs.current[key] = setInterval(async () => {
+      try {
+        const res = await authFetch(`${API}${progressEndpoint}`, { headers })
+        if (res.ok) {
+          const data = await res.json()
+          setEtlProgressByKey(prev => ({ ...prev, [key]: data }))
+          if (key === 'clinvar') setEtlProgressByKey(prev => ({ ...prev, clinvar: data })) // keep legacy alias fed
+          if (!data.running) {
+            clearInterval(etlPollRefs.current[key])
+            delete etlPollRefs.current[key]
+            setEtlRunning(prev => ({ ...prev, [key]: false }))
+            if (data.step === 'complete') {
+              const elapsed = data.total_elapsed ? ` in ${data.total_elapsed}s` : ''
+              const rows = data.rows ? ` · ${Number(data.rows).toLocaleString()} rows` : ''
+              setEtlFeedback({ source: key, message: `Import complete${elapsed}${rows}`, type: 'success' })
+              const src = ETL_SOURCES.find(s => s.key === key)
+              if (src?.statusEndpoint) fetchEtlStatus(key, src.statusEndpoint)
+            } else if (data.step === 'error') {
+              setEtlFeedback({ source: key, message: data.error || 'Import failed', type: 'error' })
+            }
+            setTimeout(() => setEtlFeedback(prev => prev?.source === key ? null : prev), 15000)
+          }
+        }
+      } catch { /* ignore */ }
+    }, 2000)
+  }, [authFetch, headers, fetchEtlStatus])
+
+  // Keys that support in-process progress polling
+  const PROGRESS_SOURCES: Record<string, string> = {
+    clinvar: '/clinvar-etl/progress',
+    gwas_catalog: '/gwas-catalog-etl/progress',
+    clingen: '/clingen-etl/progress',
+  }
+
+  const runEtlImport = async (key: string, endpoint: string | undefined) => {
+    if (!endpoint) return
     setEtlRunning(prev => ({ ...prev, [key]: true }))
     setEtlFeedback(null)
+
+    const progressEndpoint = PROGRESS_SOURCES[key]
+    if (progressEndpoint) {
+      try {
+        const res = await authFetch(`${API}${endpoint}`, { method: 'POST', headers })
+        const data = await res.json()
+        if (data.status === 'already_running') {
+          setEtlFeedback({ source: key, message: 'Import already running', type: 'error' })
+          setEtlRunning(prev => ({ ...prev, [key]: false }))
+          return
+        }
+        startEtlProgressPolling(key, progressEndpoint)
+      } catch {
+        setEtlFeedback({ source: key, message: 'Network error starting import', type: 'error' })
+        setEtlRunning(prev => ({ ...prev, [key]: false }))
+      }
+      return
+    }
+
+    // Other ETL sources dispatched to worker
     try {
       const res = await authFetch(`${API}${endpoint}`, { method: 'POST', headers })
       if (res.ok) {
         const data = await res.json()
-        const msg = data.detail || JSON.stringify(data)
+        const msg = data.detail || (data.job_id ? `Job queued: ${data.job_id}` : 'Import started')
         setEtlFeedback({ source: key, message: msg, type: 'success' })
-        // Refresh status after import
         const src = ETL_SOURCES.find(s => s.key === key)
         if (src?.statusEndpoint) fetchEtlStatus(key, src.statusEndpoint)
       } else {
@@ -863,8 +1041,44 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
       setEtlFeedback({ source: key, message: 'Network error during import', type: 'error' })
     }
     setEtlRunning(prev => ({ ...prev, [key]: false }))
-    setTimeout(() => setEtlFeedback(prev => prev?.source === key ? null : prev), 15000)
+    setTimeout(() => setEtlFeedback(prev => prev?.source === key ? null : prev), 30000)
   }
+
+  const runApiTest = async (key: string, testEndpoint: string) => {
+    setEtlLoading(prev => ({ ...prev, [key]: true }))
+    try {
+      const res = await authFetch(`${API}${testEndpoint}`, { headers })
+      const data = await res.json()
+      if (data.reachable) {
+        const detail = data.found
+          ? `BRCA1: ${data.association_count} assoc · top: ${data.top_disease ?? '—'} (${data.max_score?.toFixed(2) ?? '—'})`
+          : 'Reachable but no data returned'
+        setApiTestResults(prev => ({ ...prev, [key]: { reachable: true, detail } }))
+      } else {
+        setApiTestResults(prev => ({ ...prev, [key]: { reachable: false, detail: data.error } }))
+      }
+    } catch {
+      setApiTestResults(prev => ({ ...prev, [key]: { reachable: false, detail: 'Network error' } }))
+    }
+    setEtlLoading(prev => ({ ...prev, [key]: false }))
+  }
+
+  // On mount: resume polling for any ETL source that's already running
+  useEffect(() => {
+    Object.entries(PROGRESS_SOURCES).forEach(([key, progressEndpoint]) => {
+      authFetch(`${API}${progressEndpoint}`, { headers })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (data?.running) {
+            setEtlProgressByKey(prev => ({ ...prev, [key]: data }))
+            setEtlRunning(prev => ({ ...prev, [key]: true }))
+            startEtlProgressPolling(key, progressEndpoint)
+          }
+        })
+        .catch(() => { /* ignore */ })
+    })
+    return () => { Object.values(etlPollRefs.current).forEach(clearInterval) }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch all ETL statuses on mount
   useEffect(() => {
@@ -1005,19 +1219,74 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   // --- Utility actions ---
   const runAutoCategorize = async () => {
     setAutoCategorizing(true)
+    setAutoCatStatus('Queuing job…')
     setUtilityFeedback(null)
     try {
       const res = await authFetch(`${API}/auto-categorize`, { method: 'POST', headers })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Failed to queue job' }))
+        setUtilityFeedback({ message: err.detail, type: 'error' })
+        setAutoCategorizing(false)
+        setAutoCatStatus(null)
+        return
+      }
+      const { job_id } = await res.json()
+      setAutoCatStatus(`Job #${job_id} running…`)
+      // Poll until complete
+      const startTime = Date.now()
+      while (true) {
+        await new Promise(r => setTimeout(r, 3000))
+        try {
+          const pollRes = await authFetch(`${API}/worker-jobs/${job_id}`, { headers })
+          if (!pollRes.ok) break
+          const job = await pollRes.json()
+          if (job.status === 'completed') {
+            const r = job.result || {}
+            const total = r.total_new_mappings ?? 0
+            const elapsed = r.total_elapsed_s != null ? ` in ${r.total_elapsed_s}s` : ''
+            setUtilityFeedback({ message: `Auto-categorize complete: ${total} new mappings${elapsed}`, type: 'success' })
+            fetchWorkerJobs()
+            break
+          } else if (job.status === 'failed') {
+            setUtilityFeedback({ message: `Auto-categorize failed: ${job.error || 'Unknown error'}`, type: 'error' })
+            break
+          }
+          const elapsed = Math.round((Date.now() - startTime) / 1000)
+          setAutoCatStatus(`Job #${job_id} running… (${elapsed}s)`)
+        } catch { break }
+      }
+    } catch { setUtilityFeedback({ message: 'Network error', type: 'error' }) }
+    setAutoCategorizing(false)
+    setAutoCatStatus(null)
+    setTimeout(() => setUtilityFeedback(null), 15000)
+  }
+
+  const runEnrichMappings = async (dryRun: boolean = false) => {
+    setEnrichingMappings(dryRun ? 'dry_run' : 'apply')
+    setUtilityFeedback(null)
+    try {
+      const params = new URLSearchParams()
+      if (dryRun) params.set('dry_run', 'true')
+      if (enrichReviseAll) params.set('revise_all', 'true')
+      const res = await authFetch(`${API}/enrich-mappings?${params}`, { method: 'POST', headers })
       if (res.ok) {
         const data = await res.json()
-        setUtilityFeedback({ message: data.detail || JSON.stringify(data), type: 'success' })
+        const breakdown = Object.entries(data.by_source || {})
+          .filter(([, n]) => (n as number) > 0)
+          .map(([src, n]) => `${src}: ${n}`)
+          .join(', ')
+        const detail = breakdown ? ` (${breakdown})` : ''
+        const msg = dryRun
+          ? `[Dry run] Would update ${data.total_updated} of ${data.total_checked} checked mappings${detail}`
+          : `Enriched ${data.total_updated} of ${data.total_checked} mappings${detail}`
+        setUtilityFeedback({ message: msg, type: 'success' })
       } else {
         const err = await res.json().catch(() => ({ detail: 'Failed' }))
         setUtilityFeedback({ message: err.detail, type: 'error' })
       }
     } catch { setUtilityFeedback({ message: 'Network error', type: 'error' }) }
-    setAutoCategorizing(false)
-    setTimeout(() => setUtilityFeedback(null), 10000)
+    setEnrichingMappings(null)
+    setTimeout(() => setUtilityFeedback(null), 15000)
   }
 
   const runPurgeDeleted = async () => {
@@ -1040,6 +1309,97 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
     } catch { setUtilityFeedback({ message: 'Network error', type: 'error' }) }
     setPurgingDeleted(false)
     setTimeout(() => setUtilityFeedback(null), 10000)
+  }
+
+  const pollWorkerJob = async (
+    jobId: number,
+    onStatus: (msg: string) => void,
+    onComplete: (result: Record<string, unknown>) => void,
+    onError: (msg: string) => void,
+  ) => {
+    const startTime = Date.now()
+    while (true) {
+      await new Promise(r => setTimeout(r, 4000))
+      try {
+        const pollRes = await authFetch(`${API}/worker-jobs/${jobId}`, { headers })
+        if (!pollRes.ok) break
+        const job = await pollRes.json()
+        if (job.status === 'completed') { onComplete(job.result || {}); fetchWorkerJobs(); return }
+        if (job.status === 'failed') { onError(job.error || 'Unknown error'); return }
+        const elapsed = Math.round((Date.now() - startTime) / 1000)
+        onStatus(`Job #${jobId} running… (${elapsed}s)`)
+      } catch { break }
+    }
+    onError('Polling failed')
+  }
+
+  const runBuildCaddCache = async () => {
+    if (gnomadCacheJobId) return
+    setGnomadCacheStatus('Queuing…')
+    setUtilityFeedback(null)
+    try {
+      const res = await authFetch(`${API}/gnomad/build-cadd-cache`, { method: 'POST', headers })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Failed' }))
+        setUtilityFeedback({ message: err.detail, type: 'error' })
+        setGnomadCacheStatus(null)
+        return
+      }
+      const { job_id } = await res.json()
+      setGnomadCacheJobId(job_id)
+      await pollWorkerJob(
+        job_id,
+        msg => setGnomadCacheStatus(msg),
+        result => {
+          const n = result.variant_count as number ?? 0
+          const s = result.elapsed_s as number ?? 0
+          setUtilityFeedback({ message: `CADD cache built: ${n.toLocaleString()} variants cached in ${s}s`, type: 'success' })
+          setGnomadCacheJobId(null)
+          setGnomadCacheStatus(null)
+        },
+        err => {
+          setUtilityFeedback({ message: `CADD cache build failed: ${err}`, type: 'error' })
+          setGnomadCacheJobId(null)
+          setGnomadCacheStatus(null)
+        },
+      )
+    } catch { setUtilityFeedback({ message: 'Network error', type: 'error' }); setGnomadCacheStatus(null) }
+    setTimeout(() => setUtilityFeedback(null), 20000)
+  }
+
+  const runRefreshAncestryAfs = async (indexFirst: boolean = false) => {
+    if (gnomadAncestryJobId) return
+    setGnomadAncestryStatus('Queuing…')
+    setUtilityFeedback(null)
+    try {
+      const res = await authFetch(`${API}/gnomad/refresh-ancestry-afs?index_first=${indexFirst}`, { method: 'POST', headers })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Failed' }))
+        setUtilityFeedback({ message: err.detail, type: 'error' })
+        setGnomadAncestryStatus(null)
+        return
+      }
+      const { job_id } = await res.json()
+      setGnomadAncestryJobId(job_id)
+      await pollWorkerJob(
+        job_id,
+        msg => setGnomadAncestryStatus(msg),
+        result => {
+          const updated = result.updated as number ?? 0
+          const total = result.total as number ?? 0
+          const s = result.elapsed_s as number ?? 0
+          setUtilityFeedback({ message: `Ancestry AFs refreshed: ${updated}/${total} AIMs updated in ${s}s`, type: 'success' })
+          setGnomadAncestryJobId(null)
+          setGnomadAncestryStatus(null)
+        },
+        err => {
+          setUtilityFeedback({ message: `Ancestry AF refresh failed: ${err}`, type: 'error' })
+          setGnomadAncestryJobId(null)
+          setGnomadAncestryStatus(null)
+        },
+      )
+    } catch { setUtilityFeedback({ message: 'Network error', type: 'error' }); setGnomadAncestryStatus(null) }
+    setTimeout(() => setUtilityFeedback(null), 20000)
   }
 
   const resetSentinels = async (sourceName: string) => {
@@ -1130,55 +1490,55 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
       </div>
 
       <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
-        <TabsList className="flex w-full max-w-5xl">
-          <TabsTrigger value="users" className="gap-2">
-            <Users className="h-4 w-4" />
-            Users
-          </TabsTrigger>
-          <TabsTrigger value="registry" className="gap-2">
-            <Database className="h-4 w-4" />
-            Registry
-          </TabsTrigger>
-          <TabsTrigger value="discoveries" className="gap-2 relative">
-            <Lightbulb className="h-4 w-4" />
-            Discoveries
-            {discoverySummary && discoverySummary.total_pending > 0 && (
-              <Badge variant="destructive" className="ml-1 h-5 min-w-[20px] px-1 text-xs">
-                {discoverySummary.total_pending}
-              </Badge>
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="sources" className="gap-2">
-            <Zap className="h-4 w-4" />
-            Sources
-          </TabsTrigger>
-          <TabsTrigger value="data" className="gap-2">
-            <HardDrive className="h-4 w-4" />
-            Data
-          </TabsTrigger>
-          <TabsTrigger value="rules" className="gap-2">
-            <Scale className="h-4 w-4" />
-            Rules
-          </TabsTrigger>
-          <TabsTrigger value="annotations" className="gap-2 relative">
-            <AlertTriangle className="h-4 w-4" />
-            Incomplete
-            {incompleteSummary && (incompleteSummary.partial + incompleteSummary.failed) > 0 && (
-              <Badge variant="secondary" className="ml-1 h-5 min-w-[20px] px-1 text-xs">
-                {formatCompactNumber(incompleteSummary.partial + incompleteSummary.failed)}
-              </Badge>
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="jobs" className="gap-2 relative">
-            <Activity className="h-4 w-4" />
-            Jobs
-            {jobs.filter(j => j.analysis_status === 'processing' || j.analysis_status === 'pending').length > 0 && (
-              <Badge className="ml-1 h-5 min-w-[20px] px-1 text-xs bg-blue-500 text-white">
-                {jobs.filter(j => j.analysis_status === 'processing' || j.analysis_status === 'pending').length}
-              </Badge>
-            )}
-          </TabsTrigger>
-        </TabsList>
+        <div className="overflow-x-auto -mx-1 px-1 pb-1">
+          <TabsList className="flex w-max min-w-full">
+            <TabsTrigger value="users" className="gap-2 shrink-0">
+              <Users className="h-4 w-4" />
+              <span className="hidden sm:inline">Users</span>
+              <span className="sm:hidden">Users</span>
+            </TabsTrigger>
+            <TabsTrigger value="registry" className="gap-2 shrink-0">
+              <Database className="h-4 w-4" />
+              <span className="hidden sm:inline">Registry</span>
+              <span className="sm:hidden">Registry</span>
+            </TabsTrigger>
+            <TabsTrigger value="discoveries" className="gap-2 relative shrink-0">
+              <Lightbulb className="h-4 w-4" />
+              Discoveries
+              {discoverySummary && discoverySummary.total_pending > 0 && (
+                <Badge variant="destructive" className="ml-1 h-5 min-w-5 px-1 text-xs">
+                  {discoverySummary.total_pending}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="data" className="gap-2 shrink-0">
+              <HardDrive className="h-4 w-4" />
+              Ingestion
+            </TabsTrigger>
+            <TabsTrigger value="rules" className="gap-2 shrink-0">
+              <Scale className="h-4 w-4" />
+              Rules
+            </TabsTrigger>
+            <TabsTrigger value="annotations" className="gap-2 relative shrink-0" title="Annotation quality monitor — incomplete and failed annotations">
+              <AlertTriangle className="h-4 w-4" />
+              Incomplete
+              {incompleteSummary && (incompleteSummary.partial + incompleteSummary.failed) > 0 && (
+                <Badge variant="secondary" className="ml-1 h-5 min-w-5 px-1 text-xs">
+                  {formatCompactNumber(incompleteSummary.partial + incompleteSummary.failed)}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="jobs" className="gap-2 relative shrink-0">
+              <Activity className="h-4 w-4" />
+              Jobs
+              {jobs.filter(j => j.analysis_status === 'processing' || j.analysis_status === 'pending').length > 0 && (
+                <Badge className="ml-1 h-5 min-w-5 px-1 text-xs bg-blue-500 text-white">
+                  {jobs.filter(j => j.analysis_status === 'processing' || j.analysis_status === 'pending').length}
+                </Badge>
+              )}
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
         {/* ===== USERS TAB ===== */}
         <TabsContent value="users" className="mt-6">
@@ -1191,6 +1551,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
               <CardDescription>{users.length} registered user{users.length !== 1 ? 's' : ''}</CardDescription>
             </CardHeader>
             <CardContent>
+              <div className="overflow-x-auto -mx-6 px-6">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -1258,6 +1619,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                   ))}
                 </TableBody>
               </Table>
+              </div>
               {renderPagination(users.length, usersPage, setUsersPage)}
             </CardContent>
           </Card>
@@ -1345,6 +1707,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
               </CardHeader>
               {selectedRegistryCategory && (
                 <CardContent>
+                  <div className="overflow-x-auto">
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -1444,6 +1807,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                       })()}
                     </TableBody>
                   </Table>
+                  </div>
                   {renderPagination(filteredRegistryMappings.length, registryPage, setRegistryPage)}
                 </CardContent>
               )}
@@ -1507,6 +1871,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                 <p className={`text-center py-8 ${theme.text.tertiary}`}>No discoveries found with current filters</p>
               ) : (
                 <>
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -1575,6 +1940,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                     ))}
                   </TableBody>
                 </Table>
+                </div>
                 {renderPagination(discoveries.length, discoveriesPage, setDiscoveriesPage)}
                 </>
               )}
@@ -1582,9 +1948,9 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
           </Card>
         </TabsContent>
 
-        {/* ===== INCOMPLETE ANNOTATIONS TAB ===== */}
-        {/* ===== SOURCES TAB ===== */}
-        <TabsContent value="sources" className="mt-6">
+        {/* ===== INGESTION TAB (API Sources + Local ETL + BigQuery + Maintenance) ===== */}
+        <TabsContent value="data" className="mt-6">
+          {/* ───── API Sources & AI Insights ───── */}
           <Card className="glass-card">
             <CardHeader>
               <div className="flex items-center justify-between">
@@ -1655,85 +2021,87 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                                     : isDarkMode ? 'border-white/5 bg-white/[0.02]' : 'border-gray-100 bg-gray-25'
                                 }`}
                               >
-                                <div className="flex items-center justify-between">
-                                  <div className="flex items-center gap-4 flex-1">
-                                    <Switch
-                                      checked={src.is_enabled}
-                                      onCheckedChange={(checked) => toggleSource(src.source_name, checked)}
-                                      disabled={sourceToggling === src.source_name}
-                                    />
-                                    <div className={`flex-1 ${!src.is_enabled ? 'opacity-50' : ''}`}>
-                                      <div className="flex items-center gap-2">
-                                        <span className={`font-medium ${theme.text.primary}`}>{src.display_name}</span>
-                                        {src.rate_limit && (
-                                          <Badge variant="outline" className="text-xs">
-                                            {src.rate_limit} req/s
-                                          </Badge>
-                                        )}
-                                        <Badge variant={src.is_enabled ? 'default' : 'secondary'} className="text-xs">
-                                          {src.is_enabled ? 'Enabled' : 'Disabled'}
+                                {/* Top row: toggle + name/description */}
+                                <div className="flex items-start gap-3">
+                                  <Switch
+                                    checked={src.is_enabled}
+                                    onCheckedChange={(checked) => toggleSource(src.source_name, checked)}
+                                    disabled={sourceToggling === src.source_name}
+                                    className="mt-0.5 shrink-0"
+                                  />
+                                  <div className={`flex-1 min-w-0 ${!src.is_enabled ? 'opacity-50' : ''}`}>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className={`font-medium ${theme.text.primary}`}>{src.display_name}</span>
+                                      {src.rate_limit && (
+                                        <Badge variant="outline" className="text-xs">
+                                          {src.rate_limit} req/s
                                         </Badge>
-                                      </div>
-                                      {src.description && (
-                                        <p className={`text-sm mt-1 ${theme.text.muted}`}>{src.description}</p>
                                       )}
+                                      <Badge variant={src.is_enabled ? 'default' : 'secondary'} className="text-xs">
+                                        {src.is_enabled ? 'Enabled' : 'Disabled'}
+                                      </Badge>
+                                    </div>
+                                    {src.description && (
+                                      <p className={`text-sm mt-1 ${theme.text.muted}`}>{src.description}</p>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Bottom row: progress + actions */}
+                                <div className={`mt-3 flex flex-wrap items-center gap-3 ${!src.is_enabled ? 'opacity-50' : ''}`}>
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <span className={`text-sm font-mono ${theme.text.secondary}`}>
+                                        {src.annotated_count.toLocaleString()} / {total.toLocaleString()}
+                                      </span>
+                                      <span className={`text-xs ${theme.text.muted}`}>({pct}%)</span>
+                                    </div>
+                                    <div className="w-32 h-1.5 rounded-full bg-gray-700/30 mt-1 overflow-hidden">
+                                      <div
+                                        className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-500"
+                                        style={{ width: `${pct}%` }}
+                                      />
                                     </div>
                                   </div>
-                                  <div className={`flex items-center gap-3 ml-4 ${!src.is_enabled ? 'opacity-50' : ''}`}>
-                                    <div className="text-right min-w-[140px]">
-                                      <div className="flex items-center gap-2 justify-end">
-                                        <span className={`text-sm font-mono ${theme.text.secondary}`}>
-                                          {src.annotated_count.toLocaleString()} / {total.toLocaleString()}
-                                        </span>
-                                        <span className={`text-xs ${theme.text.muted}`}>({pct}%)</span>
-                                      </div>
-                                      <div className="w-32 h-1.5 rounded-full bg-gray-700/30 mt-1 overflow-hidden">
-                                        <div
-                                          className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-500"
-                                          style={{ width: `${pct}%` }}
-                                        />
-                                      </div>
-                                    </div>
-                                    {src.missing_count > 0 && src.is_enabled && (
-                                      <div className="flex items-center gap-2">
-                                        <Input
-                                          type="number"
-                                          min={1}
-                                          max={src.missing_count}
-                                          placeholder={String(src.missing_count)}
-                                          value={backfillLimits[src.source_name] ?? ''}
-                                          onChange={(e) => setBackfillLimits(prev => ({ ...prev, [src.source_name]: e.target.value }))}
-                                          className="w-20 h-8 text-xs text-center"
-                                          disabled={backfillingSource === src.source_name}
-                                        />
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          disabled={backfillingSource === src.source_name}
-                                          onClick={() => backfillSource(src.source_name, effectiveLimit)}
-                                          title={`Backfill ${effectiveLimit.toLocaleString()} variants from ${src.display_name}`}
-                                        >
-                                          {backfillingSource === src.source_name
-                                            ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Backfilling...</>
-                                            : <><Download className="h-3 w-3 mr-1" /> Backfill ({effectiveLimit > 999 ? `${Math.round(effectiveLimit / 1000)}k` : effectiveLimit})</>}
-                                        </Button>
-                                      </div>
-                                    )}
-                                    {['clinvar_local', 'gnomad', 'alpha_missense', 'ensembl', 'thousand_genomes', 'ensembl_vep'].includes(src.source_name) && (
+                                  {src.missing_count > 0 && src.is_enabled && (
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <Input
+                                        type="number"
+                                        min={1}
+                                        max={src.missing_count}
+                                        placeholder={String(src.missing_count)}
+                                        value={backfillLimits[src.source_name] ?? ''}
+                                        onChange={(e) => setBackfillLimits(prev => ({ ...prev, [src.source_name]: e.target.value }))}
+                                        className="w-20 h-8 text-xs text-center"
+                                        disabled={backfillingSource === src.source_name}
+                                      />
                                       <Button
                                         size="sm"
                                         variant="outline"
-                                        className="ml-2 text-xs text-amber-400 border-amber-500/30 hover:bg-amber-500/10"
-                                        disabled={resettingSentinels === src.source_name}
-                                        onClick={() => resetSentinels(src.source_name)}
-                                        title="Reset 'not found' sentinels so backfill re-checks this source"
+                                        disabled={backfillingSource === src.source_name}
+                                        onClick={() => backfillSource(src.source_name, effectiveLimit)}
+                                        title={`Backfill ${effectiveLimit.toLocaleString()} variants from ${src.display_name}`}
                                       >
-                                        {resettingSentinels === src.source_name
-                                          ? <><RotateCcw className="h-3 w-3 mr-1 animate-spin" /> Resetting...</>
-                                          : <><RotateCcw className="h-3 w-3 mr-1" /> Reset Sentinels</>}
+                                        {backfillingSource === src.source_name
+                                          ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Queuing...</>
+                                          : <><Download className="h-3 w-3 mr-1" /> Backfill ({effectiveLimit > 999 ? `${Math.round(effectiveLimit / 1000)}k` : effectiveLimit})</>}
                                       </Button>
-                                    )}
-                                  </div>
+                                    </div>
+                                  )}
+                                  {['clinvar_local', 'gnomad', 'alpha_missense', 'ensembl', 'thousand_genomes', 'ensembl_vep'].includes(src.source_name) && (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="text-xs text-amber-400 border-amber-500/30 hover:bg-amber-500/10"
+                                      disabled={resettingSentinels === src.source_name}
+                                      onClick={() => resetSentinels(src.source_name)}
+                                      title="Reset 'not found' sentinels so backfill re-checks this source"
+                                    >
+                                      {resettingSentinels === src.source_name
+                                        ? <><RotateCcw className="h-3 w-3 mr-1 animate-spin" /> Resetting...</>
+                                        : <><RotateCcw className="h-3 w-3 mr-1" /> Reset Sentinels</>}
+                                    </Button>
+                                  )}
                                 </div>
                               </div>
                             )
@@ -1821,10 +2189,8 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
               )}
             </CardContent>
           </Card>
-        </TabsContent>
 
-        {/* ===== DATA / ETL TAB ===== */}
-        <TabsContent value="data" className="mt-6">
+          {/* ───── Local ETL, BigQuery & Maintenance ───── */}
           {/* ETL Import Sources */}
           <Card className="glass-card">
             <CardHeader>
@@ -1855,52 +2221,172 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                   const status = etlStatuses[src.key]
                   const isLoading = etlLoading[src.key]
                   const isRunning = etlRunning[src.key]
+                  const srcProgress = etlProgressByKey[src.key]
+                  const showProgress = !!isRunning && !!srcProgress?.running
+                  const dc = src.displayConfig
                   return (
                     <div
                       key={src.key}
                       className={`rounded-lg border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-gray-200 bg-gray-50'}`}
                     >
-                      <div className="flex items-center justify-between">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className={`font-medium ${theme.text.primary}`}>{src.label}</span>
-                            <Badge variant="outline" className="text-xs text-emerald-600 border-emerald-500/30">Local</Badge>
+                      {/* Header row */}
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`font-semibold ${theme.text.primary}`}>{src.label}</span>
+                            {'testEndpoint' in src && src.testEndpoint
+                              ? <Badge variant="outline" className="text-xs text-blue-500 border-blue-500/30">Live API</Badge>
+                              : <Badge variant="outline" className="text-xs text-emerald-600 border-emerald-500/30">Local</Badge>
+                            }
+                            {status && !isLoading && dc.primaryKey && (
+                              <Badge variant="outline" className="text-xs text-sky-500 border-sky-500/30">
+                                {Number(status[dc.primaryKey] ?? 0).toLocaleString()} rows
+                              </Badge>
+                            )}
+                            {'testEndpoint' in src && src.testEndpoint && apiTestResults[src.key] && (
+                              <Badge variant="outline" className={`text-xs ${
+                                apiTestResults[src.key].reachable
+                                  ? 'text-green-500 border-green-500/30'
+                                  : 'text-red-500 border-red-500/30'
+                              }`}>
+                                {apiTestResults[src.key].reachable ? '✓ Reachable' : '✗ Unreachable'}
+                              </Badge>
+                            )}
                           </div>
-                          <p className={`text-sm mt-1 ${theme.text.muted}`}>{src.description}</p>
-                          {status && (
-                            <div className="flex flex-wrap gap-2 mt-2">
-                              {Object.entries(status).map(([k, v]) => (
-                                <span key={k} className={`text-xs font-mono ${theme.text.secondary}`}>
-                                  {k}: {typeof v === 'number' ? v.toLocaleString() : typeof v === 'boolean' ? (v ? 'Yes' : 'No') : String(v ?? '—')}
-                                </span>
-                              ))}
+                          <p className={`text-sm mt-0.5 ${theme.text.muted}`}>{src.description}</p>
+                          {'testEndpoint' in src && src.testEndpoint && apiTestResults[src.key]?.detail && (
+                            <p className={`text-xs mt-1 font-mono ${
+                              apiTestResults[src.key].reachable ? 'text-green-500/80' : 'text-red-500/80'
+                            }`}>{apiTestResults[src.key].detail}</p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {src.statusEndpoint && (
+                            <Button
+                              size="sm" variant="outline"
+                              disabled={!!isLoading}
+                              title="Refresh status"
+                              onClick={() => fetchEtlStatus(src.key, src.statusEndpoint!)}
+                            >
+                              <RefreshCw className={`h-3 w-3 ${isLoading ? 'animate-spin' : ''}`} />
+                            </Button>
+                          )}
+                          {'testEndpoint' in src && src.testEndpoint ? (
+                            <Button
+                              size="sm" variant="outline"
+                              disabled={!!isLoading}
+                              onClick={() => runApiTest(src.key, (src as { testEndpoint: string }).testEndpoint)}
+                              className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                            >
+                              {isLoading
+                                ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Testing…</>
+                                : <>Test Connection</>}
+                            </Button>
+                          ) : (
+                            <Button
+                              size="sm" variant="default"
+                              disabled={!!isRunning}
+                              onClick={() => runEtlImport(src.key, src.importEndpoint)}
+                              className="bg-violet-600 hover:bg-violet-700"
+                            >
+                              {isRunning
+                                ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Importing…</>
+                                : <><Upload className="h-3 w-3 mr-1" /> Import</>}
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Loading skeleton */}
+                      {isLoading && !status && (
+                        <div className="mt-3 flex gap-3">
+                          <div className={`h-16 flex-1 rounded-lg animate-pulse ${isDarkMode ? 'bg-white/5' : 'bg-gray-200'}`} />
+                          <div className={`h-16 w-28 rounded-lg animate-pulse ${isDarkMode ? 'bg-white/5' : 'bg-gray-200'}`} />
+                          <div className={`h-16 w-28 rounded-lg animate-pulse ${isDarkMode ? 'bg-white/5' : 'bg-gray-200'}`} />
+                        </div>
+                      )}
+
+                      {/* Stats cards */}
+                      {status && !showProgress && (
+                        <div className="mt-3 space-y-2">
+                          <div className="flex flex-wrap gap-2">
+                            {/* Primary hero stat */}
+                            {dc.primaryKey && status[dc.primaryKey] !== undefined && (
+                              <div className={`flex-1 min-w-32 rounded-lg p-3 ${isDarkMode ? 'bg-white/7 border border-white/10' : 'bg-white border border-gray-200'}`}>
+                                <div className={`text-2xl font-bold tabular-nums tracking-tight ${theme.text.primary}`}>
+                                  {Number(status[dc.primaryKey]).toLocaleString()}
+                                </div>
+                                <div className={`text-xs mt-0.5 ${theme.text.muted}`}>
+                                  {dc.primaryKey.replace(/_/g, ' ')}
+                                </div>
+                              </div>
+                            )}
+                            {/* Secondary count stats */}
+                            {dc.countKeys.filter(k => status[k] !== undefined).map(k => (
+                              <div key={k} className={`flex-1 min-w-28 rounded-lg p-3 ${isDarkMode ? 'bg-white/4 border border-white/6' : 'bg-gray-50 border border-gray-100'}`}>
+                                <div className={`text-lg font-semibold tabular-nums ${theme.text.primary}`}>
+                                  {Number(status[k]).toLocaleString()}
+                                </div>
+                                <div className={`text-xs mt-0.5 ${theme.text.muted}`}>
+                                  {k.replace(/_/g, ' ')}
+                                </div>
+                              </div>
+                            ))}
+                            {/* Array keys — show count */}
+                            {dc.arrayKeys.filter(k => status[k] !== undefined).map(k => (
+                              <div key={k} className={`flex-1 min-w-28 rounded-lg p-3 ${isDarkMode ? 'bg-white/4 border border-white/6' : 'bg-gray-50 border border-gray-100'}`}>
+                                <div className={`text-lg font-semibold tabular-nums ${theme.text.primary}`}>
+                                  {Array.isArray(status[k]) ? (status[k] as unknown[]).length : '—'}
+                                </div>
+                                <div className={`text-xs mt-0.5 ${theme.text.muted}`}>
+                                  {k.replace(/_/g, ' ')}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                          {/* File existence badges */}
+                          {dc.fileKeys.length > 0 && (
+                            <div className="flex flex-wrap gap-2 pt-1">
+                              {dc.fileKeys.map(k => {
+                                const exists = Boolean(status[k])
+                                return (
+                                  <span key={k} className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium ${
+                                    exists
+                                      ? 'bg-green-500/10 text-green-600 border border-green-500/20'
+                                      : 'bg-red-500/10 text-red-500 border border-red-500/20'
+                                  }`}>
+                                    {exists
+                                      ? <CheckCircle className="h-3 w-3 shrink-0" />
+                                      : <XCircle className="h-3 w-3 shrink-0" />}
+                                    {k.replace(/_exists$/, '').replace(/_/g, ' ')}
+                                  </span>
+                                )
+                              })}
                             </div>
                           )}
                         </div>
-                        <div className="flex items-center gap-2 ml-4">
-                          {src.statusEndpoint && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={!!isLoading}
-                              onClick={() => fetchEtlStatus(src.key, src.statusEndpoint!)}
-                            >
-                              <RefreshCw className={`h-3 w-3 mr-1 ${isLoading ? 'animate-spin' : ''}`} /> Status
-                            </Button>
-                          )}
-                          <Button
-                            size="sm"
-                            variant="default"
-                            disabled={!!isRunning}
-                            onClick={() => runEtlImport(src.key, src.importEndpoint)}
-                            className="bg-violet-600 hover:bg-violet-700"
-                          >
-                            {isRunning
-                              ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Importing...</>
-                              : <><Upload className="h-3 w-3 mr-1" /> Import</>}
-                          </Button>
+                      )}
+
+                      {/* Live import progress (GWAS, ClinGen, ClinVar) */}
+                      {showProgress && srcProgress && (
+                        <div className="mt-3 space-y-2">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className={`font-medium capitalize ${theme.text.secondary}`}>
+                              Step: <span className="text-violet-400">{srcProgress.step ?? '…'}</span>
+                              {(srcProgress.rows ?? 0) > 0 && (
+                                <span className={`ml-2 ${theme.text.muted}`}>({srcProgress.rows.toLocaleString()} rows)</span>
+                              )}
+                            </span>
+                            <span className={theme.text.muted}>{srcProgress.pct ?? 0}%{srcProgress.total_elapsed ? ` · ${srcProgress.total_elapsed}s` : ''}</span>
+                          </div>
+                          <div className={`w-full h-2 rounded-full overflow-hidden ${isDarkMode ? 'bg-white/10' : 'bg-gray-200'}`}>
+                            <div
+                              className="h-full rounded-full bg-linear-to-r from-violet-500 to-fuchsia-500 transition-all duration-500"
+                              style={{ width: `${srcProgress.pct ?? 0}%` }}
+                            />
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   )
                 })}
@@ -2034,9 +2520,51 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                     onClick={runAutoCategorize}
                   >
                     {autoCategorizing
-                      ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Running...</>
+                      ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> {autoCatStatus || 'Running…'}</>
                       : <><Zap className="h-3 w-3 mr-1" /> Run</>}
                   </Button>
+                </div>
+
+                {/* Enrich Mappings */}
+                <div className={`rounded-lg border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-gray-200 bg-gray-50'}`}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className={`font-medium ${theme.text.primary}`}>Enrich Mappings</span>
+                      <p className={`text-sm mt-0.5 ${theme.text.muted}`}>
+                        Replace generic &quot;{'{gene}'} variant&quot; names with proper conditions from ClinVar &amp; Ensembl.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm" variant="outline"
+                        disabled={enrichingMappings !== null}
+                        onClick={() => runEnrichMappings(true)}
+                      >
+                        {enrichingMappings === 'dry_run'
+                          ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Running…</>
+                          : <><Sparkles className="h-3 w-3 mr-1" /> Dry Run</>}
+                      </Button>
+                      <Button
+                        size="sm" variant="default"
+                        disabled={enrichingMappings !== null}
+                        onClick={() => runEnrichMappings(false)}
+                      >
+                        {enrichingMappings === 'apply'
+                          ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Running…</>
+                          : <><Sparkles className="h-3 w-3 mr-1" /> Apply</>}
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 mt-2">
+                    <Switch
+                      id="enrich-revise-all"
+                      checked={enrichReviseAll}
+                      onCheckedChange={setEnrichReviseAll}
+                    />
+                    <Label htmlFor="enrich-revise-all" className={`text-xs ${theme.text.muted}`}>
+                      Revise all mappings (not just generic names)
+                    </Label>
+                  </div>
                 </div>
 
                 {/* Purge Deleted Analyses */}
@@ -2065,6 +2593,57 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                         ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Purging...</>
                         : <><Trash2 className="h-3 w-3 mr-1" /> Purge</>}
                     </Button>
+                  </div>
+                </div>
+
+                {/* gnomAD CADD Cache Build */}
+                <div className={`rounded-lg border p-4 flex items-center justify-between ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-gray-200 bg-gray-50'}`}>
+                  <div>
+                    <span className={`font-medium ${theme.text.primary}`}>Build gnomAD CADD Cache</span>
+                    <p className={`text-sm mt-0.5 ${theme.text.muted}`}>
+                      Sequential chromosome scan of CADD TSV files → SQLite. Run once to make gnomAD annotation sub-second (instead of ~14 min per analysis).
+                    </p>
+                  </div>
+                  <Button
+                    size="sm" variant="outline"
+                    disabled={gnomadCacheJobId !== null}
+                    onClick={runBuildCaddCache}
+                  >
+                    {gnomadCacheJobId !== null
+                      ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> {gnomadCacheStatus || 'Running…'}</>
+                      : <><Zap className="h-3 w-3 mr-1" /> Build Cache</>}
+                  </Button>
+                </div>
+
+                {/* gnomAD v2 Ancestry AF Refresh */}
+                <div className={`rounded-lg border p-4 ${isDarkMode ? 'border-white/10 bg-white/5' : 'border-gray-200 bg-gray-50'}`}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className={`font-medium ${theme.text.primary}`}>Refresh Ancestry AFs (gnomAD v2)</span>
+                      <p className={`text-sm mt-0.5 ${theme.text.muted}`}>
+                        Update ancestry_aims_panel with population AFs from local gnomAD v2.1.1 GRCh37 VCF files (no network needed).
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm" variant="outline"
+                        disabled={gnomadAncestryJobId !== null}
+                        onClick={() => runRefreshAncestryAfs(true)}
+                      >
+                        {gnomadAncestryJobId !== null
+                          ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> {gnomadAncestryStatus || 'Running…'}</>
+                          : <><Zap className="h-3 w-3 mr-1" /> Index + Refresh</>}
+                      </Button>
+                      <Button
+                        size="sm" variant="default"
+                        disabled={gnomadAncestryJobId !== null}
+                        onClick={() => runRefreshAncestryAfs(false)}
+                      >
+                        {gnomadAncestryJobId !== null
+                          ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> {gnomadAncestryStatus || 'Running…'}</>
+                          : <><Sparkles className="h-3 w-3 mr-1" /> Refresh</>}
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2141,6 +2720,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                 </p>
               ) : (
                 <>
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -2206,6 +2786,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                     ))}
                   </TableBody>
                 </Table>
+                </div>
                 {renderPagination(categoryRules.length, rulesPage, setRulesPage)}
               </>
               )}
@@ -2213,6 +2794,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
           </Card>
         </TabsContent>
 
+        {/* ===== QUALITY TAB ===== */}
         <TabsContent value="annotations" className="mt-6">
           <Card className="glass-card">
             <CardHeader>
@@ -2220,7 +2802,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                 <div>
                   <CardTitle className="flex items-center gap-2">
                     <AlertTriangle className="h-5 w-5" />
-                    Incomplete Annotations
+                    Annotation Quality
                   </CardTitle>
                   <CardDescription>
                     Variants with missing data from external API sources
@@ -2416,6 +2998,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                 </div>
               ) : (
                 <>
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -2573,6 +3156,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                     ))}
                   </TableBody>
                 </Table>
+                </div>
                 {renderPagination(jobs.length, jobsPage, setJobsPage)}
                 </>
               )}
@@ -2604,6 +3188,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                   <p className={theme.text.muted}>No background jobs found</p>
                 </div>
               ) : (
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -2672,25 +3257,69 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                         <TableRow key={`${job.job_id}-detail`}>
                           <TableCell colSpan={7} className="p-0">
                             <div className="mx-2 my-1 rounded-lg bg-gray-950 border border-white/10 px-4 py-3 space-y-2 text-xs font-mono">
-                              {job.params && Object.keys(job.params).length > 0 && (
+                              {/* Duration */}
+                              {job.started_at && (
+                                <div>
+                                  <span className="text-gray-400 font-sans font-medium">Duration: </span>
+                                  <span className="text-cyan-400">
+                                    {job.completed_at
+                                      ? (() => {
+                                          const s = Math.round((new Date(job.completed_at).getTime() - new Date(job.started_at!).getTime()) / 1000)
+                                          return s >= 60 ? `${Math.floor(s/60)}m ${s%60}s` : `${s}s`
+                                        })()
+                                      : 'running…'}
+                                  </span>
+                                </div>
+                              )}
+                              {/* Params — filter out nulls/false defaults */}
+                              {job.params && Object.entries(job.params).filter(([,v]) => v !== null && v !== false).length > 0 && (
                                 <div>
                                   <span className="text-gray-400 font-sans font-medium">Params: </span>
-                                  <span className="text-blue-400">{JSON.stringify(job.params)}</span>
+                                  <span className="text-blue-400">
+                                    {JSON.stringify(Object.fromEntries(Object.entries(job.params).filter(([,v]) => v !== null && v !== false)))}
+                                  </span>
                                 </div>
                               )}
+                              {/* Result — pretty-print ETL stats */}
                               {job.result && Object.keys(job.result).length > 0 && (
-                                <div>
-                                  <span className="text-gray-400 font-sans font-medium">Result: </span>
-                                  <span className="text-emerald-400">{JSON.stringify(job.result)}</span>
+                                <div className="space-y-0.5">
+                                  <span className="text-gray-400 font-sans font-medium block">Result:</span>
+                                  {Object.entries(job.result).map(([k, v]) => (
+                                    <div key={k} className="pl-3">
+                                      <span className="text-gray-500">{k}: </span>
+                                      <span className="text-emerald-400">
+                                        {Array.isArray(v) ? `[${(v as unknown[]).length} items]` : String(v)}
+                                      </span>
+                                    </div>
+                                  ))}
                                 </div>
                               )}
+                              {/* Error */}
                               {job.error && (
                                 <div>
                                   <span className="text-gray-400 font-sans font-medium">Error: </span>
-                                  <span className="text-red-400">{job.error}</span>
+                                  <span className="text-red-400 whitespace-pre-wrap">{job.error}</span>
                                 </div>
                               )}
-                              {!job.params && !job.result && !job.error && (
+                              {/* Progress logs */}
+                              {job.job_logs && job.job_logs.length > 0 && (
+                                <div className="space-y-0.5">
+                                  <span className="text-gray-400 font-sans font-medium block">
+                                    Logs ({job.job_logs.length}):
+                                  </span>
+                                  <div className="max-h-48 overflow-y-auto rounded bg-black/40 border border-white/5 p-2 space-y-0.5">
+                                    {job.job_logs.map((entry, i) => (
+                                      <div key={i} className="flex gap-2 leading-relaxed">
+                                        <span className="text-gray-600 shrink-0">{entry.ts}</span>
+                                        <span className={entry.level === 'ERROR' ? 'text-red-400' : entry.level === 'WARNING' ? 'text-amber-400' : 'text-gray-300'}>
+                                          {entry.msg}
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {!job.started_at && !job.result && !job.error && !job.job_logs && !(job.params && Object.entries(job.params).filter(([,v]) => v !== null && v !== false).length > 0) && (
                                 <span className="text-gray-500">No additional details</span>
                               )}
                             </div>
@@ -2701,6 +3330,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               )}
             </CardContent>
           </Card>

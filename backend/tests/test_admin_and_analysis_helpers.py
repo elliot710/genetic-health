@@ -1,0 +1,114 @@
+import pytest
+from backend.api.admin_routes import _extract_am_coords
+from backend.services.analysis_service import ComprehensiveAnalysisService
+
+
+class TestExtractAmCoords:
+    def _make_ensembl(self, chrom, pos, allele_str, found=True):
+        return {
+            "found": found,
+            "data": [{"seq_region_name": chrom, "start": pos, "allele_string": allele_str}],
+        }
+
+    def test_returns_none_for_none_input(self):
+        assert _extract_am_coords(None) is None
+
+    def test_returns_none_when_not_found(self):
+        data = self._make_ensembl("1", 100, "A/T", found=False)
+        assert _extract_am_coords(data) is None
+
+    def test_returns_coords_for_snp(self):
+        data = self._make_ensembl("1", 100, "A/T")
+        result = _extract_am_coords(data)
+        assert result == ("1", 100, "A", "T")
+
+    def test_returns_none_for_non_snp_alleles(self):
+        data = self._make_ensembl("1", 100, "AT/T")
+        assert _extract_am_coords(data) is None
+
+    def test_returns_none_when_no_data_key(self):
+        assert _extract_am_coords({"found": True}) is None
+
+    def test_uses_first_element_of_data_list(self):
+        data = {
+            "found": True,
+            "data": [
+                {"seq_region_name": "2", "start": 200, "allele_string": "G/C"},
+                {"seq_region_name": "1", "start": 100, "allele_string": "A/T"},
+            ],
+        }
+        result = _extract_am_coords(data)
+        assert result == ("2", 200, "G", "C")
+
+    def test_handles_dict_data_not_list(self):
+        data = {"found": True, "data": {"seq_region_name": "X", "start": 50, "allele_string": "C/G"}}
+        result = _extract_am_coords(data)
+        assert result == ("X", 50, "C", "G")
+
+    def test_returns_none_when_allele_string_missing(self):
+        data = {"found": True, "data": [{"seq_region_name": "1", "start": 100}]}
+        assert _extract_am_coords(data) is None
+
+
+class TestComprehensiveAnalysisServiceConstants:
+    def test_completed_phases_is_class_attribute(self):
+        assert hasattr(ComprehensiveAnalysisService, '_COMPLETED_PHASES')
+
+    def test_completed_phases_keys(self):
+        phases = ComprehensiveAnalysisService._COMPLETED_PHASES
+        assert 'initializing' in phases
+        assert 'annotation_complete' in phases
+        assert 'completed' in phases
+
+    def test_annotating_variants_restarts_phase_2(self):
+        phases = ComprehensiveAnalysisService._COMPLETED_PHASES
+        assert phases['annotating_variants'] == 0
+
+    def test_annotation_complete_skips_to_phase_3(self):
+        phases = ComprehensiveAnalysisService._COMPLETED_PHASES
+        assert phases['annotation_complete'] == 1
+
+    def test_completed_is_max_phase(self):
+        phases = ComprehensiveAnalysisService._COMPLETED_PHASES
+        assert phases['completed'] == max(phases.values())
+
+
+class TestUpdateDb:
+    @pytest.mark.asyncio
+    async def test_update_progress_delegates(self):
+        from unittest.mock import AsyncMock, patch, MagicMock
+        from types import SimpleNamespace
+
+        svc = ComprehensiveAnalysisService(user_id=1)
+
+        progress = SimpleNamespace(
+            progress_percentage=50,
+            processed_variants=100,
+            current_step="annotating",
+            status="in_progress",
+            estimated_completion=None,
+        )
+
+        with patch.object(svc, '_update_db', new_callable=AsyncMock) as mock_update:
+            await svc._update_progress(42, progress)
+            mock_update.assert_called_once_with(
+                42,
+                progress_percentage=50,
+                processed_variants=100,
+                current_step="annotating",
+                analysis_status="in_progress",
+                estimated_completion=None,
+                guard_paused=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_update_analysis_status_delegates(self):
+        from unittest.mock import AsyncMock, patch
+
+        svc = ComprehensiveAnalysisService(user_id=1)
+
+        with patch.object(svc, '_update_db', new_callable=AsyncMock) as mock_update:
+            await svc._update_analysis_status(99, "completed", "done")
+            mock_update.assert_called_once_with(
+                99, analysis_status="completed", current_step="done"
+            )

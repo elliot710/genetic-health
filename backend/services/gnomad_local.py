@@ -2,6 +2,15 @@
 gnomAD service — SQLite cache (from tabix CADD TSV files) with PostgreSQL
 and BigQuery fallback. Gene constraint lookups use PG.
 
+This CADD-derived data is CONSERVATION/PATHOGENICITY-only (CADD, SIFT,
+PolyPhen, PhyloP, SpliceAI) — the source TSVs carry no af/ac/an columns, so
+results here never include an "af" key. Real allele frequency is sourced
+separately, from gnomad_v2_local.py, and merged in via
+local_annotation.run_all_lookups(). BigQuery is creds-gated and reachable
+only through lookup()/lookup_by_position() when local_only is not set — the
+per-user analysis pipeline uses lookup_batch()/lookup_batch_by_position(),
+which never call BigQuery.
+
 Usage:
     svc = get_gnomad_service()
     result = await svc.lookup("rs1234")
@@ -73,6 +82,7 @@ class GnomadCacheService:
         self._tsv_files: Optional[List[Path]] = None
         self._genome_build: Optional[str] = None
         self._is_grch38: bool = False
+        self._is_indel_only: bool = False
         # True after a full tabix→SQLite scan was completed (or loaded from disk).
         # When True, any rsid not in the SQLite cache is guaranteed NOT to be in
         # gnomAD — no need to re-run the expensive tabix fallback path.
@@ -229,6 +239,9 @@ class GnomadCacheService:
             logger.warning("No tabix-indexed gnomAD TSV files found in %s", _GNOMAD_DATA_DIR)
             return
         self._tsv_files = tsv_files
+        # Detect whether available files are indel-only (e.g. gnomAD CADD indel TSV).
+        # When True, tabix lookups for SNP variants are skipped — they can never match.
+        self._is_indel_only = all('indel' in f.name.lower() for f in tsv_files)
         build = self._detect_genome_build(tsv_files[0])
         is_grch38 = build is not None and 'GRCh38' in build
         self._genome_build = build
@@ -236,27 +249,89 @@ class GnomadCacheService:
         if is_grch38:
             logger.info("gnomAD CADD file '%s' is %s — will bridge via Ensembl VEP GRCh38 positions",
                         tsv_files[0].name, build)
-        marker_fp = await self._get_marker_fingerprint()
+        if self._is_indel_only:
+            logger.info("gnomAD CADD: indel-only data — SNP tabix lookups will be skipped")
         file_fp = get_multi_file_fingerprint(tsv_files)
-        if is_cache_valid(_SQLITE_FILE, _META_FILE, marker_fp, file_fp):
-            t0 = time.time()
-            self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE, cache_size_mb=32)
-            row = self._db.execute("SELECT COUNT(*) FROM gnomad_data").fetchone()
-            self._variant_count = row[0] if row else 0
-            self._full_scan_done = True  # Loaded from disk → full scan already done
-            logger.info("gnomAD: opened SQLite cache with %d variants in %.1fs",
-                        self._variant_count, time.time() - t0)
-            return
-        logger.info("gnomAD cache miss — scanning %d TSV files at known positions...", len(tsv_files))
-        pos_map = await self._load_known_positions(genome_build=build)
-        if not pos_map:
-            logger.info("No known variant positions — skipping gnomAD cache build")
-            return
-        count = await asyncio.to_thread(self._scan_tabix_to_sqlite, tsv_files, pos_map)
-        save_cache_meta(_META_FILE, marker_fp, file_fp, count)
-        self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE, cache_size_mb=32)
-        self._variant_count = count
-        self._full_scan_done = True  # Just completed a full scan
+
+        # Use existing cache if TSV files are unchanged (marker_fp not required).
+        if _SQLITE_FILE.exists() and _META_FILE.exists():
+            try:
+                meta = json.loads(_META_FILE.read_text())
+                if meta.get("file_fingerprint") == file_fp and meta.get("variant_count", 0) > 0:
+                    t0 = time.time()
+                    self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE, cache_size_mb=32)
+                    row = self._db.execute("SELECT COUNT(*) FROM gnomad_data").fetchone()
+                    self._variant_count = row[0] if row else 0
+                    # Do NOT set _full_scan_done=True here. The disk cache was built
+                    # incrementally and covers only a subset of current markers.
+                    # Leaving it False allows tabix fallback to run for uncached variants
+                    # and grow the SQLite cache with new hits over time.
+                    logger.info("gnomAD: opened SQLite cache with %d variants in %.1fs",
+                                self._variant_count, time.time() - t0)
+                    return
+            except Exception:
+                pass
+
+        # No valid SQLite cache — files and tabix indexes are available for
+        # on-demand queries.  Cache building from genetic_markers positions is
+        # no longer performed here; local_annotation.py uses lookup_batch_by_position
+        # with variant positions from the current analysis.
+        if self._tsv_files:
+            logger.info(
+                "gnomAD: no pre-built SQLite cache — %d CADD TSV file(s) available for tabix queries",
+                len(self._tsv_files),
+            )
+        return
+
+    async def build_full_cache(self, *, progress_callback=None) -> Dict[str, Any]:
+        """Build (or rebuild) the SQLite cache with a sequential chromosome scan.
+
+        This is far faster than per-variant tabix seeks for large marker sets:
+        - Sequential scan: read 19 GB once per file (~38s at 500 MB/s)
+        - Random seeks:    609 K seeks × ~0.5 ms = ~5 min per file
+
+        After this completes, all analysis lookups hit SQLite (sub-second).
+        Called by the admin worker job 'gnomad_build_cadd_cache'.
+        """
+        if not self._tsv_files:
+            raise RuntimeError("No gnomAD CADD TSV files found — cannot build cache")
+
+        t0 = time.time()
+        logger.info("gnomAD CADD cache build: loading marker positions from database…")
+        if self._is_grch38:
+            pos_map = await self._load_grch38_positions_from_ensembl()
+        else:
+            pos_map = await self._load_known_positions(genome_build=None)
+
+        total_markers = sum(len(v) for v in pos_map.values())
+        logger.info(
+            "gnomAD CADD cache build: %d unique positions / %d marker-allele pairs",
+            len(pos_map), total_markers,
+        )
+        if progress_callback:
+            progress_callback("positions_loaded", len(pos_map), time.time() - t0)
+
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        variant_count = await asyncio.to_thread(
+            self._scan_tabix_to_sqlite, self._tsv_files, pos_map,
+        )
+
+        # Persist metadata so _load_cache() opens this cache on next startup.
+        file_fp = get_multi_file_fingerprint(self._tsv_files)
+        save_cache_meta(_META_FILE, marker_fp="full_build", file_fp=file_fp, count=variant_count)
+
+        # Hot-reload the freshly built cache into memory.
+        self._db = await asyncio.to_thread(open_cache_db, _SQLITE_FILE, cache_size_mb=64)
+        self._variant_count = variant_count
+        self._full_scan_done = True
+        elapsed = time.time() - t0
+        logger.info(
+            "gnomAD CADD cache build complete: %d variants cached in %.1fs",
+            variant_count, elapsed,
+        )
+        if progress_callback:
+            progress_callback("complete", variant_count, elapsed)
+        return {"variant_count": variant_count, "positions_scanned": len(pos_map), "elapsed_s": round(elapsed, 1)}
 
     def _scan_tabix_to_sqlite(
         self, tsv_files: List[Path], pos_map: Dict[Tuple[str, int], List[Tuple[str, str, str]]]
@@ -656,6 +731,7 @@ class GnomadLocalService:
         self._variant_count: Optional[int] = None
         self._constraint_count: Optional[int] = None
         self._available: Optional[bool] = None
+        self._pg_has_rsids: bool = True   # False when rsid column has no data (ETL gap)
         self._cache = get_gnomad_cache_service()
 
     # ------------------------------------------------------------------
@@ -664,8 +740,10 @@ class GnomadLocalService:
 
     @property
     def is_loaded(self) -> bool:
-        # Consider loaded if cache OR PG has data
+        # Consider loaded if cache OR PG has data, OR tabix files are available
         if self._cache.is_loaded and self._cache.variant_count > 0:
+            return True
+        if self._cache.has_tabix_files:
             return True
         return self._variant_count is not None and self._variant_count > 0
 
@@ -679,12 +757,37 @@ class GnomadLocalService:
     def constraint_count(self) -> int:
         return self._constraint_count or 0
 
+    @property
+    def lookup_batch_uses_tabix(self) -> bool:
+        """True when lookup_batch() already queries tabix for all unfound rsids.
+
+        When True, lookup_batch_by_position() would produce identical results
+        (same GRCh38 bridge + same tabix files) and can be skipped entirely.
+        This happens when:
+          - tabix files are available, AND
+          - full_scan_done is False (meaning tabix is used per-lookup, not a complete cache)
+        """
+        return self._cache.has_tabix_files and not self._cache._full_scan_done
+
+    async def build_cadd_cache(self, *, progress_callback=None) -> Dict[str, Any]:
+        """Trigger a full sequential scan of CADD TSV files to build the SQLite cache.
+
+        Call once from the admin panel. After completion, all analysis lookups
+        hit SQLite (sub-second) instead of doing per-variant tabix seeks.
+        """
+        if not self._cache._tsv_files:
+            await self._cache.ensure_loaded()
+        return await self._cache.build_full_cache(progress_callback=progress_callback)
+
     # ------------------------------------------------------------------
     # Startup check
     # ------------------------------------------------------------------
 
     async def ensure_loaded(self) -> bool:
-        """Check that gnomAD data is available (SQLite cache, PG, or both)."""
+        """Check that gnomAD data is available (SQLite cache, PG, tabix, or all)."""
+        # Ensure the cache service is initialized so has_tabix_files reflects file presence
+        if not self._cache._loaded:
+            await self._cache.ensure_loaded()
         try:
             async with async_session_factory() as session:
                 result = await session.execute(
@@ -697,27 +800,52 @@ class GnomadLocalService:
                 )
                 self._constraint_count = result.scalar() or 0
 
-            self._available = self._variant_count > 0 or self._cache.is_loaded
+                # Detect whether rsid column is actually populated (ETL may skip it).
+                # Use EXISTS for a fast O(1) check instead of a full COUNT.
+                if self._variant_count > 0:
+                    r_rsid = await session.execute(sa_text(
+                        "SELECT EXISTS(SELECT 1 FROM gnomad_variants WHERE rsid IS NOT NULL LIMIT 1)"
+                    ))
+                    self._pg_has_rsids = bool(r_rsid.scalar())
+                    if not self._pg_has_rsids:
+                        logger.info(
+                            "gnomAD PG: rsid column is empty — "
+                            "rsid batch lookups will skip PG and go directly to tabix"
+                        )
+
+            self._available = (self._variant_count > 0
+                               or self._cache.is_loaded
+                               or self._cache.has_tabix_files)
             if self._variant_count > 0:
                 logger.info("gnomAD PG: %d variants, %d gene constraints available",
                             self._variant_count, self._constraint_count)
             if self._cache.is_loaded:
                 logger.info("gnomAD SQLite cache: %d variants available",
                             self._cache.variant_count)
+            elif self._cache.has_tabix_files:
+                logger.info("gnomAD: %d CADD TSV file(s) available — tabix queries enabled",
+                            len(self._cache._tsv_files or []))
             if not self._available:
                 logger.warning("gnomAD: no data — run ETL import or place TSV files in data_sources/gnomad/")
             return self._available
         except Exception as e:
             logger.warning("gnomAD PG check failed: %s", e)
-            self._available = False
-            return False
+            self._available = self._cache.has_tabix_files
+            return self._available
 
     # ------------------------------------------------------------------
     # Core lookups
     # ------------------------------------------------------------------
 
     async def lookup(self, rsid: str, *, local_only: bool = False) -> Optional[Dict[str, Any]]:
-        """Look up a variant by rsID. Tries cache → PG → tabix files → BigQuery."""
+        """Look up a variant by rsID. Tries cache → PG → tabix files → BigQuery.
+
+        Callers on the per-user analysis path must pass local_only=True — that
+        is what keeps the creds-gated BigQuery fallback reachable only from
+        admin/ETL retrigger flows, not from analysis lookups. The real
+        analysis pipeline uses lookup_batch()/lookup_batch_by_position()
+        instead, which have no BigQuery code path at all.
+        """
         # Try SQLite cache first (fastest)
         if self._cache.is_loaded:
             cached = await self._cache.lookup(rsid)
@@ -750,7 +878,12 @@ class GnomadLocalService:
     async def lookup_by_position(
         self, chrom: str, pos: int, ref: str, alt: str
     ) -> Optional[Dict[str, Any]]:
-        """Look up by genomic coordinates. Tries local PG → tabix files → BigQuery."""
+        """Look up by genomic coordinates. Tries local PG → tabix files → BigQuery.
+
+        Unreachable from the analysis pipeline: it has no real callers (the
+        per-user pipeline uses the batch methods below, which never touch
+        BigQuery). Kept for on-demand/admin use only.
+        """
         chrom = chrom.replace("chr", "")
 
         async with async_session_factory() as session:
@@ -792,8 +925,11 @@ class GnomadLocalService:
         if not remaining:
             return results
 
-        # PERF-01: Skip PG lookup entirely when gnomAD PG table is empty.
-        pg_skip = self._variant_count is not None and self._variant_count == 0
+        # PERF-01: Skip PG rsid lookup when table is empty or rsid column has no data.
+        pg_skip = (
+            (self._variant_count is not None and self._variant_count == 0)
+            or not self._pg_has_rsids
+        )
 
         if not pg_skip:
             # 2) Fallback to PG for anything not in cache
@@ -911,10 +1047,14 @@ class GnomadLocalService:
         found_count = 0
         t0 = _time.monotonic()
 
-        # PERF-01: Skip PG lookup entirely when gnomAD PG table is empty.
-        pg_skip = self._variant_count is not None and self._variant_count == 0
+        # PERF-01: Skip PG pos lookup when table is empty or gnomAD is GRCh38
+        # (user's genetic_markers positions are GRCh37 — assembly mismatch → never matches).
+        pg_skip = (
+            (self._variant_count is not None and self._variant_count == 0)
+            or self._cache._is_grch38
+        )
         if pg_skip:
-            logger.debug("gnomAD pos lookup: skipping PG (table empty)")
+            logger.debug("gnomAD pos lookup: skipping PG (table empty or GRCh38/GRCh37 mismatch)")
         else:
             async with async_session_factory() as session:
                 for i in range(0, len(entries), batch_size):
@@ -1052,6 +1192,19 @@ class GnomadLocalService:
 
         if not tuples:
             return {}
+
+        # PERF: When CADD data is indel-only, filter out SNPs (ref & alt are
+        # single nucleotides) — they can never match and the GRCh38 bridge +
+        # tabix scan would waste 20+ minutes for zero hits.
+        if self._cache._is_indel_only:
+            before = len(tuples)
+            tuples = [t for t in tuples if len(t[3]) > 1 or len(t[4]) > 1]
+            skipped = before - len(tuples)
+            if skipped:
+                logger.info("gnomAD CADD: skipped %d SNPs (indel-only data), %d indels remain",
+                            skipped, len(tuples))
+            if not tuples:
+                return {}
 
         # GRCh38 coordinate translation if needed
         if self._cache._is_grch38:
@@ -1293,7 +1446,10 @@ class GnomadLocalService:
                 await session.commit()
                 logger.debug("Cached BigQuery result for %s-%s-%s-%s", chrom, pos, ref, alt)
         except Exception as e:
-            logger.debug("Failed to cache BigQuery result: %s", e)
+            # Best-effort: the BigQuery result is already returned to the
+            # caller above; failing to warm the local cache just means the
+            # next lookup re-fetches from BigQuery instead of the cache.
+            logger.warning("Failed to cache BigQuery result: %s", e)
 
     # ------------------------------------------------------------------
     # Formatting

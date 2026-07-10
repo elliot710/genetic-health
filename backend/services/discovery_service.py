@@ -13,8 +13,8 @@ from ..db.models import PendingDiscovery, VariantMapping
 CLINICAL_PANEL_MAP = {
     'pathogenic': 'health',
     'likely_pathogenic': 'health',
-    'risk_factor': 'health',
-    'drug_response': 'drug_responses',
+    'risk_factor': 'wellness',
+    'drug_response': 'drug',
     'protective': 'health',
 }
 
@@ -25,67 +25,6 @@ CONSEQUENCE_PANEL_MAP = {
     'stop_gained': 'health',
     'splice_donor_variant': 'health',
     'splice_acceptor_variant': 'health',
-}
-
-# Gene-based category inference for health panel sub-categories
-GENE_CATEGORY_MAP = {
-    # Cardiovascular
-    'APOE': 'cardiovascular', 'LDLR': 'cardiovascular', 'PCSK9': 'cardiovascular',
-    'MTHFR': 'cardiovascular', 'F5': 'cardiovascular', 'F2': 'cardiovascular',
-    'ACE': 'cardiovascular', 'AGT': 'cardiovascular', 'NOS3': 'cardiovascular',
-    # Metabolic
-    'TCF7L2': 'metabolic', 'PPARG': 'metabolic', 'FTO': 'metabolic',
-    'MC4R': 'metabolic', 'SLC30A8': 'metabolic', 'GCKR': 'metabolic',
-    # Neurological
-    'PARK2': 'neurological', 'LRRK2': 'neurological', 'SNCA': 'neurological',
-    'APP': 'neurological', 'PSEN1': 'neurological', 'PSEN2': 'neurological',
-    'MAPT': 'neurological', 'GBA': 'neurological',
-    # Cancer
-    'BRCA1': 'cancer', 'BRCA2': 'cancer', 'TP53': 'cancer',
-    'APC': 'cancer', 'MLH1': 'cancer', 'MSH2': 'cancer',
-    'RB1': 'cancer', 'PTEN': 'cancer', 'VHL': 'cancer',
-    # Pharmacogenomics / drug metabolism
-    'CYP2D6': 'pharmacogenomic', 'CYP2C19': 'pharmacogenomic', 'CYP2C9': 'pharmacogenomic',
-    'CYP1A2': 'pharmacogenomic', 'CYP3A4': 'pharmacogenomic', 'CYP3A5': 'pharmacogenomic',
-    'NAT2': 'pharmacogenomic', 'DPYD': 'pharmacogenomic', 'TPMT': 'pharmacogenomic',
-    'UGT1A1': 'pharmacogenomic', 'SLCO1B1': 'pharmacogenomic', 'VKORC1': 'pharmacogenomic',
-    'ABCB1': 'pharmacogenomic',
-    # Immune
-    'HLA-A': 'immune', 'HLA-B': 'immune', 'HLA-C': 'immune',
-    'IL6': 'immune', 'TNF': 'immune', 'TNFRSF14': 'immune',
-    # Methylation
-    'COMT': 'methylation_enzymes', 'MTR': 'methylation_enzymes',
-    'MTRR': 'methylation_enzymes', 'CBS': 'transsulfuration',
-    'BHMT': 'methylation_enzymes', 'MAO-A': 'neurotransmitter',
-    # Detox
-    'GSTP1': 'phase2', 'GSTM1': 'phase2', 'GSTT1': 'phase2',
-    'SOD2': 'antioxidant', 'CAT': 'antioxidant', 'GPX1': 'antioxidant',
-    'NQO1': 'phase2',
-}
-
-# Consequence-based sub-category inference
-CONSEQUENCE_CATEGORY_MAP = {
-    'missense_variant': 'metabolic',
-    'frameshift_variant': 'metabolic',
-    'stop_gained': 'metabolic',
-    'splice_donor_variant': 'metabolic',
-    'splice_acceptor_variant': 'metabolic',
-    'intron_variant': 'regulatory',
-    'upstream_gene_variant': 'regulatory',
-    'downstream_gene_variant': 'regulatory',
-    'synonymous_variant': 'regulatory',
-}
-
-# Drug response sub-categories based on drug class keywords
-DRUG_CATEGORY_MAP = {
-    'warfarin': 'anticoagulants', 'heparin': 'anticoagulants', 'rivaroxaban': 'anticoagulants',
-    'clopidogrel': 'antiplatelet', 'aspirin': 'antiplatelet',
-    'statin': 'statins', 'atorvastatin': 'statins', 'simvastatin': 'statins', 'rosuvastatin': 'statins',
-    'omeprazole': 'proton_pump_inhibitors', 'pantoprazole': 'proton_pump_inhibitors',
-    'codeine': 'opioids', 'tramadol': 'opioids', 'morphine': 'opioids',
-    'tamoxifen': 'oncology', 'fluorouracil': 'oncology', 'irinotecan': 'oncology',
-    'metformin': 'antidiabetics',
-    'phenytoin': 'anticonvulsants', 'carbamazepine': 'anticonvulsants',
 }
 
 
@@ -113,7 +52,7 @@ async def process_lookup_discoveries(
     created = 0
 
     # Generate variant mapping suggestions
-    mappings = _determine_variant_mappings(rsid, gene, consequence, clinical_sigs, pharmacogenomics)
+    mappings = _determine_variant_mappings(rsid, gene, consequence, clinical_sigs, pharmacogenomics, population_data)
 
     for mapping_cat, mapping_info in mappings.items():
         map_type = mapping_info['map_type']
@@ -171,74 +110,31 @@ async def process_lookup_discoveries(
     return created
 
 
-def _infer_subcategory(gene: str | None, consequence: str, clinical_sigs: list, pharmacogenomics: dict, panel_id: str) -> str:
-    """Infer a proper sub-category for the given panel based on gene, consequence, and clinical data."""
-    # 1. Gene-based lookup (most specific)
-    if gene and gene.upper() in GENE_CATEGORY_MAP:
-        gene_cat = GENE_CATEGORY_MAP[gene.upper()]
-        # For drug_responses panel, remap pharmacogenomic genes
-        if panel_id == 'drug_responses':
-            return _infer_drug_subcategory(pharmacogenomics, gene)
-        return gene_cat
-
-    # 2. For drug_responses, infer from drug data
-    if panel_id == 'drug_responses':
-        return _infer_drug_subcategory(pharmacogenomics, gene)
-
-    # 3. Consequence-based fallback for health panel
-    if consequence and consequence in CONSEQUENCE_CATEGORY_MAP:
-        return CONSEQUENCE_CATEGORY_MAP[consequence]
-
-    # 4. Generic defaults per panel
-    defaults = {
-        'health': 'metabolic',
-        'drug_responses': 'pharmacogenomic',
-        'rare_mutations': 'metabolic',
-        'uncommon_mutations': 'metabolic',
-        'wellness': 'metabolic',
-    }
-    return defaults.get(panel_id, 'general')
-
-
-def _infer_drug_subcategory(pharmacogenomics: dict, gene: str | None) -> str:
-    """Infer drug response sub-category from pharmacogenomics data."""
-    pharm_data = pharmacogenomics.get('data', {})
-    if isinstance(pharm_data, dict):
-        chemicals = pharm_data.get('relatedChemicals', [])
-        if isinstance(chemicals, list):
-            for chem in chemicals:
-                name = (chem.get('name', '') if isinstance(chem, dict) else str(chem)).lower()
-                for keyword, category in DRUG_CATEGORY_MAP.items():
-                    if keyword in name:
-                        return category
-    # Known pharmacogene families
-    if gene:
-        g = gene.upper()
-        if g.startswith('CYP'):
-            return 'pharmacogenomic'
-        if g == 'VKORC1':
-            return 'anticoagulants'
-        if g == 'SLCO1B1':
-            return 'statins'
-    return 'pharmacogenomic'
-
-
 def _determine_variant_mappings(
     rsid: str,
     gene: str | None,
     consequence: str,
     clinical_sigs: list,
     pharmacogenomics: dict,
+    population_data: dict | None = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Determine which variant mappings should be suggested."""
     mappings: Dict[str, Dict[str, Any]] = {}
     sig_lower = [s.lower().replace(' ', '_') for s in clinical_sigs]
 
+    # RC-3: Skip common variants (AF > 1%) unless ClinVar pathogenic
+    allele_freq = _extract_allele_frequency(population_data)
+    has_pathogenic = any('pathogenic' in s for s in sig_lower)
+    if allele_freq is not None and allele_freq > 0.01 and not has_pathogenic:
+        return mappings
+
     # Health risk mapping for pathogenic/risk variants
+    # RC-4: risk_factor goes to wellness, not health
     has_health_signal = any(
         kw in sig for sig in sig_lower
-        for kw in ('pathogenic', 'risk_factor', 'likely_pathogenic')
+        for kw in ('pathogenic', 'likely_pathogenic')
     )
+    has_risk_factor = any('risk_factor' in sig for sig in sig_lower)
     if has_health_signal or consequence in CONSEQUENCE_PANEL_MAP:
         condition = _infer_condition(clinical_sigs, gene)
         mappings['health'] = {
@@ -249,6 +145,21 @@ def _determine_variant_mappings(
                 'risk_multiplier': 1.2 if 'pathogenic' in str(sig_lower) else 1.1,
             },
             'description': f"Health risk: {condition}" if condition else f"Health variant in {gene or 'unknown gene'}",
+        }
+
+    # RC-4: Route risk_factor to wellness panel instead of health
+    if has_risk_factor and 'health' not in mappings:
+        condition = _infer_condition(clinical_sigs, gene)
+        mappings['wellness'] = {
+            'map_type': 'rsid',
+            'key': rsid,
+            'data': {
+                'metric': condition or f"{gene or 'Unknown'} risk factor",
+                'predisposition': 'moderate',
+                'score': 0.5,
+                'recommendations': [f'Discuss {gene or "this variant"} with healthcare provider'],
+            },
+            'description': f"Wellness risk factor: {condition or gene}",
         }
 
     # Drug response mapping
@@ -272,6 +183,28 @@ def _determine_variant_mappings(
         }
 
     return mappings
+
+
+def _extract_allele_frequency(population_data: dict | None) -> float | None:
+    """Extract global allele frequency from population data."""
+    if not population_data or not isinstance(population_data, dict):
+        return None
+    af = population_data.get('global_af') or population_data.get('af')
+    if af is not None:
+        try:
+            return float(af)
+        except (ValueError, TypeError):
+            pass
+    frequencies = population_data.get('frequencies', {})
+    if isinstance(frequencies, dict):
+        for key in ('global', 'gnomad', 'gnomade', '1000genomes'):
+            val = frequencies.get(key)
+            if val is not None:
+                try:
+                    return float(val)
+                except (ValueError, TypeError):
+                    continue
+    return None
 
 
 def _infer_condition(clinical_sigs: list, gene: str | None) -> str | None:

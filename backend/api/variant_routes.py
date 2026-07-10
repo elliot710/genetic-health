@@ -2,7 +2,7 @@
 Variant lookup and annotation API routes
 Provides comprehensive variant information from multiple databases
 """
-from fastapi import APIRouter, HTTPException, Depends, status, Query
+from fastapi import APIRouter, HTTPException, Depends, status, Query, Request
 from pydantic import BaseModel, Field
 from typing import Dict, Any, List, Optional
 from datetime import datetime
@@ -18,6 +18,9 @@ from ..services.clinvar_local import get_clinvar_local_service
 from ..services.gnomad_local import get_gnomad_service
 from ..services.ensembl_vep_local import get_ensembl_local_service
 from ..services.bq_public import BigQueryPublicService
+from ..services.gwas_catalog_local import get_gwas_catalog_service
+from ..services.clingen_local import get_clingen_service
+from ..services.open_targets_service import get_open_targets_service
 from ..db.database import get_session
 from ..db.models import (
     GeneticAnalysis, AnalysisVariant, GeneticMarker,
@@ -25,6 +28,8 @@ from ..db.models import (
     VariantMapping,
 )
 from .auth_routes import get_current_user
+from ..core.config import settings
+from ..core.rate_limit import limiter
 
 router = APIRouter(prefix="/api/variants", tags=["variants"])
 
@@ -64,8 +69,10 @@ def validate_variant_id(variant_id: str) -> bool:
     return any(re.match(pattern, variant_id.upper()) for pattern in patterns)
 
 @router.post("/lookup", response_model=VariantLookupResponse)
+@limiter.limit(lambda: f"{settings.rate_limit.lookup_per_minute}/minute")
 async def lookup_variant(
-    request: VariantLookupRequest,
+    request: Request,
+    payload: VariantLookupRequest,
     session: AsyncSession = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
@@ -86,7 +93,7 @@ async def lookup_variant(
     - Gene variants: APOE4, MTHFR677T
     """
     
-    variant_id = request.variant_id.strip()
+    variant_id = payload.variant_id.strip()
     
     if not variant_id:
         raise HTTPException(
@@ -102,7 +109,7 @@ async def lookup_variant(
     
     try:
         # Check cache first (unless force_refresh)
-        if not request.force_refresh:
+        if not payload.force_refresh:
             result = await session.execute(
                 select(VariantLookupCache).where(VariantLookupCache.variant_id == variant_id)
             )
@@ -356,6 +363,44 @@ async def lookup_variant(
                             annotations[f'bq_{source_name}'] = source_data
                 except Exception as e:
                     _logger.debug("BQ enrichment failed for %s: %s", gene_symbol, e)
+
+            # GWAS Catalog local lookup
+            try:
+                gwas_svc = get_gwas_catalog_service()
+                await gwas_svc.ensure_loaded()
+                gwas_batch = await gwas_svc.lookup_batch([variant_id])
+                gwas_result = gwas_batch.get(variant_id)
+                if gwas_result and gwas_result.get('found'):
+                    annotations['gwas_catalog'] = gwas_result
+            except Exception as e:
+                _logger.debug("GWAS Catalog lookup failed for %s: %s", variant_id, e)
+
+            # ClinGen gene validity (requires gene symbol)
+            if gene_symbol:
+                try:
+                    clingen_svc = get_clingen_service()
+                    await clingen_svc.ensure_loaded()
+                    clingen_result = await clingen_svc.lookup_by_gene(gene_symbol)
+                    if clingen_result and clingen_result.get('found'):
+                        annotations['clingen'] = clingen_result
+                except Exception as e:
+                    _logger.debug("ClinGen lookup failed for %s: %s", gene_symbol, e)
+
+            # Open Targets gene-disease associations (requires gene symbol)
+            if gene_symbol:
+                try:
+                    ot_svc = get_open_targets_service()
+                    ot_result = await ot_svc.lookup_by_gene(gene_symbol)
+                    if ot_result and ot_result.get('found'):
+                        annotations['open_targets'] = ot_result
+                except Exception as e:
+                    _logger.debug("Open Targets lookup failed for %s: %s", gene_symbol, e)
+
+            # Transcript consequences from Ensembl VEP
+            if ensembl_entry:
+                tcs = ensembl_entry.get('transcript_consequences', [])
+                if tcs:
+                    annotations['transcript_consequences'] = tcs[:25]
 
             # Determine if variant was found
             found = any([
@@ -716,7 +761,9 @@ def get_variant_category(consequence: Optional[str]) -> str:
 
 
 @router.get("/search")
+@limiter.limit(lambda: f"{settings.rate_limit.lookup_per_minute}/minute")
 async def search_user_variants(
+    request: Request,
     q: str = Query(default="", description="Search by rsid (prefix or contains)"),
     chromosome: Optional[str] = Query(default=None, description="Filter by chromosome"),
     annotated: Optional[bool] = Query(default=None, description="Filter by annotation status"),

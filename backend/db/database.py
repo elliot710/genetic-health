@@ -82,7 +82,20 @@ async def get_session():
         finally:
             await session.close()
 
+from sqlalchemy import text as sa_text
+
 async def init_db():
-    """Initialize database tables"""
+    """Initialize database tables.
+
+    If alembic has already applied migrations (alembic_version has rows),
+    skip create_all to avoid collisions with alembic-managed indexes.
+    Falls back to create_all only for fresh databases with no migrations yet.
+    """
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        try:
+            result = await conn.execute(sa_text("SELECT version_num FROM alembic_version LIMIT 1"))
+            if result.fetchone():
+                return  # Schema fully managed by alembic migrations
+        except Exception:
+            pass
+        await conn.run_sync(lambda c: Base.metadata.create_all(c, checkfirst=True))

@@ -13,6 +13,8 @@ ALL_SOURCES: List[str] = [
     'alpha_missense', 'clinvar_local', 'gnomad', 'thousand_genomes',
     'ensembl_vep', 'gnomad_tx',
     'chembl', 'fda_drug', 'alphafold',
+    'gwas_catalog', 'clingen',
+    'open_targets',
 ]
 
 # Map source name → DB column prefix (e.g. clinpgx data stored in pharmgkb_data)
@@ -25,22 +27,40 @@ SOURCE_TO_COLUMN: Dict[str, str] = {
     'clinvar_local': 'clinvar_local',
     'gnomad': 'gnomad',
     'thousand_genomes': 'thousand_genomes',
-    'ensembl_vep': 'ensembl',  # ensembl_vep local uses the same ensembl_data column
+    # INTENTIONAL shared column contract for ensembl_data:
+    #   - 'ensembl' (remote REST fallback, hybrid local/remote via
+    #     OptimizedGeneticAPIService) and 'ensembl_vep' (local VCF) both
+    #     produce VEP consequence annotations and write ensembl_data.
+    #     Same logical annotation — do NOT split into separate columns.
+    #   - Authoritative writer: 'ensembl_vep' (local). During analysis the
+    #     pipeline is single-writer — annotation_coordinator writes
+    #     ensembl_data only from the local ensembl_vep source.
+    #   - The only place both sources can be in play together is the admin
+    #     retrigger/backfill path (_retrigger_sources in admin_routes.py).
+    #     That path MUST NOT let a retrigger of 'ensembl' blindly overwrite
+    #     an already-populated (found=True) ensembl_data value — it skips
+    #     the clobbering write instead (see the guard + log there). Do not
+    #     remove that guard when touching this path.
+    'ensembl_vep': 'ensembl',
     'gnomad_tx': 'gnomad_tx',
     'chembl': 'chembl',
     'fda_drug': 'fda_drug',
     'alphafold': 'alphafold',
+    'gwas_catalog': 'gwas_catalog',
+    'clingen': 'clingen',
+    'open_targets': 'open_targets',
 }
 
-# Sources that use external HTTP APIs (via OptimizedGeneticAPIService)
+# Sources that use external HTTP APIs (via OptimizedGeneticAPIService / GeneticAPIService)
 REMOTE_API_SOURCES: Set[str] = {'ensembl', 'clinvar', 'clinpgx', 'snpedia'}
 
 # Sources backed by local data (files, local DB tables, or SQLite cache)
 # 'ensembl' is hybrid — uses local VEP VCF when loaded, falls back to API
-LOCAL_SOURCES: Set[str] = {'clinvar_local', 'gnomad', 'gnomad_tx', 'alpha_missense', 'ensembl', 'thousand_genomes', 'ensembl_vep'}
+# 'alphafold' uses local SQLite built from EBI FTP tar when available
+LOCAL_SOURCES: Set[str] = {'clinvar_local', 'gnomad', 'gnomad_tx', 'alpha_missense', 'ensembl', 'thousand_genomes', 'ensembl_vep', 'alphafold', 'gwas_catalog', 'clingen'}
 
-# Sources backed by BigQuery public datasets
-BQ_SOURCES: Set[str] = {'chembl', 'fda_drug', 'alphafold'}
+# Sources backed by BigQuery public datasets (alphafold moved to LOCAL_SOURCES)
+BQ_SOURCES: Set[str] = {'chembl', 'fda_drug', 'open_targets'}
 
 
 def source_status(data) -> str:

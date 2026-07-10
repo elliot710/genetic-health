@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { User, Mail, Key, Save, Check, Dna, Upload, Shield, Camera, Bookmark, Trash2, ExternalLink, Bell, Share2, UserCheck, Eye, EyeOff, X, Plus } from 'lucide-react'
+import { User, Mail, Key, Save, Check, Dna, Upload, Shield, Camera, Bookmark, Trash2, ExternalLink, Bell, Share2, UserCheck, Eye, EyeOff, X, Plus, Pencil, Printer, MessageSquare } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,6 +10,7 @@ import { Switch } from '@/components/ui/switch'
 import type { DashboardData } from './categories/types'
 import { apiUrl } from '@/lib/api'
 import VariantDetailDialog from './categories/VariantDetailDialog'
+import { DISCLAIMER_TEXT } from '@/components/Disclaimer'
 
 const API = apiUrl('')
 
@@ -68,6 +69,8 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
   const [variantDialogRsid, setVariantDialogRsid] = useState<string | null>(null)
   const [variantDialogGene, setVariantDialogGene] = useState<string | undefined>(undefined)
   const [variantDialogGenotype, setVariantDialogGenotype] = useState<string | undefined>(undefined)
+  const [editingNote, setEditingNote] = useState<{ rsid: string; text: string } | null>(null)
+  const [noteSaving, setNoteSaving] = useState(false)
 
   // Notification preferences state
   const [notifPrefs, setNotifPrefs] = useState<Record<string, boolean>>({})
@@ -99,6 +102,129 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
       })
       if (res.ok) setSavedVariants(prev => prev.filter(v => v.rsid !== rsid))
     } catch { /* ignore */ }
+  }
+
+  const saveNote = async (rsid: string, note: string) => {
+    setNoteSaving(true)
+    try {
+      const res = await fetch(apiUrl(`/auth/saved-variants/${rsid}`), {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: note.trim() || null }),
+      })
+      if (res.ok) {
+        const updated = await res.json()
+        setSavedVariants(prev => prev.map(v => v.rsid === rsid ? { ...v, note: updated.note } : v))
+        setEditingNote(null)
+      }
+    } catch { /* ignore */ }
+    finally { setNoteSaving(false) }
+  }
+
+  const [printLoading, setPrintLoading] = useState(false)
+
+  const printVariants = async () => {
+    setPrintLoading(true)
+    const date = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+
+    // Fetch full annotation details for all variants in parallel (served from cache)
+    const details = await Promise.all(
+      savedVariants.map(v =>
+        fetch(apiUrl(`/api/annotations/variant-details/${v.rsid}`), { credentials: 'include' })
+          .then(r => r.ok ? r.json() : null)
+          .catch(() => null)
+      )
+    )
+
+    const rows = savedVariants.map((v, i) => {
+      const d = details[i]
+      const desc = d?.description || ''
+      // Collect unique conditions from ClinVar entries
+      const conditions = d?.clinvar?.entries
+        ? [...new Set(d.clinvar.entries.flatMap((e: { conditions: string[] }) => e.conditions).filter(Boolean))] as string[]
+        : []
+      // Pathogenicity
+      const ps = d?.pathogenicity_score
+      const pathLabel = ps
+        ? `${Math.round(ps.composite_score * 100)}% — ${ps.classification.replace(/_/g, ' ')}`
+        : ''
+      // ClinVar entry links
+      const cvLinks = d?.clinvar?.entries
+        ? (d.clinvar.entries as { uid: string; accession: string; clinical_significance: string[] }[])
+            .map(e => `<a href="https://www.ncbi.nlm.nih.gov/clinvar/variation/${e.uid}" target="_blank" rel="noopener noreferrer">${e.accession || e.uid}</a> (${e.clinical_significance.join(', ')})`)
+            .join('<br/>')
+        : ''
+      const noteHtml = v.note ? `<em class="note">${v.note.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</em>` : ''
+
+      return `
+      <tr>
+        <td class="variant-cell">
+          <strong class="rsid">${v.rsid}</strong>${v.gene ? `<br/><span class="muted">${v.gene}</span>` : ''}
+          ${v.genotype ? `<br/><span class="genotype">${v.genotype}</span>` : ''}
+        </td>
+        <td>${v.clinical_significance || '—'}${cvLinks ? `<br/><div class="cv-links">${cvLinks}</div>` : ''}</td>
+        <td>${conditions.length > 0 ? conditions.map(c => `<div class="condition">${c}</div>`).join('') : (desc ? '<span class="muted">See description</span>' : '—')}</td>
+        <td class="desc-cell">${desc || '—'}</td>
+        <td>${ps ? `<span class="${ps.classification.includes('pathogenic') && !ps.classification.includes('benign') ? 'path-high' : ps.classification.includes('uncertain') ? 'path-uncertain' : 'path-benign'}">${pathLabel}</span>` : (v.most_severe_consequence ? v.most_severe_consequence.replace(/_/g, ' ') : '—')}</td>
+        <td>${noteHtml}</td>
+      </tr>`
+    }).join('')
+
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+        <title>Saved Variants — Epigenic</title>
+        <style>
+          * { box-sizing: border-box; }
+          body { font-family: Georgia, serif; max-width: 1050px; margin: 40px auto; color: #1a1a1a; font-size: 12.5px; line-height: 1.5; }
+          h1 { font-size: 22px; margin-bottom: 4px; }
+          .meta { color: #555; font-size: 12px; margin-bottom: 28px; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 28px; }
+          th { background: #f0f0f0; text-align: left; padding: 7px 9px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 2px solid #bbb; }
+          td { padding: 8px 9px; border-bottom: 1px solid #e0e0e0; vertical-align: top; }
+          tr:last-child td { border-bottom: none; }
+          .rsid { font-size: 13px; }
+          .muted { color: #777; font-size: 11px; }
+          .genotype { font-family: monospace; color: #333; font-size: 11.5px; }
+          .variant-cell { min-width: 90px; }
+          .desc-cell { max-width: 240px; font-size: 11.5px; color: #333; }
+          .condition { margin-bottom: 2px; }
+          .cv-links { font-size: 10.5px; margin-top: 4px; color: #666; }
+          .cv-links a { color: #c35e00; text-decoration: none; }
+          .cv-links a:hover { text-decoration: underline; }
+          .note { color: #444; display: block; margin-top: 3px; font-size: 11.5px; }
+          .path-high { color: #c00; font-weight: bold; }
+          .path-uncertain { color: #b56800; font-weight: bold; }
+          .path-benign { color: #1a7a1a; font-weight: bold; }
+          .disclaimer { border-top: 1px solid #ccc; padding-top: 12px; color: #888; font-size: 11px; font-style: italic; margin-top: 8px; }
+          @media print {
+            body { margin: 14mm; font-size: 11px; }
+            .cv-links a { color: #c35e00; }
+            button { display: none; }
+          }
+        </style>
+      </head><body>
+        <h1>Saved Variants — Genetic Health Summary</h1>
+        <p class="meta">Generated: ${date} &nbsp;&middot;&nbsp; Patient: ${profile.full_name || profile.username || profile.email} &nbsp;&middot;&nbsp; Total variants: ${savedVariants.length}</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Variant / Gene<br/>Genotype</th>
+              <th>Clinical Significance<br/>ClinVar Reports</th>
+              <th>Associated Conditions</th>
+              <th>Description</th>
+              <th>Pathogenicity</th>
+              <th>Your Notes</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <p class="disclaimer">${DISCLAIMER_TEXT}</p>
+        <script>window.onload=function(){window.print()}<\/script>
+      </body></html>`
+
+    setPrintLoading(false)
+    const w = window.open('', '_blank')
+    if (w) { w.document.write(html); w.document.close() }
   }
 
   const fetchNotifPrefs = async () => {
@@ -643,13 +769,31 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
       {/* ── Saved Variants ───────────────────────────────────── */}
       <Card className="glass-card">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Bookmark className="h-5 w-5 text-blue-400" />
-            Saved Variants
-          </CardTitle>
-          <CardDescription>
-            Variants you bookmarked from the variant detail dialog
-          </CardDescription>
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Bookmark className="h-5 w-5 text-blue-400" />
+                Saved Variants
+              </CardTitle>
+              <CardDescription>
+                Variants you bookmarked from the variant detail dialog
+              </CardDescription>
+            </div>
+            {savedVariants.length > 0 && (
+              <button
+                type="button"
+                onClick={printVariants}
+                disabled={printLoading}
+                title="Export for doctor (print)"
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-blue-500/30 text-blue-400 hover:bg-blue-500/10 transition-colors shrink-0 mt-1 disabled:opacity-50"
+              >
+                {printLoading
+                  ? <><div className="h-3.5 w-3.5 rounded-full border border-blue-400 border-t-transparent animate-spin" /> Preparing…</>
+                  : <><Printer className="h-3.5 w-3.5" /> Print / Export</>
+                }
+              </button>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           {savedLoading ? (
@@ -665,54 +809,111 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
               {savedVariants.map(v => (
                 <div
                   key={v.id}
-                  className="flex items-center justify-between p-3 glass-card rounded-lg group"
+                  className="flex flex-col p-3 glass-card rounded-lg group gap-2"
                 >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setVariantDialogRsid(v.rsid)
-                      setVariantDialogGene(v.gene || undefined)
-                      setVariantDialogGenotype(v.genotype || undefined)
-                    }}
-                    className="flex-1 flex items-center gap-3 text-left min-w-0"
-                  >
-                    <Dna className="h-4 w-4 text-blue-400 shrink-0" />
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className={`font-medium ${theme.text.primary}`}>{v.rsid}</span>
-                        {v.gene && (
-                          <span className={`text-xs ${theme.text.muted}`}>({v.gene})</span>
-                        )}
+                  {/* Top row: variant info + actions */}
+                  <div className="flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setVariantDialogRsid(v.rsid)
+                        setVariantDialogGene(v.gene || undefined)
+                        setVariantDialogGenotype(v.genotype || undefined)
+                      }}
+                      className="flex-1 flex items-center gap-3 text-left min-w-0"
+                    >
+                      <Dna className="h-4 w-4 text-blue-400 shrink-0" />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className={`font-medium ${theme.text.primary}`}>{v.rsid}</span>
+                          {v.gene && (
+                            <span className={`text-xs ${theme.text.muted}`}>({v.gene})</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          {v.most_severe_consequence && (
+                            <span className={`text-xs ${theme.text.secondary}`}>
+                              {v.most_severe_consequence.replace(/_/g, ' ')}
+                            </span>
+                          )}
+                          {v.clinical_significance && (
+                            <span className={`text-xs px-1.5 py-0.5 rounded ${
+                              v.clinical_significance.toLowerCase().includes('pathogenic')
+                                ? 'bg-red-500/15 text-red-400'
+                                : v.clinical_significance.toLowerCase().includes('benign')
+                                  ? 'bg-green-500/15 text-green-400'
+                                  : 'bg-yellow-500/15 text-yellow-400'
+                            }`}>
+                              {v.clinical_significance}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        {v.most_severe_consequence && (
-                          <span className={`text-xs ${theme.text.secondary}`}>
-                            {v.most_severe_consequence.replace(/_/g, ' ')}
-                          </span>
-                        )}
-                        {v.clinical_significance && (
-                          <span className={`text-xs px-1.5 py-0.5 rounded ${
-                            v.clinical_significance.toLowerCase().includes('pathogenic')
-                              ? 'bg-red-500/15 text-red-400'
-                              : v.clinical_significance.toLowerCase().includes('benign')
-                                ? 'bg-green-500/15 text-green-400'
-                                : 'bg-yellow-500/15 text-yellow-400'
-                          }`}>
-                            {v.clinical_significance}
-                          </span>
-                        )}
+                      <ExternalLink className={`h-3.5 w-3.5 ${theme.text.muted} opacity-0 group-hover:opacity-100 transition-opacity shrink-0`} />
+                    </button>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setEditingNote(editingNote?.rsid === v.rsid ? null : { rsid: v.rsid, text: v.note || '' })}
+                        title={v.note ? 'Edit note' : 'Add note'}
+                        className={`p-1.5 rounded-lg transition-colors ${editingNote?.rsid === v.rsid ? 'bg-blue-500/20 text-blue-400' : `hover:bg-blue-500/10 ${v.note ? 'text-blue-400' : `${theme.text.muted} opacity-0 group-hover:opacity-100`}`}`}
+                      >
+                        {v.note ? <MessageSquare className="h-3.5 w-3.5" /> : <Pencil className="h-3.5 w-3.5" />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeSavedVariant(v.rsid)}
+                        title="Remove from saved"
+                        className={`p-1.5 rounded-lg hover:bg-red-500/15 transition-colors opacity-0 group-hover:opacity-100`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5 text-red-400" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Existing note display (when not editing) */}
+                  {v.note && editingNote?.rsid !== v.rsid && (
+                    <div className={`text-xs ${theme.text.secondary} italic pl-7 leading-relaxed`}>
+                      &ldquo;{v.note}&rdquo;
+                    </div>
+                  )}
+
+                  {/* Inline note editor */}
+                  {editingNote?.rsid === v.rsid && (
+                    <div className="pl-7 flex flex-col gap-1.5">
+                      <textarea
+                        value={editingNote.text}
+                        onChange={e => setEditingNote({ rsid: v.rsid, text: e.target.value })}
+                        placeholder="Add a note for your doctor… (e.g. Ask about this variant at next appointment)"
+                        rows={2}
+                        className={`w-full text-xs px-2.5 py-2 rounded-lg border ${theme.text.secondary} resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/40 ${theme.glass}`}
+                        style={{ borderColor: 'rgba(99,102,241,0.3)', background: 'rgba(99,102,241,0.05)' }}
+                        autoFocus
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) saveNote(v.rsid, editingNote.text)
+                          if (e.key === 'Escape') setEditingNote(null)
+                        }}
+                      />
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => saveNote(v.rsid, editingNote.text)}
+                          disabled={noteSaving}
+                          className="text-xs px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white transition-colors disabled:opacity-50"
+                        >
+                          {noteSaving ? 'Saving…' : 'Save note'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingNote(null)}
+                          className={`text-xs px-2.5 py-1 rounded hover:bg-gray-500/10 transition-colors ${theme.text.muted}`}
+                        >
+                          Cancel
+                        </button>
+                        <span className={`text-[10px] ${theme.text.muted}`}>⌘Enter to save · Esc to cancel</span>
                       </div>
                     </div>
-                    <ExternalLink className={`h-3.5 w-3.5 ${theme.text.muted} opacity-0 group-hover:opacity-100 transition-opacity shrink-0`} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => removeSavedVariant(v.rsid)}
-                    title="Remove from saved"
-                    className="p-1.5 rounded-lg hover:bg-red-500/15 transition-colors ml-2 opacity-0 group-hover:opacity-100 shrink-0"
-                  >
-                    <Trash2 className="h-3.5 w-3.5 text-red-400" />
-                  </button>
+                  )}
                 </div>
               ))}
             </div>

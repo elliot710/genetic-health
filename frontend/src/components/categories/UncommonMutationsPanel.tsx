@@ -10,9 +10,12 @@ import {
   SectionCard,
   StatusBadge,
   DisclaimerCard,
-  VariantLinks,
-  PathogenicityBar,
-  ZygosityBadge,
+  VariantInfoBox,
+  GeneContextBox,
+  AlphaFoldDetailBox,
+  AlphaFoldBadge,
+  GeneBurdenStrip,
+  ClickableRsidBadge,
   clinicalSignificanceToSeverity,
   formatLabel,
   MasonryLayout,
@@ -179,28 +182,32 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
             return (
               <div
                 key={mutation.rsid || index}
-                className={`${theme.glass} border ${theme.border} rounded-xl p-5 cursor-pointer hover:border-blue-500/50 transition-all duration-300`}
+                className={`${theme.glass} border ${theme.border} rounded-xl p-3 sm:p-4 cursor-pointer hover:border-blue-500/50 transition-all duration-300 overflow-hidden`}
                 onClick={() => setSelectedItem(isExpanded ? null : itemKey)}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-3">
-                    <h4 className={`font-bold text-lg ${theme.textPrimary}`}>{mutation.gene}</h4>
-                    <StatusBadge
-                      label={formatLabel(mutation.clinical_relevance || 'unknown')}
-                      severity={clinicalSignificanceToSeverity(mutation.clinical_relevance)}
-                    />
-                  </div>
-                  <ChevronRight className={`h-5 w-5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
+                <div className="flex items-start justify-between mb-1 gap-1">
+                  <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug flex-1 min-w-0`}>
+                    {cleanCondition(mutation.effect) || mutation.gene}
+                  </h4>
+                  <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
 
-                <div className="flex flex-wrap gap-1.5">
-                  {mutation.rsid && <Badge variant="secondary" className="text-xs font-mono">{mutation.rsid}{data?.genotype_map?.[mutation.rsid] ? ` ${data.genotype_map[mutation.rsid]}` : ''}</Badge>}
-                  {mutation.rsid && <ZygosityBadge genotype={data?.genotype_map?.[mutation.rsid]} />}
+                <div className="flex flex-wrap gap-1">
+                  <StatusBadge
+                    label={formatLabel(mutation.clinical_relevance || 'unknown')}
+                    severity={clinicalSignificanceToSeverity(mutation.clinical_relevance)}
+                  />
+                  {mutation.gene && <Badge variant="secondary" className="text-xs font-medium">{mutation.gene}</Badge>}
+                  {mutation.rsid && <ClickableRsidBadge rsid={mutation.rsid} gene={mutation.gene} genotype={data?.genotype_map?.[mutation.rsid]} alleleString={data?.allele_string_map?.[mutation.rsid]} token={token} isDarkMode={isDarkMode} />}
                   {mutation.effect_size && <Badge variant="outline" className="text-xs">Effect: {mutation.effect_size}</Badge>}
+                  <AlphaFoldBadge
+                    confidence={data?.alphafold_map?.[mutation.rsid]?.confidence}
+                    highPct={data?.alphafold_map?.[mutation.rsid]?.high_confidence_pct}
+                    lowPct={data?.alphafold_map?.[mutation.rsid]?.low_confidence_pct}
+                  />
                 </div>
-
-                {mutation.effect && (
-                  <p className={`text-sm ${theme.textSecondary} mt-2 line-clamp-2`}>{cleanCondition(mutation.effect)}</p>
+                {mutation.gene && data?.gene_stats_map?.[mutation.gene] && (
+                  <GeneBurdenStrip gene={mutation.gene} stats={data.gene_stats_map[mutation.gene]} theme={theme} />
                 )}
 
                 {isExpanded && (
@@ -229,8 +236,15 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
                       )}
                     </div>
 
-                    <PathogenicityBar rsid={mutation.rsid} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
-                    <VariantLinks rsid={mutation.rsid} gene={mutation.gene} token={token} isDarkMode={isDarkMode} alphaMissense={mutation.rsid ? data?.alpha_missense_map?.[mutation.rsid] : undefined} clinvarCount={mutation.rsid ? data?.clinvar_count_map?.[mutation.rsid] : undefined} genotype={mutation.rsid ? data?.genotype_map?.[mutation.rsid] : undefined} />
+                    <VariantInfoBox rsid={mutation.rsid} gene={mutation.gene} token={token} isDarkMode={isDarkMode} alphaMissense={mutation.rsid ? data?.alpha_missense_map?.[mutation.rsid] : undefined} clinvarCount={mutation.rsid ? data?.clinvar_count_map?.[mutation.rsid] : undefined} genotype={mutation.rsid ? data?.genotype_map?.[mutation.rsid] : undefined} pathogenicityMap={data?.pathogenicity_map} theme={theme} />
+                    <GeneContextBox gene={mutation.gene} stats={mutation.gene ? data?.gene_stats_map?.[mutation.gene] : undefined} theme={theme} />
+                    {mutation.rsid && data?.alphafold_map?.[mutation.rsid] && (
+                      <AlphaFoldDetailBox
+                        rsid={mutation.rsid}
+                        alphafoldData={data.alphafold_map[mutation.rsid]}
+                        theme={theme}
+                      />
+                    )}
                   </div>
                 )}
               </div>

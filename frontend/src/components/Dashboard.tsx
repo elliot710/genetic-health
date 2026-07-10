@@ -48,6 +48,7 @@ const VariantSearch = React.lazy(() => import('./VariantSearch'))
 import { ErrorState, useThemeClasses } from './categories/shared'
 import { RiskDistributionChart, FunctionalCategoriesChart, OverviewSummaryPie } from './categories/GenomicCharts'
 import AnalysisProgressLoader from './AnalysisProgressLoader'
+import { Disclaimer } from './Disclaimer'
 
 interface DashboardProps {
   token?: string
@@ -110,6 +111,7 @@ export default function Dashboard({
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [currentUserName, setCurrentUserName] = useState(userName || 'User')
   const [currentAvatarUrl, setCurrentAvatarUrl] = useState<string | null | undefined>(userAvatarUrl)
   const [notification, setNotification] = useState<{
@@ -429,6 +431,7 @@ export default function Dashboard({
         onMarkRead={markRead}
         onMarkAllRead={markAllRead}
         onDeleteNotification={deleteNotif}
+        onMenuToggle={() => setSidebarOpen(o => !o)}
       />
 
       <div className="flex" style={{ height: 'calc(100vh - 73px)' }}>
@@ -438,10 +441,14 @@ export default function Dashboard({
           categories={CATEGORIES}
           activeCategory={activeCategory}
           setActiveCategory={setActiveCategory}
+          isOpen={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
         />
 
         <main className={`flex-1 overflow-auto ${theme.background}`}>
-          <div className="p-8 max-w-none">
+          <div className="p-4 md:p-8 max-w-none">
+            <Disclaimer className="mb-6" />
+
             {/* Shared-view banner */}
             {viewingSharedUser && (
               <div className="mb-6 flex items-center justify-between gap-4 rounded-xl border border-green-500/30 bg-green-500/10 px-4 py-3">

@@ -4,12 +4,14 @@ insight generator modules.
 """
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.config import settings
+from ...db.annotation_schemas import validate_associated_variants
 from ...db.models import AnalysisVariant
 
 logger = logging.getLogger(__name__)
@@ -36,6 +38,7 @@ class VariantProfile:
     gene: Optional[str]
     consequence: Optional[str]
     impact: Optional[str]
+    chromosome: Optional[str]
     # None = no frequency data available.  0.0 = monomorphic (not the same!).
     population_frequency: Optional[float]
     clinical_significance: Optional[str]   # First ClinVar sig, lowercased
@@ -63,6 +66,7 @@ class GeneratorContext:
     rsid_gene_map: Dict[str, str]       # rsid -> gene symbol
     registry: Dict[str, Dict[str, Dict]]  # category -> {rsid: {}, gene: {}}
     variant_profiles: Dict[str, VariantProfile] = field(default_factory=dict)
+    inferred_sex: Optional[str] = None  # 'male', 'female', 'unknown'
 
     def get_maps(self, category: str):
         """Return (rsid_map, gene_map) for a category from the loaded registry."""
@@ -242,6 +246,9 @@ def get_annotation_allele_parts(annotation_result) -> tuple:
     annotations = annotation_result.annotation_data.get('annotations', {})
 
     # Ensembl VEP — allele_string format: "REF/ALT" or "REF/ALT1,ALT2"
+    # For multi-allelic sites (REF/ALT1,ALT2) we return ALL alts joined so
+    # callers can check if the user carries ANY of the risk alleles at this
+    # position, not just the arbitrarily-first one.
     ensembl = annotations.get('ensembl', {})
     data_list = ensembl.get('data', [])
     if data_list:
@@ -249,11 +256,11 @@ def get_annotation_allele_parts(annotation_result) -> tuple:
         if '/' in allele_str:
             parts = allele_str.split('/', 1)
             ref = parts[0].strip()
-            alt = parts[1].split(',')[0].strip()  # Take first alt for multi-allelic
+            alt = parts[1].strip()  # Keep full alt string, may be "A,T" for multi-allelic
             if ref and alt:
                 return (ref.upper(), alt.upper())
 
-    # gnomAD — has ref and alt columns
+    # gnomAD — has ref and alt columns (single alt)
     gnomad = annotations.get('gnomad', {})
     if gnomad and gnomad.get('found'):
         ref = gnomad.get('ref', '')
@@ -261,7 +268,7 @@ def get_annotation_allele_parts(annotation_result) -> tuple:
         if ref and alt:
             return (ref.strip().upper(), alt.strip().upper())
 
-    # ClinVar local — has explicit ref/alt alleles
+    # ClinVar local — has explicit ref/alt alleles (single alt)
     cv = annotations.get('clinvar_local', {})
     if cv and cv.get('found'):
         ref = cv.get('ref_allele') or cv.get('reference_allele') or ''
@@ -286,6 +293,13 @@ def indel_d_is_ref(ref_allele: str | None, alt_allele: str | None) -> bool | Non
     _UNKNOWN = ('-', '.', 'N')
     ref_up = ref_allele.strip().upper()
     alt_up = alt_allele.strip().upper()
+    # For multi-allelic sites (e.g. "C,CCC" from allele_string "CC/C,CCC"),
+    # use only the first alt allele for length comparison. This matches the
+    # VariantDetailDialog.tsx frontend behaviour (alts[0]). Without this,
+    # the full comma-joined string length is used, producing incorrect D/I
+    # directionality for dual-allele consumer array variants (BUG-14).
+    if ',' in alt_up:
+        alt_up = alt_up.split(',')[0].strip()
     if ref_up in _UNKNOWN or alt_up in _UNKNOWN:
         return None
     ref_len = len(ref_up)
@@ -355,7 +369,7 @@ def get_user_genotype(variant) -> Optional[str]:
 #   DI or ID = heterozygous (one deleted copy, one reference copy)
 #   -- = no call / failed genotyping
 _INDEL_CODES = frozenset({'II', 'DD', 'DI', 'ID'})
-_NO_CALL_CODES = frozenset({'--', '00', 'NC'})
+_NO_CALL_CODES = frozenset({'--', '00', 'NC', './.', '.|.'})
 
 # ClinVar significance values that indicate a variant is NOT clinically
 # harmful. Used to filter out benign variants at insight generation time
@@ -364,71 +378,58 @@ _NO_CALL_CODES = frozenset({'--', '00', 'NC'})
 _BENIGN_SIG_PREFIXES = ('benign', 'likely benign', 'likely_benign')
 
 
+def _get_all_clinvar_significances(annotations: dict) -> list:
+    sigs: list = []
+    cv_local = annotations.get('clinvar_local', {})
+    if cv_local and cv_local.get('found'):
+        sigs.extend(cv_local.get('clinical_significances', []))
+    cv_api = annotations.get('clinvar', {})
+    if cv_api and cv_api.get('found'):
+        for entry in cv_api.get('entries', []):
+            entry_sigs = entry.get('clinical_significance', [])
+            sigs.extend([entry_sigs] if isinstance(entry_sigs, str) else entry_sigs)
+        top_sig = cv_api.get('clinical_significance', '')
+        if isinstance(top_sig, str) and top_sig:
+            sigs.append(top_sig)
+    return sigs
+
+
+def _has_computational_pathogenicity(annotations: dict) -> bool:
+    am = annotations.get('alpha_missense', {})
+    if am and am.get('found'):
+        am_class = (am.get('am_class') or am.get('classification') or '').lower()
+        if 'pathogenic' in am_class:
+            return True
+    gnomad = annotations.get('gnomad', {})
+    if gnomad and gnomad.get('found'):
+        cadd = gnomad.get('cadd', {})
+        if isinstance(cadd, dict) and cadd.get('phred') is not None:
+            if cadd['phred'] >= 25:
+                return True
+    return False
+
+
 def is_clinvar_benign(annotation_result) -> bool:
     """Return True when ALL available annotation sources agree the variant is benign.
 
     Cross-references ClinVar local, ClinVar API, and computational predictors
     (AlphaMissense, CADD) to avoid filtering variants where any source reports
     potential pathogenicity.
-
-    Returns True only when:
-    - At least one ClinVar source has data AND all ClinVar significances are benign
-    - No computational predictor flags the variant as potentially pathogenic
     """
     if not annotation_result or not annotation_result.annotation_data:
-        return False  # No data — don't filter
+        return False
     annotations = annotation_result.annotation_data.get('annotations', {})
 
-    # --- ClinVar Local ---
-    cv_sigs_all: list = []
-    cv_local = annotations.get('clinvar_local', {})
-    if cv_local and cv_local.get('found'):
-        sigs = cv_local.get('clinical_significances', [])
-        cv_sigs_all.extend(sigs)
-
-    # --- ClinVar API ---
-    cv_api = annotations.get('clinvar', {})
-    if cv_api and cv_api.get('found'):
-        entries = cv_api.get('entries', [])
-        for entry in entries:
-            entry_sigs = entry.get('clinical_significance', [])
-            if isinstance(entry_sigs, str):
-                entry_sigs = [entry_sigs]
-            cv_sigs_all.extend(entry_sigs)
-        # Also check top-level significance
-        top_sig = cv_api.get('clinical_significance', '')
-        if isinstance(top_sig, str) and top_sig:
-            cv_sigs_all.append(top_sig)
-
+    cv_sigs_all = _get_all_clinvar_significances(annotations)
     if not cv_sigs_all:
-        return False  # No ClinVar data at all — don't filter
+        return False
 
-    # Check if ALL ClinVar significance values are benign
     for sig in cv_sigs_all:
         s = sig.strip().lower().replace('_', ' ')
-        if not s:
-            continue
-        if not any(s.startswith(prefix) for prefix in _BENIGN_SIG_PREFIXES):
-            return False  # At least one non-benign ClinVar report → keep it
+        if s and not any(s.startswith(prefix) for prefix in _BENIGN_SIG_PREFIXES):
+            return False
 
-    # --- Cross-check computational predictors ---
-    # If AlphaMissense says likely_pathogenic, don't filter even if ClinVar says benign
-    am = annotations.get('alpha_missense', {})
-    if am and am.get('found'):
-        am_class = (am.get('am_class') or am.get('classification') or '').lower()
-        if 'pathogenic' in am_class:
-            return False  # Computational disagrees — keep for review
-
-    # If CADD PHRED score is very high (>= 25), the variant may be functionally
-    # important despite benign ClinVar classification
-    gnomad = annotations.get('gnomad', {})
-    if gnomad and gnomad.get('found'):
-        cadd = gnomad.get('cadd', {})
-        if isinstance(cadd, dict) and cadd.get('phred') is not None:
-            if cadd['phred'] >= 25:
-                return False  # High computational deleteriousness — keep
-
-    return True  # All sources agree: benign
+    return not _has_computational_pathogenicity(annotations)
 
 
 def is_indel_genotype(genotype: Optional[str]) -> bool:
@@ -590,12 +591,17 @@ def zygosity_adjust(level: str, genotype: Optional[str], *, ref_allele: Optional
     elif is_heterozygous(genotype):
         new_idx = idx  # baseline — no change
     else:
-        # Homozygous non-reference — only escalate when the ref allele is known
-        # (BUG-07: without ref we cannot distinguish hom-alt from hom-ref)
-        if ref_allele is None:
-            new_idx = idx  # preserve baseline; cannot determine true zygosity
-        else:
+        # Homozygous non-reference. Escalate ONLY when we can positively
+        # confirm the genotype is non-reference — i.e. ref_allele is known
+        # and the genotype is a resolvable nucleotide homozygote. When the
+        # reference is unknown (or the genotype is an indel D/I code with no
+        # allele-direction data), we cannot distinguish hom-alt from hom-ref,
+        # so preserve baseline rather than fabricating an escalation that
+        # inflates risk from missing data (U3/KTD3 — conservative policy).
+        if ref_allele and not is_indel_genotype(genotype):
             new_idx = min(len(_SEVERITY_LADDER) - 1, idx + steps)
+        else:
+            new_idx = idx
 
     result = _SEVERITY_LADDER[new_idx]
     # Preserve original casing style (Title Case if original was)
@@ -662,11 +668,11 @@ def assess_risk_level(genotype: str, risk_multiplier: float, ref_allele: Optiona
             else:
                 base = 'low'
     else:
-        # Fallback: multiplier-only with finer-grained thresholds (SCORE-03 fix).
-        # Added a 1.7x tier so 1.7–2.0 → "high" instead of forcing a jump at 2.0×.
-        if risk_multiplier >= 1.7:
-            base = 'high'
-        elif risk_multiplier >= 1.2:
+        # Fallback: multiplier-only — cap at 'moderate', never 'high'.
+        # 'high' requires evidence from the composite pathogenicity score
+        # (ClinVar + gnomAD + AlphaMissense); a population risk multiplier
+        # alone is insufficient to justify the highest risk category.
+        if risk_multiplier >= 1.2:
             base = 'moderate'
         elif risk_multiplier <= 0.8:
             base = 'low'
@@ -713,10 +719,15 @@ def assess_drug_response(genotype: str, gene: str, ref_allele: Optional[str] = N
         if gt_upper[0] != gt_upper[1]:
             return 'intermediate'
         else:
-            # Homozygous non-reference — poor metabolizer.
-            # We reach here only if ref_allele was unavailable or didn't
-            # match the genotype, so this is genuinely non-reference.
-            return 'poor'
+            # Homozygous. Call 'poor' ONLY when we can confirm the genotype is
+            # non-reference: a confirmed hom-ref already returned 'normal'
+            # above, so a KNOWN ref reaching here means genuine hom-alt. With
+            # an unknown reference we cannot distinguish hom-alt from hom-ref,
+            # so do not fabricate a poor-metabolizer call from missing data
+            # (U3/KTD3 — conservative policy).
+            if ref_allele:
+                return 'poor'
+            return 'normal'
     return 'normal'
 
 
@@ -747,6 +758,125 @@ def get_trait_description(trait: str, result: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Sex-linked condition filtering
+# ---------------------------------------------------------------------------
+
+_X_LINKED_FEMALE_ONLY_CONDITIONS = frozenset({
+    'rett syndrome', 'atypical rett syndrome',
+})
+
+_X_LINKED_RECESSIVE_GENES = frozenset({
+    'DMD', 'F8', 'F9', 'G6PD', 'OTC', 'AR', 'AVPR2', 'BTK',
+    'CYBB', 'GJB1', 'IL2RG', 'LAMP2', 'PDHA1', 'PLP1', 'SLC16A2',
+})
+
+
+def should_skip_sex_linked(
+    rsid: str,
+    condition: str,
+    gene: Optional[str],
+    chromosome: Optional[str],
+    inferred_sex: Optional[str],
+) -> bool:
+    if not inferred_sex or inferred_sex == 'unknown':
+        return False
+    if not chromosome or chromosome.upper() not in ('X', 'CHRX'):
+        return False
+    condition_lower = condition.lower().strip()
+    if inferred_sex == 'male' and condition_lower in _X_LINKED_FEMALE_ONLY_CONDITIONS:
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# GWAS trait → insight category mapping
+# ---------------------------------------------------------------------------
+
+_GWAS_CATEGORY_KEYWORDS: Dict[str, List[str]] = {
+    'cognitive': [
+        'intelligence', 'cognitive', 'educational attainment',
+        'general cognitive ability', 'fluid intelligence', 'reaction time',
+        'memory', 'cognitive performance',
+    ],
+    'personality': [
+        'neuroticism', 'extraversion', 'openness', 'conscientiousness',
+        'agreeableness', 'adventurousness', 'risk-taking', 'risk taking',
+        'loneliness', 'well-being', 'wellbeing', 'happiness',
+        'personality', 'subjective well-being',
+    ],
+    'sports': [
+        'grip strength', 'muscle', 'endurance', 'sprint',
+        'athletic', 'physical activity', 'exercise',
+        'hand grip strength', 'vo2 max',
+    ],
+    'physical': [
+        'height', 'eye color', 'hair color', 'skin pigmentation',
+        'freckles', 'male pattern baldness', 'body mass index',
+        'waist', 'hip circumference',
+    ],
+    'nutrition': [
+        'caffeine', 'lactose', 'vitamin', 'omega', 'folate',
+        'alcohol consumption', 'bitter taste', 'fatty acid',
+        'iron levels', 'zinc', 'selenium',
+    ],
+    'wellness': [
+        'sleep duration', 'insomnia', 'circadian', 'chronotype',
+        'longevity', 'telomere length', 'biological aging',
+        'morningness', 'stress',
+    ],
+}
+
+
+def classify_gwas_trait(trait: str) -> Optional[str]:
+    trait_lower = trait.lower()
+    for category, keywords in _GWAS_CATEGORY_KEYWORDS.items():
+        for keyword in keywords:
+            if keyword in trait_lower:
+                return category
+    return None
+
+
+def extract_gwas_insights(annotation_result) -> List[Dict[str, Any]]:
+    if not annotation_result or not annotation_result.annotation_data:
+        return []
+    gwas = annotation_result.annotation_data.get('annotations', {}).get('gwas_catalog', {})
+    if not gwas or not gwas.get('found'):
+        return []
+    insights = []
+    seen_categories: set = set()
+    for assoc in gwas.get('associations', []):
+        p_value = assoc.get('p_value')
+        if p_value is None or p_value > 5e-8:
+            continue
+        trait = assoc.get('trait', '')
+        category = classify_gwas_trait(trait)
+        if category and category not in seen_categories:
+            seen_categories.add(category)
+            insights.append({
+                'category': category,
+                'trait': trait,
+                'p_value': p_value,
+                'p_value_mlog': assoc.get('p_value_mlog'),
+                'study_accession': assoc.get('study_accession'),
+                'risk_allele_frequency': assoc.get('risk_allele_frequency'),
+            })
+    return insights
+
+
+# ---------------------------------------------------------------------------
+# ClinGen gene-disease validity check
+# ---------------------------------------------------------------------------
+
+def get_clingen_validity(annotation_result) -> Optional[str]:
+    if not annotation_result or not annotation_result.annotation_data:
+        return None
+    clingen = annotation_result.annotation_data.get('annotations', {}).get('clingen', {})
+    if not clingen or not clingen.get('found'):
+        return None
+    return clingen.get('strongest_classification')
+
+
+# ---------------------------------------------------------------------------
 # Generic map-driven generator
 # ---------------------------------------------------------------------------
 
@@ -759,6 +889,8 @@ async def generate_from_maps(
     build_from_rsid: Callable,
     build_from_gene: Callable,
     filter_benign: bool = False,
+    skip_benign_filter: bool = False,
+    max_population_af: Optional[float] = None,
 ) -> int:
     """
     Generic loop shared by most category generators.
@@ -768,10 +900,12 @@ async def generate_from_maps(
         dedup_field: key inside the info dict used to avoid duplicates.
         build_from_rsid(analysis_id, rsid, genotype, info) -> model | None
         build_from_gene(analysis_id, rsid, gene, consequence, info) -> model | None
-        filter_benign: if True AND config.exclude_benign_from_panels is set,
-            skip variants classified as benign/likely_benign. Only set for
-            categories where pathogenicity is medically relevant (health_risks,
-            carrier_status).
+        filter_benign: deprecated — kept for backward compat.
+        skip_benign_filter: deprecated — use max_population_af instead.
+        max_population_af: population allele frequency ceiling. Variants
+            above this threshold are skipped unless ClinVar explicitly
+            classifies them as pathogenic.  Clinical panels use 0.05,
+            lifestyle panels use 0.20.  None disables the gate.
     """
     items = []
     seen: set = set()
@@ -791,10 +925,31 @@ async def generate_from_maps(
         annotation_result = ctx.annotation_results.get(rsid)
         effective_ref = _get_effective_ref_allele(variant, annotation_result)
 
+        # Get alt allele for proper indel D/I code interpretation
+        _, _alt_allele = get_annotation_allele_parts(annotation_result)
+
         # Skip homozygous reference — user doesn't carry any risk allele
         # at this position. Other variants in the same gene can still match.
-        if effective_ref and is_homozygous_reference(genotype, effective_ref):
+        if effective_ref and is_homozygous_reference(genotype, effective_ref, alt_allele=_alt_allele):
             continue
+
+        # Population frequency gate — skip common variants that are too
+        # frequent to be clinically meaningful.  Variants with strong
+        # ClinVar pathogenic evidence bypass this gate.
+        if max_population_af is not None:
+            _prof = ctx.variant_profiles.get(rsid)
+            _var_freq = _prof.population_frequency if _prof else extract_frequency(annotation_result)
+            if _var_freq is not None and _var_freq > max_population_af:
+                _has_clinvar_path = False
+                if annotation_result and annotation_result.annotation_data:
+                    _cv_sigs = _get_all_clinvar_significances(
+                        annotation_result.annotation_data.get('annotations', {})
+                    )
+                    _has_clinvar_path = any(
+                        'pathogenic' in s.lower() for s in _cv_sigs
+                    )
+                if not _has_clinvar_path:
+                    continue
 
         # rsid-based matching
         if rsid in rsid_map:
@@ -808,28 +963,70 @@ async def generate_from_maps(
 
             info = rsid_map[rsid]
 
-            # BUG-06: Allele verification — confirm the user's genotype
-            # actually carries the alternate (risk) allele from annotation
-            # data. Without this, variants where user is hom-ref but ref
-            # allele was unavailable (so hom-ref check was skipped) would
-            # generate false insights.  Skip verification for indel D/I
-            # codes since their alleles don't map to nucleotides.
+            # Sex-linked condition filtering
+            _chromosome = getattr(variant, 'chromosome', None)
+            _condition_name = info.get('condition', info.get('trait', info.get('drug', '')))
+            if should_skip_sex_linked(rsid, _condition_name, info.get('gene'), _chromosome, ctx.inferred_sex):
+                continue
+
+            # Allele verification — confirm the user's genotype actually carries
+            # the alternate (risk) allele from annotation data.  Both SNPs and
+            # consumer-array indel codes (D/I) are now verified.
             if genotype and not is_indel_genotype(genotype):
                 _, ann_alt = get_annotation_allele_parts(annotation_result)
-                # Fallback: use risk_allele stored directly in the mapping when
-                # annotation data doesn't carry allele information (BUG-01).
+                # FIX-02: skip when annotation data lacks allele information.
+                # We cannot verify the user carries the risk allele vs reference,
+                # so omit rather than risk a false positive.
+                # (A prior info.get('risk_allele') fallback was removed — no
+                # variant_mappings row has ever populated risk_allele, so it was
+                # dead code; populating a real allele column is deferred — see U5.)
                 if ann_alt is None:
-                    ann_alt = info.get('risk_allele')
-                if ann_alt and len(ann_alt) == 1:
-                    gt_upper = genotype.upper()
-                    alleles = set(gt_upper.replace('/', '').replace('|', ''))
-                    carries = ann_alt in alleles
-                    if not carries:
-                        # Strand-flip fallback for minus-strand arrays
-                        _COMPLEMENT_MAP = str.maketrans('ACGT', 'TGCA')
-                        carries = ann_alt in {a.translate(_COMPLEMENT_MAP) for a in alleles}
+                    logger.debug(
+                        "rsid %s: no allele data for SNP verification — skipping", rsid
+                    )
+                    continue
+                # ann_alt may be a comma-separated list for multi-allelic sites
+                # (e.g. "A,T" for REF/A,T). Extract all single-base alts and
+                # check whether the user carries ANY of them.
+                _COMPLEMENT_MAP = str.maketrans('ACGT', 'TGCA')
+                gt_upper = genotype.upper()
+                alleles = set(gt_upper.replace('/', '').replace('|', ''))
+                alleles_flipped = {a.translate(_COMPLEMENT_MAP) for a in alleles}
+                ann_alts = [a.strip() for a in ann_alt.split(',') if a.strip()]
+                snp_alts = [a for a in ann_alts if len(a) == 1]
+                if snp_alts:
+                    carries = any(a in alleles or a in alleles_flipped for a in snp_alts)
                     if not carries:
                         continue
+                # If no single-base alt was extracted, fall through without allele
+                # filtering (multi-base alt or structural variant — handled elsewhere).
+            elif genotype and is_indel_genotype(genotype):
+                # FIX-01: Verify consumer D/I indel codes against annotation allele
+                # lengths.  D = shorter allele, I = longer allele.  indel_d_is_ref()
+                # returns True when D maps to the reference (insertion variant), False
+                # when D maps to the alternate (deletion variant), None when unknown.
+                _ind_ref, _ind_alt = get_annotation_allele_parts(annotation_result)
+                _d_is_ref = indel_d_is_ref(_ind_ref, _ind_alt)
+                if _d_is_ref is not None:
+                    # The risk (alternate) allele code
+                    _risk_code = 'I' if _d_is_ref else 'D'
+                    _user_codes = _parse_alleles(genotype) or []
+                    if _risk_code not in _user_codes:
+                        continue  # User carries only the reference indel allele
+                elif genotype.strip().upper() in ('II', 'DD'):
+                    # BUG-15: No allele data to determine insertion/deletion direction.
+                    # For homozygous indel codes, we cannot confirm whether the user
+                    # carries the risk (alternate) allele or the reference allele —
+                    # either code can be hom-ref or hom-alt depending on the variant.
+                    # Skip to avoid false positives (e.g. rs61749708 "II" = hom-ref).
+                    # Heterozygous DI/ID is preserved since one allele is the insertion
+                    # and one is the deletion, so the user plausibly carries the risk one.
+                    logger.debug(
+                        "rsid %s: homozygous indel %s with no allele-direction data — "
+                        "skipping to prevent false positive (BUG-15)",
+                        rsid, genotype,
+                    )
+                    continue
             key = info[dedup_field]
             if key not in seen:
                 seen.add(key)
@@ -844,12 +1041,51 @@ async def generate_from_maps(
                     )
                 )
                 info_with_ref = {**info, '_ref_allele': effective_ref, '_pathogenicity_score': _path_score}
-                # Filter benign/likely_benign variants from health-relevant panels
-                if (filter_benign
-                        and settings.analysis.exclude_benign_from_panels
+                # Skip "Unknown variant" entries unless the composite pathogenicity
+                # score or ClinVar confirms meaningful evidence. Auto-categorization
+                # produces these when no condition name could be resolved (BUG-06).
+                _condition = info.get('condition', '')
+                if _condition.lower() in ('unknown variant', 'unknown') and not (
+                    isinstance(_path_score, dict) and _path_score.get('composite_score', 0) >= 0.60
+                ):
+                    logger.debug("rsid %s: skipping 'Unknown variant' mapping with no pathogenicity evidence", rsid)
+                    continue
+                # Skip generic "Gene Name variant" conditions that have no ClinVar
+                # clinical significance. These are auto-generated fallback names
+                # (e.g. "UBR4 variant") created when no real disease association
+                # exists — usually caused by AlphaMissense coordinate mismatches
+                # with MODIFIER/intergenic VEP consequences. Require either:
+                #   a) non-empty clinical_significance from ClinVar, OR
+                #   b) strong composite pathogenicity score (≥ 0.75)
+                _is_generic_variant_condition = (
+                    bool(re.search(r'\bvariant\s*$', _condition, re.IGNORECASE))
+                    and _condition.lower() not in ('unknown variant',)
+                    and not info.get('clinical_significance', '').strip()
+                )
+                if _is_generic_variant_condition and not (
+                    isinstance(_path_score, dict) and _path_score.get('composite_score', 0) >= 0.75
+                    and _path_score.get('evidence_count', 0) >= 2
+                ):
+                    logger.debug(
+                        "rsid %s: skipping generic '%s' — no ClinVar significance and insufficient multi-source evidence",
+                        rsid, _condition,
+                    )
+                    continue
+                # Filter benign/likely_benign variants — applies to all panels.
+                # Lifestyle panels with max_population_af already filter common
+                # variants above, so this catches remaining benign-classified ones.
+                if (settings.analysis.exclude_benign_from_panels
                         and isinstance(_path_score, dict)
                         and _path_score.get('classification') in _BENIGN_CLASSIFICATIONS):
                     continue
+                # RC-7: When no scoring data exists and no ClinVar evidence,
+                # skip for clinical panels (health/carrier/drug) to prevent
+                # unscored variants from appearing as health risks.
+                if (not skip_benign_filter
+                        and max_population_af is not None and max_population_af <= 0.05
+                        and not isinstance(_path_score, dict)):
+                    if not info.get('clinical_significance', '').strip():
+                        continue
                 item = build_from_rsid(ctx.analysis_id, rsid, genotype or '', info_with_ref)
                 if item:
                     items.append(item)
@@ -880,14 +1116,21 @@ async def generate_from_maps(
             ):
                 pass  # Qualifies by consequence type
             elif consequence is None and impact is None:
-                # No VEP data — check ClinVar significance as fallback
+                # No VEP data — check ClinVar significance as fallback.
+                # RC-6: Require rsid-specific ClinVar evidence, not just
+                # gene-level. A pathogenic variant at position X doesn't
+                # imply pathogenicity for an intron variant at position Y.
                 _cv_qualifies = False
                 if annotation_result and annotation_result.annotation_data:
                     cv_local = annotation_result.annotation_data.get('annotations', {}).get('clinvar_local', {})
                     if cv_local and cv_local.get('found'):
                         sigs = cv_local.get('clinical_significances', [])
                         sig_str = ' '.join(s.lower() for s in sigs)
-                        if any(kw in sig_str for kw in ('pathogenic', 'risk_factor', 'drug_response')):
+                        has_path_sig = any(kw in sig_str for kw in ('pathogenic', 'drug_response'))
+                        # Require the ClinVar record to match this specific rsid
+                        cv_rsid = cv_local.get('rsid') or cv_local.get('rs_id') or ''
+                        is_rsid_specific = str(cv_rsid) == str(rsid) or str(cv_rsid) == rsid.lstrip('rs')
+                        if has_path_sig and is_rsid_specific:
                             _cv_qualifies = True
                 if not _cv_qualifies:
                     continue
@@ -908,9 +1151,7 @@ async def generate_from_maps(
                     )
                 )
                 info_with_gt = {**info, '_ref_allele': effective_ref, '_genotype': genotype or '', '_pathogenicity_score': _path_score}
-                # Filter benign/likely_benign variants from health-relevant panels
-                if (filter_benign
-                        and settings.analysis.exclude_benign_from_panels
+                if (settings.analysis.exclude_benign_from_panels
                         and isinstance(_path_score, dict)
                         and _path_score.get('classification') in _BENIGN_CLASSIFICATIONS):
                     continue
@@ -919,6 +1160,7 @@ async def generate_from_maps(
                     items.append(item)
 
     for item in items:
+        validate_associated_variants(type(item).__name__, getattr(item, 'associated_variants', None))
         ctx.session.add(item)
     return len(items)
 
@@ -939,9 +1181,12 @@ async def build_variant_profiles(
     applies without re-annotating, and the annotation cache doesn't need
     to store pre-computed scores.
     """
-    from ..scoring_engine import get_scoring_engine
+    from ..scoring_engine import get_scoring_engine, ScoringEngine
     scorer = get_scoring_engine()
     profiles: Dict[str, VariantProfile] = {}
+
+    gene_constraints = await _bulk_load_gene_constraints(rsid_gene_map)
+    clinvar_gene_stats = await _bulk_load_clinvar_gene_stats(rsid_gene_map)
 
     for idx, variant in enumerate(variants):
         if idx > 0 and idx % 200 == 0:
@@ -971,13 +1216,17 @@ async def build_variant_profiles(
                    and is_homozygous_reference(genotype, effective_ref, alt_allele=ann_alt))
         het = not no_call and not hom_ref and is_heterozygous(genotype)
 
-        benign = is_clinvar_benign(annotation_result)
+        clinvar_benign = is_clinvar_benign(annotation_result)
 
         # Pathogenicity score — always compute fresh (ARCH-06).
         # Lazy scoring ensures updated scoring logic applies without re-annotating.
         annotations_dict: dict = {}
         if annotation_result and annotation_result.annotation_data:
             annotations_dict = annotation_result.annotation_data.get('annotations', {})
+        if gene and gene in gene_constraints:
+            annotations_dict = {**annotations_dict, 'gene_constraint': gene_constraints[gene]}
+        if gene and gene in clinvar_gene_stats:
+            annotations_dict = {**annotations_dict, 'clinvar_gene_stats': clinvar_gene_stats[gene]}
         pscore = scorer.score_variant(annotations_dict)
         composite = pscore.get('composite_score', 0.0)
 
@@ -992,6 +1241,15 @@ async def build_variant_profiles(
                 if sigs:
                     clin_sig = sigs[0].lower().replace('_', ' ')
 
+        # is_benign: True when ClinVar unanimously says benign OR when the
+        # composite pathogenicity score classifies as benign/likely_benign.
+        # This covers variants with no ClinVar data that still score benign
+        # from other evidence (e.g. VEP-only intron variants).
+        score_benign = composite < ScoringEngine.BENIGN_THRESHOLD
+        is_benign_flag = clinvar_benign or score_benign
+
+        chromosome = getattr(variant, 'chromosome', None)
+
         profiles[rsid] = VariantProfile(
             rsid=rsid,
             genotype=genotype,
@@ -999,9 +1257,10 @@ async def build_variant_profiles(
             gene=gene,
             consequence=consequence,
             impact=impact,
+            chromosome=chromosome,
             population_frequency=pop_freq,
             clinical_significance=clin_sig,
-            is_benign=benign,
+            is_benign=is_benign_flag,
             is_hom_ref=hom_ref,
             is_het=het,
             is_no_call=no_call,
@@ -1013,3 +1272,57 @@ async def build_variant_profiles(
 
     logger.info(f"Built {len(profiles)} variant profiles")
     return profiles
+
+
+async def _bulk_load_gene_constraints(rsid_gene_map: Dict[str, str]) -> Dict[str, dict]:
+    """Pre-load gene constraint data for all genes in one query."""
+    unique_genes = list(set(rsid_gene_map.values()))
+    if not unique_genes:
+        return {}
+    try:
+        from ...db.database import async_session_factory
+        from sqlalchemy import text
+        async with async_session_factory() as session:
+            result = await session.execute(
+                text(
+                    "SELECT gene, pli, loeuf, mis_z, syn_z "
+                    "FROM gnomad_gene_constraints WHERE gene = ANY(:genes)"
+                ),
+                {"genes": unique_genes},
+            )
+            return {
+                row[0]: {"pli": row[1], "loeuf": row[2], "mis_z": row[3], "syn_z": row[4]}
+                for row in result.all()
+            }
+    except Exception:
+        return {}
+
+
+async def _bulk_load_clinvar_gene_stats(rsid_gene_map: Dict[str, str]) -> Dict[str, dict]:
+    """Pre-load ClinVar gene-level stats for all genes in one query."""
+    unique_genes = list(set(rsid_gene_map.values()))
+    if not unique_genes:
+        return {}
+    try:
+        from ...db.database import async_session_factory
+        from sqlalchemy import text
+        async with async_session_factory() as session:
+            result = await session.execute(
+                text(
+                    "SELECT gene, total_submissions, pathogenic_likely_pathogenic, "
+                    "uncertain_significance, with_conflicts "
+                    "FROM clinvar_gene_stats WHERE gene = ANY(:genes)"
+                ),
+                {"genes": unique_genes},
+            )
+            return {
+                row[0]: {
+                    "total_submissions": row[1],
+                    "pathogenic_count": row[2],
+                    "uncertain_count": row[3],
+                    "conflict_count": row[4],
+                }
+                for row in result.all()
+            }
+    except Exception:
+        return {}
