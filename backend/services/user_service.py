@@ -1,13 +1,52 @@
 """
 User service for database operations
 """
+from datetime import datetime
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from typing import Optional, List
-from ..db.models import User, GeneticAnalysis
+from ..db.models import (
+    User, GeneticAnalysis,
+    HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait,
+    SportsPerformance, CognitiveProfile, PersonalityTrait,
+    AncestryResult, CarrierStatus, WellnessMetric,
+    MethylationProfile, DetoxificationProfile, RareMutation,
+    UncommonMutation,
+)
 from ..db.schemas import UserCreate, UserUpdate
 from ..core.auth import get_password_hash, verify_password
+
+# Per-analysis insight tables included in a user's data export (mirrors
+# INSIGHT_TABLES in insight_dispatcher.py — duplicated per this codebase's
+# convention rather than cross-imported).
+_INSIGHT_MODELS = (
+    HealthRisk, DrugResponse, PhysicalTrait, NutritionTrait,
+    SportsPerformance, CognitiveProfile, PersonalityTrait,
+    AncestryResult, CarrierStatus, WellnessMetric,
+    MethylationProfile, DetoxificationProfile, RareMutation,
+    UncommonMutation,
+)
+
+# Explicit allowlist — never export hashed_password or other auth internals.
+_PROFILE_EXPORT_FIELDS = (
+    "id", "email", "username", "full_name", "avatar_url",
+    "auth_provider", "is_verified", "created_at",
+)
+
+
+def _to_json_safe(value):
+    return value.isoformat() if isinstance(value, datetime) else value
+
+
+def _row_to_dict(row) -> dict:
+    return {c.name: _to_json_safe(getattr(row, c.name)) for c in row.__table__.columns}
+
+
+def _profile_to_dict(user: User) -> dict:
+    return {field: _to_json_safe(getattr(user, field)) for field in _PROFILE_EXPORT_FIELDS}
+
 
 class UserService:
     def __init__(self, db: AsyncSession):
@@ -147,3 +186,48 @@ class UserService:
             .order_by(GeneticAnalysis.upload_date.desc())
         )
         return list(result.scalars().all())
+
+    async def delete_account(self, user: User) -> None:
+        """Hard-delete a user and all their personal data.
+
+        Relies on the ORM cascade declared on User.genetic_analyses (see
+        models.py), which cascades through genetic_analyses to the 14
+        insight tables and variant rows. Never touches shared caches
+        (genetic_markers, shared_variant_annotations, gnomad/clinvar).
+        """
+        await self.db.delete(user)
+        await self.db.commit()
+
+    async def export_account_data(self, user: User) -> dict:
+        """Return the user's profile, analyses, and insight rows as JSON.
+
+        Scoped strictly to this user: every analysis query filters by
+        GeneticAnalysis.user_id and every insight query filters by
+        analysis_id, so shared reference caches (genetic_markers,
+        shared_variant_annotations, gnomad/clinvar source tables) are never
+        read or included.
+        """
+        result = await self.db.execute(
+            select(GeneticAnalysis).where(GeneticAnalysis.user_id == user.id)
+        )
+        analyses = result.scalars().all()
+        return {
+            "profile": _profile_to_dict(user),
+            "analyses": [await self._export_analysis(a) for a in analyses],
+        }
+
+    async def _export_analysis(self, analysis: GeneticAnalysis) -> dict:
+        exported = {
+            "id": analysis.id,
+            "filename": analysis.filename,
+            "file_type": analysis.file_type,
+            "analysis_status": analysis.analysis_status,
+            "upload_date": _to_json_safe(analysis.upload_date),
+            "inferred_sex": analysis.inferred_sex,
+        }
+        for model in _INSIGHT_MODELS:
+            result = await self.db.execute(
+                select(model).where(model.analysis_id == analysis.id)
+            )
+            exported[model.__tablename__] = [_row_to_dict(row) for row in result.scalars().all()]
+        return exported

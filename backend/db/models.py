@@ -24,7 +24,7 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Relationship to genetic analyses
-    genetic_analyses = relationship("GeneticAnalysis", back_populates="user")
+    genetic_analyses = relationship("GeneticAnalysis", back_populates="user", cascade="all, delete-orphan")
     saved_variants = relationship("SavedVariant", back_populates="user", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     # Notification preferences — JSON map of type → bool, e.g. {"analysis_completed": true}
@@ -100,7 +100,7 @@ class GeneticAnalysis(Base):
     __tablename__ = "genetic_analyses"
     
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     filename = Column(String, nullable=False)
     file_type = Column(String, nullable=False)  # 'vcf' or 'csv'
     analysis_results = Column(JSON)  # Store the complete analysis results

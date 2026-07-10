@@ -254,6 +254,27 @@ async def change_password(
     return {"detail": "Password changed successfully"}
 
 
+@router.delete("/account")
+async def delete_account(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Permanently delete the current user's account and all personal data."""
+    service = UserService(db)
+    await service.delete_account(current_user)
+    return {"detail": "Account and all associated data deleted"}
+
+
+@router.get("/account/export")
+async def export_account(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Export the current user's profile, analyses, and insight data as JSON."""
+    service = UserService(db)
+    return await service.export_account_data(current_user)
+
+
 @router.post("/logout")
 async def logout(response: Response):
     """Clear auth cookies to log the user out."""
