@@ -941,6 +941,76 @@ class TestAdminIncompleteAnnotations:
                 assert resp.status_code == 404
 
 
+class TestRetriggerSourcesEnsemblGuard:
+    """_retrigger_sources must not let a remote 'ensembl' fetch clobber the
+    shared ensembl_data column when it's already populated (e.g. by the
+    authoritative local 'ensembl_vep' writer)."""
+
+    def _make_annotation(self, ensembl_data=None):
+        from backend.db.models import SharedVariantAnnotation
+        return SharedVariantAnnotation(rsid="rs123", ensembl_data=ensembl_data)
+
+    async def test_retrigger_ensembl_skips_when_ensembl_data_already_found(self):
+        from backend.api.admin_routes import _retrigger_sources
+
+        existing_data = {"found": True, "source": "ensembl_vep", "data": {"consequence": "missense_variant"}}
+        annotation = self._make_annotation(ensembl_data=existing_data)
+
+        remote_call = AsyncMock(return_value={"found": True, "source": "ensembl", "data": {"consequence": "synonymous_variant"}})
+        mock_service = MagicMock()
+        mock_service.initialize = AsyncMock()
+        mock_service.close = AsyncMock()
+        mock_service._get_ensembl_annotation = remote_call
+
+        with patch("backend.services.genetic_api_service.OptimizedGeneticAPIService", return_value=mock_service):
+            updated, confirmed_no_data, still_failed = await _retrigger_sources(annotation, ["ensembl"])
+
+        assert annotation.ensembl_data == existing_data
+        remote_call.assert_not_called()
+        assert "ensembl" not in updated
+        assert "ensembl" not in confirmed_no_data
+        assert "ensembl" not in still_failed
+
+    async def test_retrigger_ensembl_writes_when_ensembl_data_absent(self):
+        from backend.api.admin_routes import _retrigger_sources
+
+        annotation = self._make_annotation(ensembl_data=None)
+        fresh_data = {"found": True, "source": "ensembl", "data": {"consequence": "missense_variant"}}
+
+        remote_call = AsyncMock(return_value=fresh_data)
+        mock_service = MagicMock()
+        mock_service.initialize = AsyncMock()
+        mock_service.close = AsyncMock()
+        mock_service._get_ensembl_annotation = remote_call
+
+        with patch("backend.services.genetic_api_service.OptimizedGeneticAPIService", return_value=mock_service):
+            updated, confirmed_no_data, still_failed = await _retrigger_sources(annotation, ["ensembl"])
+
+        remote_call.assert_awaited_once_with("rs123")
+        assert annotation.ensembl_data == fresh_data
+        assert updated == ["ensembl"]
+
+    async def test_retrigger_ensembl_retries_when_existing_is_confirmed_no_data(self):
+        """A confirmed-absent result (found=False) is not 'populated' — the guard
+        only blocks found=True data, so a retry attempt is still allowed to run."""
+        from backend.api.admin_routes import _retrigger_sources
+
+        existing_data = {"found": False, "confirmed_no_data": True, "source": "ensembl_vep"}
+        annotation = self._make_annotation(ensembl_data=existing_data)
+
+        remote_call = AsyncMock(return_value={"found": False})
+        mock_service = MagicMock()
+        mock_service.initialize = AsyncMock()
+        mock_service.close = AsyncMock()
+        mock_service._get_ensembl_annotation = remote_call
+
+        with patch("backend.services.genetic_api_service.OptimizedGeneticAPIService", return_value=mock_service):
+            updated, confirmed_no_data, still_failed = await _retrigger_sources(annotation, ["ensembl"])
+
+        remote_call.assert_awaited_once_with("rs123")
+        assert "ensembl" in confirmed_no_data
+
+
 class TestAdminPurgeDeleted:
     def _build(self, session=None):
         from backend.api.admin_routes import router

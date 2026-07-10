@@ -1351,12 +1351,27 @@ async def _retrigger_sources(
         try:
             for src in remote_sources:
                 try:
+                    col = SOURCE_TO_COLUMN.get(src, src)
+                    # Guard: 'ensembl' shares ensembl_data with the authoritative
+                    # local 'ensembl_vep' writer. Never let this lower-priority
+                    # remote fetch clobber a value that's already populated —
+                    # skip instead of overwriting (see annotation_constants.py).
+                    if src == 'ensembl':
+                        existing = getattr(annotation, f'{col}_data', None)
+                        if isinstance(existing, dict) and existing.get('found'):
+                            logger.info(
+                                "Retrigger: skipping remote 'ensembl' fetch for rsid=%s — "
+                                "shared ensembl_data column is already populated "
+                                "(ensembl_vep is the authoritative writer); refusing to clobber",
+                                annotation.rsid,
+                            )
+                            continue
+
                     method = getattr(api_service, f'_get_{src}_annotation', None)
                     if not method:
                         still_failed.append(src)
                         continue
                     result_data = await method(annotation.rsid)
-                    col = SOURCE_TO_COLUMN.get(src, src)
                     if result_data and isinstance(result_data, dict) and result_data.get('found', False):
                         setattr(annotation, f'{col}_data', result_data)
                         updated.append(src)
