@@ -1425,7 +1425,10 @@ class GnomadLocalService:
                 await session.commit()
                 logger.debug("Cached BigQuery result for %s-%s-%s-%s", chrom, pos, ref, alt)
         except Exception as e:
-            logger.debug("Failed to cache BigQuery result: %s", e)
+            # Best-effort: the BigQuery result is already returned to the
+            # caller above; failing to warm the local cache just means the
+            # next lookup re-fetches from BigQuery instead of the cache.
+            logger.warning("Failed to cache BigQuery result: %s", e)
 
     # ------------------------------------------------------------------
     # Formatting

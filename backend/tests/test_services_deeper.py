@@ -209,17 +209,17 @@ class TestSaveAnnotation:
             assert result in (True, False)
 
     @pytest.mark.asyncio
-    async def test_save_exception_returns_false(self):
+    async def test_save_exception_raises(self):
         from backend.services.shared_annotation_service import SharedVariantAnnotationService
         with patch("backend.db.database.async_session_factory", side_effect=Exception("DB error")):
             svc = SharedVariantAnnotationService()
-            result = await svc.save_annotation(
-                rsid="rs12345",
-                annotation_data={"annotations": {}, "sources_queried": [], "success_count": 0},
-                analysis_id=1,
-                analysis_variant_id=1,
-            )
-            assert result is False
+            with pytest.raises(Exception):
+                await svc.save_annotation(
+                    rsid="rs12345",
+                    annotation_data={"annotations": {}, "sources_queried": [], "success_count": 0},
+                    analysis_id=1,
+                    analysis_variant_id=1,
+                )
 
 
 class TestIncrementUsageCounts:

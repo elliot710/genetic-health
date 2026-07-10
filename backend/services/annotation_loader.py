@@ -31,8 +31,12 @@ async def load_or_fetch_annotation(
             rsid, refresh, db, current_user
         )
         return annotation, False
-    except Exception:
-        return None, False
+    except Exception as e:
+        # Re-raise: a fetch/save failure here must not be reported to the
+        # caller as "variant not found" — that hides a real backend error
+        # behind a normal, expected outcome.
+        logger.error(f"Annotation fetch/save failed for rsid={rsid}: {e}")
+        raise
 
 
 async def _fetch_fresh_annotation(rsid, refresh, db, current_user):
@@ -109,8 +113,10 @@ async def attach_user_genotype(
         user_genotype = geno_result.scalar_one_or_none()
         if user_genotype:
             response["user_genotype"] = user_genotype
-    except Exception:
-        pass
+    except Exception as e:
+        # Best-effort: omit user_genotype from the response rather than
+        # fail the whole variant-details lookup over a supplementary field.
+        logger.warning(f"Failed to attach user genotype for rsid={rsid}: {e}")
 
 
 BQ_COLUMNS = {
@@ -221,7 +227,10 @@ async def _fetch_open_targets(annotation, gene_symbol, db):
             annotation.open_targets_data = ot_data
             await db.commit()
             return ot_data
-        except Exception:
+        except Exception as e:
+            # Best-effort enrichment: Open Targets data is supplementary,
+            # so a lookup/cache-write failure just omits this section.
+            logger.warning(f"Open Targets lookup failed for gene={gene_symbol}: {e}")
             return {}
     return annotation.open_targets_data or {}
 

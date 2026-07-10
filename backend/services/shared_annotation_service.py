@@ -170,8 +170,11 @@ class SharedVariantAnnotationService:
             return True
 
         except Exception as e:
+            # A failed write must not look like "nothing to save" to the caller —
+            # re-raise so the analysis pipeline surfaces and retries/fails loudly
+            # instead of silently dropping this variant's annotation.
             logger.error(f"Failed to save annotation for {rsid}: {e}")
-            return False
+            raise
 
     def _compute_annotation_status(
         self, annotation_data: Dict[str, Any]

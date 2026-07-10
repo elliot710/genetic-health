@@ -269,8 +269,13 @@ class ComprehensiveAnalysisService:
             logger.error(f"Analysis {analysis_id} failed: {e}", exc_info=True)
             try:
                 await self._update_analysis_status(analysis_id, "failed", f"Failed: {str(e)}")
-            except Exception:
-                pass
+            except Exception as status_update_error:
+                # The failure above is already returned to the caller; if we can't
+                # even persist "failed" status, log it so a stuck "processing" row
+                # in the DB can be traced back to this secondary failure.
+                logger.warning(
+                    f"Could not persist failed status for analysis {analysis_id}: {status_update_error}"
+                )
             return {"success": False, "analysis_id": analysis_id, "status": "failed",
                     "error": str(e), "processing_time": time.time() - start_time}
 
@@ -384,10 +389,15 @@ class ComprehensiveAnalysisService:
                     )
                 )
                 await inv_session.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            # Best-effort: the analysis itself already completed successfully
+            # above, so a stale dashboard cache is a display-lag issue only.
+            logger.warning(f"Dashboard cache invalidation failed for analysis {analysis_id}: {e}")
 
     async def _persist_logs_and_cleanup(self, analysis_id: int, log_collector):
+        # Everything below is post-completion housekeeping: the analysis's
+        # annotations/insights are already committed, so failures here are
+        # logged and swallowed rather than turned into a failed analysis.
         try:
             logs = log_collector.get_logs(analysis_id)
             if logs:
@@ -399,19 +409,19 @@ class ComprehensiveAnalysisService:
                         .values(job_logs=logs)
                     )
                     await session.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to persist job_logs for analysis {analysis_id}: {e}")
         log_collector.clear_active_job()
         try:
             if self.api_service:
                 await self.api_service.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to close api_service for analysis {analysis_id}: {e}")
         try:
             from .bq_public import get_bq_public_service
             get_bq_public_service().clear_gene_cache(analysis_id)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to clear gene cache for analysis {analysis_id}: {e}")
 
     # ------------------------------------------------------------------
     # Delegated method stubs

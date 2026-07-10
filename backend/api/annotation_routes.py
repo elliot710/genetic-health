@@ -144,9 +144,14 @@ async def get_variant_details(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    annotation, cache_hit = await load_or_fetch_annotation(
-        rsid, refresh, db, current_user
-    )
+    try:
+        annotation, cache_hit = await load_or_fetch_annotation(
+            rsid, refresh, db, current_user
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Variant details lookup failed: {str(e)}"
+        )
     if not annotation:
         return {"found": False, "rsid": rsid}
 
