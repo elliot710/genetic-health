@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { Dna, Github, Twitter, Mail } from 'lucide-react'
+import { DISCLAIMER_TEXT } from '@/components/Disclaimer'
 
 const FOOTER_LINKS = {
   Product: [
@@ -85,7 +86,7 @@ export default function Footer() {
             © {new Date().getFullYear()} Epigenic.xyz. All rights reserved.
           </p>
           <p className="text-xs text-slate-400 dark:text-slate-500 text-center sm:text-right max-w-sm">
-            For informational purposes only. Not a substitute for professional medical advice. Always consult a qualified healthcare provider.
+            {DISCLAIMER_TEXT}
           </p>
         </div>
       </div>

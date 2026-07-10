@@ -10,6 +10,7 @@ import { Switch } from '@/components/ui/switch'
 import type { DashboardData } from './categories/types'
 import { apiUrl } from '@/lib/api'
 import VariantDetailDialog from './categories/VariantDetailDialog'
+import { DISCLAIMER_TEXT } from '@/components/Disclaimer'
 
 const API = apiUrl('')
 
@@ -217,7 +218,7 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
           </thead>
           <tbody>${rows}</tbody>
         </table>
-        <p class="disclaimer">This report was generated from the Epigenic platform for informational purposes only. It is not a clinical diagnosis. Please discuss these findings with a qualified healthcare professional or genetic counselor.</p>
+        <p class="disclaimer">${DISCLAIMER_TEXT}</p>
         <script>window.onload=function(){window.print()}<\/script>
       </body></html>`
 

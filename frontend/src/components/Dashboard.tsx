@@ -48,6 +48,7 @@ const VariantSearch = React.lazy(() => import('./VariantSearch'))
 import { ErrorState, useThemeClasses } from './categories/shared'
 import { RiskDistributionChart, FunctionalCategoriesChart, OverviewSummaryPie } from './categories/GenomicCharts'
 import AnalysisProgressLoader from './AnalysisProgressLoader'
+import { Disclaimer } from './Disclaimer'
 
 interface DashboardProps {
   token?: string
@@ -446,6 +447,8 @@ export default function Dashboard({
 
         <main className={`flex-1 overflow-auto ${theme.background}`}>
           <div className="p-4 md:p-8 max-w-none">
+            <Disclaimer className="mb-6" />
+
             {/* Shared-view banner */}
             {viewingSharedUser && (
               <div className="mb-6 flex items-center justify-between gap-4 rounded-xl border border-green-500/30 bg-green-500/10 px-4 py-3">
