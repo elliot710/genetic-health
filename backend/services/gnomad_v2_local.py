@@ -2,8 +2,12 @@
 gnomAD v2.1.1 local service — per-population allele frequency lookup.
 
 Reads from bgzip-compressed VCF files (GRCh37) using pysam tabix.
-Used exclusively for ancestry analysis (super-population + NFE sub-population AFs).
-NOT used for variant annotation — use gnomad_local.py for CADD scores.
+Used for ancestry analysis (super-population + NFE sub-population AFs) AND as
+the live allele-frequency source for variant annotation: local_annotation.py's
+run_all_lookups() merges batch_lookup_pg/batch_lookup_by_position results into
+results.gnomad[rsid]['af'] (af_nfe) for rsids gnomad_local.py's CADD-derived
+cache didn't already resolve. gnomad_local.py (CADD, GRCh38) never carries AF —
+it is conservation/pathogenicity-only (CADD, SIFT, PolyPhen, PhyloP, SpliceAI).
 
 Data location: /app/data_sources/gnomad_v2/
 Files:         gnomad.exomes.r2.1.1.sites.{chrom}.vcf.bgz + .tbi indexes

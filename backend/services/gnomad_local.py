@@ -2,6 +2,15 @@
 gnomAD service — SQLite cache (from tabix CADD TSV files) with PostgreSQL
 and BigQuery fallback. Gene constraint lookups use PG.
 
+This CADD-derived data is CONSERVATION/PATHOGENICITY-only (CADD, SIFT,
+PolyPhen, PhyloP, SpliceAI) — the source TSVs carry no af/ac/an columns, so
+results here never include an "af" key. Real allele frequency is sourced
+separately, from gnomad_v2_local.py, and merged in via
+local_annotation.run_all_lookups(). BigQuery is creds-gated and reachable
+only through lookup()/lookup_by_position() when local_only is not set — the
+per-user analysis pipeline uses lookup_batch()/lookup_batch_by_position(),
+which never call BigQuery.
+
 Usage:
     svc = get_gnomad_service()
     result = await svc.lookup("rs1234")
@@ -829,7 +838,14 @@ class GnomadLocalService:
     # ------------------------------------------------------------------
 
     async def lookup(self, rsid: str, *, local_only: bool = False) -> Optional[Dict[str, Any]]:
-        """Look up a variant by rsID. Tries cache → PG → tabix files → BigQuery."""
+        """Look up a variant by rsID. Tries cache → PG → tabix files → BigQuery.
+
+        Callers on the per-user analysis path must pass local_only=True — that
+        is what keeps the creds-gated BigQuery fallback reachable only from
+        admin/ETL retrigger flows, not from analysis lookups. The real
+        analysis pipeline uses lookup_batch()/lookup_batch_by_position()
+        instead, which have no BigQuery code path at all.
+        """
         # Try SQLite cache first (fastest)
         if self._cache.is_loaded:
             cached = await self._cache.lookup(rsid)
@@ -862,7 +878,12 @@ class GnomadLocalService:
     async def lookup_by_position(
         self, chrom: str, pos: int, ref: str, alt: str
     ) -> Optional[Dict[str, Any]]:
-        """Look up by genomic coordinates. Tries local PG → tabix files → BigQuery."""
+        """Look up by genomic coordinates. Tries local PG → tabix files → BigQuery.
+
+        Unreachable from the analysis pipeline: it has no real callers (the
+        per-user pipeline uses the batch methods below, which never touch
+        BigQuery). Kept for on-demand/admin use only.
+        """
         chrom = chrom.replace("chr", "")
 
         async with async_session_factory() as session:

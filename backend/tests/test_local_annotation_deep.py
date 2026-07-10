@@ -258,7 +258,9 @@ class TestRunAllLookups:
         sources.gnomad_v2 = gnomad_v2_svc
         v = _make_variant("rs1")
         result = await run_all_lookups(sources, ["rs1"], {"rs1": v})
-        gnomad_v2_svc.batch_lookup_pg.assert_called_once()
+        assert result.gnomad["rs1"]["found"] is True
+        assert result.gnomad["rs1"]["source"] == "gnomad_v2_exome"
+        assert result.gnomad["rs1"]["af"] == 0.01
 
     @pytest.mark.asyncio
     async def test_with_ensembl_source(self):

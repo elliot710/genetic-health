@@ -1313,7 +1313,13 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
               })()}
 
               {/* ── gnomAD Local Frequencies ── */}
-              {lookupResults.annotations?.gnomad_local?.found && (() => {
+              {/* gated on actual frequency fields, not just `found` — CADD-only
+                  hits carry conservation/pathogenicity data with no af/ac/an/hom */}
+              {lookupResults.annotations?.gnomad_local?.found &&
+               (lookupResults.annotations.gnomad_local.af != null ||
+                lookupResults.annotations.gnomad_local.ac != null ||
+                lookupResults.annotations.gnomad_local.an != null ||
+                lookupResults.annotations.gnomad_local.hom != null) && (() => {
                 const gn = lookupResults.annotations.gnomad_local
                 const af = gn.af
                 const ac = gn.ac
