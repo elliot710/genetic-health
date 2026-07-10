@@ -36,6 +36,15 @@ class DatabaseConfiguration:
     enable_connection_pooling: bool = True
 
 
+@dataclass
+class RateLimitConfiguration:
+    """Configuration for per-IP rate limiting on public-facing endpoints."""
+    enabled: bool = False  # off by default so tests aren't throttled; RATE_LIMIT_ENABLED=true in prod
+    auth_per_minute: int = 10
+    upload_per_hour: int = 5
+    lookup_per_minute: int = 30
+
+
 class Settings:
     """Centralized application settings."""
     
@@ -43,6 +52,7 @@ class Settings:
         self.api = APIConfiguration()
         self.analysis = AnalysisConfiguration()
         self.database = DatabaseConfiguration()
+        self.rate_limit = RateLimitConfiguration()
         
         # Load from environment variables if available
         self._load_from_env()
@@ -68,6 +78,12 @@ class Settings:
         self.database.max_connections = int(os.getenv('DB_MAX_CONNECTIONS', self.database.max_connections))
         self.database.connection_timeout = int(os.getenv('DB_CONNECTION_TIMEOUT', self.database.connection_timeout))
         self.database.query_timeout = int(os.getenv('DB_QUERY_TIMEOUT', self.database.query_timeout))
+
+        # Rate limit settings — disabled by default (see RateLimitConfiguration)
+        self.rate_limit.enabled = os.getenv('RATE_LIMIT_ENABLED', 'false').lower() == 'true'
+        self.rate_limit.auth_per_minute = int(os.getenv('RATE_LIMIT_AUTH_PER_MINUTE', self.rate_limit.auth_per_minute))
+        self.rate_limit.upload_per_hour = int(os.getenv('RATE_LIMIT_UPLOAD_PER_HOUR', self.rate_limit.upload_per_hour))
+        self.rate_limit.lookup_per_minute = int(os.getenv('RATE_LIMIT_LOOKUP_PER_MINUTE', self.rate_limit.lookup_per_minute))
 
 
 # Maximum size (bytes) accepted for a single uploaded genetic data file.

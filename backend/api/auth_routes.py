@@ -23,6 +23,8 @@ from ..db.database import get_session
 from ..db.schemas import UserCreate, UserResponse, Token, UserLogin
 from ..db.models import User, SavedVariant
 from ..services.user_service import UserService
+from ..core.config import settings
+from ..core.rate_limit import limiter
 from ..core.auth import (
     create_access_token, create_refresh_token, verify_token, verify_refresh_token,
     verify_password, get_password_hash, ACCESS_TOKEN_EXPIRE_MINUTES,
@@ -130,7 +132,8 @@ async def register(user_data: UserCreate, db: AsyncSession = Depends(get_session
     return UserResponse.model_validate(user)
 
 @router.post("/login")
-async def login(user_data: UserLogin, response: Response, db: AsyncSession = Depends(get_session)):
+@limiter.limit(lambda: f"{settings.rate_limit.auth_per_minute}/minute")
+async def login(request: Request, user_data: UserLogin, response: Response, db: AsyncSession = Depends(get_session)):
     """Login user — sets HttpOnly auth cookies and returns token for API-client compat."""
     user_service = UserService(db)
     
@@ -495,7 +498,8 @@ async def update_saved_variant(
 # ─── Forgot / Reset Password ──────────────────────────────────────────────────
 
 @router.post("/forgot-password", status_code=202)
-async def forgot_password(data: ForgotPasswordRequest, db: AsyncSession = Depends(get_session)):
+@limiter.limit(lambda: f"{settings.rate_limit.auth_per_minute}/minute")
+async def forgot_password(request: Request, data: ForgotPasswordRequest, db: AsyncSession = Depends(get_session)):
     """Send a password reset email. Always returns 202 to avoid email enumeration."""
     user_service = UserService(db)
     user = await user_service.get_user_by_email(str(data.email))
@@ -510,7 +514,8 @@ async def forgot_password(data: ForgotPasswordRequest, db: AsyncSession = Depend
 
 
 @router.post("/reset-password")
-async def reset_password(data: ResetPasswordRequest, db: AsyncSession = Depends(get_session)):
+@limiter.limit(lambda: f"{settings.rate_limit.auth_per_minute}/minute")
+async def reset_password(request: Request, data: ResetPasswordRequest, db: AsyncSession = Depends(get_session)):
     """Reset password using a valid reset token."""
     email = verify_reset_token(data.token)
     if not email:
@@ -545,7 +550,9 @@ async def google_login():
 
 
 @router.get("/google/callback")
+@limiter.limit(lambda: f"{settings.rate_limit.auth_per_minute}/minute")
 async def google_callback(
+    request: Request,
     code: str,
     response: Response,
     db: AsyncSession = Depends(get_session),

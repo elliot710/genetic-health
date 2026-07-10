@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,6 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.services.genetic_api_service import GeneticAPIService
 from backend.db.database import get_session
 from .auth_routes import get_current_user
+from backend.core.config import settings
+from backend.core.rate_limit import limiter
 from backend.db.schemas import User
 from backend.utils.annotation_text import (
     build_variant_description as _build_variant_description,
@@ -50,8 +52,10 @@ class AnnotationResponse(BaseModel):
     error: Optional[str] = None
 
 @router.post("/variant", response_model=AnnotationResponse)
+@limiter.limit(lambda: f"{settings.rate_limit.lookup_per_minute}/minute")
 async def annotate_single_variant(
-    request: VariantAnnotationRequest,
+    request: Request,
+    payload: VariantAnnotationRequest,
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -71,14 +75,16 @@ async def annotate_single_variant(
     """
     try:
         async with GeneticAPIService() as api_service:
-            result = await api_service.annotate_variant(request.rsid, request.gene)
+            result = await api_service.annotate_variant(payload.rsid, payload.gene)
             return AnnotationResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Annotation failed: {str(e)}")
 
 @router.post("/batch", response_model=List[AnnotationResponse])
+@limiter.limit(lambda: f"{settings.rate_limit.lookup_per_minute}/minute")
 async def annotate_batch_variants(
-    request: BatchAnnotationRequest,
+    request: Request,
+    payload: BatchAnnotationRequest,
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -95,7 +101,7 @@ async def annotate_batch_variants(
     """
     try:
         async with GeneticAPIService() as api_service:
-            results = await api_service.batch_annotate_variants(request.variants)
+            results = await api_service.batch_annotate_variants(payload.variants)
             return [AnnotationResponse(**result) if isinstance(result, dict) else 
                    AnnotationResponse(rsid="unknown", gene=None, annotations={}, error=str(result))
                    for result in results]
@@ -138,7 +144,9 @@ async def get_clinical_summary_route(
 
 
 @router.get("/variant-details/{rsid}")
+@limiter.limit(lambda: f"{settings.rate_limit.lookup_per_minute}/minute")
 async def get_variant_details(
+    request: Request,
     rsid: str,
     refresh: bool = False,
     db: AsyncSession = Depends(get_session),

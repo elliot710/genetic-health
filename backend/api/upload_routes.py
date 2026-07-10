@@ -2,15 +2,16 @@
 Upload routes for genetic data files with optimized variant storage.
 """
 import logging
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete, update
 from sqlalchemy.orm import selectinload
 
 from .auth_routes import get_current_user
-from ..core.config import MAX_UPLOAD_BYTES
+from ..core.config import MAX_UPLOAD_BYTES, settings
 from ..core.exceptions import FileParsingException
+from ..core.rate_limit import limiter
 from ..db.database import get_session, async_session_factory
 from ..db.models import GeneticAnalysis, AnalysisVariant, DashboardCache
 from ..utils.vcf_parser import VCFParser
@@ -185,7 +186,9 @@ async def _handle_upload(
 
 
 @router.post("/vcf")
+@limiter.limit(lambda: f"{settings.rate_limit.upload_per_hour}/hour")
 async def upload_vcf(
+    request: Request,
     file: UploadFile = File(...),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     session: AsyncSession = Depends(get_session),
@@ -201,7 +204,9 @@ async def upload_vcf(
 
 
 @router.post("/csv")
+@limiter.limit(lambda: f"{settings.rate_limit.upload_per_hour}/hour")
 async def upload_csv(
+    request: Request,
     file: UploadFile = File(...),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     session: AsyncSession = Depends(get_session),
