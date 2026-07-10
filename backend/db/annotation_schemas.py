@@ -287,3 +287,20 @@ class AlphaFoldAnnotation(TypedDict, total=False):
     found: bool
     source: str  # "alphafold"
     data: Dict[str, Any]
+
+
+# ─── Insight write-time validation ───
+
+def validate_associated_variants(model_name: str, value: Any) -> None:
+    """Reject malformed associated_variants payloads before they reach the DB.
+
+    Every generate_from_maps-based insight row stores associated_variants as a
+    list of rsid strings (e.g. ["rs123"]); a wrong shape here indicates a
+    generator bug that would otherwise surface as a silent read-time failure.
+    """
+    if value is None:
+        return
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(
+            f"{model_name}.associated_variants must be a list of rsid strings, got {value!r}"
+        )

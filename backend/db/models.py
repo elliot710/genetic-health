@@ -139,7 +139,7 @@ class GeneticMarker(Base):
     chromosome = Column(String, nullable=False)
     position = Column(Integer, nullable=False)
     ref_allele = Column(String, nullable=False)
-    alt_alleles = Column(String)  # Comma-separated list of all observed alt alleles
+    alt_alleles = Column(String, nullable=False, default='')  # Comma-separated list of all observed alt alleles
     gene_symbol = Column(String(50))  # Cached gene symbol (PERF-04) — filled after first analysis
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -163,10 +163,10 @@ class AnalysisVariant(Base):
     marker_id = Column(Integer, ForeignKey("genetic_markers.id"), nullable=False)
     
     # User-specific data (genotype varies per person)
-    genotype = Column(String)
+    genotype = Column(String, nullable=False, default='./.')
     quality = Column(String)
     filter_status = Column(String)
-    info = Column(JSON)
+    info = Column(JSON, nullable=False, default=dict)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # Relationships

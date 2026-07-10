@@ -2,6 +2,8 @@
 import pytest
 from unittest.mock import MagicMock
 from backend.services.insight_generators.base import (
+    GeneratorContext,
+    generate_from_maps,
     extract_gene_and_consequence,
     extract_frequency,
     get_ref_allele,
@@ -576,3 +578,59 @@ class TestGetTraitDescription:
         assert isinstance(result, str)
         assert "Brown" in result
         assert "Hair color" in result
+
+
+
+class _BadShapeItem:
+    """Stand-in for an insight model whose associated_variants field is malformed."""
+    def __init__(self, associated_variants):
+        self.associated_variants = associated_variants
+
+
+def _matching_variant(rsid="rs1001", genotype="A/G", ref="A", alt="G", chrom="1"):
+    v = MagicMock()
+    v.rsid = rsid
+    v.genotype = genotype
+    v.chromosome = chrom
+    v.marker = MagicMock()
+    v.marker.ref_allele = ref
+    v.marker.alt_alleles = alt
+    v.info = {}
+    return v
+
+
+def _matching_annotation():
+    ar = MagicMock()
+    ar.annotation_data = {
+        "annotations": {
+            "ensembl": {"data": [{"allele_string": "A/G", "most_severe_consequence": "missense_variant"}]},
+            "clinvar_local": {"found": True, "clinical_significances": ["Pathogenic"], "alt_allele": "G"},
+        }
+    }
+    return ar
+
+
+class TestGenerateFromMapsValidatesAssociatedVariants:
+    async def test_malformed_associated_variants_rejected_at_write(self):
+        variant = _matching_variant()
+        ctx = GeneratorContext(
+            analysis_id=1,
+            variants=[variant],
+            annotation_results={"rs1001": _matching_annotation()},
+            session=MagicMock(),
+            rsid_gene_map={},
+            registry={},
+        )
+
+        def build_from_rsid(analysis_id, rsid, genotype, info):
+            return _BadShapeItem(associated_variants=rsid)  # bug: bare string, not [rsid]
+
+        with pytest.raises(ValueError, match="associated_variants"):
+            await generate_from_maps(
+                ctx,
+                rsid_map={"rs1001": {"condition": "Test Condition"}},
+                gene_map={},
+                dedup_field="condition",
+                build_from_rsid=build_from_rsid,
+                build_from_gene=lambda *a: None,
+            )

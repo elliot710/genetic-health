@@ -11,6 +11,7 @@ from typing import Callable, Dict, List, Optional, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.config import settings
+from ...db.annotation_schemas import validate_associated_variants
 from ...db.models import AnalysisVariant
 
 logger = logging.getLogger(__name__)
@@ -1159,6 +1160,7 @@ async def generate_from_maps(
                     items.append(item)
 
     for item in items:
+        validate_associated_variants(type(item).__name__, getattr(item, 'associated_variants', None))
         ctx.session.add(item)
     return len(items)
 
