@@ -9,6 +9,8 @@ from sqlalchemy import select, func, delete, update
 from sqlalchemy.orm import selectinload
 
 from .auth_routes import get_current_user
+from ..core.config import MAX_UPLOAD_BYTES
+from ..core.exceptions import FileParsingException
 from ..db.database import get_session, async_session_factory
 from ..db.models import GeneticAnalysis, AnalysisVariant, DashboardCache
 from ..utils.vcf_parser import VCFParser
@@ -105,6 +107,30 @@ async def _mark_upload_failed(analysis_id: int, user_id: int, error_msg: str):
 
 _VCF_EXTENSIONS = {'.vcf'}
 _CSV_EXTENSIONS = {'.csv', '.txt'}
+_UPLOAD_READ_CHUNK_BYTES = 1024 * 1024  # 1 MB
+
+
+async def _read_upload_within_limit(file: UploadFile) -> bytes:
+    """Read an UploadFile in chunks, aborting as soon as MAX_UPLOAD_BYTES is exceeded.
+
+    FastAPI/Starlette already spool the multipart body to disk before this endpoint
+    runs, so a Content-Length precheck here would not stop that buffering. Capping
+    the read is what actually prevents holding an oversized file in memory below.
+    """
+    chunks = []
+    total_bytes = 0
+    while True:
+        chunk = await file.read(_UPLOAD_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total_bytes += len(chunk)
+        if total_bytes > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File exceeds the maximum upload size of {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 async def _handle_upload(
@@ -121,7 +147,21 @@ async def _handle_upload(
             detail=f"Only {', '.join(allowed_extensions)} files are supported",
         )
 
-    content = await file.read()
+    content = await _read_upload_within_limit(file)
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty",
+        )
+
+    parser = VCFParser()
+    try:
+        variants_data = await parser.parse_vcf_content(content)
+    except FileParsingException as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    # Only persist the analysis row once parsing has succeeded, so a parse
+    # failure never leaves an orphaned row behind.
     analysis = GeneticAnalysis(
         user_id=current_user.id, filename=file.filename, file_type=file_type,
         analysis_status='processing', current_step='uploading_variants', progress_percentage=0,
@@ -129,9 +169,6 @@ async def _handle_upload(
     session.add(analysis)
     await session.commit()
     await session.refresh(analysis)
-
-    parser = VCFParser()
-    variants_data = await parser.parse_vcf_content(content)
     analysis_id = getattr(analysis, 'id')
 
     background_tasks.add_task(

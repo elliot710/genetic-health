@@ -79,6 +79,7 @@ _settings_obj = MagicMock(
 _settings_stub = _AutoStubModule('backend.core.config')
 _settings_stub._cache = {}
 _settings_stub.settings = _settings_obj
+_settings_stub.MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 sys.modules['backend.core.config'] = _settings_stub
 
 _auth_stub = _AutoStubModule('backend.core.auth')

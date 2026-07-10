@@ -23,6 +23,11 @@ class VariantProcessingException(GeneticAnalysisException):
     pass
 
 
+class FileParsingException(GeneticAnalysisException):
+    """Raised when an uploaded genetic data file cannot be parsed."""
+    pass
+
+
 class APIServiceException(GeneticAnalysisException):
     """Base exception for external API service errors."""
     pass

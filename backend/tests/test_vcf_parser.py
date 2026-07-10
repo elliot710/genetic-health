@@ -1,6 +1,7 @@
 import pytest
 import asyncio
 from backend.utils.vcf_parser import VCFParser, RSID_PATTERN, VALID_CHROMOSOMES
+from backend.core.exceptions import FileParsingException
 
 
 @pytest.fixture
@@ -514,3 +515,15 @@ rs67890,2,200000,CT
         variants = await parser.parse_vcf_content(csv_content)
         assert len(variants) == 2
         assert variants[0]["rsid"] == "rs12345"
+
+
+class TestParseFailureRaisesInsteadOfMocking:
+    @pytest.mark.asyncio
+    async def test_invalid_utf8_raises_file_parsing_exception(self, parser):
+        invalid_utf8_content = b"\xff\xfe\x00\x01not valid utf-8"
+        with pytest.raises(FileParsingException):
+            await parser.parse_vcf_content(invalid_utf8_content)
+
+    @pytest.mark.asyncio
+    async def test_generate_mock_variants_no_longer_exists(self, parser):
+        assert not hasattr(parser, "_generate_mock_variants")

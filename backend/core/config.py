@@ -70,5 +70,9 @@ class Settings:
         self.database.query_timeout = int(os.getenv('DB_QUERY_TIMEOUT', self.database.query_timeout))
 
 
+# Maximum size (bytes) accepted for a single uploaded genetic data file.
+MAX_UPLOAD_BYTES = int(os.getenv('MAX_UPLOAD_BYTES', 100 * 1024 * 1024))  # 100 MB
+
+
 # Global settings instance
 settings = Settings()
