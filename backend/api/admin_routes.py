@@ -643,9 +643,49 @@ class AnnotationSourceResponse(BaseModel):
     priority: int = 0
     annotated_count: int = 0
     missing_count: int = 0
+    # True coverage: rows where the source actually returned found=true. A stored
+    # {"found": false} (confirmed absence) inflates annotated_count but must not
+    # count as coverage — found_count is the honest signal, no_data_count the rest.
+    found_count: int = 0
+    no_data_count: int = 0
+    # On-disk cache size (bytes) for file/hybrid sources; None if the source has no
+    # known cache file or the file is absent. Stat only — contents never read.
+    cache_file_bytes: Optional[int] = None
+    # Heuristic flag so a stale/unbuilt cache (e.g. the empty gnomAD CADD build)
+    # is visible on the admin surface.
+    is_stale: bool = False
 
     class Config:
         from_attributes = True
+
+
+# A file/hybrid cache below this size is treated as stale/unbuilt (e.g. the empty
+# gnomAD CADD build, ~180 KB) so it is flagged on the admin data-sources surface.
+_STALE_CACHE_BYTES = 1_000_000
+
+
+def _source_cache_file_size(source_name: str) -> Optional[int]:
+    """On-disk size (bytes) of a source's cache file, or None when the source has
+    no known cache file or the file is absent. Stats only — never reads contents."""
+    if source_name == 'gnomad':
+        try:
+            from ..services.gnomad_local import _SQLITE_FILE
+            return _SQLITE_FILE.stat().st_size
+        except (OSError, ImportError):
+            return None  # absent -> report as None, never error
+    return None
+
+
+def _is_source_stale(is_enabled: bool, found_count: int, annotated_count: int,
+                     cache_file_bytes: Optional[int]) -> bool:
+    """Flag a source whose coverage looks empty/unbuilt. Two signals: a tiny on-disk
+    cache file, or an enabled source that has stored rows but zero real coverage
+    (found=true), which is the empty-build case the honest found-rate exposes."""
+    if cache_file_bytes is not None and cache_file_bytes < _STALE_CACHE_BYTES:
+        return True
+    if is_enabled and annotated_count > 0 and found_count == 0:
+        return True
+    return False
 
 
 class AnnotationSourceUpdate(BaseModel):
@@ -658,10 +698,15 @@ async def get_annotation_sources(
     db: AsyncSession = Depends(get_session),
     admin: User = Depends(require_admin),
 ):
-    """Get all annotation source configurations with stats."""
+    """Get all annotation source configurations with health stats.
+
+    Coverage is reported honestly: found_count counts only rows the source
+    actually resolved (found=true), so a stored {"found": false} no longer
+    inflates the coverage figure. A per-source on-disk cache size and a stale
+    flag make an empty/unbuilt cache (e.g. gnomAD CADD) visible.
+    """
     sources = await _ensure_source_configs(db)
 
-    # Count annotated/missing per source
     total_result = await db.execute(select(func.count(SharedVariantAnnotation.id)))
     total_annotations = total_result.scalar() or 0
 
@@ -670,12 +715,27 @@ async def get_annotation_sources(
         col_name = SOURCE_TO_COLUMN.get(src.source_name, src.source_name)
         col = getattr(SharedVariantAnnotation, f'{col_name}_data', None)
         annotated = 0
+        found = 0
         if col is not None:
             count_result = await db.execute(
                 select(func.count(SharedVariantAnnotation.id)).where(col.isnot(None))
             )
             annotated = count_result.scalar() or 0
+            try:
+                found_result = await db.execute(
+                    select(func.count(SharedVariantAnnotation.id)).where(
+                        col['found'].as_boolean().is_(True)
+                    )
+                )
+                found = found_result.scalar() or 0
+            except Exception as e:
+                logger.warning(
+                    "found-rate query failed for source=%s; falling back to "
+                    "non-null count: %s", src.source_name, e,
+                )
+                found = annotated
 
+        cache_bytes = _source_cache_file_size(src.source_name)
         responses.append(AnnotationSourceResponse(
             id=src.id,
             source_name=src.source_name,
@@ -687,6 +747,10 @@ async def get_annotation_sources(
             priority=src.priority,
             annotated_count=annotated,
             missing_count=total_annotations - annotated,
+            found_count=found,
+            no_data_count=max(annotated - found, 0),
+            cache_file_bytes=cache_bytes,
+            is_stale=_is_source_stale(src.is_enabled, found, annotated, cache_bytes),
         ))
 
     return responses

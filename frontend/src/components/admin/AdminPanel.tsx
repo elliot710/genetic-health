@@ -170,6 +170,10 @@ interface AnnotationSource {
   priority: number
   annotated_count: number
   missing_count: number
+  found_count: number
+  no_data_count: number
+  cache_file_bytes: number | null
+  is_stale: boolean
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -2027,6 +2031,11 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                                       <Badge variant={src.is_enabled ? 'default' : 'secondary'} className="text-xs">
                                         {src.is_enabled ? 'Enabled' : 'Disabled'}
                                       </Badge>
+                                      {src.is_stale && (
+                                        <Badge variant="outline" className="text-xs border-amber-500 text-amber-600 dark:text-amber-400">
+                                          Stale cache
+                                        </Badge>
+                                      )}
                                     </div>
                                     {src.description && (
                                       <p className={`text-sm mt-1 ${theme.text.muted}`}>{src.description}</p>
@@ -2042,6 +2051,10 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
                                         {src.annotated_count.toLocaleString()} / {total.toLocaleString()}
                                       </span>
                                       <span className={`text-xs ${theme.text.muted}`}>({pct}%)</span>
+                                    </div>
+                                    <div className={`text-xs mt-0.5 ${src.is_stale ? 'text-amber-600 dark:text-amber-400' : theme.text.muted}`}>
+                                      {src.found_count.toLocaleString()} found · {src.no_data_count.toLocaleString()} no-data
+                                      {src.cache_file_bytes != null && ` · cache ${(src.cache_file_bytes / 1024).toLocaleString(undefined, { maximumFractionDigits: 0 })} KB`}
                                     </div>
                                     <div className="w-32 h-1.5 rounded-full bg-gray-700/30 mt-1 overflow-hidden">
                                       <div
