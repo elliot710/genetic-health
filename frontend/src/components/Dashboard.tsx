@@ -8,7 +8,7 @@ import {
   Loader2,
 } from 'lucide-react'
 import { getTheme } from '../utils/theme'
-import { apiUrl } from '@/lib/api'
+import { apiFetch, ApiError } from '@/lib/api'
 import type { DashboardData } from './categories/types'
 
 // Hooks
@@ -212,12 +212,10 @@ export default function Dashboard({
   const refreshUserInfo = useCallback(async () => {
     if (!token) return
     try {
-      const res = await fetch(apiUrl('/auth/me'), { credentials: 'include' })
-      if (res.ok) {
-        const u = await res.json()
-        setCurrentUserName(u.full_name || u.username || 'User')
-        setCurrentAvatarUrl(u.avatar_url)
-      }
+      const res = await apiFetch('/auth/me')
+      const u = await res.json()
+      setCurrentUserName(u.full_name || u.username || 'User')
+      setCurrentAvatarUrl(u.avatar_url)
     } catch {
       /* ignore */
     }
@@ -226,9 +224,9 @@ export default function Dashboard({
   // ── Load shared user dashboard when viewingSharedUser changes ──
   useEffect(() => {
     if (viewingSharedUser) {
-      fetch(apiUrl(`/api/sharing/dashboard/${viewingSharedUser.id}`), { credentials: 'include' })
-        .then(r => r.ok ? r.json() : null)
-        .then(d => { if (d) setData(d) })
+      apiFetch(`/api/sharing/dashboard/${viewingSharedUser.id}`)
+        .then(r => r.json())
+        .then(d => setData(d))
         .catch(() => {/* ignore */})
     } else if (viewingSharedUser === null && analysisData) {
       // Switched back to own data — restore
@@ -277,21 +275,14 @@ export default function Dashboard({
   const handleDeleteData = async () => {
     setIsDeleting(true)
     try {
-      const response = await fetch(apiUrl('/upload/data'), {
-        method: 'DELETE',
-        credentials: 'include',
-      })
-      if (response.ok) {
-        setShowDeleteDialog(false)
-        // Navigate away immediately — no intermediate empty-dashboard flash
-        if (onNavigateToUpload) {
-          onNavigateToUpload()
-        }
-      } else {
-        showNotification('Failed to delete data', 'error')
+      await apiFetch('/upload/data', { method: 'DELETE' })
+      setShowDeleteDialog(false)
+      // Navigate away immediately — no intermediate empty-dashboard flash
+      if (onNavigateToUpload) {
+        onNavigateToUpload()
       }
-    } catch {
-      showNotification('Error deleting data', 'error')
+    } catch (err) {
+      showNotification(err instanceof ApiError ? 'Failed to delete data' : 'Error deleting data', 'error')
     } finally {
       setIsDeleting(false)
     }

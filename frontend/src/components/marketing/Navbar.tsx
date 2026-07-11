@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { Dna, Menu, X, Sun, Moon } from 'lucide-react'
-import { apiUrl } from '@/lib/api'
+import { apiFetch } from '@/lib/api'
 
 const NAV_LINKS = [
   { href: '/#features', label: 'Features' },
@@ -39,8 +39,10 @@ export default function Navbar() {
   }, [])
 
   useEffect(() => {
-    fetch(apiUrl('/auth/me'), { credentials: 'include' })
-      .then(r => setIsSignedIn(r.ok))
+    // Passive check on a public page — a signed-out visitor is expected, not a session
+    // being revoked, so suppress the global 401 handler.
+    apiFetch('/auth/me', { redirectOn401: false })
+      .then(() => setIsSignedIn(true))
       .catch(() => setIsSignedIn(false))
   }, [])
 

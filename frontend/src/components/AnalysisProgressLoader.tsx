@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { AlertCircle, Check, ChevronLeft, ChevronRight, Clock, Info, Loader2 } from 'lucide-react';
 import { getTheme } from '../utils/theme';
 import { Button } from '@/components/ui/button';
-import { apiUrl } from '@/lib/api';
+import { apiUrl, apiFetch } from '@/lib/api';
 import type { DashboardData } from '@/components/categories/types';
 
 interface AnalysisProgress {
@@ -57,12 +57,15 @@ export default function AnalysisProgressLoader({
     const handleCompleted = async () => {
       setIsLoading(false);
       if (onComplete) {
-        const resultsResponse = await fetch(apiUrl('/api/analysis/dashboard-data'), {
-          credentials: 'include',
-        });
-        if (resultsResponse.ok) {
+        try {
+          const resultsResponse = await apiFetch('/api/analysis/dashboard-data');
           const results = await resultsResponse.json();
           onComplete(results);
+        } catch (err) {
+          console.error('Error loading analysis results:', err);
+          const errorMsg = 'Failed to load analysis results.';
+          setError(errorMsg);
+          if (onError) onError(errorMsg);
         }
       }
     };

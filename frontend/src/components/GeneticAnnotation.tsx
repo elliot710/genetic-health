@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { apiFetch } from '@/lib/api';
 
 interface EnsemblAnnotation {
   error?: string;
@@ -63,9 +64,8 @@ export default function GeneticAnnotation({ token }: GeneticAnnotationProps) {
     setAnnotation(null);
 
     try {
-      const response = await fetch('/api/annotations/variant', {
+      const response = await apiFetch('/api/annotations/variant', {
         method: 'POST',
-        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
         },
@@ -74,10 +74,6 @@ export default function GeneticAnnotation({ token }: GeneticAnnotationProps) {
           gene: gene.trim() || null,
         }),
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
 
       const data = await response.json();
       setAnnotation(data);
