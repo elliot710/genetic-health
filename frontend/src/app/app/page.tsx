@@ -7,6 +7,7 @@ import FileUpload from '@/components/FileUpload'
 import AuthForm from '@/components/AuthForm'
 import { getTheme } from '@/utils/theme'
 import { apiFetch, ApiError, UNAUTHORIZED_EVENT } from '@/lib/api'
+import { useDarkMode } from '@/hooks/useDarkMode'
 import type { DashboardData } from '@/components/categories/types'
 
 interface User {
@@ -30,16 +31,12 @@ export default function Home() {
   const [authMode, setAuthMode] = useState<'login' | 'reset' | undefined>(undefined)
   
   // Initialize theme from localStorage or default to false
-  const [isDarkMode, setIsDarkMode] = useState(false)
+  const { isDarkMode, setIsDarkMode } = useDarkMode()
 
-  // Handle hydration and theme initialization
+  // Handle hydration and password-reset link detection
   useEffect(() => {
     setIsHydrated(true)
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('darkMode')
-      if (saved) {
-        setIsDarkMode(JSON.parse(saved))
-      }
       // Check for password reset token in URL
       const params = new URLSearchParams(window.location.search)
       if (params.get('mode') === 'reset' && params.get('token')) {
@@ -50,15 +47,6 @@ export default function Home() {
       }
     }
   }, [])
-
-  // Save theme preference to localStorage whenever it changes
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('darkMode', JSON.stringify(isDarkMode))
-      // Sync .dark class on <html> for shadcn CSS variables
-      document.documentElement.classList.toggle('dark', isDarkMode)
-    }
-  }, [isDarkMode])
 
   // Get theme object
   const theme = getTheme(isDarkMode)

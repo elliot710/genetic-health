@@ -43,6 +43,11 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var saved=localStorage.getItem('darkMode');if(saved&&JSON.parse(saved))document.documentElement.classList.add('dark');}catch(e){}})();`,
+          }}
+        />
         {children}
       </body>
     </html>

@@ -28,6 +28,7 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area'
 import VariantDetailDialog from '@/components/categories/VariantDetailDialog'
 import { apiUrl } from '@/lib/api'
+import { useFeedback } from '@/hooks/useFeedback'
 
 const API = apiUrl('/api/admin')
 
@@ -305,7 +306,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const INCOMPLETE_PAGE_SIZE = 50
   const [retriggeringIds, setRetriggeringIds] = useState<Set<number>>(new Set())
   const [bulkRetriggering, setBulkRetriggering] = useState(false)
-  const [retriggerFeedback, setRetriggerFeedback] = useState<{ id: number; message: string; type: 'success' | 'info' | 'error' } | null>(null)
+  const { feedback: retriggerFeedback, showFeedback: showRetriggerFeedback, clearFeedback: clearRetriggerFeedback } = useFeedback<{ id: number }>()
 
   // Jobs state
   const [jobs, setJobs] = useState<AdminJob[]>([])
@@ -328,7 +329,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const [sourcesLoading, setSourcesLoading] = useState(false)
   const [sourceToggling, setSourceToggling] = useState<string | null>(null)
   const [backfillingSource, setBackfillingSource] = useState<string | null>(null)
-  const [backfillFeedback, setBackfillFeedback] = useState<{ source: string; message: string; type: 'success' | 'error' } | null>(null)
+  const { feedback: backfillFeedback, showFeedback: showBackfillFeedback, clearFeedback: clearBackfillFeedback } = useFeedback<{ source: string }>()
   const [backfillLimits, setBackfillLimits] = useState<Record<string, string>>({})
 
   // AI Insights state
@@ -347,7 +348,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const [etlStatuses, setEtlStatuses] = useState<Record<string, Record<string, unknown>>>({})
   const [etlLoading, setEtlLoading] = useState<Record<string, boolean>>({})
   const [etlRunning, setEtlRunning] = useState<Record<string, boolean>>({})
-  const [etlFeedback, setEtlFeedback] = useState<{ source: string; message: string; type: 'success' | 'error' } | null>(null)
+  const { feedback: etlFeedback, showFeedback: showEtlFeedback, clearFeedback: clearEtlFeedback } = useFeedback<{ source: string }>()
   const [apiTestResults, setApiTestResults] = useState<Record<string, { reachable: boolean; detail?: string }>>({})
   const [etlProgressByKey, setEtlProgressByKey] = useState<Record<string, { running: boolean; step: string | null; rows: number; pct: number; total_elapsed: number; error: string | null }>>({})
   const etlPollRefs = useRef<Record<string, ReturnType<typeof setInterval>>>({})
@@ -360,7 +361,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const [bqBatchSize, setBqBatchSize] = useState('200')
   const [bqMaxVariants, setBqMaxVariants] = useState('10000')
   const [bqChromosome, setBqChromosome] = useState('')
-  const [bqFeedback, setBqFeedback] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  const { feedback: bqFeedback, showFeedback: showBqFeedback, clearFeedback: clearBqFeedback } = useFeedback()
 
   // Category Rules state
   const [categoryRules, setCategoryRules] = useState<{ id: number; category: string; rule_type: string; rule_value: string; priority: number; is_active: boolean; mapping_data_template: Record<string, unknown> | null; created_at: string | null }[]>([])
@@ -372,7 +373,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const [editingRulePriority, setEditingRulePriority] = useState('')
   const [deleteRuleId, setDeleteRuleId] = useState<number | null>(null)
   const [seedingRules, setSeedingRules] = useState(false)
-  const [rulesFeedback, setRulesFeedback] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  const { feedback: rulesFeedback, showFeedback: showRulesFeedback } = useFeedback()
 
   // Utility state
   const [autoCategorizing, setAutoCategorizing] = useState(false)
@@ -381,9 +382,9 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const [enrichReviseAll, setEnrichReviseAll] = useState(false)
   const [purgingDeleted, setPurgingDeleted] = useState(false)
   const [purgeOlderThanDays, setPurgeOlderThanDays] = useState('0')
-  const [utilityFeedback, setUtilityFeedback] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  const { feedback: utilityFeedback, showFeedback: showUtilityFeedback, clearFeedback: clearUtilityFeedback } = useFeedback()
   const [resettingSentinels, setResettingSentinels] = useState<string | null>(null)
-  const [sentinelFeedback, setSentinelFeedback] = useState<{ source: string; message: string; type: 'success' | 'error' } | null>(null)
+  const { feedback: sentinelFeedback, showFeedback: showSentinelFeedback, clearFeedback: clearSentinelFeedback } = useFeedback<{ source: string }>()
   const [gnomadCacheJobId, setGnomadCacheJobId] = useState<number | null>(null)
   const [gnomadCacheStatus, setGnomadCacheStatus] = useState<string | null>(null)
   const [gnomadAncestryJobId, setGnomadAncestryJobId] = useState<number | null>(null)
@@ -590,7 +591,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
 
   const retriggerAnnotation = async (id: number) => {
     setRetriggeringIds(prev => new Set(prev).add(id))
-    setRetriggerFeedback(null)
+    clearRetriggerFeedback()
     try {
       const res = await authFetch(`${API}/annotations/retrigger/${id}`, { method: 'POST', headers })
       if (res.ok) {
@@ -599,18 +600,17 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
         const updated = data.updated_sources || []
         const failed = data.still_failed || []
         if (updated.length > 0) {
-          setRetriggerFeedback({ id, message: `Updated: ${updated.join(', ')}${noData.length ? `. No data available: ${noData.join(', ')}` : ''}`, type: 'success' })
+          showRetriggerFeedback({ id, message: `Updated: ${updated.join(', ')}${noData.length ? `. No data available: ${noData.join(', ')}` : ''}`, type: 'success' }, 8000)
         } else if (noData.length > 0 && failed.length === 0) {
-          setRetriggerFeedback({ id, message: `Providers confirmed no data exists for: ${noData.join(', ')}. Marked complete.`, type: 'info' })
+          showRetriggerFeedback({ id, message: `Providers confirmed no data exists for: ${noData.join(', ')}. Marked complete.`, type: 'info' }, 8000)
         } else if (failed.length > 0) {
-          setRetriggerFeedback({ id, message: `Still failing: ${failed.join(', ')}${noData.length ? `. No data: ${noData.join(', ')}` : ''}`, type: 'error' })
+          showRetriggerFeedback({ id, message: `Still failing: ${failed.join(', ')}${noData.length ? `. No data: ${noData.join(', ')}` : ''}`, type: 'error' }, 8000)
         }
         await fetchIncompleteAnnotations()
         await fetchIncompleteSummary()
       }
     } catch { /* ignore */ }
     setRetriggeringIds(prev => { const s = new Set(prev); s.delete(id); return s })
-    setTimeout(() => setRetriggerFeedback(prev => prev?.id === id ? null : prev), 8000)
   }
 
   const retriggerAllIncomplete = async () => {
@@ -794,7 +794,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
 
   const backfillSource = async (sourceName: string, limit: number = 5000) => {
     setBackfillingSource(sourceName)
-    setBackfillFeedback(null)
+    clearBackfillFeedback()
     try {
       const res = await authFetch(`${API}/annotation-sources/${encodeURIComponent(sourceName)}/backfill?limit=${limit}`, {
         method: 'POST',
@@ -802,17 +802,16 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
       })
       if (res.ok) {
         const data = await res.json()
-        setBackfillFeedback({ source: sourceName, message: data.detail, type: 'success' })
+        showBackfillFeedback({ source: sourceName, message: data.detail, type: 'success' }, 10000)
         await fetchAnnotationSources()
       } else {
         const err = await res.json().catch(() => ({ detail: 'Backfill failed' }))
-        setBackfillFeedback({ source: sourceName, message: err.detail, type: 'error' })
+        showBackfillFeedback({ source: sourceName, message: err.detail, type: 'error' }, 10000)
       }
     } catch {
-      setBackfillFeedback({ source: sourceName, message: 'Network error during backfill', type: 'error' })
+      showBackfillFeedback({ source: sourceName, message: 'Network error during backfill', type: 'error' }, 10000)
     }
     setBackfillingSource(null)
-    setTimeout(() => setBackfillFeedback(prev => prev?.source === sourceName ? null : prev), 10000)
   }
 
   // AI Insights
@@ -981,13 +980,12 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
             if (data.step === 'complete') {
               const elapsed = data.total_elapsed ? ` in ${data.total_elapsed}s` : ''
               const rows = data.rows ? ` · ${Number(data.rows).toLocaleString()} rows` : ''
-              setEtlFeedback({ source: key, message: `Import complete${elapsed}${rows}`, type: 'success' })
+              showEtlFeedback({ source: key, message: `Import complete${elapsed}${rows}`, type: 'success' }, 15000)
               const src = ETL_SOURCES.find(s => s.key === key)
               if (src?.statusEndpoint) fetchEtlStatus(key, src.statusEndpoint)
             } else if (data.step === 'error') {
-              setEtlFeedback({ source: key, message: data.error || 'Import failed', type: 'error' })
+              showEtlFeedback({ source: key, message: data.error || 'Import failed', type: 'error' }, 15000)
             }
-            setTimeout(() => setEtlFeedback(prev => prev?.source === key ? null : prev), 15000)
           }
         }
       } catch { /* ignore */ }
@@ -1004,7 +1002,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const runEtlImport = async (key: string, endpoint: string | undefined) => {
     if (!endpoint) return
     setEtlRunning(prev => ({ ...prev, [key]: true }))
-    setEtlFeedback(null)
+    clearEtlFeedback()
 
     const progressEndpoint = PROGRESS_SOURCES[key]
     if (progressEndpoint) {
@@ -1012,13 +1010,13 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
         const res = await authFetch(`${API}${endpoint}`, { method: 'POST', headers })
         const data = await res.json()
         if (data.status === 'already_running') {
-          setEtlFeedback({ source: key, message: 'Import already running', type: 'error' })
+          showEtlFeedback({ source: key, message: 'Import already running', type: 'error' })
           setEtlRunning(prev => ({ ...prev, [key]: false }))
           return
         }
         startEtlProgressPolling(key, progressEndpoint)
       } catch {
-        setEtlFeedback({ source: key, message: 'Network error starting import', type: 'error' })
+        showEtlFeedback({ source: key, message: 'Network error starting import', type: 'error' })
         setEtlRunning(prev => ({ ...prev, [key]: false }))
       }
       return
@@ -1030,18 +1028,17 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
       if (res.ok) {
         const data = await res.json()
         const msg = data.detail || (data.job_id ? `Job queued: ${data.job_id}` : 'Import started')
-        setEtlFeedback({ source: key, message: msg, type: 'success' })
+        showEtlFeedback({ source: key, message: msg, type: 'success' }, 30000)
         const src = ETL_SOURCES.find(s => s.key === key)
         if (src?.statusEndpoint) fetchEtlStatus(key, src.statusEndpoint)
       } else {
         const err = await res.json().catch(() => ({ detail: 'Import failed' }))
-        setEtlFeedback({ source: key, message: err.detail, type: 'error' })
+        showEtlFeedback({ source: key, message: err.detail, type: 'error' }, 30000)
       }
     } catch {
-      setEtlFeedback({ source: key, message: 'Network error during import', type: 'error' })
+      showEtlFeedback({ source: key, message: 'Network error during import', type: 'error' }, 30000)
     }
     setEtlRunning(prev => ({ ...prev, [key]: false }))
-    setTimeout(() => setEtlFeedback(prev => prev?.source === key ? null : prev), 30000)
   }
 
   const runApiTest = async (key: string, testEndpoint: string) => {
@@ -1101,7 +1098,7 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
 
   const runBqBackfill = async () => {
     setBqRunning(true)
-    setBqFeedback(null)
+    clearBqFeedback()
     try {
       const params = new URLSearchParams({
         batch_size: bqBatchSize,
@@ -1111,17 +1108,16 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
       const res = await authFetch(`${API}/gnomad-bigquery/backfill?${params}`, { method: 'POST', headers })
       if (res.ok) {
         const data = await res.json()
-        setBqFeedback({ message: data.detail || JSON.stringify(data), type: 'success' })
+        showBqFeedback({ message: data.detail || JSON.stringify(data), type: 'success' }, 15000)
         fetchBqStatus()
       } else {
         const err = await res.json().catch(() => ({ detail: 'Backfill failed' }))
-        setBqFeedback({ message: err.detail, type: 'error' })
+        showBqFeedback({ message: err.detail, type: 'error' }, 15000)
       }
     } catch {
-      setBqFeedback({ message: 'Network error during BigQuery backfill', type: 'error' })
+      showBqFeedback({ message: 'Network error during BigQuery backfill', type: 'error' }, 15000)
     }
     setBqRunning(false)
-    setTimeout(() => setBqFeedback(null), 15000)
   }
 
   // --- Category Rules ---
@@ -1155,13 +1151,12 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
         setShowAddRule(false)
         setNewRule({ category: '', rule_type: 'gene_symbol', rule_value: '', priority: '50' })
         fetchCategoryRules()
-        setRulesFeedback({ message: 'Rule created', type: 'success' })
+        showRulesFeedback({ message: 'Rule created', type: 'success' }, 5000)
       } else {
         const err = await res.json().catch(() => ({ detail: 'Failed' }))
-        setRulesFeedback({ message: err.detail, type: 'error' })
+        showRulesFeedback({ message: err.detail, type: 'error' }, 5000)
       }
     } catch { /* ignore */ }
-    setTimeout(() => setRulesFeedback(null), 5000)
   }
 
   const updateCategoryRulePriority = async (ruleId: number) => {
@@ -1193,10 +1188,9 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
       if (res.ok) {
         setDeleteRuleId(null)
         fetchCategoryRules()
-        setRulesFeedback({ message: 'Rule deleted', type: 'success' })
+        showRulesFeedback({ message: 'Rule deleted', type: 'success' }, 5000)
       }
     } catch { /* ignore */ }
-    setTimeout(() => setRulesFeedback(null), 5000)
   }
 
   const seedCategoryRules = async (force: boolean = false) => {
@@ -1205,27 +1199,26 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
       const res = await authFetch(`${API}/category-rules/seed?force=${force}`, { method: 'POST', headers })
       if (res.ok) {
         const data = await res.json()
-        setRulesFeedback({ message: data.detail || JSON.stringify(data), type: 'success' })
+        showRulesFeedback({ message: data.detail || JSON.stringify(data), type: 'success' }, 8000)
         fetchCategoryRules()
       } else {
         const err = await res.json().catch(() => ({ detail: 'Seed failed' }))
-        setRulesFeedback({ message: err.detail, type: 'error' })
+        showRulesFeedback({ message: err.detail, type: 'error' }, 8000)
       }
     } catch { /* ignore */ }
     setSeedingRules(false)
-    setTimeout(() => setRulesFeedback(null), 8000)
   }
 
   // --- Utility actions ---
   const runAutoCategorize = async () => {
     setAutoCategorizing(true)
     setAutoCatStatus('Queuing job…')
-    setUtilityFeedback(null)
+    clearUtilityFeedback()
     try {
       const res = await authFetch(`${API}/auto-categorize`, { method: 'POST', headers })
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: 'Failed to queue job' }))
-        setUtilityFeedback({ message: err.detail, type: 'error' })
+        showUtilityFeedback({ message: err.detail, type: 'error' })
         setAutoCategorizing(false)
         setAutoCatStatus(null)
         return
@@ -1244,26 +1237,25 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
             const r = job.result || {}
             const total = r.total_new_mappings ?? 0
             const elapsed = r.total_elapsed_s != null ? ` in ${r.total_elapsed_s}s` : ''
-            setUtilityFeedback({ message: `Auto-categorize complete: ${total} new mappings${elapsed}`, type: 'success' })
+            showUtilityFeedback({ message: `Auto-categorize complete: ${total} new mappings${elapsed}`, type: 'success' }, 15000)
             fetchWorkerJobs()
             break
           } else if (job.status === 'failed') {
-            setUtilityFeedback({ message: `Auto-categorize failed: ${job.error || 'Unknown error'}`, type: 'error' })
+            showUtilityFeedback({ message: `Auto-categorize failed: ${job.error || 'Unknown error'}`, type: 'error' }, 15000)
             break
           }
           const elapsed = Math.round((Date.now() - startTime) / 1000)
           setAutoCatStatus(`Job #${job_id} running… (${elapsed}s)`)
         } catch { break }
       }
-    } catch { setUtilityFeedback({ message: 'Network error', type: 'error' }) }
+    } catch { showUtilityFeedback({ message: 'Network error', type: 'error' }, 15000) }
     setAutoCategorizing(false)
     setAutoCatStatus(null)
-    setTimeout(() => setUtilityFeedback(null), 15000)
   }
 
   const runEnrichMappings = async (dryRun: boolean = false) => {
     setEnrichingMappings(dryRun ? 'dry_run' : 'apply')
-    setUtilityFeedback(null)
+    clearUtilityFeedback()
     try {
       const params = new URLSearchParams()
       if (dryRun) params.set('dry_run', 'true')
@@ -1279,19 +1271,18 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
         const msg = dryRun
           ? `[Dry run] Would update ${data.total_updated} of ${data.total_checked} checked mappings${detail}`
           : `Enriched ${data.total_updated} of ${data.total_checked} mappings${detail}`
-        setUtilityFeedback({ message: msg, type: 'success' })
+        showUtilityFeedback({ message: msg, type: 'success' }, 15000)
       } else {
         const err = await res.json().catch(() => ({ detail: 'Failed' }))
-        setUtilityFeedback({ message: err.detail, type: 'error' })
+        showUtilityFeedback({ message: err.detail, type: 'error' }, 15000)
       }
-    } catch { setUtilityFeedback({ message: 'Network error', type: 'error' }) }
+    } catch { showUtilityFeedback({ message: 'Network error', type: 'error' }, 15000) }
     setEnrichingMappings(null)
-    setTimeout(() => setUtilityFeedback(null), 15000)
   }
 
   const runPurgeDeleted = async () => {
     setPurgingDeleted(true)
-    setUtilityFeedback(null)
+    clearUtilityFeedback()
     try {
       const days = parseInt(purgeOlderThanDays)
       const res = await authFetch(`${API}/purge-deleted?older_than_days=${isNaN(days) ? 0 : days}`, {
@@ -1299,16 +1290,15 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
       })
       if (res.ok) {
         const data = await res.json()
-        setUtilityFeedback({ message: data.detail, type: 'success' })
+        showUtilityFeedback({ message: data.detail, type: 'success' }, 10000)
         fetchJobs()
         fetchJobsSummary()
       } else {
         const err = await res.json().catch(() => ({ detail: 'Purge failed' }))
-        setUtilityFeedback({ message: err.detail, type: 'error' })
+        showUtilityFeedback({ message: err.detail, type: 'error' }, 10000)
       }
-    } catch { setUtilityFeedback({ message: 'Network error', type: 'error' }) }
+    } catch { showUtilityFeedback({ message: 'Network error', type: 'error' }, 10000) }
     setPurgingDeleted(false)
-    setTimeout(() => setUtilityFeedback(null), 10000)
   }
 
   const pollWorkerJob = async (
@@ -1336,12 +1326,12 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
   const runBuildCaddCache = async () => {
     if (gnomadCacheJobId) return
     setGnomadCacheStatus('Queuing…')
-    setUtilityFeedback(null)
+    clearUtilityFeedback()
     try {
       const res = await authFetch(`${API}/gnomad/build-cadd-cache`, { method: 'POST', headers })
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: 'Failed' }))
-        setUtilityFeedback({ message: err.detail, type: 'error' })
+        showUtilityFeedback({ message: err.detail, type: 'error' })
         setGnomadCacheStatus(null)
         return
       }
@@ -1353,29 +1343,28 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
         result => {
           const n = result.variant_count as number ?? 0
           const s = result.elapsed_s as number ?? 0
-          setUtilityFeedback({ message: `CADD cache built: ${n.toLocaleString()} variants cached in ${s}s`, type: 'success' })
+          showUtilityFeedback({ message: `CADD cache built: ${n.toLocaleString()} variants cached in ${s}s`, type: 'success' }, 20000)
           setGnomadCacheJobId(null)
           setGnomadCacheStatus(null)
         },
         err => {
-          setUtilityFeedback({ message: `CADD cache build failed: ${err}`, type: 'error' })
+          showUtilityFeedback({ message: `CADD cache build failed: ${err}`, type: 'error' }, 20000)
           setGnomadCacheJobId(null)
           setGnomadCacheStatus(null)
         },
       )
-    } catch { setUtilityFeedback({ message: 'Network error', type: 'error' }); setGnomadCacheStatus(null) }
-    setTimeout(() => setUtilityFeedback(null), 20000)
+    } catch { showUtilityFeedback({ message: 'Network error', type: 'error' }, 20000); setGnomadCacheStatus(null) }
   }
 
   const runRefreshAncestryAfs = async (indexFirst: boolean = false) => {
     if (gnomadAncestryJobId) return
     setGnomadAncestryStatus('Queuing…')
-    setUtilityFeedback(null)
+    clearUtilityFeedback()
     try {
       const res = await authFetch(`${API}/gnomad/refresh-ancestry-afs?index_first=${indexFirst}`, { method: 'POST', headers })
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: 'Failed' }))
-        setUtilityFeedback({ message: err.detail, type: 'error' })
+        showUtilityFeedback({ message: err.detail, type: 'error' })
         setGnomadAncestryStatus(null)
         return
       }
@@ -1388,40 +1377,38 @@ export default function AdminPanel({ token, isDarkMode, theme }: AdminPanelProps
           const updated = result.updated as number ?? 0
           const total = result.total as number ?? 0
           const s = result.elapsed_s as number ?? 0
-          setUtilityFeedback({ message: `Ancestry AFs refreshed: ${updated}/${total} AIMs updated in ${s}s`, type: 'success' })
+          showUtilityFeedback({ message: `Ancestry AFs refreshed: ${updated}/${total} AIMs updated in ${s}s`, type: 'success' }, 20000)
           setGnomadAncestryJobId(null)
           setGnomadAncestryStatus(null)
         },
         err => {
-          setUtilityFeedback({ message: `Ancestry AF refresh failed: ${err}`, type: 'error' })
+          showUtilityFeedback({ message: `Ancestry AF refresh failed: ${err}`, type: 'error' }, 20000)
           setGnomadAncestryJobId(null)
           setGnomadAncestryStatus(null)
         },
       )
-    } catch { setUtilityFeedback({ message: 'Network error', type: 'error' }); setGnomadAncestryStatus(null) }
-    setTimeout(() => setUtilityFeedback(null), 20000)
+    } catch { showUtilityFeedback({ message: 'Network error', type: 'error' }, 20000); setGnomadAncestryStatus(null) }
   }
 
   const resetSentinels = async (sourceName: string) => {
     setResettingSentinels(sourceName)
-    setSentinelFeedback(null)
+    clearSentinelFeedback()
     try {
       const res = await authFetch(`${API}/annotation-sources/${encodeURIComponent(sourceName)}/reset-sentinels`, {
         method: 'POST', headers,
       })
       if (res.ok) {
         const data = await res.json()
-        setSentinelFeedback({ source: sourceName, message: data.detail, type: 'success' })
+        showSentinelFeedback({ source: sourceName, message: data.detail, type: 'success' }, 10000)
         await fetchAnnotationSources()
       } else {
         const err = await res.json().catch(() => ({ detail: 'Reset failed' }))
-        setSentinelFeedback({ source: sourceName, message: err.detail, type: 'error' })
+        showSentinelFeedback({ source: sourceName, message: err.detail, type: 'error' }, 10000)
       }
     } catch {
-      setSentinelFeedback({ source: sourceName, message: 'Network error', type: 'error' })
+      showSentinelFeedback({ source: sourceName, message: 'Network error', type: 'error' }, 10000)
     }
     setResettingSentinels(null)
-    setTimeout(() => setSentinelFeedback(prev => prev?.source === sourceName ? null : prev), 10000)
   }
 
   if (loading) {

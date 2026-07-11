@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Eye, EyeOff, Mail, Lock, User, Dna, Sparkles, Shield, Sun, Moon, CheckCircle, ArrowLeft } from 'lucide-react'
 import { getTheme } from '../utils/theme'
+import { useDarkMode } from '@/hooks/useDarkMode'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent } from '@/components/ui/card'
@@ -39,20 +40,11 @@ export default function AuthForm({ onLogin, isDarkMode: initialDarkMode = false,
   const [successMsg, setSuccessMsg] = useState('')
   const [showSuccessDialog, setShowSuccessDialog] = useState(false)
   
-  const [isDarkMode, setIsDarkMode] = useState(initialDarkMode)
-
-  useEffect(() => {
-    if (isHydrated && typeof window !== 'undefined') {
-      const saved = localStorage.getItem('darkMode')
-      if (saved) setIsDarkMode(JSON.parse(saved))
-    }
-  }, [isHydrated])
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('darkMode', JSON.stringify(isDarkMode))
-    }
-  }, [isDarkMode])
+  const { isDarkMode, setIsDarkMode } = useDarkMode({
+    initialValue: initialDarkMode,
+    enabled: isHydrated,
+    syncDocumentClass: false,
+  })
 
   const theme = getTheme(isDarkMode)
 

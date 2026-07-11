@@ -15,6 +15,8 @@ import type { DashboardData } from './categories/types'
 import { useDashboardData } from '@/hooks/useDashboardData'
 import { useAnalysisControls } from '@/hooks/useAnalysisControls'
 import { useNotifications } from '@/hooks/useNotifications'
+import { useDarkMode } from '@/hooks/useDarkMode'
+import { useFeedback } from '@/hooks/useFeedback'
 
 // Dashboard sub-components
 import DashboardHeader from './dashboard/DashboardHeader'
@@ -114,18 +116,8 @@ export default function Dashboard({
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [currentUserName, setCurrentUserName] = useState(userName || 'User')
   const [currentAvatarUrl, setCurrentAvatarUrl] = useState<string | null | undefined>(userAvatarUrl)
-  const [notification, setNotification] = useState<{
-    show: boolean
-    message: string
-    type: 'success' | 'error' | 'info'
-  }>({ show: false, message: '', type: 'info' })
-  const [isDarkMode, setIsDarkMode] = useState(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('darkMode')
-      return saved ? JSON.parse(saved) : false
-    }
-    return false
-  })
+  const { feedback: notification, showFeedback, clearFeedback } = useFeedback()
+  const { isDarkMode, setIsDarkMode } = useDarkMode({ readSynchronously: true })
   const [viewingSharedUser, setViewingSharedUser] = useState<SharedUserInfo | null>(null)
 
   const theme = getTheme(isDarkMode)
@@ -134,10 +126,9 @@ export default function Dashboard({
   // ── Notification helper ───────────────────────────────────
   const showNotification = useCallback(
     (message: string, type: 'success' | 'error' | 'info' = 'info') => {
-      setNotification({ show: true, message, type })
-      setTimeout(() => setNotification((prev) => ({ ...prev, show: false })), 3000)
+      showFeedback({ message, type }, 3000)
     },
-    [],
+    [showFeedback],
   )
 
   // ── Data hook ─────────────────────────────────────────────
@@ -177,14 +168,6 @@ export default function Dashboard({
     markAllRead,
     deleteNotification: deleteNotif,
   } = useNotifications(token)
-
-  // ── Theme persistence ─────────────────────────────────────
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('darkMode', JSON.stringify(isDarkMode))
-      document.documentElement.classList.toggle('dark', isDarkMode)
-    }
-  }, [isDarkMode])
 
   // ── URL hash sync ─────────────────────────────────────────
   useEffect(() => {
@@ -517,10 +500,10 @@ export default function Dashboard({
 
       <NotificationToast
         theme={theme}
-        show={notification.show}
-        message={notification.message}
-        type={notification.type}
-        onDismiss={() => setNotification((prev) => ({ ...prev, show: false }))}
+        show={notification !== null}
+        message={notification?.message ?? ''}
+        type={notification?.type ?? 'info'}
+        onDismiss={clearFeedback}
       />
     </div>
   )

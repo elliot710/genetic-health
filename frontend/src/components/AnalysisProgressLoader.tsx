@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AlertCircle, Check, ChevronLeft, ChevronRight, Clock, Info, Loader2 } from 'lucide-react';
 import { getTheme } from '../utils/theme';
+import { useDarkMode } from '@/hooks/useDarkMode';
 import { Button } from '@/components/ui/button';
 import { apiUrl, apiFetch } from '@/lib/api';
 import type { DashboardData } from '@/components/categories/types';
@@ -36,13 +37,11 @@ export default function AnalysisProgressLoader({
   const [error, setError] = useState<string | null>(null);
 
   // Use prop if provided, otherwise read from localStorage
-  const [localDarkMode, setLocalDarkMode] = useState(false);
-  useEffect(() => {
-    if (isDarkModeProp === undefined) {
-      const saved = localStorage.getItem('darkMode');
-      if (saved) setLocalDarkMode(JSON.parse(saved));
-    }
-  }, [isDarkModeProp]);
+  const { isDarkMode: localDarkMode } = useDarkMode({
+    enabled: isDarkModeProp === undefined,
+    persist: false,
+    syncDocumentClass: false,
+  });
   const isDarkMode = isDarkModeProp ?? localDarkMode;
   const theme = getTheme(isDarkMode);
 
@@ -381,16 +380,16 @@ export default function AnalysisProgressLoader({
                 {progress.status === 'pending' ? (
                   <div>
                     <strong>Analysis queued...</strong> Your genetic data has been uploaded successfully and is waiting in the processing queue. 
-                    We'll begin analyzing your {progress.total_variants.toLocaleString()} variants shortly.
+                    We&apos;ll begin analyzing your {progress.total_variants.toLocaleString()} variants shortly.
                   </div>
                 ) : isUploadingVariants ? (
                   <div>
-                    <strong>Processing your upload...</strong> We're storing and deduplicating your genetic variants.
+                    <strong>Processing your upload...</strong> We&apos;re storing and deduplicating your genetic variants.
                     Analysis will begin automatically once processing is complete.
                   </div>
                 ) : (
                   <div>
-                    <strong>Processing your genetic data... It may take a while, depending on available resources.</strong> We're analyzing {progress.total_variants.toLocaleString()} variants 
+                    <strong>Processing your genetic data... It may take a while, depending on available resources.</strong> We&apos;re analyzing {progress.total_variants.toLocaleString()} variants
                     across 14 comprehensive categories including health, nutrition, drug responses, physical traits, sports performance, 
                     intelligence, personality, ancestry, wellness, methylation, and detoxification pathways.
                   </div>

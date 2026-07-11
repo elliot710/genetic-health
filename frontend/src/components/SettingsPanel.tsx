@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import type { DashboardData } from './categories/types'
 import { apiFetch, ApiError } from '@/lib/api'
+import { useFeedback } from '@/hooks/useFeedback'
 import VariantDetailDialog from './categories/VariantDetailDialog'
 import { DISCLAIMER_TEXT } from '@/components/Disclaimer'
 
@@ -47,8 +48,8 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
   const [passwords, setPasswords] = useState({ current: '', new_password: '', confirm: '' })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
-  const [pwMessage, setPwMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  const { feedback: message, showFeedback: showMessage, clearFeedback: clearMessage } = useFeedback()
+  const { feedback: pwMessage, showFeedback: showPwMessage, clearFeedback: clearPwMessage } = useFeedback()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Saved variants state
@@ -78,7 +79,7 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
   // Dashboard sharing state
   const [shareEmail, setShareEmail] = useState('')
   const [shareLoading, setShareLoading] = useState(false)
-  const [shareMessage, setShareMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  const { feedback: shareMessage, showFeedback: showShareMessage, clearFeedback: clearShareMessage } = useFeedback()
   const [myShares, setMyShares] = useState<SharedUser[]>([])
   const [sharedWithMe, setSharedWithMe] = useState<SharedUser[]>([])
   const [sharesLoading, setSharesLoading] = useState(false)
@@ -257,7 +258,7 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
   const handleShare = async () => {
     if (!shareEmail.trim()) return
     setShareLoading(true)
-    setShareMessage(null)
+    clearShareMessage()
     try {
       const res = await apiFetch('/api/sharing/share', {
         method: 'POST',
@@ -265,11 +266,11 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
         body: JSON.stringify({ email: shareEmail.trim() }),
       })
       const json = await res.json().catch(() => ({}))
-      setShareMessage({ text: json.detail || 'Dashboard shared!', type: 'success' })
+      showShareMessage({ message: json.detail || 'Dashboard shared!', type: 'success' })
       setShareEmail('')
       fetchShares()
     } catch (e) {
-      setShareMessage({ text: e instanceof ApiError ? e.message : 'Network error', type: 'error' })
+      showShareMessage({ message: e instanceof ApiError ? e.message : 'Network error', type: 'error' })
     } finally {
       setShareLoading(false)
     }
@@ -303,11 +304,11 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
     const file = e.target.files?.[0]
     if (!file) return
     if (!file.type.startsWith('image/')) {
-      setMessage({ text: 'Please select an image file', type: 'error' })
+      showMessage({ message: 'Please select an image file', type: 'error' })
       return
     }
     if (file.size > 350_000) {
-      setMessage({ text: 'Image must be under 350KB', type: 'error' })
+      showMessage({ message: 'Image must be under 350KB', type: 'error' })
       return
     }
     const reader = new FileReader()
@@ -320,30 +321,30 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
 
   const saveProfile = async () => {
     setSaving(true)
-    setMessage(null)
+    clearMessage()
     try {
       await apiFetch('/auth/me', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ full_name: profile.full_name, avatar_url: profile.avatar_url || '' }),
       })
-      setMessage({ text: 'Profile updated successfully', type: 'success' })
+      showMessage({ message: 'Profile updated successfully', type: 'success' })
       onProfileUpdate?.()
     } catch (e) {
-      setMessage({ text: e instanceof ApiError ? e.message : 'Network error', type: 'error' })
+      showMessage({ message: e instanceof ApiError ? e.message : 'Network error', type: 'error' })
     } finally {
       setSaving(false)
     }
   }
 
   const changePassword = async () => {
-    setPwMessage(null)
+    clearPwMessage()
     if (passwords.new_password !== passwords.confirm) {
-      setPwMessage({ text: 'Passwords do not match', type: 'error' })
+      showPwMessage({ message: 'Passwords do not match', type: 'error' })
       return
     }
     if (passwords.new_password.length < 6) {
-      setPwMessage({ text: 'Password must be at least 6 characters', type: 'error' })
+      showPwMessage({ message: 'Password must be at least 6 characters', type: 'error' })
       return
     }
     setSaving(true)
@@ -356,10 +357,10 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
           new_password: passwords.new_password,
         }),
       })
-      setPwMessage({ text: 'Password changed successfully', type: 'success' })
+      showPwMessage({ message: 'Password changed successfully', type: 'success' })
       setPasswords({ current: '', new_password: '', confirm: '' })
     } catch (e) {
-      setPwMessage({ text: e instanceof ApiError ? e.message : 'Network error', type: 'error' })
+      showPwMessage({ message: e instanceof ApiError ? e.message : 'Network error', type: 'error' })
     } finally {
       setSaving(false)
     }
@@ -461,7 +462,7 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
             {message && (
               <p className={`text-sm flex items-center gap-1 ${message.type === 'success' ? 'text-green-500' : 'text-red-500'}`}>
                 {message.type === 'success' && <Check className="h-4 w-4" />}
-                {message.text}
+                {message.message}
               </p>
             )}
             <Button onClick={saveProfile} disabled={saving} className="gap-2">
@@ -563,7 +564,7 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
             {pwMessage && (
               <p className={`text-sm flex items-center gap-1 ${pwMessage.type === 'success' ? 'text-green-500' : 'text-red-500'}`}>
                 {pwMessage.type === 'success' && <Check className="h-4 w-4" />}
-                {pwMessage.text}
+                {pwMessage.message}
               </p>
             )}
             <Button onClick={changePassword} disabled={saving || !passwords.current || !passwords.new_password} className="gap-2">
@@ -646,7 +647,7 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
             {shareMessage && (
               <p className={`text-sm flex items-center gap-1 ${shareMessage.type === 'success' ? 'text-green-500' : 'text-red-500'}`}>
                 {shareMessage.type === 'success' && <Check className="h-4 w-4" />}
-                {shareMessage.text}
+                {shareMessage.message}
               </p>
             )}
             {sharesLoading ? (
