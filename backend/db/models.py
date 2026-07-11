@@ -24,7 +24,12 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Relationship to genetic analyses
-    genetic_analyses = relationship("GeneticAnalysis", back_populates="user", cascade="all, delete-orphan")
+    # passive_deletes: rely on the DB's ON DELETE CASCADE chain (users -> genetic_analyses
+    # -> variants/annotations/insight tables, all FKs ondelete=CASCADE) instead of loading
+    # the whole per-genome object graph (600k+ variant rows) into the event loop on account
+    # deletion. Emits a single DELETE FROM users; Postgres cascades the rest.
+    genetic_analyses = relationship("GeneticAnalysis", back_populates="user",
+                                    cascade="all, delete-orphan", passive_deletes=True)
     saved_variants = relationship("SavedVariant", back_populates="user", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     # Notification preferences — JSON map of type → bool, e.g. {"analysis_completed": true}
