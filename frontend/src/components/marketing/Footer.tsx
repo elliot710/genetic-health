@@ -12,6 +12,7 @@ const FOOTER_LINKS = {
   Company: [
     { href: '/about', label: 'About' },
     { href: '/contact', label: 'Contact' },
+    { href: '/faq', label: 'FAQ' },
   ],
   Legal: [
     { href: '/privacy', label: 'Privacy Policy' },

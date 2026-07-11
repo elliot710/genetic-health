@@ -598,11 +598,58 @@ class OptimizedGeneticAPIService:
                         'gene': match.get('gene', []),
                         'name': match.get('name'),
                         'clinical_significance': match.get('data_clinical_significance', []),
+                        'publications': await self._fetch_litvar_publications(rsid),
                     }
             return {'found': False, 'source': 'litvar'}
         except Exception as e:
             logger.error(f"LitVar annotation error for {rsid}: {e}")
             return {'found': False, 'source': 'litvar', 'error': str(e)}
+
+    async def _fetch_litvar_publications(self, rsid: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Resolve the PMIDs LitVar counts for this variant into publication details.
+
+        LitVar2's public autocomplete endpoint only exposes pmids_count, not the
+        PMIDs themselves, so the actual literature is sourced from the same NCBI
+        E-utilities search+summary pair already used for ClinVar entries above.
+        """
+        try:
+            esearch_params = {
+                'db': 'pubmed',
+                'term': f'{rsid}[All Fields]',
+                'retmode': 'json',
+                'retmax': limit,
+            }
+            esearch_url = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi'
+            search_resp = await self._make_request('clinvar', esearch_url, params=esearch_params)
+            if not search_resp.success or not search_resp.data:
+                return []
+            pmids = search_resp.data.get('esearchresult', {}).get('idlist', [])
+            if not pmids:
+                return []
+
+            esummary_url = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi'
+            esummary_params = {'db': 'pubmed', 'id': ','.join(pmids), 'retmode': 'json'}
+            summary_resp = await self._make_request('clinvar', esummary_url, params=esummary_params)
+            if not summary_resp.success or not summary_resp.data:
+                return []
+
+            doc_sums = summary_resp.data.get('result', {})
+            publications = []
+            for pmid in doc_sums.get('uids', []):
+                doc = doc_sums.get(pmid, {})
+                if not doc:
+                    continue
+                pub_year = doc.get('pubdate', '').split(' ')[0]
+                publications.append({
+                    'pmid': pmid,
+                    'title': doc.get('title', ''),
+                    'journal': doc.get('fulljournalname', ''),
+                    'year': int(pub_year) if pub_year.isdigit() else None,
+                })
+            return publications
+        except Exception as e:
+            logger.warning(f"LitVar publication fetch failed for {rsid}: {e}")
+            return []
     
     async def batch_annotate_variants(self, rsids: List[str], strategy: str = 'comprehensive', enabled_sources: Optional[List[str]] = None) -> Dict[str, Optional[Dict[str, Any]]]:
         """Annotate multiple variants with each API source running independently.
