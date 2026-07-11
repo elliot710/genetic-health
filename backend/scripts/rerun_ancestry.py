@@ -10,7 +10,6 @@ os.chdir('/app')
 async def main():
     from backend.db.database import async_session_factory, engine
     from backend.db.models import AncestryResult, AnalysisVariant
-    from backend.core.container import ServiceContainer
     from sqlalchemy import select, delete
     from sqlalchemy.orm import joinedload
 
