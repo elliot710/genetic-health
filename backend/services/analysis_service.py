@@ -22,7 +22,6 @@ from ..core.exceptions import AnalysisNotFoundException
 from ..core.config import settings
 from ..core.telemetry import get_tracer
 from .job_logs import JobLogCollector
-from .shared_annotation_service import SharedVariantAnnotationService
 from .variant_types import AnnotationResult
 
 logger = logging.getLogger(__name__)
@@ -252,20 +251,23 @@ class ComprehensiveAnalysisService:
         logger.info(f"Phase 1/4 complete: {len(self._rsid_gene_map)} genes mapped")
 
     async def _run_phase2_annotations(self, analysis_id, variants, progress):
-        from ..db.database import async_session_factory
-
         progress.phase = 2
         progress.phase_progress = 0.0
         progress.current_step = "annotating_variants"
         await self._update_progress(analysis_id, progress)
         logger.info("Phase 2/4: Annotating variants")
 
+        from .annotation_coordinator import annotate_variants_efficiently
+
         with tracer.start_as_current_span("analysis.phase2.annotate_variants") as span:
             span.set_attribute("variant.count", len(variants))
-            annotation_service = SharedVariantAnnotationService()
-            annotation_results = await self._annotate_variants_efficiently(
-                variants, analysis_id, annotation_service, progress,
+            annotation_results = await annotate_variants_efficiently(
+                variants, analysis_id, progress,
+                api_service=self.api_service,
+                enabled_sources=await self._load_enabled_sources(),
+                rsid_gene_map=self._rsid_gene_map,
                 update_progress_fn=self._update_progress,
+                check_cancelled_fn=self._check_if_cancelled,
             )
             span.set_attribute("annotation.reused", progress.reused_annotations)
             span.set_attribute("annotation.new", progress.new_annotations)
@@ -382,21 +384,6 @@ class ComprehensiveAnalysisService:
         """Delegate to variant_loader."""
         from .variant_loader import correct_ref_alleles
         await correct_ref_alleles(variants, annotation_results)
-
-    async def _annotate_variants_efficiently(
-        self, variants, analysis_id, annotation_service, progress,
-        update_progress_fn=None,
-    ) -> Dict[str, AnnotationResult]:
-        """Delegate to annotation_coordinator."""
-        from .annotation_coordinator import annotate_variants_efficiently
-        return await annotate_variants_efficiently(
-            variants, analysis_id, annotation_service, progress,
-            api_service=self.api_service,
-            enabled_sources=await self._load_enabled_sources(),
-            rsid_gene_map=self._rsid_gene_map,
-            update_progress_fn=update_progress_fn,
-            check_cancelled_fn=self._check_if_cancelled,
-        )
 
     async def _bulk_enrich_bigquery(self, annotation_results, analysis_id, progress):
         """Delegate to annotation_coordinator."""

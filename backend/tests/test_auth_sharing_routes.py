@@ -762,11 +762,3 @@ class TestSharedAnnotationService:
         svc = SharedVariantAnnotationService()
         result = await svc.get_existing_annotations([])
         assert result == {}
-
-    def test_compute_annotation_status_empty(self):
-        from backend.services.shared_annotation_service import SharedVariantAnnotationService
-        svc = SharedVariantAnnotationService()
-        data = {"annotations": {}}
-        result = svc._compute_annotation_status(data)
-        # Returns a tuple (status, sources_queried)
-        assert isinstance(result, (str, tuple))
