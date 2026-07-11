@@ -378,7 +378,7 @@ class ComprehensiveAnalysisService:
         progress.processed_variants = len(variants)
         progress.phase = 4
         progress.phase_progress = 1.0
-        await self._update_progress(analysis_id, progress, force_percentage=100)
+        await self._update_progress(analysis_id, progress, force_percentage=100, completed=True)
 
         try:
             from ..db.database import async_session_factory
@@ -614,17 +614,19 @@ class ComprehensiveAnalysisService:
     # ------------------------------------------------------------------
 
     async def _update_progress(self, analysis_id: int, progress: AnalysisProgress,
-                               *, force_percentage: Optional[int] = None):
+                               *, force_percentage: Optional[int] = None,
+                               completed: bool = False):
         pct = force_percentage if force_percentage is not None else progress.progress_percentage
-        await self._update_db(
-            analysis_id,
+        values = dict(
             progress_percentage=pct,
             processed_variants=progress.processed_variants,
             current_step=progress.current_step,
             analysis_status=progress.status,
             estimated_completion=progress.estimated_completion,
-            guard_paused=True,
         )
+        if completed:
+            values["completed_at"] = func.now()
+        await self._update_db(analysis_id, guard_paused=True, **values)
 
     async def _update_analysis_status(self, analysis_id: int, status: str, step: str):
         await self._update_db(analysis_id, analysis_status=status, current_step=step)

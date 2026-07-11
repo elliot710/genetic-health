@@ -113,6 +113,7 @@ class GeneticAnalysis(Base):
     processed_variants = Column(Integer, default=0)
     current_step = Column(String, default='initializing')  # Current processing step
     estimated_completion = Column(DateTime(timezone=True))  # Estimated completion time
+    completed_at = Column(DateTime(timezone=True), nullable=True)  # Set only on successful completion
     
     # Soft delete
     deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)

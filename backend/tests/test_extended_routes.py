@@ -648,6 +648,35 @@ class TestAdminJobs:
                 assert "total" in data
                 assert "pending" in data
 
+
+    def test_jobs_latency_empty_when_no_completed_analyses(self):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_mock_result(all_rows=[]))
+        app, _ = self._build(session)
+        with _admin_sa_patch():
+            with TestClient(app) as client:
+                data = client.get("/api/admin/jobs/latency").json()
+                assert data["sample_size"] == 0
+                assert data["p50_seconds"] is None
+                assert data["p95_seconds"] is None
+
+    def test_jobs_latency_computes_p50_p95_from_durations(self):
+        session = _make_mock_session()
+        rows = [
+            (datetime(2024, 1, 1, 0, 0, 0), datetime(2024, 1, 1, 0, 1, 0)),  # 60s
+            (datetime(2024, 1, 1, 0, 0, 0), datetime(2024, 1, 1, 0, 2, 0)),  # 120s
+            (datetime(2024, 1, 1, 0, 0, 0), datetime(2024, 1, 1, 0, 5, 0)),  # 300s
+        ]
+        session.execute = AsyncMock(return_value=_make_mock_result(all_rows=rows))
+        app, _ = self._build(session)
+        with _admin_sa_patch():
+            with TestClient(app) as client:
+                data = client.get("/api/admin/jobs/latency").json()
+                assert data["sample_size"] == 3
+                assert data["p50_seconds"] == 120.0
+                assert data["p95_seconds"] == 300.0
+                assert data["exceeds_threshold"] is False
+
     def test_list_jobs_returns_200(self):
         session = _make_mock_session()
         analysis = MagicMock()

@@ -1483,6 +1483,59 @@ async def get_jobs_summary(
     )
 
 
+# Measurement-first threshold (U12): backend latency optimization is out of
+# scope for the analysis pipeline until real p95 completion time exceeds this.
+# Below it, the wait-UX/honest-progress work in this unit is sufficient.
+LATENCY_P95_THRESHOLD_SECONDS = 5 * 60
+
+
+def _percentile(sorted_data: List[float], pct: float) -> float:
+    """Nearest-rank percentile over already-sorted data (pct in [0, 1])."""
+    index = min(len(sorted_data) - 1, int(round(pct * (len(sorted_data) - 1))))
+    return sorted_data[index]
+
+
+class AdminJobsLatency(BaseModel):
+    sample_size: int
+    p50_seconds: Optional[float] = None
+    p95_seconds: Optional[float] = None
+    threshold_seconds: int = LATENCY_P95_THRESHOLD_SECONDS
+    exceeds_threshold: bool = False
+
+
+@router.get("/jobs/latency", response_model=AdminJobsLatency)
+async def get_jobs_latency(
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """p50/p95 analysis completion latency, derived from completed_at - upload_date.
+
+    Measurement only — see LATENCY_P95_THRESHOLD_SECONDS above.
+    """
+    result = await db.execute(
+        select(GeneticAnalysis.upload_date, GeneticAnalysis.completed_at)
+        .where(
+            GeneticAnalysis.analysis_status == 'completed',
+            GeneticAnalysis.completed_at.isnot(None),
+            GeneticAnalysis.upload_date.isnot(None),
+        )
+    )
+    durations = sorted(
+        (completed_at - upload_date).total_seconds()
+        for upload_date, completed_at in result.all()
+    )
+    if not durations:
+        return AdminJobsLatency(sample_size=0)
+
+    p95 = _percentile(durations, 0.95)
+    return AdminJobsLatency(
+        sample_size=len(durations),
+        p50_seconds=round(_percentile(durations, 0.50), 1),
+        p95_seconds=round(p95, 1),
+        exceeds_threshold=p95 > LATENCY_P95_THRESHOLD_SECONDS,
+    )
+
+
 @router.get("/jobs", response_model=List[AdminJobResponse])
 async def list_jobs(
     status_filter: Optional[str] = Query(None, alias="status"),
