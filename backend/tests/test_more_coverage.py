@@ -459,7 +459,7 @@ class TestVariantRoutesDeep:
 
 class TestAnalysisServicePure:
     def test_annotation_result_creation(self):
-        from backend.services.analysis_service import AnnotationResult
+        from backend.services.variant_types import AnnotationResult
         result = AnnotationResult(
             rsid="rs12345",
             was_reused=True,

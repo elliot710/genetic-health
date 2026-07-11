@@ -18,6 +18,10 @@ logger = logging.getLogger(__name__)
 
 _BENIGN_CLASSIFICATIONS = frozenset(('benign', 'likely_benign'))
 
+# Strand complement translation table — shared by generators that verify a
+# user's genotype against an annotation allele reported on the minus strand.
+STRAND_COMPLEMENT = str.maketrans('ACGT', 'TGCA')
+
 
 # ---------------------------------------------------------------------------
 # Variant profile — pre-computed per-variant enrichment
@@ -988,10 +992,9 @@ async def generate_from_maps(
                 # ann_alt may be a comma-separated list for multi-allelic sites
                 # (e.g. "A,T" for REF/A,T). Extract all single-base alts and
                 # check whether the user carries ANY of them.
-                _COMPLEMENT_MAP = str.maketrans('ACGT', 'TGCA')
                 gt_upper = genotype.upper()
                 alleles = set(gt_upper.replace('/', '').replace('|', ''))
-                alleles_flipped = {a.translate(_COMPLEMENT_MAP) for a in alleles}
+                alleles_flipped = {a.translate(STRAND_COMPLEMENT) for a in alleles}
                 ann_alts = [a.strip() for a in ann_alt.split(',') if a.strip()]
                 snp_alts = [a for a in ann_alts if len(a) == 1]
                 if snp_alts:

@@ -21,7 +21,8 @@ from ..db.models import (
     SharedVariantAnnotation, VariantAnnotation,
 )
 from ..core.config import settings
-from .analysis_service import AnnotationResult, AnalysisProgress
+from .analysis_service import AnalysisProgress
+from .variant_types import AnnotationResult
 
 logger = logging.getLogger(__name__)
 

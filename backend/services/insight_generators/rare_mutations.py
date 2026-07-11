@@ -6,13 +6,10 @@ from .base import (
     GeneratorContext, extract_gene_and_consequence, extract_frequency,
     get_user_genotype, _get_effective_ref_allele, is_homozygous_reference,
     is_no_call_genotype, is_indel_genotype, get_annotation_allele_parts,
-    is_heterozygous,
+    is_heterozygous, STRAND_COMPLEMENT,
 )
 
 logger = logging.getLogger(__name__)
-
-# Strand complement for strand-flip-aware allele verification
-_COMPLEMENT = str.maketrans('ACGT', 'TGCA')
 
 
 async def generate_rare_mutations(ctx: GeneratorContext) -> int:
@@ -59,7 +56,7 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
                 # Strand-flip: if none of the alleles match ref on forward strand,
                 # try reverse complement — hom-ref on minus strand means no variant.
                 if not any(a == effective_ref for a in gt):
-                    flipped = gt.translate(_COMPLEMENT)
+                    flipped = gt.translate(STRAND_COMPLEMENT)
                     if is_homozygous_reference(flipped, effective_ref):
                         continue
             raw_freq = extract_frequency(annotation_result)
@@ -86,7 +83,7 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
                 gt = user_gt.upper()
                 carries = _cv_alt in set(gt)
                 if not carries:
-                    carries = _cv_alt in set(gt.translate(_COMPLEMENT))
+                    carries = _cv_alt in set(gt.translate(STRAND_COMPLEMENT))
                 if not carries:
                     continue  # User doesn't carry this ClinVar-reported pathogenic allele
 

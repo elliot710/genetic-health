@@ -599,7 +599,7 @@ class TestVariantLookupPost:
 
 class TestAnalysisServicePure:
     def test_annotation_result_creation(self):
-        from backend.services.analysis_service import AnnotationResult
+        from backend.services.variant_types import AnnotationResult
         result = AnnotationResult(
             rsid="rs12345",
             was_reused=True,
@@ -631,7 +631,7 @@ class TestAnalysisServicePure:
         assert str(exc) == "cancelled"
 
     def test_annotation_result_defaults(self):
-        from backend.services.analysis_service import AnnotationResult
+        from backend.services.variant_types import AnnotationResult
         result = AnnotationResult(
             rsid="rs99999",
             was_reused=False,
