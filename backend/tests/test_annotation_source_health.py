@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from backend.api.admin_routes import _is_source_stale, _source_cache_file_size
+from backend.api.admin.schemas import _is_source_stale, _source_cache_file_size
 
 
 class TestIsSourceStale:

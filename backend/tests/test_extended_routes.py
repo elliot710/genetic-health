@@ -354,7 +354,9 @@ def _admin_sa_patch():
              patch("backend.api.admin.variant_mappings.select"), \
              patch("backend.api.admin.variant_mappings.func"), \
              patch("backend.api.admin.discoveries.select"), \
-             patch("backend.api.admin.discoveries.func"):
+             patch("backend.api.admin.discoveries.func"), \
+             patch("backend.api.admin.annotation_sources.select"), \
+             patch("backend.api.admin.annotation_sources.func"):
             yield
     return _patch()
 
@@ -884,7 +886,7 @@ class TestAdminAnnotationSources:
         # Ensure scalar returns 0 for count queries
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=0, all_rows=[]))
 
-        with patch("backend.api.admin_routes._ensure_source_configs", new=AsyncMock(return_value=[mock_source])):
+        with patch("backend.api.admin.annotation_sources._ensure_source_configs", new=AsyncMock(return_value=[mock_source])):
             with _admin_sa_patch():
                 app, _ = self._build(session)
                 with TestClient(app) as client:
@@ -893,7 +895,7 @@ class TestAdminAnnotationSources:
 
     def test_update_annotation_source_not_found(self):
         session = _make_mock_session()
-        with patch("backend.api.admin_routes._ensure_source_configs", new=AsyncMock(return_value=[])):
+        with patch("backend.api.admin.annotation_sources._ensure_source_configs", new=AsyncMock(return_value=[])):
             with _admin_sa_patch():
                 session.execute = AsyncMock(return_value=_make_mock_result(scalar=None))
                 app, _ = self._build(session)
@@ -947,9 +949,9 @@ class TestAdminIncompleteAnnotations:
     def test_incomplete_summary_returns_200(self):
         session = _make_mock_session()
         # Patch the helper functions to avoid complex DB query mocking
-        with patch("backend.api.admin_routes._get_all_enabled_source_names", new=AsyncMock(return_value=["ensembl", "clinvar"])):
-            with patch("backend.api.admin_routes._get_enabled_source_names", new=AsyncMock(return_value=["ensembl"])):
-                with patch("backend.api.admin_routes._build_incomplete_condition", return_value=None):
+        with patch("backend.api.admin.annotation_sources._get_all_enabled_source_names", new=AsyncMock(return_value=["ensembl", "clinvar"])):
+            with patch("backend.api.admin.annotation_sources._get_enabled_source_names", new=AsyncMock(return_value=["ensembl"])):
+                with patch("backend.api.admin.annotation_sources._build_incomplete_condition", return_value=None):
                     session.execute = AsyncMock(return_value=_make_mock_result(scalar=10))
                     app, _ = self._build(session)
                     with _admin_sa_patch():
@@ -959,9 +961,9 @@ class TestAdminIncompleteAnnotations:
 
     def test_incomplete_list_returns_200(self):
         session = _make_mock_session()
-        with patch("backend.api.admin_routes._get_all_enabled_source_names", new=AsyncMock(return_value=["ensembl"])):
-            with patch("backend.api.admin_routes._get_enabled_source_names", new=AsyncMock(return_value=[])):
-                with patch("backend.api.admin_routes._build_incomplete_condition", return_value=None):
+        with patch("backend.api.admin.annotation_sources._get_all_enabled_source_names", new=AsyncMock(return_value=["ensembl"])):
+            with patch("backend.api.admin.annotation_sources._get_enabled_source_names", new=AsyncMock(return_value=[])):
+                with patch("backend.api.admin.annotation_sources._build_incomplete_condition", return_value=None):
                     app, _ = self._build(session)
                     with _admin_sa_patch():
                         with TestClient(app) as client:
@@ -988,7 +990,7 @@ class TestRetriggerSourcesEnsemblGuard:
         return SharedVariantAnnotation(rsid="rs123", ensembl_data=ensembl_data)
 
     async def test_retrigger_ensembl_skips_when_ensembl_data_already_found(self):
-        from backend.api.admin_routes import _retrigger_sources
+        from backend.api.admin.annotation_sources import _retrigger_sources
 
         existing_data = {"found": True, "source": "ensembl_vep", "data": {"consequence": "missense_variant"}}
         annotation = self._make_annotation(ensembl_data=existing_data)
@@ -1009,7 +1011,7 @@ class TestRetriggerSourcesEnsemblGuard:
         assert "ensembl" not in still_failed
 
     async def test_retrigger_ensembl_writes_when_ensembl_data_absent(self):
-        from backend.api.admin_routes import _retrigger_sources
+        from backend.api.admin.annotation_sources import _retrigger_sources
 
         annotation = self._make_annotation(ensembl_data=None)
         fresh_data = {"found": True, "source": "ensembl", "data": {"consequence": "missense_variant"}}
@@ -1030,7 +1032,7 @@ class TestRetriggerSourcesEnsemblGuard:
     async def test_retrigger_ensembl_retries_when_existing_is_confirmed_no_data(self):
         """A confirmed-absent result (found=False) is not 'populated' — the guard
         only blocks found=True data, so a retry attempt is still allowed to run."""
-        from backend.api.admin_routes import _retrigger_sources
+        from backend.api.admin.annotation_sources import _retrigger_sources
 
         existing_data = {"found": False, "confirmed_no_data": True, "source": "ensembl_vep"}
         annotation = self._make_annotation(ensembl_data=existing_data)

@@ -346,7 +346,7 @@ class TestAdminRoutes:
 
     def test_get_annotation_source_configs(self):
         app, session, _ = self._make_admin_app()
-        with patch("backend.api.admin_routes._ensure_source_configs", new=AsyncMock(return_value=[])):
+        with patch("backend.api.admin.annotation_sources._ensure_source_configs", new=AsyncMock(return_value=[])):
             result = MagicMock()
             result.scalar.return_value = 0
             session.execute = AsyncMock(return_value=result)
