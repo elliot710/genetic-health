@@ -274,7 +274,6 @@ def _admin_sa_patch():
     @contextlib.contextmanager
     def _patch():
         with patch("backend.api.admin_routes.select"), \
-             patch("backend.api.admin_routes.func"), \
              patch("backend.api.admin_routes.delete"), \
              patch("backend.api.admin_routes.update"), \
              patch("backend.api.admin.users.select"), \
@@ -282,7 +281,11 @@ def _admin_sa_patch():
              patch("backend.api.admin.variant_mappings.select"), \
              patch("backend.api.admin.variant_mappings.func"), \
              patch("backend.api.admin.discoveries.select"), \
-             patch("backend.api.admin.discoveries.func"):
+             patch("backend.api.admin.discoveries.func"), \
+             patch("backend.api.admin.jobs.select"), \
+             patch("backend.api.admin.jobs.func"), \
+             patch("backend.api.admin.jobs.delete"), \
+             patch("backend.api.admin.jobs.update"):
             yield
     return _patch()
 
