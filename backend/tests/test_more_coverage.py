@@ -276,7 +276,9 @@ def _admin_sa_patch():
         with patch("backend.api.admin_routes.select"), \
              patch("backend.api.admin_routes.func"), \
              patch("backend.api.admin_routes.delete"), \
-             patch("backend.api.admin_routes.update"):
+             patch("backend.api.admin_routes.update"), \
+             patch("backend.api.admin.users.select"), \
+             patch("backend.api.admin.users.func"):
             yield
     return _patch()
 

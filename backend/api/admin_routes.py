@@ -7,196 +7,60 @@ import io
 import logging
 import time
 import yaml
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete, case, cast, literal_column, text, update
 from sqlalchemy.types import Integer as SAInteger
 from typing import List, Optional
-from pydantic import BaseModel
-from datetime import datetime
 
 from ..db.database import get_session
 from ..db.models import User, GeneticAnalysis, VariantMapping, PendingDiscovery, SharedVariantAnnotation, AnnotationSourceConfig
-from .auth_routes import get_current_user
 from ..services.notification_service import get_notification_service
 
-router = APIRouter(prefix="/api/admin", tags=["admin"])
+# Imported before `router` is constructed so the require_admin guard can be
+# baked into the router itself (see dependencies= below) -- this makes
+# backend.api.admin's aggregate a plain re-export of this router rather than
+# a second APIRouter that .include_router()'s a copy: with two objects, the
+# copy step captures whatever routes existed at that exact import moment,
+# which is empty if something imports admin_routes.py directly before the
+# admin package (circular import, order-dependent). One router, mutated in
+# place by every decorator below, has no such moment to get wrong.
+from .admin.schemas import (
+    require_admin,
+    SOURCE_TO_COLUMN,
+    LATENCY_P95_THRESHOLD_SECONDS,
+    VariantMappingResponse,
+    VariantMappingCreate,
+    VariantMappingUpdate,
+    VariantMappingCategorySummary,
+    PendingDiscoveryResponse,
+    DiscoverySummary,
+    DiscoveryReviewAction,
+    AnnotationSourceResponse,
+    AnnotationSourceUpdate,
+    _source_cache_file_size,
+    _is_source_stale,
+    BackfillResponse,
+    IncompleteAnnotationResponse,
+    PaginatedIncompleteResponse,
+    IncompleteAnnotationSummary,
+    AdminJobResponse,
+    AdminJobsSummary,
+    AdminJobsLatency,
+    CategoryRuleCreate,
+    CategoryRuleUpdate,
+    SentinelResetResponse,
+)
+from .admin.users import router as _users_router
+
+router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 logger = logging.getLogger(__name__)
 
-
-# --- Pydantic schemas ---
-
-class AdminUserResponse(BaseModel):
-    id: int
-    email: str
-    username: str
-    full_name: Optional[str] = None
-    avatar_url: Optional[str] = None
-    is_active: bool
-    is_verified: bool
-    is_admin: bool
-    created_at: datetime
-    analysis_count: int = 0
-
-    class Config:
-        from_attributes = True
-
-
-class AdminUserUpdate(BaseModel):
-    is_active: Optional[bool] = None
-    is_admin: Optional[bool] = None
-    is_verified: Optional[bool] = None
-
-
-# --- Dependencies ---
-
-async def require_admin(current_user: User = Depends(get_current_user)) -> User:
-    if not current_user.is_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required"
-        )
-    return current_user
-
-
-# --- User Management ---
-
-@router.get("/users", response_model=List[AdminUserResponse])
-async def list_users(
-    db: AsyncSession = Depends(get_session),
-    admin: User = Depends(require_admin),
-):
-    """List all users with analysis counts."""
-    result = await db.execute(
-        select(
-            User,
-            func.count(GeneticAnalysis.id).label("analysis_count")
-        )
-        .outerjoin(
-            GeneticAnalysis,
-            (User.id == GeneticAnalysis.user_id) & (GeneticAnalysis.deleted_at.is_(None))
-        )
-        .group_by(User.id)
-        .order_by(User.created_at.desc())
-    )
-    rows = result.all()
-    users = []
-    for user, count in rows:
-        users.append(AdminUserResponse(
-            id=user.id,
-            email=user.email,
-            username=user.username,
-            full_name=user.full_name,
-            avatar_url=user.avatar_url,
-            is_active=user.is_active,
-            is_verified=user.is_verified,
-            is_admin=user.is_admin,
-            created_at=user.created_at,
-            analysis_count=count,
-        ))
-    return users
-
-
-@router.put("/users/{user_id}", response_model=AdminUserResponse)
-async def update_user(
-    user_id: int,
-    update: AdminUserUpdate,
-    db: AsyncSession = Depends(get_session),
-    admin: User = Depends(require_admin),
-):
-    """Update user flags (active, admin, verified)."""
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    if update.is_active is not None:
-        user.is_active = update.is_active
-    if update.is_admin is not None:
-        user.is_admin = update.is_admin
-    if update.is_verified is not None:
-        user.is_verified = update.is_verified
-
-    await db.commit()
-    await db.refresh(user)
-
-    # Get analysis count
-    count_result = await db.execute(
-        select(func.count(GeneticAnalysis.id)).where(
-            GeneticAnalysis.user_id == user_id,
-            GeneticAnalysis.deleted_at.is_(None),
-        )
-    )
-    count = count_result.scalar() or 0
-
-    return AdminUserResponse(
-        id=user.id,
-        email=user.email,
-        username=user.username,
-        full_name=user.full_name,
-        is_active=user.is_active,
-        is_verified=user.is_verified,
-        is_admin=user.is_admin,
-        created_at=user.created_at,
-        analysis_count=count,
-    )
-
-
-@router.delete("/users/{user_id}")
-async def delete_user(
-    user_id: int,
-    db: AsyncSession = Depends(get_session),
-    admin: User = Depends(require_admin),
-):
-    """Delete a user. Cannot delete yourself."""
-    if user_id == admin.id:
-        raise HTTPException(status_code=400, detail="Cannot delete yourself")
-
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    await db.delete(user)
-    await db.commit()
-    return {"detail": "User deleted"}
+router.include_router(_users_router)
 
 
 # --- Variant Mapping Registry ---
-
-class VariantMappingResponse(BaseModel):
-    id: int
-    category: str
-    map_type: str
-    key: str
-    data: dict
-    is_active: bool
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
-
-
-class VariantMappingCreate(BaseModel):
-    category: str
-    map_type: str        # 'rsid' or 'gene'
-    key: str             # e.g. 'rs7903146' or 'TP73'
-    data: dict
-
-
-class VariantMappingUpdate(BaseModel):
-    key: Optional[str] = None
-    data: Optional[dict] = None
-    is_active: Optional[bool] = None
-
-
-class VariantMappingCategorySummary(BaseModel):
-    category: str
-    rsid_count: int
-    gene_count: int
-    total: int
 
 
 @router.get("/variant-mappings/categories", response_model=List[VariantMappingCategorySummary])
@@ -311,45 +175,6 @@ async def delete_variant_mapping(
 
 
 # --- Pending Discoveries ---
-
-class PendingDiscoveryResponse(BaseModel):
-    id: int
-    discovery_type: str
-    rsid: str
-    gene: Optional[str] = None
-    panel_id: Optional[str] = None
-    description: Optional[str] = None
-    category: Optional[str] = None
-    map_type: Optional[str] = None
-    mapping_category: Optional[str] = None
-    mapping_data: Optional[dict] = None
-    source_data: Optional[dict] = None
-    status: str
-    reviewed_by: Optional[int] = None
-    reviewed_at: Optional[datetime] = None
-    rejection_reason: Optional[str] = None
-    discovered_by: Optional[int] = None
-    lookup_count: int = 1
-    created_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
-
-
-class DiscoverySummary(BaseModel):
-    total_pending: int
-    total_approved: int
-    total_rejected: int
-    variant_mapping_pending: int
-
-
-class DiscoveryReviewAction(BaseModel):
-    action: str  # 'approve' or 'reject'
-    rejection_reason: Optional[str] = None
-    # Optional overrides before approving
-    description: Optional[str] = None
-    category: Optional[str] = None
-    mapping_data: Optional[dict] = None
 
 
 @router.get("/discoveries/summary", response_model=DiscoverySummary)
@@ -603,10 +428,6 @@ DEFAULT_SOURCES = [
     {"source_name": "open_targets", "display_name": "Open Targets Platform", "is_enabled": True, "source_type": "api", "description": "Open Targets Platform gene-disease scores aggregated from genetic, literature, and animal model evidence. Queried live via GraphQL API by gene symbol during annotation.", "rate_limit": 5.0, "priority": 16},
 ]
 
-# Shared source-to-column mapping — single source of truth
-from ..services.annotation_constants import SOURCE_TO_COLUMN
-
-
 async def _ensure_source_configs(db: AsyncSession) -> List[AnnotationSourceConfig]:
     """Ensure all default sources exist in annotation_source_configs. Returns all configs."""
     result = await db.execute(
@@ -627,70 +448,6 @@ async def _ensure_source_configs(db: AsyncSession) -> List[AnnotationSourceConfi
         existing = list(result.scalars().all())
 
     return existing
-
-
-class AnnotationSourceResponse(BaseModel):
-    id: int
-    source_name: str
-    display_name: str
-    is_enabled: bool
-    description: Optional[str] = None
-    # 'api' = third-party HTTP API, 'database' = PostgreSQL only,
-    # 'file' = local tabix/TSV files only, 'hybrid' = files + PostgreSQL,
-    # 'bigquery' = Google BigQuery
-    source_type: str = 'api'
-    rate_limit: Optional[float] = None
-    priority: int = 0
-    annotated_count: int = 0
-    missing_count: int = 0
-    # True coverage: rows where the source actually returned found=true. A stored
-    # {"found": false} (confirmed absence) inflates annotated_count but must not
-    # count as coverage — found_count is the honest signal, no_data_count the rest.
-    found_count: int = 0
-    no_data_count: int = 0
-    # On-disk cache size (bytes) for file/hybrid sources; None if the source has no
-    # known cache file or the file is absent. Stat only — contents never read.
-    cache_file_bytes: Optional[int] = None
-    # Heuristic flag so a stale/unbuilt cache (e.g. the empty gnomAD CADD build)
-    # is visible on the admin surface.
-    is_stale: bool = False
-
-    class Config:
-        from_attributes = True
-
-
-# A file/hybrid cache below this size is treated as stale/unbuilt (e.g. the empty
-# gnomAD CADD build, ~180 KB) so it is flagged on the admin data-sources surface.
-_STALE_CACHE_BYTES = 1_000_000
-
-
-def _source_cache_file_size(source_name: str) -> Optional[int]:
-    """On-disk size (bytes) of a source's cache file, or None when the source has
-    no known cache file or the file is absent. Stats only — never reads contents."""
-    if source_name == 'gnomad':
-        try:
-            from ..services.gnomad_local import _SQLITE_FILE
-            return _SQLITE_FILE.stat().st_size
-        except (OSError, ImportError):
-            return None  # absent -> report as None, never error
-    return None
-
-
-def _is_source_stale(is_enabled: bool, found_count: int, annotated_count: int,
-                     cache_file_bytes: Optional[int]) -> bool:
-    """Flag a source whose coverage looks empty/unbuilt. Two signals: a tiny on-disk
-    cache file, or an enabled source that has stored rows but zero real coverage
-    (found=true), which is the empty-build case the honest found-rate exposes."""
-    if cache_file_bytes is not None and cache_file_bytes < _STALE_CACHE_BYTES:
-        return True
-    if is_enabled and annotated_count > 0 and found_count == 0:
-        return True
-    return False
-
-
-class AnnotationSourceUpdate(BaseModel):
-    is_enabled: Optional[bool] = None
-    priority: Optional[int] = None
 
 
 @router.get("/annotation-sources", response_model=List[AnnotationSourceResponse])
@@ -809,15 +566,6 @@ async def update_annotation_source(
     )
 
 
-class BackfillResponse(BaseModel):
-    detail: str
-    source: str
-    total_to_backfill: int
-    completed: int
-    failed: int
-    confirmed_no_data: int
-
-
 def _extract_am_coords(ensembl_data) -> Optional[tuple]:
     if not (ensembl_data and isinstance(ensembl_data, dict)
             and ensembl_data.get('found') and ensembl_data.get('data')):
@@ -883,12 +631,6 @@ async def backfill_source(
 
 # --- Ensembl VEP ETL ---
 
-class VepEtlResponse(BaseModel):
-    detail: str
-    chromosomes_imported: list = []
-    total_variants: int = 0
-    skipped_chromosomes: list = []
-
 @router.post("/ensembl-vep-etl/import")
 async def trigger_vep_etl(
     chromosomes: Optional[str] = Query(None, description="Comma-separated chromosome list, e.g. '1,2,X'. Omit for all available."),
@@ -943,49 +685,6 @@ async def vep_etl_status(
 
 
 # --- Incomplete Annotations ---
-
-class IncompleteAnnotationResponse(BaseModel):
-    id: int
-    rsid: str
-    annotation_status: Optional[str] = None
-    failed_sources: Optional[list] = None
-    missing_sources: List[str] = []  # derived: enabled sources with status "missing"
-    total_api_calls: int = 0
-    # Source status: "found" = has data, "no_data" = confirmed absence, "missing" = never queried/error
-    ensembl: str = "missing"
-    clinvar: str = "missing"
-    clinpgx: str = "missing"
-    snpedia: str = "missing"
-    litvar: str = "missing"
-    alpha_missense: str = "missing"
-    clinvar_local: str = "missing"
-    gnomad: str = "missing"
-    chembl: str = "missing"
-    fda_drug: str = "missing"
-    alphafold: str = "missing"
-    first_annotated_at: Optional[datetime] = None
-    last_updated_at: Optional[datetime] = None
-    usage_count: int = 0
-
-    class Config:
-        from_attributes = True
-
-
-class PaginatedIncompleteResponse(BaseModel):
-    items: List[IncompleteAnnotationResponse]
-    total_count: int
-    limit: int
-    offset: int
-
-
-class IncompleteAnnotationSummary(BaseModel):
-    total_annotations: int
-    complete: int
-    partial: int
-    failed: int
-    enabled_sources: List[str] = []  # all enabled sources (for table columns)
-    active_sources: List[str] = []   # high-coverage sources (used for counts)
-
 
 def _has_failed_sources():
     """Safe SQL expression: true when failed_sources is a non-empty JSON array.
@@ -1495,33 +1194,6 @@ def _extract_gene_symbol(annotation) -> Optional[str]:
 
 # --- Job Management ---
 
-class AdminJobResponse(BaseModel):
-    id: int
-    user_id: int
-    user_email: str
-    username: str
-    filename: str
-    file_type: str
-    analysis_status: str
-    progress_percentage: int
-    total_variants: int
-    processed_variants: int
-    current_step: Optional[str] = None
-    upload_date: Optional[datetime] = None
-    estimated_completion: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
-
-
-class AdminJobsSummary(BaseModel):
-    total: int
-    pending: int
-    processing: int
-    completed: int
-    failed: int
-
-
 @router.get("/jobs/summary", response_model=AdminJobsSummary)
 async def get_jobs_summary(
     db: AsyncSession = Depends(get_session),
@@ -1547,24 +1219,10 @@ async def get_jobs_summary(
     )
 
 
-# Measurement-first threshold (U12): backend latency optimization is out of
-# scope for the analysis pipeline until real p95 completion time exceeds this.
-# Below it, the wait-UX/honest-progress work in this unit is sufficient.
-LATENCY_P95_THRESHOLD_SECONDS = 5 * 60
-
-
 def _percentile(sorted_data: List[float], pct: float) -> float:
     """Nearest-rank percentile over already-sorted data (pct in [0, 1])."""
     index = min(len(sorted_data) - 1, int(round(pct * (len(sorted_data) - 1))))
     return sorted_data[index]
-
-
-class AdminJobsLatency(BaseModel):
-    sample_size: int
-    p50_seconds: Optional[float] = None
-    p95_seconds: Optional[float] = None
-    threshold_seconds: int = LATENCY_P95_THRESHOLD_SECONDS
-    exceeds_threshold: bool = False
 
 
 @router.get("/jobs/latency", response_model=AdminJobsLatency)
@@ -2030,22 +1688,6 @@ async def open_targets_test(admin: User = Depends(require_admin)):
 # ======================================================================
 # Category Rules endpoints
 # ======================================================================
-
-class CategoryRuleCreate(BaseModel):
-    category: str
-    rule_type: str
-    rule_value: str
-    priority: int = 50
-    is_active: bool = True
-    mapping_data_template: Optional[dict] = None
-
-
-class CategoryRuleUpdate(BaseModel):
-    rule_value: Optional[str] = None
-    priority: Optional[int] = None
-    is_active: Optional[bool] = None
-    mapping_data_template: Optional[dict] = None
-
 
 @router.get("/category-rules")
 async def list_category_rules(
@@ -2520,11 +2162,6 @@ async def list_worker_jobs(
 
 
 # --- Annotation sentinel reset ---
-
-class SentinelResetResponse(BaseModel):
-    detail: str
-    source: str
-    reset_count: int
 
 @router.post("/annotation-sources/{source_name}/reset-sentinels", response_model=SentinelResetResponse)
 async def reset_source_sentinels(

@@ -296,7 +296,9 @@ class TestAdminRoutes:
     def test_get_users_admin(self):
         app, session, _ = self._make_admin_app()
         self._mock_db_result(session)
-        with patch("backend.api.admin_routes.select", return_value=MagicMock()):
+        with patch("backend.api.admin_routes.select", return_value=MagicMock()), \
+             patch("backend.api.admin.users.select", return_value=MagicMock()), \
+             patch("backend.api.admin.users.func", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.get("/api/admin/users")
                 assert resp.status_code in (200, 403, 500)

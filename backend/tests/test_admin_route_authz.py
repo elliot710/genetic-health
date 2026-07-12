@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, MagicMock
 
-from backend.api.admin_routes import router as admin_router
+from backend.api.admin import router as admin_router
 from backend.api.auth_routes import get_current_user
 from backend.db.database import get_session
 

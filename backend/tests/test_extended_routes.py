@@ -339,14 +339,17 @@ class TestVariantSearch:
 # ──────────────────────────────────────────────────
 
 def _admin_sa_patch():
-    """Context manager that patches SQLAlchemy functions in admin_routes."""
+    """Context manager that patches SQLAlchemy functions in admin_routes
+    and admin.users (users handlers live in the latter after the U1 split)."""
     import contextlib
     @contextlib.contextmanager
     def _patch():
         with patch("backend.api.admin_routes.select"), \
              patch("backend.api.admin_routes.func"), \
              patch("backend.api.admin_routes.delete"), \
-             patch("backend.api.admin_routes.update"):
+             patch("backend.api.admin_routes.update"), \
+             patch("backend.api.admin.users.select"), \
+             patch("backend.api.admin.users.func"):
             yield
     return _patch()
 
