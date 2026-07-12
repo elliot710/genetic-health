@@ -278,7 +278,11 @@ def _admin_sa_patch():
              patch("backend.api.admin_routes.delete"), \
              patch("backend.api.admin_routes.update"), \
              patch("backend.api.admin.users.select"), \
-             patch("backend.api.admin.users.func"):
+             patch("backend.api.admin.users.func"), \
+             patch("backend.api.admin.variant_mappings.select"), \
+             patch("backend.api.admin.variant_mappings.func"), \
+             patch("backend.api.admin.discoveries.select"), \
+             patch("backend.api.admin.discoveries.func"):
             yield
     return _patch()
 

@@ -306,7 +306,7 @@ class TestAdminRoutes:
     def test_get_discoveries_admin(self):
         app, session, _ = self._make_admin_app()
         self._mock_db_result(session)
-        with patch("backend.api.admin_routes.select", return_value=MagicMock()):
+        with patch("backend.api.admin.discoveries.select", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.get("/api/admin/discoveries")
                 assert resp.status_code in (200, 403, 500)
@@ -316,7 +316,7 @@ class TestAdminRoutes:
         result = MagicMock()
         result.all.return_value = []
         session.execute = AsyncMock(return_value=result)
-        with patch("backend.api.admin_routes.select", return_value=MagicMock()):
+        with patch("backend.api.admin.discoveries.select", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.get("/api/admin/discoveries/summary")
                 assert resp.status_code in (200, 403, 500)
@@ -332,7 +332,7 @@ class TestAdminRoutes:
     def test_get_variant_mappings_admin(self):
         app, session, _ = self._make_admin_app()
         self._mock_db_result(session)
-        with patch("backend.api.admin_routes.select", return_value=MagicMock()):
+        with patch("backend.api.admin.variant_mappings.select", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.get("/api/admin/variant-mappings/categories")
                 assert resp.status_code in (200, 403, 500)

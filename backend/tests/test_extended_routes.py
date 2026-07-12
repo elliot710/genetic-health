@@ -339,8 +339,9 @@ class TestVariantSearch:
 # ──────────────────────────────────────────────────
 
 def _admin_sa_patch():
-    """Context manager that patches SQLAlchemy functions in admin_routes
-    and admin.users (users handlers live in the latter after the U1 split)."""
+    """Context manager that patches SQLAlchemy functions in admin_routes and
+    the admin domain sub-modules whose handlers were split out (users in U1;
+    variant_mappings + discoveries in U2)."""
     import contextlib
     @contextlib.contextmanager
     def _patch():
@@ -349,7 +350,11 @@ def _admin_sa_patch():
              patch("backend.api.admin_routes.delete"), \
              patch("backend.api.admin_routes.update"), \
              patch("backend.api.admin.users.select"), \
-             patch("backend.api.admin.users.func"):
+             patch("backend.api.admin.users.func"), \
+             patch("backend.api.admin.variant_mappings.select"), \
+             patch("backend.api.admin.variant_mappings.func"), \
+             patch("backend.api.admin.discoveries.select"), \
+             patch("backend.api.admin.discoveries.func"):
             yield
     return _patch()
 
@@ -523,7 +528,7 @@ class TestAdminDiscoveries:
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=discovery))
         app, _ = self._build(session)
         with _admin_sa_patch():
-            with patch("backend.api.admin_routes.get_notification_service"):
+            with patch("backend.api.admin.discoveries.get_notification_service"):
                 with TestClient(app) as client:
                     resp = client.post(
                         "/api/admin/discoveries/1/review",
