@@ -59,6 +59,12 @@ INSIGHT_TABLES = [
     UncommonMutation,
 ]
 
+# Insight generators run concurrently in bounded batches. Each generator owns an
+# isolated DB session and writes a disjoint category table, so within-batch
+# concurrency is safe; the cap keeps peak connections well under the pool
+# (pool_size=20 + overflow, × WORKER_MAX_CONCURRENT analyses).
+GENERATOR_CONCURRENCY = 4
+
 
 async def generate_comprehensive_insights(
     variants: List,
@@ -136,36 +142,45 @@ async def generate_comprehensive_insights(
     total_generators = len(ALL_GENERATORS)
     failed_generators: list[str] = []
 
-    for gen_idx, (gen_name, gen_func) in enumerate(ALL_GENERATORS):
+    async def _run_generator(gen_name: str, gen_func) -> int:
+        async with async_session_factory() as gen_session:
+            ctx = GeneratorContext(
+                analysis_id=analysis_id,
+                variants=interesting_variants,
+                annotation_results=annotation_results,
+                session=gen_session,
+                rsid_gene_map=rsid_gene_map,
+                registry=registry,
+                variant_profiles=variant_profiles,
+                inferred_sex=inferred_sex,
+            )
+            count = await gen_func(ctx)
+            await gen_session.commit()
+            return count
+
+    for batch_start in range(0, total_generators, GENERATOR_CONCURRENCY):
         if check_cancelled_fn:
             await check_cancelled_fn(analysis_id)
-        try:
-            progress.current_step = f"generating_{gen_name}"
-            progress.phase_progress = gen_idx / total_generators
-            if update_progress_fn:
-                await update_progress_fn(analysis_id, progress)
 
-            async with async_session_factory() as gen_session:
-                ctx = GeneratorContext(
-                    analysis_id=analysis_id,
-                    variants=interesting_variants,
-                    annotation_results=annotation_results,
-                    session=gen_session,
-                    rsid_gene_map=rsid_gene_map,
-                    registry=registry,
-                    variant_profiles=variant_profiles,
-                    inferred_sex=inferred_sex,
-                )
-                count = await gen_func(ctx)
-                await gen_session.commit()
-            insights_generated += count
-            logger.info(f"  [{gen_idx + 1}/{total_generators}] {gen_name}: {count} insights")
-        except AnalysisCancelled:
-            raise
-        except Exception as e:
-            failed_generators.append(gen_name)
-            logger.error(f"  [{gen_idx + 1}/{total_generators}] {gen_name}: FAILED — {e}")
-            continue
+        batch = ALL_GENERATORS[batch_start:batch_start + GENERATOR_CONCURRENCY]
+        progress.current_step = "generating_insights"
+        progress.phase_progress = batch_start / total_generators
+        if update_progress_fn:
+            await update_progress_fn(analysis_id, progress)
+
+        results = await asyncio.gather(
+            *(_run_generator(name, func) for name, func in batch),
+            return_exceptions=True,
+        )
+        for (gen_name, _), result in zip(batch, results):
+            if isinstance(result, AnalysisCancelled):
+                raise result
+            if isinstance(result, Exception):
+                failed_generators.append(gen_name)
+                logger.error(f"  {gen_name}: FAILED — {result}")
+            else:
+                insights_generated += result
+                logger.info(f"  {gen_name}: {result} insights")
 
     if failed_generators:
         logger.warning(f"  {len(failed_generators)} generator(s) failed: {', '.join(failed_generators)}")
