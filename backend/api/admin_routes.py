@@ -643,9 +643,49 @@ class AnnotationSourceResponse(BaseModel):
     priority: int = 0
     annotated_count: int = 0
     missing_count: int = 0
+    # True coverage: rows where the source actually returned found=true. A stored
+    # {"found": false} (confirmed absence) inflates annotated_count but must not
+    # count as coverage — found_count is the honest signal, no_data_count the rest.
+    found_count: int = 0
+    no_data_count: int = 0
+    # On-disk cache size (bytes) for file/hybrid sources; None if the source has no
+    # known cache file or the file is absent. Stat only — contents never read.
+    cache_file_bytes: Optional[int] = None
+    # Heuristic flag so a stale/unbuilt cache (e.g. the empty gnomAD CADD build)
+    # is visible on the admin surface.
+    is_stale: bool = False
 
     class Config:
         from_attributes = True
+
+
+# A file/hybrid cache below this size is treated as stale/unbuilt (e.g. the empty
+# gnomAD CADD build, ~180 KB) so it is flagged on the admin data-sources surface.
+_STALE_CACHE_BYTES = 1_000_000
+
+
+def _source_cache_file_size(source_name: str) -> Optional[int]:
+    """On-disk size (bytes) of a source's cache file, or None when the source has
+    no known cache file or the file is absent. Stats only — never reads contents."""
+    if source_name == 'gnomad':
+        try:
+            from ..services.gnomad_local import _SQLITE_FILE
+            return _SQLITE_FILE.stat().st_size
+        except (OSError, ImportError):
+            return None  # absent -> report as None, never error
+    return None
+
+
+def _is_source_stale(is_enabled: bool, found_count: int, annotated_count: int,
+                     cache_file_bytes: Optional[int]) -> bool:
+    """Flag a source whose coverage looks empty/unbuilt. Two signals: a tiny on-disk
+    cache file, or an enabled source that has stored rows but zero real coverage
+    (found=true), which is the empty-build case the honest found-rate exposes."""
+    if cache_file_bytes is not None and cache_file_bytes < _STALE_CACHE_BYTES:
+        return True
+    if is_enabled and annotated_count > 0 and found_count == 0:
+        return True
+    return False
 
 
 class AnnotationSourceUpdate(BaseModel):
@@ -658,10 +698,15 @@ async def get_annotation_sources(
     db: AsyncSession = Depends(get_session),
     admin: User = Depends(require_admin),
 ):
-    """Get all annotation source configurations with stats."""
+    """Get all annotation source configurations with health stats.
+
+    Coverage is reported honestly: found_count counts only rows the source
+    actually resolved (found=true), so a stored {"found": false} no longer
+    inflates the coverage figure. A per-source on-disk cache size and a stale
+    flag make an empty/unbuilt cache (e.g. gnomAD CADD) visible.
+    """
     sources = await _ensure_source_configs(db)
 
-    # Count annotated/missing per source
     total_result = await db.execute(select(func.count(SharedVariantAnnotation.id)))
     total_annotations = total_result.scalar() or 0
 
@@ -670,12 +715,27 @@ async def get_annotation_sources(
         col_name = SOURCE_TO_COLUMN.get(src.source_name, src.source_name)
         col = getattr(SharedVariantAnnotation, f'{col_name}_data', None)
         annotated = 0
+        found = 0
         if col is not None:
             count_result = await db.execute(
                 select(func.count(SharedVariantAnnotation.id)).where(col.isnot(None))
             )
             annotated = count_result.scalar() or 0
+            try:
+                found_result = await db.execute(
+                    select(func.count(SharedVariantAnnotation.id)).where(
+                        col['found'].as_boolean().is_(True)
+                    )
+                )
+                found = found_result.scalar() or 0
+            except Exception as e:
+                logger.warning(
+                    "found-rate query failed for source=%s; falling back to "
+                    "non-null count: %s", src.source_name, e,
+                )
+                found = annotated
 
+        cache_bytes = _source_cache_file_size(src.source_name)
         responses.append(AnnotationSourceResponse(
             id=src.id,
             source_name=src.source_name,
@@ -687,6 +747,10 @@ async def get_annotation_sources(
             priority=src.priority,
             annotated_count=annotated,
             missing_count=total_annotations - annotated,
+            found_count=found,
+            no_data_count=max(annotated - found, 0),
+            cache_file_bytes=cache_bytes,
+            is_stale=_is_source_stale(src.is_enabled, found, annotated, cache_bytes),
         ))
 
     return responses
@@ -1351,12 +1415,27 @@ async def _retrigger_sources(
         try:
             for src in remote_sources:
                 try:
+                    col = SOURCE_TO_COLUMN.get(src, src)
+                    # Guard: 'ensembl' shares ensembl_data with the authoritative
+                    # local 'ensembl_vep' writer. Never let this lower-priority
+                    # remote fetch clobber a value that's already populated —
+                    # skip instead of overwriting (see annotation_constants.py).
+                    if src == 'ensembl':
+                        existing = getattr(annotation, f'{col}_data', None)
+                        if isinstance(existing, dict) and existing.get('found'):
+                            logger.info(
+                                "Retrigger: skipping remote 'ensembl' fetch for rsid=%s — "
+                                "shared ensembl_data column is already populated "
+                                "(ensembl_vep is the authoritative writer); refusing to clobber",
+                                annotation.rsid,
+                            )
+                            continue
+
                     method = getattr(api_service, f'_get_{src}_annotation', None)
                     if not method:
                         still_failed.append(src)
                         continue
                     result_data = await method(annotation.rsid)
-                    col = SOURCE_TO_COLUMN.get(src, src)
                     if result_data and isinstance(result_data, dict) and result_data.get('found', False):
                         setattr(annotation, f'{col}_data', result_data)
                         updated.append(src)
@@ -1465,6 +1544,59 @@ async def get_jobs_summary(
         processing=counts.get('processing', 0),
         completed=counts.get('completed', 0),
         failed=counts.get('failed', 0),
+    )
+
+
+# Measurement-first threshold (U12): backend latency optimization is out of
+# scope for the analysis pipeline until real p95 completion time exceeds this.
+# Below it, the wait-UX/honest-progress work in this unit is sufficient.
+LATENCY_P95_THRESHOLD_SECONDS = 5 * 60
+
+
+def _percentile(sorted_data: List[float], pct: float) -> float:
+    """Nearest-rank percentile over already-sorted data (pct in [0, 1])."""
+    index = min(len(sorted_data) - 1, int(round(pct * (len(sorted_data) - 1))))
+    return sorted_data[index]
+
+
+class AdminJobsLatency(BaseModel):
+    sample_size: int
+    p50_seconds: Optional[float] = None
+    p95_seconds: Optional[float] = None
+    threshold_seconds: int = LATENCY_P95_THRESHOLD_SECONDS
+    exceeds_threshold: bool = False
+
+
+@router.get("/jobs/latency", response_model=AdminJobsLatency)
+async def get_jobs_latency(
+    db: AsyncSession = Depends(get_session),
+    admin: User = Depends(require_admin),
+):
+    """p50/p95 analysis completion latency, derived from completed_at - upload_date.
+
+    Measurement only — see LATENCY_P95_THRESHOLD_SECONDS above.
+    """
+    result = await db.execute(
+        select(GeneticAnalysis.upload_date, GeneticAnalysis.completed_at)
+        .where(
+            GeneticAnalysis.analysis_status == 'completed',
+            GeneticAnalysis.completed_at.isnot(None),
+            GeneticAnalysis.upload_date.isnot(None),
+        )
+    )
+    durations = sorted(
+        (completed_at - upload_date).total_seconds()
+        for upload_date, completed_at in result.all()
+    )
+    if not durations:
+        return AdminJobsLatency(sample_size=0)
+
+    p95 = _percentile(durations, 0.95)
+    return AdminJobsLatency(
+        sample_size=len(durations),
+        p50_seconds=round(_percentile(durations, 0.50), 1),
+        p95_seconds=round(p95, 1),
+        exceeds_threshold=p95 > LATENCY_P95_THRESHOLD_SECONDS,
     )
 
 

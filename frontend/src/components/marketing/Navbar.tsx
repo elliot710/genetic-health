@@ -3,7 +3,8 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { Dna, Menu, X, Sun, Moon } from 'lucide-react'
-import { apiUrl } from '@/lib/api'
+import { apiFetch } from '@/lib/api'
+import { useDarkMode } from '@/hooks/useDarkMode'
 
 const NAV_LINKS = [
   { href: '/#features', label: 'Features' },
@@ -15,22 +16,7 @@ export default function Navbar() {
   const [isOpen, setIsOpen] = useState(false)
   const [scrolled, setScrolled] = useState(false)
   const [isSignedIn, setIsSignedIn] = useState(false)
-  const [isDark, setIsDark] = useState(false)
-
-  useEffect(() => {
-    const saved = localStorage.getItem('darkMode')
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-    const dark = saved !== null ? JSON.parse(saved) : prefersDark
-    setIsDark(dark)
-    document.documentElement.classList.toggle('dark', dark)
-  }, [])
-
-  const toggleTheme = () => {
-    const next = !isDark
-    setIsDark(next)
-    document.documentElement.classList.toggle('dark', next)
-    localStorage.setItem('darkMode', JSON.stringify(next))
-  }
+  const { isDarkMode: isDark, toggleDarkMode: toggleTheme } = useDarkMode({ useSystemPreference: true })
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 20)
@@ -39,8 +25,10 @@ export default function Navbar() {
   }, [])
 
   useEffect(() => {
-    fetch(apiUrl('/auth/me'), { credentials: 'include' })
-      .then(r => setIsSignedIn(r.ok))
+    // Passive check on a public page — a signed-out visitor is expected, not a session
+    // being revoked, so suppress the global 401 handler.
+    apiFetch('/auth/me', { redirectOn401: false })
+      .then(() => setIsSignedIn(true))
       .catch(() => setIsSignedIn(false))
   }, [])
 

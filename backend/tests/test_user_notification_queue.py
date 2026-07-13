@@ -274,6 +274,70 @@ class TestUserService:
             analyses = await svc.get_user_analyses(1)
             assert analyses == []
 
+    @pytest.mark.asyncio
+    async def test_delete_account_deletes_user_via_session(self):
+        from backend.services.user_service import UserService
+        session = self._make_db_session()
+        session.delete = AsyncMock()
+        user = self._make_user()
+        svc = UserService(session)
+        await svc.delete_account(user)
+        session.delete.assert_awaited_once_with(user)
+
+    @pytest.mark.asyncio
+    async def test_export_account_data_excludes_hashed_password(self):
+        from backend.services.user_service import UserService
+        session = self._make_db_session()
+        user = self._make_user()
+        user.full_name = "Test User"
+        user.avatar_url = None
+        user.auth_provider = "local"
+        user.is_verified = True
+        user.created_at = datetime(2024, 1, 1)
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = []
+        session.execute.return_value = result
+        with patch("backend.services.user_service.select", _mock_select()):
+            svc = UserService(session)
+            data = await svc.export_account_data(user)
+        assert "hashed_password" not in data["profile"]
+
+    @pytest.mark.asyncio
+    async def test_export_account_data_scopes_profile_to_the_given_user(self):
+        from backend.services.user_service import UserService
+        session = self._make_db_session()
+        user = self._make_user(user_id=7, username="scoped_user", email="scoped@example.com")
+        user.full_name = "Scoped User"
+        user.avatar_url = None
+        user.auth_provider = "local"
+        user.is_verified = True
+        user.created_at = datetime(2024, 1, 1)
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = []
+        session.execute.return_value = result
+        with patch("backend.services.user_service.select", _mock_select()):
+            svc = UserService(session)
+            data = await svc.export_account_data(user)
+        assert data["profile"]["email"] == "scoped@example.com"
+
+    @pytest.mark.asyncio
+    async def test_export_account_data_returns_no_analyses_for_new_user(self):
+        from backend.services.user_service import UserService
+        session = self._make_db_session()
+        user = self._make_user()
+        user.full_name = "Test User"
+        user.avatar_url = None
+        user.auth_provider = "local"
+        user.is_verified = True
+        user.created_at = datetime(2024, 1, 1)
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = []
+        session.execute.return_value = result
+        with patch("backend.services.user_service.select", _mock_select()):
+            svc = UserService(session)
+            data = await svc.export_account_data(user)
+        assert data["analyses"] == []
+
 
 def _make_none_result():
     r = MagicMock()

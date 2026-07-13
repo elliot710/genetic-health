@@ -406,6 +406,56 @@ class TestAuthRoutes:
             assert resp.status_code == 401
 
 
+class TestAccountDeletionAndExportRoutes:
+    """U7: self-service DELETE /auth/account and GET /auth/account/export.
+
+    Real cascade behavior is proven at the model level in
+    test_account_deletion_cascade.py; export content/scoping is proven at
+    the UserService level in test_user_notification_queue.py (this suite
+    globally stubs backend.db.models, so real ORM `select()` against the
+    fake model classes must be patched — same convention already used for
+    UserService in that file). These route tests only cover HTTP wiring.
+    """
+
+    def _app(self, session=None, user=None):
+        from backend.api.auth_routes import router
+        return _build_app(router, current_user=user or _make_mock_user(), session=session)
+
+    def test_delete_account_success(self):
+        app, _ = self._app()
+        with TestClient(app) as client:
+            resp = client.delete("/auth/account")
+            assert resp.json()["detail"] == "Account and all associated data deleted"
+
+    def test_delete_account_requires_auth(self):
+        from backend.api.auth_routes import router
+        from backend.db.database import get_session
+        app = FastAPI()
+        app.include_router(router)
+
+        async def _override_session():
+            yield _make_mock_session()
+
+        app.dependency_overrides[get_session] = _override_session
+        with TestClient(app) as client:
+            resp = client.delete("/auth/account")
+            assert resp.status_code == 401
+
+    def test_export_account_requires_auth(self):
+        from backend.api.auth_routes import router
+        from backend.db.database import get_session
+        app = FastAPI()
+        app.include_router(router)
+
+        async def _override_session():
+            yield _make_mock_session()
+
+        app.dependency_overrides[get_session] = _override_session
+        with TestClient(app) as client:
+            resp = client.get("/auth/account/export")
+            assert resp.status_code == 401
+
+
 # ──────────────────────────────────────────────────────────────────
 # Sharing routes
 # ──────────────────────────────────────────────────────────────────

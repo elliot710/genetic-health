@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { apiUrl } from '@/lib/api'
+import { apiFetch } from '@/lib/api'
 
 // ────────────────────────────────── types ────────────────────────────────────
 
@@ -74,8 +74,8 @@ export function useNotifications(token?: string): UseNotificationsReturn {
 
   const fetchFromRest = useCallback(async () => {
     try {
-      const res = await fetch(apiUrl('/api/notifications?limit=50'), { credentials: 'include' })
-      if (res.ok && mountedRef.current) {
+      const res = await apiFetch('/api/notifications?limit=50')
+      if (mountedRef.current) {
         const data: AppNotification[] = await res.json()
         setNotifications(data)
       }
@@ -85,10 +85,7 @@ export function useNotifications(token?: string): UseNotificationsReturn {
 
   const markRead = useCallback(async (id: number) => {
     try {
-      await fetch(apiUrl(`/api/notifications/${id}/read`), {
-        method: 'POST',
-        credentials: 'include',
-      })
+      await apiFetch(`/api/notifications/${id}/read`, { method: 'POST' })
       setNotifications((prev) =>
         prev.map((n) => (n.id === id ? { ...n, read: true } : n))
       )
@@ -99,10 +96,7 @@ export function useNotifications(token?: string): UseNotificationsReturn {
 
   const markAllRead = useCallback(async () => {
     try {
-      await fetch(apiUrl('/api/notifications/read-all'), {
-        method: 'POST',
-        credentials: 'include',
-      })
+      await apiFetch('/api/notifications/read-all', { method: 'POST' })
       setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
     } catch (e) {
       console.error('[notifications] markAllRead error', e)
@@ -111,10 +105,7 @@ export function useNotifications(token?: string): UseNotificationsReturn {
 
   const deleteNotification = useCallback(async (id: number) => {
     try {
-      await fetch(apiUrl(`/api/notifications/${id}`), {
-        method: 'DELETE',
-        credentials: 'include',
-      })
+      await apiFetch(`/api/notifications/${id}`, { method: 'DELETE' })
       setNotifications((prev) => prev.filter((n) => n.id !== id))
     } catch (e) {
       console.error('[notifications] delete error', e)
@@ -216,8 +207,8 @@ export function useNotifications(token?: string): UseNotificationsReturn {
     fetchFromRest()
 
     // 2. Fetch real JWT for WS auth, then connect
-    fetch(apiUrl('/auth/ws-token'), { credentials: 'include' })
-      .then(r => r.ok ? r.json() : null)
+    apiFetch('/auth/ws-token')
+      .then(r => r.json())
       .then(data => {
         if (data?.token && mountedRef.current) {
           setWsToken(data.token)

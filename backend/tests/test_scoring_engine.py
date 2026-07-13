@@ -480,6 +480,11 @@ class TestScoreGnomad:
         assert af_ev is not None
         assert af_ev.score == 0.85
 
+    def test_cadd_only_no_af_evidence(self, engine):
+        data = {"found": True, "cadd": {"raw": 3.2, "phred": 25.0, "interpretation": "High"}}
+        results = engine._score_gnomad(data)
+        assert not any(e.source == "gnomad_af" for e in results)
+
     def test_empty_data_no_evidence(self, engine):
         data = {"found": True}
         assert engine._score_gnomad(data) == []

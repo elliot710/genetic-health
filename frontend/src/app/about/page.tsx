@@ -1,7 +1,6 @@
 import Link from 'next/link'
 import { Dna, Heart, Shield, Zap, Users } from 'lucide-react'
-import Navbar from '@/components/marketing/Navbar'
-import Footer from '@/components/marketing/Footer'
+import MarketingLayout from '@/components/marketing/MarketingLayout'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
@@ -28,9 +27,7 @@ const VALUES = [
 
 export default function AboutPage() {
   return (
-    <div className="min-h-screen bg-white dark:bg-slate-950 text-slate-900 dark:text-white">
-      <Navbar />
-
+    <MarketingLayout>
       {/* Hero */}
       <section className="relative pt-32 pb-20 overflow-hidden">
         <div className="absolute inset-0 bg-linear-to-br from-teal-50/60 dark:from-teal-950/30 to-white dark:to-slate-950 pointer-events-none" />
@@ -111,8 +108,6 @@ export default function AboutPage() {
           </Link>
         </div>
       </section>
-
-      <Footer />
-    </div>
+    </MarketingLayout>
   )
 }

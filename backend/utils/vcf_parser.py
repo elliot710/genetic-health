@@ -5,6 +5,8 @@ import re
 import logging
 from typing import List, Dict, Any, Optional
 
+from ..core.exceptions import FileParsingException
+
 logger = logging.getLogger(__name__)
 
 RSID_PATTERN = re.compile(r'^rs\d+$')
@@ -62,9 +64,8 @@ class VCFParser:
                 variants = await self._parse_csv_format(content_text)
                 
         except Exception as e:
-            print(f"Error parsing genetic data: {e}")
-            # Return mock data for demo
-            variants = self._generate_mock_variants()
+            logger.error(f"Failed to parse uploaded genetic data file: {e}")
+            raise FileParsingException(f"Unable to parse uploaded file: {e}") from e
         
         return variants
 
@@ -430,34 +431,7 @@ class VCFParser:
                 info_dict[item] = True
         
         return info_dict
-    
-    def _generate_mock_variants(self) -> List[Dict[str, Any]]:
-        """Generate mock variants for demonstration"""
-        import random
-        
-        mock_variants = []
-        chromosomes = [str(i) for i in range(1, 23)] + ['X', 'Y']
-        
-        for i in range(50):
-            variant = {
-                "line_number": i + 1,
-                "chromosome": random.choice(chromosomes),
-                "position": random.randint(10000, 250000000),
-                "id": f"rs{random.randint(1000000, 99999999)}",
-                "ref_allele": random.choice(['A', 'T', 'G', 'C']),
-                "alt_allele": random.choice(['A', 'T', 'G', 'C']),
-                "quality": round(random.uniform(20, 999), 2),
-                "filter": random.choice(['PASS', 'LowQual', '.']),
-                "info": {
-                    "AF": round(random.uniform(0.001, 0.5), 4),
-                    "AC": random.randint(1, 10),
-                    "AN": random.randint(10, 1000)
-                }
-            }
-            mock_variants.append(variant)
-        
-        return mock_variants
-    
+
     async def get_variant_statistics(self, variants: List[Dict]) -> Dict[str, Any]:
         """Get statistics about parsed variants"""
         if not variants:

@@ -435,6 +435,63 @@ class TestUploadRoutesExtra:
                 resp = client.delete("/upload/analysis/999")
                 assert resp.status_code in (200, 404, 500, 422)
 
+    def test_upload_vcf_happy_path_creates_analysis(self):
+        session = _make_mock_session()
+        app, _ = self._app(session)
+        stub_analysis = MagicMock(id=42)
+        vcf_bytes = (
+            b"##fileformat=VCFv4.1\n"
+            b"#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n"
+            b"1\t100000\trs12345\tA\tT\t.\tPASS\t.\tGT\t0/1\n"
+        )
+        with patch("backend.api.upload_routes.GeneticAnalysis", return_value=stub_analysis):
+            with TestClient(app) as client:
+                resp = client.post(
+                    "/upload/vcf",
+                    files={"file": ("test.vcf", vcf_bytes, "text/plain")},
+                )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["analysis_id"] == 42
+        assert body["total_variants"] == 1
+        session.add.assert_called_once_with(stub_analysis)
+
+    def test_upload_vcf_oversized_file_rejected_before_analysis_created(self):
+        session = _make_mock_session()
+        app, _ = self._app(session)
+        oversized_content = b"x" * 1000
+        with patch("backend.api.upload_routes.MAX_UPLOAD_BYTES", 10):
+            with TestClient(app) as client:
+                resp = client.post(
+                    "/upload/vcf",
+                    files={"file": ("test.vcf", oversized_content, "text/plain")},
+                )
+        assert resp.status_code == 413
+        session.add.assert_not_called()
+
+    def test_upload_vcf_unparseable_file_rejected_no_analysis_created(self):
+        session = _make_mock_session()
+        app, _ = self._app(session)
+        invalid_utf8_content = b"\xff\xfe\x00\x01not valid utf-8"
+        with TestClient(app) as client:
+            resp = client.post(
+                "/upload/vcf",
+                files={"file": ("test.vcf", invalid_utf8_content, "application/octet-stream")},
+            )
+        assert resp.status_code == 400
+        session.add.assert_not_called()
+
+    def test_upload_vcf_empty_file_rejected(self):
+        session = _make_mock_session()
+        app, _ = self._app(session)
+        with TestClient(app) as client:
+            resp = client.post(
+                "/upload/vcf",
+                files={"file": ("test.vcf", b"", "text/plain")},
+            )
+        assert resp.status_code == 400
+        session.add.assert_not_called()
+
 
 # ──────────────────────────────────────────────────────────────────
 # Annotation routes - larger tests

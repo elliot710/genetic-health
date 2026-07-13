@@ -907,10 +907,13 @@ async def bulk_enrich_bigquery(
             await _flush_pending()
 
         except Exception as inner_e:
+            # Best-effort: try to save whatever enrichment was pending before
+            # propagating the original error below — a failure of this last-
+            # chance flush must not mask inner_e, so it's only logged here.
             try:
                 await _flush_pending()
-            except Exception:
-                pass
+            except Exception as flush_error:
+                logger.warning(f"BigQuery enrichment retry-flush failed: {flush_error}")
             raise inner_e
 
         logger.info(f"BigQuery enrichment complete: {enriched_genes}/{len(genes_to_process)} genes "

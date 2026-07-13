@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { apiUrl } from '@/lib/api'
+import { apiFetch, ApiError } from '@/lib/api'
 import type { DashboardData } from '@/components/categories/types'
 
 interface UseDashboardDataOptions {
@@ -56,27 +56,23 @@ export function useDashboardData({
   // Fetch dashboard data from server
   const fetchDashboardData = useCallback(async () => {
     try {
-      const response = await fetch(apiUrl('/api/analysis/dashboard-data'), {
-        credentials: 'include',
-      })
-
-      if (response.ok) {
-        const result = await response.json()
-        setData(result)
-        setError(null)
-        setLastFetchedAt(Date.now())
-        setIsCached(false)
-        return result
-      } else {
-        const msg = `Failed to load dashboard data (HTTP ${response.status}). Please try again.`
-        console.error('Failed to load dashboard data:', response.status)
-        setError(msg)
-        return null
-      }
+      const response = await apiFetch('/api/analysis/dashboard-data')
+      const result = await response.json()
+      setData(result)
+      setError(null)
+      setLastFetchedAt(Date.now())
+      setIsCached(false)
+      return result
     } catch (err) {
-      const msg = 'Could not reach the server. Check your connection and try again.'
-      console.error('Error loading dashboard data:', err)
-      setError(msg)
+      if (err instanceof ApiError) {
+        const msg = `Failed to load dashboard data (HTTP ${err.status}). Please try again.`
+        console.error('Failed to load dashboard data:', err.status)
+        setError(msg)
+      } else {
+        const msg = 'Could not reach the server. Check your connection and try again.'
+        console.error('Error loading dashboard data:', err)
+        setError(msg)
+      }
       return null
     }
   }, [])
@@ -84,18 +80,14 @@ export function useDashboardData({
   // Fetch variant categories
   const fetchVariantCategories = useCallback(async () => {
     try {
-      const response = await fetch(apiUrl('/api/variants/categories'), {
-        credentials: 'include',
-      })
-      if (response.ok) {
-        const d = await response.json()
-        if (d?.categories) {
-          setVariantCategories(d.categories)
-          setVariantCategoryStats({
-            total: d.total_variants || 0,
-            annotated: d.annotated_variants || 0,
-          })
-        }
+      const response = await apiFetch('/api/variants/categories')
+      const d = await response.json()
+      if (d?.categories) {
+        setVariantCategories(d.categories)
+        setVariantCategoryStats({
+          total: d.total_variants || 0,
+          annotated: d.annotated_variants || 0,
+        })
       }
     } catch {
       // silently handle

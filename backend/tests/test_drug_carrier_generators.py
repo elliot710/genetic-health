@@ -30,8 +30,14 @@ class TestAssessDrugResponse:
     def test_heterozygous_pharmacogene_returns_intermediate(self):
         assert self._fn()("AC", "CYP2D6", ref_allele=None) == "intermediate"
 
-    def test_homozygous_nonref_pharmacogene_returns_poor(self):
-        assert self._fn()("CC", "CYP2D6", ref_allele=None) == "poor"
+    def test_confirmed_homozygous_altref_pharmacogene_returns_poor(self):
+        # Confirmed hom-alt (ref known, genotype != ref) → poor.
+        assert self._fn()("CC", "CYP2D6", ref_allele="A") == "poor"
+
+    def test_homozygous_pharmacogene_unknown_ref_returns_normal(self):
+        # U3/KTD3: unknown ref cannot distinguish hom-alt from hom-ref, so
+        # do not fabricate a poor-metabolizer call from missing data.
+        assert self._fn()("CC", "CYP2D6", ref_allele=None) == "normal"
 
     def test_unknown_gene_returns_normal(self):
         assert self._fn()("AC", "UNKNOWN_GENE") == "normal"

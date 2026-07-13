@@ -8,13 +8,15 @@ import {
   Loader2,
 } from 'lucide-react'
 import { getTheme } from '../utils/theme'
-import { apiUrl } from '@/lib/api'
+import { apiFetch, ApiError } from '@/lib/api'
 import type { DashboardData } from './categories/types'
 
 // Hooks
 import { useDashboardData } from '@/hooks/useDashboardData'
 import { useAnalysisControls } from '@/hooks/useAnalysisControls'
 import { useNotifications } from '@/hooks/useNotifications'
+import { useDarkMode } from '@/hooks/useDarkMode'
+import { useFeedback } from '@/hooks/useFeedback'
 
 // Dashboard sub-components
 import DashboardHeader from './dashboard/DashboardHeader'
@@ -48,6 +50,7 @@ const VariantSearch = React.lazy(() => import('./VariantSearch'))
 import { ErrorState, useThemeClasses } from './categories/shared'
 import { RiskDistributionChart, FunctionalCategoriesChart, OverviewSummaryPie } from './categories/GenomicCharts'
 import AnalysisProgressLoader from './AnalysisProgressLoader'
+import { Disclaimer } from './Disclaimer'
 
 interface DashboardProps {
   token?: string
@@ -113,18 +116,8 @@ export default function Dashboard({
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [currentUserName, setCurrentUserName] = useState(userName || 'User')
   const [currentAvatarUrl, setCurrentAvatarUrl] = useState<string | null | undefined>(userAvatarUrl)
-  const [notification, setNotification] = useState<{
-    show: boolean
-    message: string
-    type: 'success' | 'error' | 'info'
-  }>({ show: false, message: '', type: 'info' })
-  const [isDarkMode, setIsDarkMode] = useState(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('darkMode')
-      return saved ? JSON.parse(saved) : false
-    }
-    return false
-  })
+  const { feedback: notification, showFeedback, clearFeedback } = useFeedback()
+  const { isDarkMode, setIsDarkMode } = useDarkMode({ readSynchronously: true })
   const [viewingSharedUser, setViewingSharedUser] = useState<SharedUserInfo | null>(null)
 
   const theme = getTheme(isDarkMode)
@@ -133,10 +126,9 @@ export default function Dashboard({
   // ── Notification helper ───────────────────────────────────
   const showNotification = useCallback(
     (message: string, type: 'success' | 'error' | 'info' = 'info') => {
-      setNotification({ show: true, message, type })
-      setTimeout(() => setNotification((prev) => ({ ...prev, show: false })), 3000)
+      showFeedback({ message, type }, 3000)
     },
-    [],
+    [showFeedback],
   )
 
   // ── Data hook ─────────────────────────────────────────────
@@ -177,14 +169,6 @@ export default function Dashboard({
     deleteNotification: deleteNotif,
   } = useNotifications(token)
 
-  // ── Theme persistence ─────────────────────────────────────
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('darkMode', JSON.stringify(isDarkMode))
-      document.documentElement.classList.toggle('dark', isDarkMode)
-    }
-  }, [isDarkMode])
-
   // ── URL hash sync ─────────────────────────────────────────
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -211,12 +195,10 @@ export default function Dashboard({
   const refreshUserInfo = useCallback(async () => {
     if (!token) return
     try {
-      const res = await fetch(apiUrl('/auth/me'), { credentials: 'include' })
-      if (res.ok) {
-        const u = await res.json()
-        setCurrentUserName(u.full_name || u.username || 'User')
-        setCurrentAvatarUrl(u.avatar_url)
-      }
+      const res = await apiFetch('/auth/me')
+      const u = await res.json()
+      setCurrentUserName(u.full_name || u.username || 'User')
+      setCurrentAvatarUrl(u.avatar_url)
     } catch {
       /* ignore */
     }
@@ -225,9 +207,9 @@ export default function Dashboard({
   // ── Load shared user dashboard when viewingSharedUser changes ──
   useEffect(() => {
     if (viewingSharedUser) {
-      fetch(apiUrl(`/api/sharing/dashboard/${viewingSharedUser.id}`), { credentials: 'include' })
-        .then(r => r.ok ? r.json() : null)
-        .then(d => { if (d) setData(d) })
+      apiFetch(`/api/sharing/dashboard/${viewingSharedUser.id}`)
+        .then(r => r.json())
+        .then(d => setData(d))
         .catch(() => {/* ignore */})
     } else if (viewingSharedUser === null && analysisData) {
       // Switched back to own data — restore
@@ -276,21 +258,14 @@ export default function Dashboard({
   const handleDeleteData = async () => {
     setIsDeleting(true)
     try {
-      const response = await fetch(apiUrl('/upload/data'), {
-        method: 'DELETE',
-        credentials: 'include',
-      })
-      if (response.ok) {
-        setShowDeleteDialog(false)
-        // Navigate away immediately — no intermediate empty-dashboard flash
-        if (onNavigateToUpload) {
-          onNavigateToUpload()
-        }
-      } else {
-        showNotification('Failed to delete data', 'error')
+      await apiFetch('/upload/data', { method: 'DELETE' })
+      setShowDeleteDialog(false)
+      // Navigate away immediately — no intermediate empty-dashboard flash
+      if (onNavigateToUpload) {
+        onNavigateToUpload()
       }
-    } catch {
-      showNotification('Error deleting data', 'error')
+    } catch (err) {
+      showNotification(err instanceof ApiError ? 'Failed to delete data' : 'Error deleting data', 'error')
     } finally {
       setIsDeleting(false)
     }
@@ -446,6 +421,8 @@ export default function Dashboard({
 
         <main className={`flex-1 overflow-auto ${theme.background}`}>
           <div className="p-4 md:p-8 max-w-none">
+            <Disclaimer className="mb-6" />
+
             {/* Shared-view banner */}
             {viewingSharedUser && (
               <div className="mb-6 flex items-center justify-between gap-4 rounded-xl border border-green-500/30 bg-green-500/10 px-4 py-3">
@@ -523,10 +500,10 @@ export default function Dashboard({
 
       <NotificationToast
         theme={theme}
-        show={notification.show}
-        message={notification.message}
-        type={notification.type}
-        onDismiss={() => setNotification((prev) => ({ ...prev, show: false }))}
+        show={notification !== null}
+        message={notification?.message ?? ''}
+        type={notification?.type ?? 'info'}
+        onDismiss={clearFeedback}
       />
     </div>
   )

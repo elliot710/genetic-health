@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Search, Loader2, AlertCircle, CheckCircle, Info, ExternalLink, AlertTriangle, ChevronLeft, ChevronRight, Database, Globe, X, BarChart3, RefreshCw, Clock, Bookmark, Shield, Activity, FlaskConical } from 'lucide-react'
 import type { getTheme } from '@/utils/theme'
-import { apiUrl } from '@/lib/api'
+import { apiFetch } from '@/lib/api'
 
 type Theme = ReturnType<typeof getTheme>
 
@@ -275,8 +275,7 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
   const fetchSavedRsids = useCallback(async () => {
     if (!token) return
     try {
-      const res = await fetch(apiUrl('/auth/saved-variants'), { credentials: 'include' })
-      if (!res.ok) return
+      const res = await apiFetch('/auth/saved-variants')
       const data = await res.json()
       setSavedRsids(new Set(data.map((v: { rsid: string }) => v.rsid)))
     } catch { /* ignore */ }
@@ -289,12 +288,11 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
     const wasSaved = savedRsids.has(rsid)
     try {
       if (wasSaved) {
-        await fetch(apiUrl(`/auth/saved-variants/${rsid}`), { method: 'DELETE', credentials: 'include' })
+        await apiFetch(`/auth/saved-variants/${rsid}`, { method: 'DELETE' })
         setSavedRsids(prev => { const next = new Set(prev); next.delete(rsid); return next })
       } else {
-        await fetch(apiUrl('/auth/saved-variants'), {
+        await apiFetch('/auth/saved-variants', {
           method: 'POST',
-          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ rsid, gene: gene || null, most_severe_consequence: consequence || null, clinical_significance: clinSig || null }),
         })
@@ -305,10 +303,8 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
 
   useEffect(() => {
     if (!token) return
-    fetch(apiUrl('/api/variants/categories'), {
-      credentials: 'include',
-    })
-      .then(r => r.ok ? r.json() : null)
+    apiFetch('/api/variants/categories')
+      .then(r => r.json())
       .then(d => { if (d?.categories) setCategories(d.categories) })
       .catch(() => {})
   }, [token])
@@ -328,10 +324,7 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
       params.set('page', String(page))
       params.set('per_page', String(perPage))
 
-      const res = await fetch(apiUrl(`/api/variants/search?${params}`), {
-        credentials: 'include',
-      })
-      if (!res.ok) throw new Error('Failed to search variants')
+      const res = await apiFetch(`/api/variants/search?${params}`)
       const data: SearchResponse = await res.json()
       setSearchData(data)
     } catch (err) {
@@ -376,18 +369,13 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
       setActiveTab('lookup')
     }
     try {
-      const res = await fetch(apiUrl('/api/variants/lookup'), {
+      const res = await apiFetch('/api/variants/lookup', {
         method: 'POST',
-        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ variant_id: term, include_literature: true, include_clinpgx: true, force_refresh: forceRefresh })
       })
-      if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.detail || 'Lookup failed')
-      }
       setLookupResults(await res.json())
     } catch (err) {
       setLookupError(err instanceof Error ? err.message : 'Lookup failed')
@@ -1313,7 +1301,13 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
               })()}
 
               {/* ── gnomAD Local Frequencies ── */}
-              {lookupResults.annotations?.gnomad_local?.found && (() => {
+              {/* gated on actual frequency fields, not just `found` — CADD-only
+                  hits carry conservation/pathogenicity data with no af/ac/an/hom */}
+              {lookupResults.annotations?.gnomad_local?.found &&
+               (lookupResults.annotations.gnomad_local.af != null ||
+                lookupResults.annotations.gnomad_local.ac != null ||
+                lookupResults.annotations.gnomad_local.an != null ||
+                lookupResults.annotations.gnomad_local.hom != null) && (() => {
                 const gn = lookupResults.annotations.gnomad_local
                 const af = gn.af
                 const ac = gn.ac

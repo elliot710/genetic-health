@@ -16,7 +16,11 @@ from .api.insights_routes import router as insights_router
 from .api.notification_routes import router as notification_ws_router, notification_router
 from .api.sharing_routes import router as sharing_router
 from .core.telemetry import configure_telemetry
+from .core.rate_limit import limiter
 from .db.database import init_db, async_session_factory
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +256,12 @@ try:
     FastAPIInstrumentor.instrument_app(app)
 except Exception:
     pass  # OTel instrumentation is optional
+
+# Per-IP rate limiting — disabled by default (see core/rate_limit.py); registered
+# before CORS so CORS remains the outermost middleware, added last, unaffected.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 # Configure CORS — base origins always allowed; extend via EXTRA_CORS_ORIGINS env var
 # e.g. EXTRA_CORS_ORIGINS=https://epigenic.xyz,https://www.epigenic.xyz

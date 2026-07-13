@@ -24,7 +24,12 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Relationship to genetic analyses
-    genetic_analyses = relationship("GeneticAnalysis", back_populates="user")
+    # passive_deletes: rely on the DB's ON DELETE CASCADE chain (users -> genetic_analyses
+    # -> variants/annotations/insight tables, all FKs ondelete=CASCADE) instead of loading
+    # the whole per-genome object graph (600k+ variant rows) into the event loop on account
+    # deletion. Emits a single DELETE FROM users; Postgres cascades the rest.
+    genetic_analyses = relationship("GeneticAnalysis", back_populates="user",
+                                    cascade="all, delete-orphan", passive_deletes=True)
     saved_variants = relationship("SavedVariant", back_populates="user", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     # Notification preferences — JSON map of type → bool, e.g. {"analysis_completed": true}
@@ -100,7 +105,7 @@ class GeneticAnalysis(Base):
     __tablename__ = "genetic_analyses"
     
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     filename = Column(String, nullable=False)
     file_type = Column(String, nullable=False)  # 'vcf' or 'csv'
     analysis_results = Column(JSON)  # Store the complete analysis results
@@ -113,6 +118,7 @@ class GeneticAnalysis(Base):
     processed_variants = Column(Integer, default=0)
     current_step = Column(String, default='initializing')  # Current processing step
     estimated_completion = Column(DateTime(timezone=True))  # Estimated completion time
+    completed_at = Column(DateTime(timezone=True), nullable=True)  # Set only on successful completion
     
     # Soft delete
     deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
@@ -139,7 +145,7 @@ class GeneticMarker(Base):
     chromosome = Column(String, nullable=False)
     position = Column(Integer, nullable=False)
     ref_allele = Column(String, nullable=False)
-    alt_alleles = Column(String)  # Comma-separated list of all observed alt alleles
+    alt_alleles = Column(String, nullable=False, default='')  # Comma-separated list of all observed alt alleles
     gene_symbol = Column(String(50))  # Cached gene symbol (PERF-04) — filled after first analysis
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -163,10 +169,10 @@ class AnalysisVariant(Base):
     marker_id = Column(Integer, ForeignKey("genetic_markers.id"), nullable=False)
     
     # User-specific data (genotype varies per person)
-    genotype = Column(String)
+    genotype = Column(String, nullable=False, default='./.')
     quality = Column(String)
     filter_status = Column(String)
-    info = Column(JSON)
+    info = Column(JSON, nullable=False, default=dict)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # Relationships

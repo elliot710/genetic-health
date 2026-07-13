@@ -1,13 +1,14 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Eye, EyeOff, Mail, Lock, User, Dna, Sparkles, Shield, Sun, Moon, CheckCircle, ArrowLeft } from 'lucide-react'
 import { getTheme } from '../utils/theme'
+import { useDarkMode } from '@/hooks/useDarkMode'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
-import { apiUrl } from '@/lib/api'
+import { apiFetch } from '@/lib/api'
 
 interface AuthFormProps {
   onLogin: () => void
@@ -39,20 +40,11 @@ export default function AuthForm({ onLogin, isDarkMode: initialDarkMode = false,
   const [successMsg, setSuccessMsg] = useState('')
   const [showSuccessDialog, setShowSuccessDialog] = useState(false)
   
-  const [isDarkMode, setIsDarkMode] = useState(initialDarkMode)
-
-  useEffect(() => {
-    if (isHydrated && typeof window !== 'undefined') {
-      const saved = localStorage.getItem('darkMode')
-      if (saved) setIsDarkMode(JSON.parse(saved))
-    }
-  }, [isHydrated])
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('darkMode', JSON.stringify(isDarkMode))
-    }
-  }, [isDarkMode])
+  const { isDarkMode, setIsDarkMode } = useDarkMode({
+    initialValue: initialDarkMode,
+    enabled: isHydrated,
+    syncDocumentClass: false,
+  })
 
   const theme = getTheme(isDarkMode)
 
@@ -64,16 +56,12 @@ export default function AuthForm({ onLogin, isDarkMode: initialDarkMode = false,
 
     try {
       if (authView === 'forgot') {
-        const response = await fetch(apiUrl('/auth/forgot-password'), {
+        await apiFetch('/auth/forgot-password', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email: formData.forgotEmail }),
         })
-        if (response.ok) {
-          setSuccessMsg('If that email is registered, a reset link has been sent. Check your inbox.')
-        } else {
-          throw new Error('Failed to send reset email')
-        }
+        setSuccessMsg('If that email is registered, a reset link has been sent. Check your inbox.')
         return
       }
 
@@ -86,13 +74,11 @@ export default function AuthForm({ onLogin, isDarkMode: initialDarkMode = false,
           setError('Password must be at least 6 characters')
           return
         }
-        const response = await fetch(apiUrl('/auth/reset-password'), {
+        await apiFetch('/auth/reset-password', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token: resetToken, new_password: formData.newPassword }),
         })
-        const data = await response.json()
-        if (!response.ok) throw new Error(data.detail || 'Reset failed')
         setSuccessMsg('Password reset! You can now sign in.')
         setTimeout(() => setAuthView('login'), 2000)
         return
@@ -108,15 +94,11 @@ export default function AuthForm({ onLogin, isDarkMode: initialDarkMode = false,
             full_name: formData.fullName,
           }
 
-      const response = await fetch(apiUrl(endpoint), {
+      await apiFetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify(body),
       })
-
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.detail || 'Authentication failed')
 
       if (isLogin) {
         onLogin()

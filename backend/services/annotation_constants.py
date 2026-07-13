@@ -27,7 +27,21 @@ SOURCE_TO_COLUMN: Dict[str, str] = {
     'clinvar_local': 'clinvar_local',
     'gnomad': 'gnomad',
     'thousand_genomes': 'thousand_genomes',
-    'ensembl_vep': 'ensembl',  # ensembl_vep local uses the same ensembl_data column
+    # INTENTIONAL shared column contract for ensembl_data:
+    #   - 'ensembl' (remote REST fallback, hybrid local/remote via
+    #     OptimizedGeneticAPIService) and 'ensembl_vep' (local VCF) both
+    #     produce VEP consequence annotations and write ensembl_data.
+    #     Same logical annotation — do NOT split into separate columns.
+    #   - Authoritative writer: 'ensembl_vep' (local). During analysis the
+    #     pipeline is single-writer — annotation_coordinator writes
+    #     ensembl_data only from the local ensembl_vep source.
+    #   - The only place both sources can be in play together is the admin
+    #     retrigger/backfill path (_retrigger_sources in admin_routes.py).
+    #     That path MUST NOT let a retrigger of 'ensembl' blindly overwrite
+    #     an already-populated (found=True) ensembl_data value — it skips
+    #     the clobbering write instead (see the guard + log there). Do not
+    #     remove that guard when touching this path.
+    'ensembl_vep': 'ensembl',
     'gnomad_tx': 'gnomad_tx',
     'chembl': 'chembl',
     'fda_drug': 'fda_drug',

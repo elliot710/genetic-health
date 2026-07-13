@@ -693,7 +693,9 @@ class TestGetVariantDetails:
                 data = resp.json()
                 assert "transcripts" in data or resp.status_code == 200
 
-    def test_variant_details_no_annotation_found(self):
+    def test_variant_details_fetch_failure_surfaces_as_error(self):
+        # A fetch/save failure must not be reported as "not found" — it is a
+        # real backend error and should surface as one (see annotation_loader.py).
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=None))
         app, _ = self._build_with_session(session)
@@ -706,7 +708,7 @@ class TestGetVariantDetails:
             MockSvc.return_value = instance
             with TestClient(app) as client:
                 resp = client.get("/api/annotations/variant-details/rs99999")
-                assert resp.status_code in (200, 404)
+                assert resp.status_code == 500
 
     def test_variant_details_with_bq_enrichment(self):
         session = _make_mock_session()

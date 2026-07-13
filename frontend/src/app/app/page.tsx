@@ -6,7 +6,8 @@ import Dashboard from '@/components/Dashboard'
 import FileUpload from '@/components/FileUpload'
 import AuthForm from '@/components/AuthForm'
 import { getTheme } from '@/utils/theme'
-import { apiUrl } from '@/lib/api'
+import { apiFetch, ApiError, UNAUTHORIZED_EVENT } from '@/lib/api'
+import { useDarkMode } from '@/hooks/useDarkMode'
 import type { DashboardData } from '@/components/categories/types'
 
 interface User {
@@ -30,16 +31,12 @@ export default function Home() {
   const [authMode, setAuthMode] = useState<'login' | 'reset' | undefined>(undefined)
   
   // Initialize theme from localStorage or default to false
-  const [isDarkMode, setIsDarkMode] = useState(false)
+  const { isDarkMode, setIsDarkMode } = useDarkMode()
 
-  // Handle hydration and theme initialization
+  // Handle hydration and password-reset link detection
   useEffect(() => {
     setIsHydrated(true)
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('darkMode')
-      if (saved) {
-        setIsDarkMode(JSON.parse(saved))
-      }
       // Check for password reset token in URL
       const params = new URLSearchParams(window.location.search)
       if (params.get('mode') === 'reset' && params.get('token')) {
@@ -51,83 +48,62 @@ export default function Home() {
     }
   }, [])
 
-  // Save theme preference to localStorage whenever it changes
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('darkMode', JSON.stringify(isDarkMode))
-      // Sync .dark class on <html> for shadcn CSS variables
-      document.documentElement.classList.toggle('dark', isDarkMode)
-    }
-  }, [isDarkMode])
-
   // Get theme object
   const theme = getTheme(isDarkMode)
 
   const loadExistingData = useCallback(async () => {
     console.log('Loading existing data...')
     try {
-      const dashboardResponse = await fetch(apiUrl('/api/analysis/dashboard-data'), {
-        credentials: 'include',
-      })
-      
-      console.log('Dashboard response status:', dashboardResponse.status)
-      
-      if (dashboardResponse.ok) {
-        const dashboardData = await dashboardResponse.json()
-        console.log('Dashboard data received:', dashboardData)
-        
-        const status = dashboardData.summary?.status
-        if (status === 'processing' || status === 'pending') {
-          // Analysis is running — show dashboard (empty panels) so user can navigate
-          console.log('Analysis is', status, '— showing dashboard')
-          if (dashboardData.summary.analysis_id) {
-            setAnalysisId(dashboardData.summary.analysis_id)
-          }
-          setAnalysisData(dashboardData)
-        } else if (dashboardData.summary && dashboardData.summary.total_variants > 0) {
-          console.log('Found user data with', dashboardData.summary.total_variants, 'variants')
-          
-          if (dashboardData.summary.analysis_id) {
-            setAnalysisId(dashboardData.summary.analysis_id)
-            console.log('Set analysis ID:', dashboardData.summary.analysis_id)
-          }
-          
-          setAnalysisData(dashboardData)
-          console.log('Analysis data set successfully')
-        } else {
-          console.log('No variants found for user - may need to upload data')
-          setAnalysisData(null)
+      const dashboardResponse = await apiFetch('/api/analysis/dashboard-data')
+      const dashboardData = await dashboardResponse.json()
+      console.log('Dashboard data received:', dashboardData)
+
+      const status = dashboardData.summary?.status
+      if (status === 'processing' || status === 'pending') {
+        // Analysis is running — show dashboard (empty panels) so user can navigate
+        console.log('Analysis is', status, '— showing dashboard')
+        if (dashboardData.summary.analysis_id) {
+          setAnalysisId(dashboardData.summary.analysis_id)
         }
+        setAnalysisData(dashboardData)
+      } else if (dashboardData.summary && dashboardData.summary.total_variants > 0) {
+        console.log('Found user data with', dashboardData.summary.total_variants, 'variants')
+
+        if (dashboardData.summary.analysis_id) {
+          setAnalysisId(dashboardData.summary.analysis_id)
+          console.log('Set analysis ID:', dashboardData.summary.analysis_id)
+        }
+
+        setAnalysisData(dashboardData)
+        console.log('Analysis data set successfully')
       } else {
-        console.error('Failed to load dashboard data:', dashboardResponse.status)
-        if (dashboardResponse.status === 401) {
-          setToken(null)
-          setUser(null)
-        }
+        console.log('No variants found for user - may need to upload data')
+        setAnalysisData(null)
       }
     } catch (error) {
+      // A 401 here is handled globally by the UNAUTHORIZED_EVENT listener below.
       console.error('Error loading existing data:', error)
     }
   }, [])
 
   const checkSession = useCallback(async (retries = 2) => {
     try {
-      const response = await fetch(apiUrl('/auth/me'), {
-        credentials: 'include',
-      })
-      
-      if (response.ok) {
-        const userData = await response.json()
-        setToken('authenticated')
-        setUser(userData)
-        setLoading(false)
-        // Load dashboard data in the background — don't block the spinner on it
-        loadExistingData()
-      } else {
+      // Suppress the global handler: an unauthenticated first load is expected
+      // here, not a session being revoked, and this branch already clears state.
+      const response = await apiFetch('/auth/me', { redirectOn401: false })
+      const userData = await response.json()
+      setToken('authenticated')
+      setUser(userData)
+      setLoading(false)
+      // Load dashboard data in the background — don't block the spinner on it
+      loadExistingData()
+    } catch (error) {
+      if (error instanceof ApiError) {
+        // Not logged in (or session rejected) — no point retrying.
         setToken(null)
         setLoading(false)
+        return
       }
-    } catch (error) {
       if (retries > 0) {
         await new Promise(r => setTimeout(r, 2000))
         return checkSession(retries - 1)
@@ -142,6 +118,18 @@ export default function Home() {
     // On mount, check if we have a valid session cookie
     checkSession()
   }, [checkSession])
+
+  useEffect(() => {
+    // Single centralized 401 handler: any apiFetch call (except auth endpoints)
+    // that gets a 401 dispatches this event, so the session is cleared here
+    // regardless of which component/hook made the call.
+    function handleUnauthorized() {
+      setToken(null)
+      setUser(null)
+    }
+    window.addEventListener(UNAUTHORIZED_EVENT, handleUnauthorized)
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, handleUnauthorized)
+  }, [])
 
   const handleLogin = () => {
     setLoading(true)
@@ -162,7 +150,7 @@ export default function Home() {
 
   const handleLogout = async () => {
     try {
-      await fetch(apiUrl('/auth/logout'), { method: 'POST', credentials: 'include' })
+      await apiFetch('/auth/logout', { method: 'POST', redirectOn401: false })
     } catch { /* ignore */ }
     setToken(null)
     setUser(null)

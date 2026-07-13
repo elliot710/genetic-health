@@ -295,8 +295,10 @@ async def regenerate_insights(analysis_id: int, user_id: Optional[int] = None) -
                     )
                 )
                 await inv_session.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            # Best-effort: insights above are already committed, so a stale
+            # dashboard cache is a display-lag issue, not lost data.
+            logger.warning(f"Dashboard cache invalidation failed for analysis {analysis_id}: {e}")
 
         elapsed = time.time() - start_time
         logger.info(f"═══ Insight regeneration complete: {insights_generated} insights in {elapsed:.1f}s ═══")

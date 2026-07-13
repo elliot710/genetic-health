@@ -2,7 +2,7 @@
 Variant lookup and annotation API routes
 Provides comprehensive variant information from multiple databases
 """
-from fastapi import APIRouter, HTTPException, Depends, status, Query
+from fastapi import APIRouter, HTTPException, Depends, status, Query, Request
 from pydantic import BaseModel, Field
 from typing import Dict, Any, List, Optional
 from datetime import datetime
@@ -28,6 +28,8 @@ from ..db.models import (
     VariantMapping,
 )
 from .auth_routes import get_current_user
+from ..core.config import settings
+from ..core.rate_limit import limiter
 
 router = APIRouter(prefix="/api/variants", tags=["variants"])
 
@@ -67,8 +69,10 @@ def validate_variant_id(variant_id: str) -> bool:
     return any(re.match(pattern, variant_id.upper()) for pattern in patterns)
 
 @router.post("/lookup", response_model=VariantLookupResponse)
+@limiter.limit(lambda: f"{settings.rate_limit.lookup_per_minute}/minute")
 async def lookup_variant(
-    request: VariantLookupRequest,
+    request: Request,
+    payload: VariantLookupRequest,
     session: AsyncSession = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
@@ -89,7 +93,7 @@ async def lookup_variant(
     - Gene variants: APOE4, MTHFR677T
     """
     
-    variant_id = request.variant_id.strip()
+    variant_id = payload.variant_id.strip()
     
     if not variant_id:
         raise HTTPException(
@@ -105,7 +109,7 @@ async def lookup_variant(
     
     try:
         # Check cache first (unless force_refresh)
-        if not request.force_refresh:
+        if not payload.force_refresh:
             result = await session.execute(
                 select(VariantLookupCache).where(VariantLookupCache.variant_id == variant_id)
             )
@@ -757,7 +761,9 @@ def get_variant_category(consequence: Optional[str]) -> str:
 
 
 @router.get("/search")
+@limiter.limit(lambda: f"{settings.rate_limit.lookup_per_minute}/minute")
 async def search_user_variants(
+    request: Request,
     q: str = Query(default="", description="Search by rsid (prefix or contains)"),
     chromosome: Optional[str] = Query(default=None, description="Filter by chromosome"),
     annotated: Optional[bool] = Query(default=None, description="Filter by annotation status"),
