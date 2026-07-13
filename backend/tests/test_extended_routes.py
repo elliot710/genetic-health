@@ -345,9 +345,9 @@ def _admin_sa_patch():
     import contextlib
     @contextlib.contextmanager
     def _patch():
-        with patch("backend.api.admin_routes.select"), \
-             patch("backend.api.admin_routes.delete"), \
-             patch("backend.api.admin_routes.update"), \
+        with patch("backend.api.admin.category_rules.select"), \
+             patch("backend.api.admin.category_rules.delete"), \
+             patch("backend.api.admin.category_rules.update"), \
              patch("backend.api.admin.users.select"), \
              patch("backend.api.admin.users.func"), \
              patch("backend.api.admin.variant_mappings.select"), \
@@ -366,7 +366,7 @@ def _admin_sa_patch():
 
 class TestAdminUsers:
     def _build(self, session=None, user=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         u = user or _make_admin_user()
         return _build_app([router], current_user=u, session=session)
 
@@ -452,7 +452,7 @@ class TestAdminUsers:
 
 class TestAdminDiscoveries:
     def _build(self, session=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         return _build_app([router], session=session)
 
     def test_discovery_summary_returns_200(self):
@@ -557,7 +557,7 @@ class TestAdminDiscoveries:
 
 class TestAdminVariantMappings:
     def _build(self, session=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         return _build_app([router], session=session)
 
     def test_list_mapping_categories_returns_200(self):
@@ -637,7 +637,7 @@ class TestAdminVariantMappings:
 
 class TestAdminJobs:
     def _build(self, session=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         return _build_app([router], session=session)
 
     def test_jobs_summary_returns_200(self):
@@ -800,7 +800,7 @@ class TestAdminJobs:
 
 class TestAdminCategoryRules:
     def _build(self, session=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         return _build_app([router], session=session)
 
     def test_list_rules_empty(self):
@@ -872,7 +872,7 @@ class TestAdminCategoryRules:
 
 class TestAdminAnnotationSources:
     def _build(self, session=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         return _build_app([router], session=session)
 
     def test_list_annotation_sources_returns_200(self):
@@ -909,7 +909,7 @@ class TestAdminAnnotationSources:
 
 class TestAdminClinvarEtl:
     def _build(self, session=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         return _build_app([router], session=session)
 
     def test_clinvar_etl_status(self):
@@ -931,7 +931,7 @@ class TestAdminClinvarEtl:
 
 class TestAdminGnomadEtl:
     def _build(self, session=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         return _build_app([router], session=session)
 
     def test_gnomad_etl_status(self):
@@ -946,7 +946,7 @@ class TestAdminGnomadEtl:
 
 class TestAdminIncompleteAnnotations:
     def _build(self, session=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         return _build_app([router], session=session)
 
     def test_incomplete_summary_returns_200(self):
@@ -1055,7 +1055,7 @@ class TestRetriggerSourcesEnsemblGuard:
 
 class TestAdminPurgeDeleted:
     def _build(self, session=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         return _build_app([router], session=session)
 
     def test_purge_deleted_success(self):

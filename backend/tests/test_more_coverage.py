@@ -273,9 +273,9 @@ def _admin_sa_patch():
 
     @contextlib.contextmanager
     def _patch():
-        with patch("backend.api.admin_routes.select"), \
-             patch("backend.api.admin_routes.delete"), \
-             patch("backend.api.admin_routes.update"), \
+        with patch("backend.api.admin.category_rules.select"), \
+             patch("backend.api.admin.category_rules.delete"), \
+             patch("backend.api.admin.category_rules.update"), \
              patch("backend.api.admin.users.select"), \
              patch("backend.api.admin.users.func"), \
              patch("backend.api.admin.variant_mappings.select"), \
@@ -292,7 +292,7 @@ def _admin_sa_patch():
 
 class TestAdminRoutesExtra:
     def _app(self, session=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         user = _make_mock_user(is_admin=True, username="admin")
         return _build_app(router, current_user=user, session=session)
 

@@ -1,52 +1,26 @@
 """
-Admin API routes for user management and panel marker configuration.
+Admin category-rule management + auto-categorization routes.
 """
-import asyncio
 import logging
+from typing import List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, update
-from typing import List, Optional
 
-from ..db.database import get_session
-from ..db.models import User
-
-# Imported before `router` is constructed so the require_admin guard can be
-# baked into the router itself (see dependencies= below) -- this makes
-# backend.api.admin's aggregate a plain re-export of this router rather than
-# a second APIRouter that .include_router()'s a copy: with two objects, the
-# copy step captures whatever routes existed at that exact import moment,
-# which is empty if something imports admin_routes.py directly before the
-# admin package (circular import, order-dependent). One router, mutated in
-# place by every decorator below, has no such moment to get wrong.
-from .admin.schemas import (
+from ...db.database import get_session
+from ...db.models import User
+from .schemas import (
     require_admin,
     CategoryRuleCreate,
     CategoryRuleUpdate,
 )
-from .admin.users import router as _users_router
-from .admin.variant_mappings import router as _variant_mappings_router
-from .admin.discoveries import router as _discoveries_router
-from .admin.annotation_sources import router as _annotation_sources_router
-from .admin.jobs import router as _jobs_router
-from .admin.etl import router as _etl_router
-# Re-exported so backend/worker.py's `from backend.api.admin_routes import
-# _extract_am_coords` keeps resolving after the annotation-source split.
-from .admin.annotation_sources import _extract_am_coords  # noqa: F401
 
-router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_admin)])
+# No prefix here -- folded into the admin package's aggregated router (see
+# admin/__init__.py), which carries "/api/admin"; baking it in twice
+# double-prefixes.
+router = APIRouter(tags=["admin"])
 logger = logging.getLogger(__name__)
-
-router.include_router(_users_router)
-router.include_router(_variant_mappings_router)
-router.include_router(_discoveries_router)
-router.include_router(_annotation_sources_router)
-router.include_router(_jobs_router)
-router.include_router(_etl_router)
-
-
-
-
 
 
 # ======================================================================
@@ -60,7 +34,7 @@ async def list_category_rules(
     admin: User = Depends(require_admin),
 ):
     """List all category rules, optionally filtered by category."""
-    from ..db.models import CategoryRule
+    from ...db.models import CategoryRule
     q = select(CategoryRule).order_by(CategoryRule.category, CategoryRule.priority)
     if category:
         q = q.where(CategoryRule.category == category)
@@ -84,7 +58,7 @@ async def create_category_rule(
     admin: User = Depends(require_admin),
 ):
     """Create a new category rule."""
-    from ..db.models import CategoryRule
+    from ...db.models import CategoryRule
     new_rule = CategoryRule(
         category=rule.category,
         rule_type=rule.rule_type,
@@ -107,7 +81,7 @@ async def update_category_rule(
     admin: User = Depends(require_admin),
 ):
     """Update a category rule."""
-    from ..db.models import CategoryRule
+    from ...db.models import CategoryRule
     result = await db.execute(select(CategoryRule).where(CategoryRule.id == rule_id))
     rule = result.scalar_one_or_none()
     if not rule:
@@ -125,7 +99,7 @@ async def delete_category_rule(
     admin: User = Depends(require_admin),
 ):
     """Delete a category rule."""
-    from ..db.models import CategoryRule
+    from ...db.models import CategoryRule
     result = await db.execute(select(CategoryRule).where(CategoryRule.id == rule_id))
     rule = result.scalar_one_or_none()
     if not rule:
@@ -141,7 +115,7 @@ async def seed_rules(
     admin: User = Depends(require_admin),
 ):
     """Seed default category rules (idempotent unless force=true)."""
-    from ..services.auto_categorizer import seed_category_rules
+    from ...services.auto_categorizer import seed_category_rules
     return await seed_category_rules(force=force)
 
 
@@ -162,7 +136,7 @@ async def run_auto_categorize(
     Returns immediately with a job ID that can be polled via
     GET /api/admin/jobs/{job_id}.
     """
-    from ..db.models import WorkerJob
+    from ...db.models import WorkerJob
     cat_list = [c.strip() for c in categories.split(",")] if categories else None
     job = WorkerJob(
         job_type="auto_categorize",
@@ -175,3 +149,4 @@ async def run_auto_categorize(
     await db.refresh(job)
     logger.info(f"Auto-categorize job {job.id} queued by admin {admin.id}")
     return {"job_id": job.id, "status": "pending", "detail": "Queued for worker processing"}
+

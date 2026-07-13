@@ -1,24 +1,35 @@
 """
 Aggregated admin API router.
 
-`router` is resolved lazily via module __getattr__ (PEP 562) instead of
-being imported eagerly: admin_routes.py imports from .admin.schemas, which
-forces this package's __init__.py to run first. If this file eagerly
-imported admin_routes.router in turn, whichever import started first would
-capture the router before all of its @router.* handlers had registered --
-the two modules import each other. Deferring the lookup to first attribute
-access means it always resolves after both modules are fully loaded,
-regardless of which one a caller imports first.
-
-The require_admin guard is applied once, directly on admin_routes.router's
-own construction (see its `dependencies=`), and is inherited by
-admin.users's router when admin_routes.py folds it in via
-router.include_router().
+Every admin route lives in a domain sub-module (users, variant_mappings,
+discoveries, annotation_sources, jobs, etl, category_rules), each exposing a
+prefix-less APIRouter. They are folded here into one router that carries the
+"/api/admin" prefix and applies the require_admin guard once, so no sub-router
+can silently ship without it (enforced by test_admin_route_authz.py).
 """
+from fastapi import APIRouter, Depends
 
+from .schemas import require_admin
+from .users import router as _users_router
+from .variant_mappings import router as _variant_mappings_router
+from .discoveries import router as _discoveries_router
+from .annotation_sources import router as _annotation_sources_router
+# Re-exported so backend/worker.py can import the shared AlphaMissense coord
+# helper without reaching into a specific sub-module path.
+from .annotation_sources import _extract_am_coords  # noqa: F401
+from .jobs import router as _jobs_router
+from .etl import router as _etl_router
+from .category_rules import router as _category_rules_router
 
-def __getattr__(name):
-    if name == "router":
-        from ..admin_routes import router
-        return router
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_admin)])
+
+for _sub_router in (
+    _users_router,
+    _variant_mappings_router,
+    _discoveries_router,
+    _annotation_sources_router,
+    _jobs_router,
+    _etl_router,
+    _category_rules_router,
+):
+    router.include_router(_sub_router)

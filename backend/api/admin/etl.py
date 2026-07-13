@@ -14,8 +14,9 @@ from ...db.database import get_session
 from ...db.models import User
 from .schemas import require_admin
 
-# No prefix here -- folded into admin_routes.router, which already carries
-# "/api/admin"; baking it in twice double-prefixes (see admin_routes.py).
+# No prefix here -- folded into the admin package's aggregated router (see
+# admin/__init__.py), which carries "/api/admin"; baking it in twice
+# double-prefixes.
 router = APIRouter(tags=["admin"])
 logger = logging.getLogger(__name__)
 

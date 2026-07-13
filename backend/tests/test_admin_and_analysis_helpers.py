@@ -1,5 +1,5 @@
 import pytest
-from backend.api.admin_routes import _extract_am_coords
+from backend.api.admin import _extract_am_coords
 from backend.services.analysis_service import ComprehensiveAnalysisService
 
 

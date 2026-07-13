@@ -65,7 +65,7 @@ def _build_test_app(current_user=None, session=None):
     from backend.db.database import get_session
     from backend.api.auth_routes import get_current_user, router as auth_router
     from backend.api.analysis_routes import router as analysis_router
-    from backend.api.admin_routes import router as admin_router
+    from backend.api.admin import router as admin_router
 
     app = FastAPI()
     app.include_router(auth_router)
@@ -296,8 +296,7 @@ class TestAdminRoutes:
     def test_get_users_admin(self):
         app, session, _ = self._make_admin_app()
         self._mock_db_result(session)
-        with patch("backend.api.admin_routes.select", return_value=MagicMock()), \
-             patch("backend.api.admin.users.select", return_value=MagicMock()), \
+        with patch("backend.api.admin.users.select", return_value=MagicMock()), \
              patch("backend.api.admin.users.func", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.get("/api/admin/users")
