@@ -423,7 +423,7 @@ class TestVariantRoutesDeep:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_mock_result(scalars_list=[]))
         app, _ = self._app(session)
-        with patch("backend.api.variant_routes.select", return_value=MagicMock()):
+        with patch("backend.api.variant.search.select", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.get("/api/variants/search?q=")
                 assert resp.status_code in (200, 400, 422, 500)
@@ -432,7 +432,7 @@ class TestVariantRoutesDeep:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_mock_result(scalars_list=[]))
         app, _ = self._app(session)
-        with patch("backend.api.variant_routes.select", return_value=MagicMock()):
+        with patch("backend.api.variant.search.select", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.get("/api/variants/search?q=BRCA1")
                 assert resp.status_code in (200, 500)
@@ -441,7 +441,7 @@ class TestVariantRoutesDeep:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=0))
         app, _ = self._app(session)
-        with patch("backend.api.variant_routes.select", return_value=MagicMock()):
+        with patch("backend.api.variant.search.select", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.get("/api/variants/stats")
                 assert resp.status_code in (200, 500)
@@ -456,7 +456,7 @@ class TestVariantRoutesDeep:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_mock_result(scalars_list=[]))
         app, _ = self._app(session)
-        with patch("backend.api.variant_routes.select", return_value=MagicMock()):
+        with patch("backend.api.variant.search.select", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.get("/api/variants/categories")
                 assert resp.status_code in (200, 500)

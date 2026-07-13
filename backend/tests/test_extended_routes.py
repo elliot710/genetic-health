@@ -312,7 +312,7 @@ class TestVariantSearch:
         # scalar_one_or_none=None makes analysis query return None → early return
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=None))
         app, _ = self._build(session)
-        with patch("backend.api.variant_routes.select"):
+        with patch("backend.api.variant.search.select"):
             with TestClient(app) as client:
                 resp = client.get("/api/variants/search")
                 assert resp.status_code in (200, 400, 422)
@@ -328,7 +328,7 @@ class TestVariantSearch:
         marker.alt_allele = "G"
         session.execute = AsyncMock(return_value=_make_mock_result(scalars_list=[marker]))
         app, _ = self._build(session)
-        with patch("backend.api.variant_routes.select"):
+        with patch("backend.api.variant.search.select"):
             with TestClient(app) as client:
                 resp = client.get("/api/variants/search?q=rs12345")
                 assert resp.status_code in (200, 400, 500)
