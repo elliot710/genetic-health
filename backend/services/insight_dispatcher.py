@@ -46,8 +46,9 @@ def _collect_existing_dedup_keys(ctx: GeneratorContext) -> Dict[str, set]:
         keys[cat] = cat_keys
     return keys
 
-# Re-use dataclasses from analysis_service
-from .analysis_service import AnnotationResult, AnalysisProgress, AnalysisCancelled
+# Re-use dataclasses from analysis_service / variant_types
+from .analysis_service import AnalysisProgress, AnalysisCancelled
+from .variant_types import AnnotationResult
 
 # All insight tables for cleanup
 INSIGHT_TABLES = [

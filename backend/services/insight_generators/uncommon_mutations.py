@@ -5,13 +5,10 @@ from ...db.models import UncommonMutation
 from .base import (
     GeneratorContext, extract_gene_and_consequence, extract_frequency,
     get_user_genotype, _get_effective_ref_allele, is_homozygous_reference,
-    is_no_call_genotype, is_indel_genotype,
+    is_no_call_genotype, is_indel_genotype, STRAND_COMPLEMENT,
 )
 
 logger = logging.getLogger(__name__)
-
-# Strand complement for allele verification (handles arrays reporting on minus strand)
-_COMPLEMENT = str.maketrans('ACGT', 'TGCA')
 
 # Only include variants with functional consequences — skip intergenic,
 # intronic, upstream/downstream which are rarely clinically actionable.
@@ -96,7 +93,7 @@ async def generate_uncommon_mutations(ctx: GeneratorContext) -> int:
             # forward strand, try the reverse complement — if that is all-ref, the user
             # is homozygous reference on the reported (minus) strand.
             if not any(a == effective_ref for a in gt):
-                flipped = gt.translate(_COMPLEMENT)
+                flipped = gt.translate(STRAND_COMPLEMENT)
                 if is_homozygous_reference(flipped, effective_ref):
                     continue
 
@@ -109,7 +106,7 @@ async def generate_uncommon_mutations(ctx: GeneratorContext) -> int:
         if alt_alleles:
             gt = user_gt.upper()
             gt_set = set(gt)
-            gt_flipped = set(gt.translate(_COMPLEMENT))
+            gt_flipped = set(gt.translate(STRAND_COMPLEMENT))
             snp_alts = [a for a in alt_alleles if len(a) == 1]
             if snp_alts:
                 carries = any(a in gt_set or a in gt_flipped for a in snp_alts)

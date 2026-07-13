@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db.database import get_session
 from ..db.models import GeneticAnalysis
 from .auth_routes import get_current_user
-from ..services.insights_service import generate_insight, generate_variant_insight, get_llm_status, set_insights_enabled
+from ..services.ai_insights_service import generate_insight, generate_variant_insight, get_llm_status, set_insights_enabled
 from ..services.knowledge_graph import build_knowledge_graph
 
 logger = logging.getLogger(__name__)

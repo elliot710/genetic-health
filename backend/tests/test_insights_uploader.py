@@ -1,4 +1,4 @@
-"""Tests for insights_service.py and variant_uploader.py."""
+"""Tests for ai_insights_service.py and variant_uploader.py."""
 import pytest
 import json
 from unittest.mock import MagicMock, AsyncMock, patch
@@ -6,10 +6,10 @@ import importlib.util as _ilu
 import os
 
 
-def _load_insights_service():
+def _load_ai_insights_service():
     spec = _ilu.spec_from_file_location(
         "_insights_svc",
-        os.path.join(os.path.dirname(__file__), '..', 'services', 'insights_service.py'),
+        os.path.join(os.path.dirname(__file__), '..', 'services', 'ai_insights_service.py'),
     )
     mod = _ilu.module_from_spec(spec)
     with patch.dict('sys.modules', {
@@ -21,11 +21,11 @@ def _load_insights_service():
     return mod
 
 
-_is = _load_insights_service()
+_is = _load_ai_insights_service()
 
 
 # ──────────────────────────────────────────────
-# insights_service pure functions
+# ai_insights_service pure functions
 # ──────────────────────────────────────────────
 
 class TestLoadEnabledState:

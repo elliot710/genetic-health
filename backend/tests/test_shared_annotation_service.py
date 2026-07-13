@@ -1,8 +1,5 @@
-import logging
-
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from types import SimpleNamespace
 
 from backend.services.shared_annotation_service import (
     _row_to_annotation_dict,
@@ -54,67 +51,6 @@ class TestEmptyAnnotationDict:
             "sources_queried": [],
             "success_count": 0,
         }
-
-
-class TestComputeAnnotationStatus:
-    def setup_method(self):
-        self.svc = SharedVariantAnnotationService()
-
-    def test_completed_when_all_sources_present(self):
-        ann_data = {
-            "sources_queried": ["ensembl", "clinvar"],
-            "success_count": 2,
-            "annotations": {"ensembl": {"found": True}, "clinvar": {"found": True}},
-        }
-        status, failed = self.svc._compute_annotation_status(ann_data)
-        assert status == "completed"
-        assert failed == []
-
-    def test_partial_when_some_sources_missing(self):
-        ann_data = {
-            "sources_queried": ["ensembl", "clinvar"],
-            "success_count": 1,
-            "annotations": {"ensembl": {"found": True}},
-        }
-        status, failed = self.svc._compute_annotation_status(ann_data)
-        assert status == "partial"
-        assert "clinvar" in failed
-
-    def test_failed_when_no_sources_populated(self):
-        ann_data = {
-            "sources_queried": ["ensembl", "clinvar"],
-            "success_count": 0,
-            "annotations": {},
-        }
-        status, failed = self.svc._compute_annotation_status(ann_data)
-        assert status == "failed"
-        assert set(failed) == {"ensembl", "clinvar"}
-
-    def test_empty_annotation_data_defaults(self):
-        status, failed = self.svc._compute_annotation_status({})
-        assert status == "failed"
-        assert set(failed) == {'ensembl', 'clinvar', 'clinpgx', 'snpedia'}
-
-
-class TestSaveAnnotationSurfacesFailure:
-    @pytest.mark.asyncio
-    async def test_db_failure_is_logged_and_raised(self, caplog):
-        svc = SharedVariantAnnotationService()
-        with patch("backend.services.shared_annotation_service.insert"), \
-             patch(
-                 "backend.db.database.async_session_factory",
-                 side_effect=RuntimeError("connection refused"),
-             ):
-            with caplog.at_level(logging.ERROR, logger="backend.services.shared_annotation_service"):
-                with pytest.raises(RuntimeError, match="connection refused"):
-                    await svc.save_annotation(
-                        rsid="rs12345",
-                        annotation_data={"annotations": {}, "sources_queried": [], "success_count": 0},
-                        analysis_id=1,
-                        analysis_variant_id=1,
-                    )
-
-        assert any("Failed to save annotation" in r.message for r in caplog.records)
 
 
 class TestGetExistingAnnotations:

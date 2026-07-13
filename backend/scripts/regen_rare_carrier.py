@@ -17,7 +17,7 @@ from backend.db.models import (
     GeneticAnalysis, AnalysisVariant, SharedVariantAnnotation,
     RareMutation, CarrierStatus
 )
-from backend.services.analysis_service import AnnotationResult
+from backend.services.variant_types import AnnotationResult
 from backend.services.insight_generators import GeneratorContext, generate_rare_mutations, generate_carrier_status
 
 

@@ -575,17 +575,17 @@ class TestVariantLookupPost:
             "annotations": {},
             "cached": False,
         }
-        with patch("backend.api.variant_routes.GeneticAPIService") as MockSvc:
+        with patch("backend.api.variant.lookup.GeneticAPIService") as MockSvc:
             instance = MagicMock()
             instance.__aenter__ = AsyncMock(return_value=instance)
             instance.__aexit__ = AsyncMock(return_value=False)
             instance.get_comprehensive_variant_info = AsyncMock(return_value=lookup_result)
             MockSvc.return_value = instance
-            with patch("backend.api.variant_routes.select", return_value=MagicMock()):
-                with patch("backend.api.variant_routes.get_clinvar_local_service"):
-                    with patch("backend.api.variant_routes.get_ensembl_local_service"):
-                        with patch("backend.api.variant_routes.get_gnomad_service"):
-                            with patch("backend.api.variant_routes.get_alpha_missense_service"):
+            with patch("backend.api.variant.lookup.select", return_value=MagicMock()):
+                with patch("backend.api.variant.lookup.get_clinvar_local_service"):
+                    with patch("backend.api.variant.lookup.get_ensembl_local_service"):
+                        with patch("backend.api.variant.lookup.get_gnomad_service"):
+                            with patch("backend.api.variant.lookup.get_alpha_missense_service"):
                                 app, _ = self._build(session)
                                 with TestClient(app) as client:
                                     resp = client.post("/api/variants/lookup",
@@ -599,7 +599,7 @@ class TestVariantLookupPost:
 
 class TestAnalysisServicePure:
     def test_annotation_result_creation(self):
-        from backend.services.analysis_service import AnnotationResult
+        from backend.services.variant_types import AnnotationResult
         result = AnnotationResult(
             rsid="rs12345",
             was_reused=True,
@@ -631,7 +631,7 @@ class TestAnalysisServicePure:
         assert str(exc) == "cancelled"
 
     def test_annotation_result_defaults(self):
-        from backend.services.analysis_service import AnnotationResult
+        from backend.services.variant_types import AnnotationResult
         result = AnnotationResult(
             rsid="rs99999",
             was_reused=False,
