@@ -59,6 +59,31 @@ INSIGHT_TABLES = [
     UncommonMutation,
 ]
 
+# Insight generators run concurrently in bounded batches. Each generator owns an
+# isolated DB session and writes a disjoint category table, so within-batch
+# concurrency is safe; the cap keeps peak connections well under the pool
+# (pool_size=20 + overflow, × WORKER_MAX_CONCURRENT analyses).
+GENERATOR_CONCURRENCY = 4
+
+
+def _build_insight_status(
+    category_status: Dict[str, Dict[str, Any]],
+    failed_generators: List[str],
+    total_insights: int,
+    generators_total: int,
+) -> Dict[str, Any]:
+    """Per-category generation outcome, persisted so a partially-generated
+    dashboard is an honest, visible state rather than a silent gap."""
+    generated = [name for name, s in category_status.items() if s.get("status") == "generated"]
+    return {
+        "total_insights": total_insights,
+        "generators_total": generators_total,
+        "generators_succeeded": len(category_status) - len(failed_generators),
+        "generated": generated,
+        "failed": list(failed_generators),
+        "categories": category_status,
+    }
+
 
 async def generate_comprehensive_insights(
     variants: List,
@@ -135,37 +160,52 @@ async def generate_comprehensive_insights(
     insights_generated = 0
     total_generators = len(ALL_GENERATORS)
     failed_generators: list[str] = []
+    category_status: Dict[str, Dict[str, Any]] = {}
 
-    for gen_idx, (gen_name, gen_func) in enumerate(ALL_GENERATORS):
+    async def _run_generator(gen_name: str, gen_func) -> int:
+        async with async_session_factory() as gen_session:
+            ctx = GeneratorContext(
+                analysis_id=analysis_id,
+                variants=interesting_variants,
+                annotation_results=annotation_results,
+                session=gen_session,
+                rsid_gene_map=rsid_gene_map,
+                registry=registry,
+                variant_profiles=variant_profiles,
+                inferred_sex=inferred_sex,
+            )
+            count = await gen_func(ctx)
+            await gen_session.commit()
+            return count
+
+    for batch_start in range(0, total_generators, GENERATOR_CONCURRENCY):
         if check_cancelled_fn:
             await check_cancelled_fn(analysis_id)
-        try:
-            progress.current_step = f"generating_{gen_name}"
-            progress.phase_progress = gen_idx / total_generators
-            if update_progress_fn:
-                await update_progress_fn(analysis_id, progress)
 
-            async with async_session_factory() as gen_session:
-                ctx = GeneratorContext(
-                    analysis_id=analysis_id,
-                    variants=interesting_variants,
-                    annotation_results=annotation_results,
-                    session=gen_session,
-                    rsid_gene_map=rsid_gene_map,
-                    registry=registry,
-                    variant_profiles=variant_profiles,
-                    inferred_sex=inferred_sex,
-                )
-                count = await gen_func(ctx)
-                await gen_session.commit()
-            insights_generated += count
-            logger.info(f"  [{gen_idx + 1}/{total_generators}] {gen_name}: {count} insights")
-        except AnalysisCancelled:
-            raise
-        except Exception as e:
-            failed_generators.append(gen_name)
-            logger.error(f"  [{gen_idx + 1}/{total_generators}] {gen_name}: FAILED — {e}")
-            continue
+        batch = ALL_GENERATORS[batch_start:batch_start + GENERATOR_CONCURRENCY]
+        progress.current_step = "generating_insights"
+        progress.phase_progress = batch_start / total_generators
+        if update_progress_fn:
+            await update_progress_fn(analysis_id, progress)
+
+        results = await asyncio.gather(
+            *(_run_generator(name, func) for name, func in batch),
+            return_exceptions=True,
+        )
+        for (gen_name, _), result in zip(batch, results):
+            if isinstance(result, AnalysisCancelled):
+                raise result
+            if isinstance(result, Exception):
+                failed_generators.append(gen_name)
+                category_status[gen_name] = {"status": "failed", "count": 0}
+                logger.error(f"  {gen_name}: FAILED — {result}")
+            else:
+                insights_generated += result
+                category_status[gen_name] = {
+                    "status": "generated" if result > 0 else "empty",
+                    "count": result,
+                }
+                logger.info(f"  {gen_name}: {result} insights")
 
     if failed_generators:
         logger.warning(f"  {len(failed_generators)} generator(s) failed: {', '.join(failed_generators)}")
@@ -190,9 +230,31 @@ async def generate_comprehensive_insights(
                 gwas_count = await generate_gwas_enrichment(gwas_ctx, existing_keys)
                 await gwas_session.commit()
             insights_generated += gwas_count
+            category_status["gwas_enrichment"] = {
+                "status": "generated" if gwas_count > 0 else "empty",
+                "count": gwas_count,
+            }
             logger.info(f"  GWAS enrichment: {gwas_count} additional insights")
         except Exception as e:
+            failed_generators.append("gwas_enrichment")
+            category_status["gwas_enrichment"] = {"status": "failed", "count": 0}
             logger.error(f"  GWAS enrichment: FAILED — {e}")
+
+    insight_status = _build_insight_status(
+        category_status, failed_generators, insights_generated, total_generators
+    )
+    try:
+        from sqlalchemy import update as sa_update
+        from ..db.models import GeneticAnalysis
+        async with async_session_factory() as status_session:
+            await status_session.execute(
+                sa_update(GeneticAnalysis)
+                .where(GeneticAnalysis.id == analysis_id)
+                .values(insight_status=insight_status)
+            )
+            await status_session.commit()
+    except Exception as e:
+        logger.warning(f"  Failed to persist insight_status for analysis {analysis_id}: {e}")
 
     return insights_generated
 

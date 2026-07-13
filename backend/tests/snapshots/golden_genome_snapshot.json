@@ -1,0 +1,71 @@
+{
+  "ancestry_results": {
+    "raised": "TypeError"
+  },
+  "carrier_status": [],
+  "cognitive_profiles": [
+    {
+      "fields": {
+        "analysis_id": 1,
+        "associated_variants": [
+          "rs1003"
+        ],
+        "cognitive_domain": "Memory",
+        "enhancement_suggestions": [
+          "Do puzzles"
+        ],
+        "genetic_score": 70,
+        "percentile": 55
+      },
+      "table": "CognitiveProfile"
+    }
+  ],
+  "detox_profiles": [],
+  "drug_responses": [],
+  "health_risks": [
+    {
+      "fields": {
+        "analysis_id": 1,
+        "associated_variants": [
+          "rs1001"
+        ],
+        "condition": "Type 2 Diabetes",
+        "gene": "TCF7L2",
+        "pathogenicity_classification": "pathogenic",
+        "recommendations": [
+          "Maintain healthy weight"
+        ],
+        "review_status": null,
+        "risk_level": "high",
+        "risk_score": 0.8
+      },
+      "table": "HealthRisk"
+    },
+    {
+      "fields": {
+        "analysis_id": 1,
+        "associated_variants": [
+          "rs1005"
+        ],
+        "condition": "Hereditary Breast Cancer",
+        "gene": "BRCA1",
+        "pathogenicity_classification": "pathogenic",
+        "recommendations": [
+          "Discuss screening"
+        ],
+        "review_status": null,
+        "risk_level": "high",
+        "risk_score": 0.8
+      },
+      "table": "HealthRisk"
+    }
+  ],
+  "methylation_profiles": [],
+  "nutrition_traits": [],
+  "personality_traits": [],
+  "physical_traits": [],
+  "rare_mutations": [],
+  "sports_performance": [],
+  "uncommon_mutations": [],
+  "wellness_metrics": []
+}

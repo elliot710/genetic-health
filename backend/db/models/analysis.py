@@ -34,6 +34,10 @@ class GeneticAnalysis(Base):
     # Persisted job logs (JSON array of {ts, level, msg} entries)
     job_logs = Column(JSON, nullable=True)
     inferred_sex = Column(String(10), nullable=True)  # 'male', 'female', 'unknown'
+    # Per-category insight-generation outcome: which generators produced rows,
+    # which were empty, which failed. Populated at the end of phase 4 so a
+    # partially-generated dashboard is an honest, visible state, not a silent gap.
+    insight_status = Column(JSON, nullable=True)
 
     # Relationship to user
     user = relationship("User", back_populates="genetic_analyses")

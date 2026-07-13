@@ -221,6 +221,33 @@ async def stream_analysis_progress(
     )
 
 
+def _analysis_coverage(insight_status, processed_variants, total_variants) -> Dict[str, Any]:
+    """Honest per-analysis completeness: the mean of the variant-annotation rate
+    and the insight-category success rate, each 0-1. Either input may be missing
+    (older analyses have no insight_status); score is None only when neither is
+    available."""
+    processed_variants = processed_variants or 0
+    total_variants = total_variants or 0
+    variant_rate = (processed_variants / total_variants) if total_variants else None
+
+    category_rate = None
+    categories = None
+    if isinstance(insight_status, dict):
+        generators_total = insight_status.get("generators_total") or 0
+        generators_succeeded = insight_status.get("generators_succeeded")
+        if generators_total and generators_succeeded is not None:
+            category_rate = generators_succeeded / generators_total
+            categories = {"succeeded": generators_succeeded, "total": generators_total}
+
+    rates = [r for r in (variant_rate, category_rate) if r is not None]
+    score = round(100 * sum(rates) / len(rates)) if rates else None
+    return {
+        "score": score,
+        "variant_annotation": {"processed": processed_variants, "total": total_variants},
+        "insight_categories": categories,
+    }
+
+
 @router.get("/results/{analysis_id}", response_model=Dict[str, Any])
 async def get_analysis_results(
     analysis_id: int, db: AsyncSession = Depends(get_session), current_user=Depends(get_current_user),
@@ -235,6 +262,12 @@ async def get_analysis_results(
             "processed_variants": getattr(analysis, 'processed_variants', 0) or 0,
             "total_variants": getattr(analysis, 'total_variants', 0) or 0,
             "upload_date": upload_date.isoformat() if upload_date else None,
+            "insight_status": getattr(analysis, 'insight_status', None),
+            "coverage": _analysis_coverage(
+                getattr(analysis, 'insight_status', None),
+                getattr(analysis, 'processed_variants', 0),
+                getattr(analysis, 'total_variants', 0),
+            ),
         }
     except HTTPException:
         raise

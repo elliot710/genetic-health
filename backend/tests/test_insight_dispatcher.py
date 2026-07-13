@@ -4,7 +4,10 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from backend.services.analysis_service import AnalysisProgress
-from backend.services.insight_dispatcher import generate_comprehensive_insights
+from backend.services.insight_dispatcher import (
+    generate_comprehensive_insights,
+    _build_insight_status,
+)
 
 
 def _mock_session_ctx():
@@ -51,3 +54,24 @@ class TestGeneratorFaultIsolation:
         # ok_panel's insights are not dropped just because boom_panel failed
         assert total_insights == 3
         assert any("boom_panel" in r.message for r in caplog.records)
+
+
+class TestBuildInsightStatus:
+    def _statuses(self):
+        return {
+            "health_risks": {"status": "generated", "count": 5},
+            "ancestry_results": {"status": "empty", "count": 0},
+            "drug_responses": {"status": "failed", "count": 0},
+        }
+
+    def test_failed_list_records_failed_generator(self):
+        status = _build_insight_status(self._statuses(), ["drug_responses"], 5, 14)
+        assert status["failed"] == ["drug_responses"]
+
+    def test_generated_list_excludes_empty_and_failed(self):
+        status = _build_insight_status(self._statuses(), ["drug_responses"], 5, 14)
+        assert status["generated"] == ["health_risks"]
+
+    def test_generators_succeeded_counts_non_failed(self):
+        status = _build_insight_status(self._statuses(), ["drug_responses"], 5, 14)
+        assert status["generators_succeeded"] == 2
