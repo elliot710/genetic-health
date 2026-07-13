@@ -255,12 +255,14 @@ class TestRunAllLookups:
         gnomad_v2_svc = self._make_mock_service()
         gnomad_v2_svc.has_pg_data = True
         gnomad_v2_svc.batch_lookup_pg = AsyncMock(return_value={"rs1": {"af_nfe": 0.01}})
+        gnomad_v2_svc.ASSEMBLY = "GRCh37"
         sources.gnomad_v2 = gnomad_v2_svc
         v = _make_variant("rs1")
         result = await run_all_lookups(sources, ["rs1"], {"rs1": v})
         assert result.gnomad["rs1"]["found"] is True
         assert result.gnomad["rs1"]["source"] == "gnomad_v2_exome"
         assert result.gnomad["rs1"]["af"] == 0.01
+        assert result.gnomad["rs1"]["assembly"] == "GRCh37"
 
     @pytest.mark.asyncio
     async def test_with_ensembl_source(self):
