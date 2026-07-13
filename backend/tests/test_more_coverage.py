@@ -506,33 +506,33 @@ class TestAnalysisServicePure:
 
 
 # ──────────────────────────────────────────────────────────────────
-# insights_service tests
+# ai_insights_service tests
 # ──────────────────────────────────────────────────────────────────
 
 class TestInsightsService:
     def test_llm_status_function_exists(self):
-        from backend.services.insights_service import get_llm_status
+        from backend.services.ai_insights_service import get_llm_status
         assert callable(get_llm_status)
 
     def test_llm_status_returns_dict(self):
-        from backend.services.insights_service import get_llm_status
+        from backend.services.ai_insights_service import get_llm_status
         status = get_llm_status()
         assert isinstance(status, dict)
 
     def test_set_insights_enabled(self):
-        from backend.services.insights_service import set_insights_enabled
+        from backend.services.ai_insights_service import set_insights_enabled
         result = set_insights_enabled(False)
         assert isinstance(result, dict)
         # Restore
         set_insights_enabled(True)
 
     def test_build_user_prompt(self):
-        from backend.services.insights_service import _build_user_prompt
+        from backend.services.ai_insights_service import _build_user_prompt
         result = _build_user_prompt("health", {"risks": []})
         assert isinstance(result, str)
 
     def test_is_express_mode_key(self):
-        from backend.services.insights_service import _is_express_mode_key
+        from backend.services.ai_insights_service import _is_express_mode_key
         result = _is_express_mode_key("health")
         assert isinstance(result, bool)
 

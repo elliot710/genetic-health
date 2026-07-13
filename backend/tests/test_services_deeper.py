@@ -1,4 +1,4 @@
-"""Deeper tests for shared_annotation_service.py and insights_service.py."""
+"""Deeper tests for shared_annotation_service.py and ai_insights_service.py."""
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
@@ -171,12 +171,12 @@ class TestIncrementUsageCounts:
 
 
 # ──────────────────────────────────────────────────
-# insights_service.py — pure functions
+# ai_insights_service.py — pure functions
 # ──────────────────────────────────────────────────
 
 class TestIsExpressModeKey:
     def _fn(self):
-        from backend.services.insights_service import _is_express_mode_key
+        from backend.services.ai_insights_service import _is_express_mode_key
         return _is_express_mode_key
 
     def test_none_key(self):
@@ -198,7 +198,7 @@ class TestIsExpressModeKey:
 
 class TestBuildUserPrompt:
     def _fn(self):
-        from backend.services.insights_service import _build_user_prompt
+        from backend.services.ai_insights_service import _build_user_prompt
         return _build_user_prompt
 
     def test_health_section(self):
@@ -231,13 +231,13 @@ class TestBuildUserPrompt:
 
 class TestGetLlmStatus:
     def test_returns_dict(self):
-        from backend.services.insights_service import get_llm_status
+        from backend.services.ai_insights_service import get_llm_status
         result = get_llm_status()
         assert isinstance(result, dict)
         assert "enabled" in result or "configured" in result or "status" in result
 
     def test_no_exception(self):
-        from backend.services.insights_service import get_llm_status
+        from backend.services.ai_insights_service import get_llm_status
         try:
             get_llm_status()
         except Exception as e:
@@ -246,19 +246,19 @@ class TestGetLlmStatus:
 
 class TestSetInsightsEnabled:
     def test_sets_enabled(self):
-        from backend.services.insights_service import set_insights_enabled, get_llm_status
+        from backend.services.ai_insights_service import set_insights_enabled, get_llm_status
         set_insights_enabled(True)
         status = get_llm_status()
         assert status is not None
 
     def test_sets_disabled(self):
-        from backend.services.insights_service import set_insights_enabled, get_llm_status
+        from backend.services.ai_insights_service import set_insights_enabled, get_llm_status
         set_insights_enabled(False)
         status = get_llm_status()
         assert status is not None
 
     def test_re_enable(self):
-        from backend.services.insights_service import set_insights_enabled
+        from backend.services.ai_insights_service import set_insights_enabled
         set_insights_enabled(False)
         set_insights_enabled(True)
 
@@ -266,7 +266,7 @@ class TestSetInsightsEnabled:
 class TestGenerateInsight:
     @pytest.mark.asyncio
     async def test_disabled_insights(self):
-        from backend.services.insights_service import generate_insight, set_insights_enabled
+        from backend.services.ai_insights_service import generate_insight, set_insights_enabled
         set_insights_enabled(False)
         result = await generate_insight(1, "health", {})
         assert "disabled" in result or "summary" in result
@@ -274,7 +274,7 @@ class TestGenerateInsight:
 
     @pytest.mark.asyncio
     async def test_with_db_cache_hit(self):
-        from backend.services.insights_service import generate_insight, set_insights_enabled
+        from backend.services.ai_insights_service import generate_insight, set_insights_enabled
         set_insights_enabled(True)
         mock_session = MagicMock()
         cached_row = MagicMock()
@@ -288,9 +288,9 @@ class TestGenerateInsight:
 
     @pytest.mark.asyncio
     async def test_no_api_key_returns_error(self):
-        from backend.services.insights_service import generate_insight, set_insights_enabled
+        from backend.services.ai_insights_service import generate_insight, set_insights_enabled
         set_insights_enabled(True)
-        with patch("backend.services.insights_service.GEMINI_API_KEY", ""):
+        with patch("backend.services.ai_insights_service.GEMINI_API_KEY", ""):
             result = await generate_insight(1, "health", {})
             assert "summary" in result or "unavailable" in str(result).lower()
 
@@ -298,16 +298,16 @@ class TestGenerateInsight:
 class TestCallLlm:
     @pytest.mark.asyncio
     async def test_no_api_key_raises(self):
-        from backend.services.insights_service import _call_llm
-        with patch("backend.services.insights_service.GEMINI_API_KEY", ""):
+        from backend.services.ai_insights_service import _call_llm
+        with patch("backend.services.ai_insights_service.GEMINI_API_KEY", ""):
             with pytest.raises(ValueError):
                 await _call_llm("test prompt")
 
     @pytest.mark.asyncio
     async def test_with_api_key_calls_gemini(self):
-        from backend.services.insights_service import _call_llm
-        with patch("backend.services.insights_service.GEMINI_API_KEY", "test_key"), \
-             patch("backend.services.insights_service._call_gemini", new=AsyncMock(return_value={"summary": "test"})):
+        from backend.services.ai_insights_service import _call_llm
+        with patch("backend.services.ai_insights_service.GEMINI_API_KEY", "test_key"), \
+             patch("backend.services.ai_insights_service._call_gemini", new=AsyncMock(return_value={"summary": "test"})):
             result = await _call_llm("test prompt")
             assert result == {"summary": "test"}
 
@@ -315,7 +315,7 @@ class TestCallLlm:
 class TestCallGemini:
     @pytest.mark.asyncio
     async def test_ai_studio_path(self):
-        from backend.services.insights_service import _call_gemini
+        from backend.services.ai_insights_service import _call_gemini
         import json
         mock_resp = MagicMock()
         mock_resp.status = 200
@@ -331,15 +331,15 @@ class TestCallGemini:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("backend.services.insights_service.GEMINI_API_KEY", "AIza_test"), \
-             patch("backend.services.insights_service._is_express_mode_key", return_value=False), \
+        with patch("backend.services.ai_insights_service.GEMINI_API_KEY", "AIza_test"), \
+             patch("backend.services.ai_insights_service._is_express_mode_key", return_value=False), \
              patch("aiohttp.ClientSession", return_value=mock_session):
             result = await _call_gemini("test prompt")
             assert result == {"summary": "test"}
 
     @pytest.mark.asyncio
     async def test_express_mode_path(self):
-        from backend.services.insights_service import _call_gemini
+        from backend.services.ai_insights_service import _call_gemini
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.raise_for_status = MagicMock()
@@ -354,15 +354,15 @@ class TestCallGemini:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("backend.services.insights_service.GEMINI_API_KEY", "express_key_" + "x" * 80), \
-             patch("backend.services.insights_service._is_express_mode_key", return_value=True), \
+        with patch("backend.services.ai_insights_service.GEMINI_API_KEY", "express_key_" + "x" * 80), \
+             patch("backend.services.ai_insights_service._is_express_mode_key", return_value=True), \
              patch("aiohttp.ClientSession", return_value=mock_session):
             result = await _call_gemini("test prompt")
             assert "summary" in result
 
     @pytest.mark.asyncio
     async def test_vertex_ai_path(self):
-        from backend.services.insights_service import _call_gemini
+        from backend.services.ai_insights_service import _call_gemini
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.raise_for_status = MagicMock()
@@ -377,10 +377,10 @@ class TestCallGemini:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("backend.services.insights_service.GEMINI_API_KEY", "vertex_key"), \
-             patch("backend.services.insights_service._is_express_mode_key", return_value=False), \
-             patch("backend.services.insights_service._is_standard_vertex_key", return_value=True), \
-             patch("backend.services.insights_service.VERTEX_AI_PROJECT", "my-project"), \
+        with patch("backend.services.ai_insights_service.GEMINI_API_KEY", "vertex_key"), \
+             patch("backend.services.ai_insights_service._is_express_mode_key", return_value=False), \
+             patch("backend.services.ai_insights_service._is_standard_vertex_key", return_value=True), \
+             patch("backend.services.ai_insights_service.VERTEX_AI_PROJECT", "my-project"), \
              patch("aiohttp.ClientSession", return_value=mock_session):
             result = await _call_gemini("test prompt")
             assert "summary" in result
