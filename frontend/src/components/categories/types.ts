@@ -228,6 +228,17 @@ export interface DashboardData {
     filename?: string
     upload_info?: { filename?: string; [key: string]: unknown }
     data_sources?: string[]
+    insight_status?: {
+      generators_total?: number
+      generators_succeeded?: number
+      failed?: string[]
+      generated?: string[]
+    } | null
+    coverage?: {
+      score: number | null
+      variant_annotation?: { processed: number; total: number }
+      insight_categories?: { succeeded: number; total: number } | null
+    } | null
     [key: string]: unknown
   }
   health_risks?: HealthRisk[] | { details?: HealthRisk[] }
