@@ -187,3 +187,19 @@ class TestFinalizeAnalysisCompletion:
         mock_update_progress.assert_called_once_with(
             42, progress, force_percentage=100, completed=True
         )
+
+
+class TestAnalysisCoverage:
+    def test_averages_variant_and_category_rates(self):
+        from backend.api.analysis_routes import _analysis_coverage
+        status = {"generators_total": 14, "generators_succeeded": 7}
+        # variant rate 1.0, category rate 0.5 → mean 0.75 → 75
+        assert _analysis_coverage(status, 100, 100)["score"] == 75
+
+    def test_falls_back_to_variant_rate_when_no_insight_status(self):
+        from backend.api.analysis_routes import _analysis_coverage
+        assert _analysis_coverage(None, 80, 100)["score"] == 80
+
+    def test_score_none_when_no_signal(self):
+        from backend.api.analysis_routes import _analysis_coverage
+        assert _analysis_coverage(None, 0, 0)["score"] is None
