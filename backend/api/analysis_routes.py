@@ -235,6 +235,7 @@ async def get_analysis_results(
             "processed_variants": getattr(analysis, 'processed_variants', 0) or 0,
             "total_variants": getattr(analysis, 'total_variants', 0) or 0,
             "upload_date": upload_date.isoformat() if upload_date else None,
+            "insight_status": getattr(analysis, 'insight_status', None),
         }
     except HTTPException:
         raise
