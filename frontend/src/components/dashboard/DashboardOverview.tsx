@@ -3,7 +3,7 @@
 import {
   Heart, AlertTriangle, ChevronRight, Activity, BarChart3,
   Sparkles, Target, Dna, Pill, FlaskConical, Brain, Palette,
-  Dumbbell, Apple, Zap, FileText,
+  Dumbbell, Apple, Zap, FileText, CheckCircle,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { getThemeClass, getTheme } from '@/utils/theme'
@@ -220,6 +220,7 @@ export default function DashboardOverview({
             icon: Heart,
             gradient: 'from-rose-500 to-pink-500',
             navigateTo: 'health',
+            zeroIsClear: true,
           },
           {
             label: 'Drug Interactions',
@@ -236,6 +237,7 @@ export default function DashboardOverview({
             icon: AlertTriangle,
             gradient: 'from-orange-500 to-red-500',
             navigateTo: 'carrier-status',
+            zeroIsClear: true,
           },
           {
             label: 'Nutrition Markers',
@@ -246,16 +248,30 @@ export default function DashboardOverview({
           },
         ].map((metric) => {
           const Icon = metric.icon
+          // A zero count for a risk-style metric is reassuring ("none found"),
+          // not an alarm — render it as a green check rather than a stark 0
+          // behind a warning-coloured icon.
+          const isClear = (metric as { zeroIsClear?: boolean }).zeroIsClear && Number(metric.value) === 0
+          const navigate = () => setActiveCategory(metric.navigateTo)
           return (
             <div
               key={metric.label}
-              className={`${theme.glass} border ${theme.glassBorder} rounded-xl p-4 cursor-pointer ${theme.glassHover} transition-all duration-300 hover:shadow-md hover:-translate-y-0.5`}
-              onClick={() => setActiveCategory(metric.navigateTo)}
+              role="button"
+              tabIndex={0}
+              aria-label={`${metric.label}: ${isClear ? 'none found' : metric.value}`}
+              className={`${theme.glass} border ${theme.glassBorder} rounded-xl p-4 cursor-pointer ${theme.glassHover} transition-all duration-300 hover:shadow-md hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-teal-500/50`}
+              onClick={navigate}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  navigate()
+                }
+              }}
             >
-              <div className={`p-2 bg-gradient-to-br ${metric.gradient} rounded-lg w-fit mb-3 shadow-lg`}>
-                <Icon className="h-4 w-4 text-white" />
+              <div className={`p-2 bg-gradient-to-br ${isClear ? 'from-emerald-500 to-green-500' : metric.gradient} rounded-lg w-fit mb-3 shadow-lg`}>
+                {isClear ? <CheckCircle className="h-4 w-4 text-white" /> : <Icon className="h-4 w-4 text-white" />}
               </div>
-              <p className={`text-2xl font-bold ${theme.text.primary}`}>{metric.value}</p>
+              <p className={`text-2xl font-bold ${theme.text.primary}`}>{isClear ? 'None' : metric.value}</p>
               <p className={`text-xs ${theme.text.muted} mt-0.5`}>{metric.label}</p>
             </div>
           )
