@@ -15,6 +15,7 @@ the module whose *namespace* the patched function is resolved through at
 call time — that must be this module's own globals, so the callee and the
 callables it patches have to live together here.
 """
+import asyncio
 import logging
 from typing import Any, Dict
 
