@@ -75,3 +75,47 @@ class TestBuildInsightStatus:
     def test_generators_succeeded_counts_non_failed(self):
         status = _build_insight_status(self._statuses(), ["drug_responses"], 5, 14)
         assert status["generators_succeeded"] == 2
+
+
+class TestTargetedRegeneration:
+    def _fake_generators(self, calls):
+        async def gen_health(ctx):
+            calls.append("health_risks")
+            return 1
+
+        async def gen_drug(ctx):
+            calls.append("drug_responses")
+            return 2
+
+        return [("health_risks", gen_health), ("drug_responses", gen_drug)]
+
+    async def _run(self, only_categories):
+        calls: list[str] = []
+        with patch("backend.services.insight_dispatcher.async_session_factory",
+                   return_value=_mock_session_ctx()), \
+             patch("backend.services.insight_dispatcher.delete"), \
+             patch("backend.services.insight_dispatcher.ALL_GENERATORS",
+                   self._fake_generators(calls)), \
+             patch("backend.services.insight_dispatcher.build_variant_profiles",
+                   AsyncMock(return_value={})):
+            total = await generate_comprehensive_insights(
+                variants=[], annotation_results={}, analysis_id=1,
+                rsid_gene_map={}, registry={}, progress=_make_progress(),
+                only_categories=only_categories,
+            )
+        return calls, total
+
+    @pytest.mark.asyncio
+    async def test_only_selected_generator_runs(self):
+        calls, _ = await self._run(only_categories=["health_risks"])
+        assert calls == ["health_risks"]
+
+    @pytest.mark.asyncio
+    async def test_total_reflects_only_selected(self):
+        _, total = await self._run(only_categories=["health_risks"])
+        assert total == 1
+
+    @pytest.mark.asyncio
+    async def test_none_runs_all_generators(self):
+        calls, _ = await self._run(only_categories=None)
+        assert calls == ["health_risks", "drug_responses"]

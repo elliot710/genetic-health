@@ -59,6 +59,25 @@ INSIGHT_TABLES = [
     UncommonMutation,
 ]
 
+# Generator name (from ALL_GENERATORS) -> the category table it writes. Used by
+# targeted regeneration to clear only the affected category's rows.
+CATEGORY_TO_TABLE = {
+    'health_risks': HealthRisk,
+    'drug_responses': DrugResponse,
+    'physical_traits': PhysicalTrait,
+    'nutrition_traits': NutritionTrait,
+    'sports_performance': SportsPerformance,
+    'cognitive_profiles': CognitiveProfile,
+    'personality_traits': PersonalityTrait,
+    'ancestry_results': AncestryResult,
+    'carrier_status': CarrierStatus,
+    'wellness_metrics': WellnessMetric,
+    'methylation_profiles': MethylationProfile,
+    'detox_profiles': DetoxificationProfile,
+    'rare_mutations': RareMutation,
+    'uncommon_mutations': UncommonMutation,
+}
+
 # Insight generators run concurrently in bounded batches. Each generator owns an
 # isolated DB session and writes a disjoint category table, so within-batch
 # concurrency is safe; the cap keeps peak connections well under the pool
@@ -96,6 +115,7 @@ async def generate_comprehensive_insights(
     check_cancelled_fn: Optional[Callable] = None,
     update_progress_fn: Optional[Callable] = None,
     inferred_sex: Optional[str] = None,
+    only_categories: Optional[List[str]] = None,
 ) -> int:
     """Generate comprehensive insights for all categories.
 
@@ -104,15 +124,31 @@ async def generate_comprehensive_insights(
 
     Each generator runs in its own DB session so that a connection
     failure in one generator does not poison subsequent generators.
+
+    When ``only_categories`` is given, only those categories' tables are
+    cleared and only their generators run — a targeted regeneration that
+    avoids recomputing all 14 categories when one category's inputs changed.
+    The GWAS enrichment pass (which augments already-generated category rows)
+    is skipped for targeted runs. When ``only_categories`` is None, the full
+    delete-all + regenerate-all behavior is preserved.
     """
-    # Clean up any partial insights from a previous interrupted run
+    selected = [name for name, _ in ALL_GENERATORS] if not only_categories \
+        else [name for name, _ in ALL_GENERATORS if name in set(only_categories)]
+
+    # Clean up existing insights so a re-run does not produce duplicates.
+    tables_to_clear = INSIGHT_TABLES if not only_categories else [
+        CATEGORY_TO_TABLE[name] for name in selected if name in CATEGORY_TO_TABLE
+    ]
     async with async_session_factory() as cleanup_session:
-        for tbl in INSIGHT_TABLES:
+        for tbl in tables_to_clear:
             await cleanup_session.execute(
                 delete(tbl).where(tbl.analysis_id == analysis_id)
             )
         await cleanup_session.commit()
-    logger.info(f"  Cleared {len(INSIGHT_TABLES)} insight tables for fresh generation")
+    logger.info(
+        f"  Cleared {len(tables_to_clear)} insight table(s) for "
+        f"{'targeted' if only_categories else 'fresh'} generation"
+    )
 
     # Build variant profiles ONCE — all generators share these
     profile_start = time.time()
@@ -158,7 +194,8 @@ async def generate_comprehensive_insights(
     )
 
     insights_generated = 0
-    total_generators = len(ALL_GENERATORS)
+    generators = [(name, func) for name, func in ALL_GENERATORS if name in set(selected)]
+    total_generators = len(generators)
     failed_generators: list[str] = []
     category_status: Dict[str, Dict[str, Any]] = {}
 
@@ -182,7 +219,7 @@ async def generate_comprehensive_insights(
         if check_cancelled_fn:
             await check_cancelled_fn(analysis_id)
 
-        batch = ALL_GENERATORS[batch_start:batch_start + GENERATOR_CONCURRENCY]
+        batch = generators[batch_start:batch_start + GENERATOR_CONCURRENCY]
         progress.current_step = "generating_insights"
         progress.phase_progress = batch_start / total_generators
         if update_progress_fn:
@@ -212,7 +249,7 @@ async def generate_comprehensive_insights(
 
     # GWAS enrichment pass: add insights from genome-wide significant
     # associations that weren't covered by registry-based generators
-    if gwas_variants:
+    if gwas_variants and not only_categories:
         try:
             all_gwas_pool = interesting_variants + gwas_variants
             async with async_session_factory() as gwas_session:
@@ -259,7 +296,11 @@ async def generate_comprehensive_insights(
     return insights_generated
 
 
-async def regenerate_insights(analysis_id: int, user_id: Optional[int] = None) -> Dict[str, Any]:
+async def regenerate_insights(
+    analysis_id: int,
+    user_id: Optional[int] = None,
+    only_categories: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """Re-generate all insight tables using existing annotations.
 
     Skips Phases 1-3 entirely. Loads variants and cached annotations from DB,
@@ -347,6 +388,7 @@ async def regenerate_insights(analysis_id: int, user_id: Optional[int] = None) -
             variants, annotation_results, analysis_id,
             rsid_gene_map, registry, progress,
             inferred_sex=inferred_sex,
+            only_categories=only_categories,
         )
 
         # Invalidate dashboard cache
