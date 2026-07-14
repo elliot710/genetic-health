@@ -545,18 +545,27 @@ function CategoryHighlights({
     })
   }
 
-  // Ancestry
+  // Ancestry — the generator writes a single row whose `composition` array
+  // holds the multi-population breakdown, so count/list those regions rather
+  // than the row count (which is always 1).
   if (Array.isArray(data.ancestry_results) && data.ancestry_results.length > 0) {
+    const composition = data.ancestry_results[0]?.composition ?? []
+    const regions = composition.length > 0
+      ? composition.map((r) => ({ region: r.region, percentage: r.percentage }))
+      : data.ancestry_results.map((a) => ({
+          region: a.population,
+          percentage: typeof a.percentage === 'number' ? a.percentage : Number(a.percentage) || 0,
+        }))
     categoryCards.push({
       id: 'ancestry',
       title: 'Ancestry & Origins',
       icon: Target,
       gradient: 'from-indigo-500 to-blue-500',
-      items: data.ancestry_results.slice(0, 3).map((a) => ({
-        label: a.population,
-        value: typeof a.percentage === 'number' ? `${a.percentage}%` : a.percentage,
+      items: regions.slice(0, 3).map((r) => ({
+        label: r.region,
+        value: `${r.percentage}%`,
       })),
-      summary: `${data.ancestry_results.length} populations identified`,
+      summary: `${regions.length} ${regions.length === 1 ? 'population' : 'populations'} identified`,
       hasData: true,
     })
   }
