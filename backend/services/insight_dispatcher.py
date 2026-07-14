@@ -90,16 +90,28 @@ def _build_insight_status(
     failed_generators: List[str],
     total_insights: int,
     generators_total: int,
+    enrichment_status: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """Per-category generation outcome, persisted so a partially-generated
-    dashboard is an honest, visible state rather than a silent gap."""
+    """Per-category generation outcome with three distinct states so a
+    partially-generated dashboard is honest rather than a silent gap:
+    - generated:   produced >0 insights
+    - no_findings: ran cleanly but found nothing (legitimate, NOT a failure)
+    - failed:      raised an exception
+
+    A category producing zero insights is a legitimate "no findings" outcome
+    and counts toward `generators_succeeded`. `gwas_enrichment` augments other
+    category panels rather than being a category itself, so it is tracked under
+    `enrichment` and never counted against `generators_total`."""
     generated = [name for name, s in category_status.items() if s.get("status") == "generated"]
+    no_findings = [name for name, s in category_status.items() if s.get("status") == "empty"]
     return {
         "total_insights": total_insights,
         "generators_total": generators_total,
-        "generators_succeeded": len(category_status) - len(failed_generators),
+        "generators_succeeded": len(generated) + len(no_findings),
         "generated": generated,
+        "no_findings": no_findings,
         "failed": list(failed_generators),
+        "enrichment": enrichment_status or {},
         "categories": category_status,
     }
 
@@ -248,7 +260,11 @@ async def generate_comprehensive_insights(
         logger.warning(f"  {len(failed_generators)} generator(s) failed: {', '.join(failed_generators)}")
 
     # GWAS enrichment pass: add insights from genome-wide significant
-    # associations that weren't covered by registry-based generators
+    # associations that weren't covered by registry-based generators. This
+    # augments existing category panels rather than being a category of its
+    # own, so its outcome is tracked in `enrichment_status` — never counted
+    # against the 14 categories in completeness/coverage.
+    enrichment_status: Dict[str, Dict[str, Any]] = {}
     if gwas_variants and not only_categories:
         try:
             all_gwas_pool = interesting_variants + gwas_variants
@@ -267,18 +283,18 @@ async def generate_comprehensive_insights(
                 gwas_count = await generate_gwas_enrichment(gwas_ctx, existing_keys)
                 await gwas_session.commit()
             insights_generated += gwas_count
-            category_status["gwas_enrichment"] = {
+            enrichment_status["gwas_enrichment"] = {
                 "status": "generated" if gwas_count > 0 else "empty",
                 "count": gwas_count,
             }
             logger.info(f"  GWAS enrichment: {gwas_count} additional insights")
         except Exception as e:
-            failed_generators.append("gwas_enrichment")
-            category_status["gwas_enrichment"] = {"status": "failed", "count": 0}
+            enrichment_status["gwas_enrichment"] = {"status": "failed", "count": 0}
             logger.error(f"  GWAS enrichment: FAILED — {e}")
 
     insight_status = _build_insight_status(
-        category_status, failed_generators, insights_generated, total_generators
+        category_status, failed_generators, insights_generated,
+        total_generators, enrichment_status,
     )
     try:
         from sqlalchemy import update as sa_update

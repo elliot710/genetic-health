@@ -152,6 +152,42 @@ class TestBuildSubpopComposition:
         assert len(result) == 1
         assert result[0]["percentage"] == 30.0
 
+    def test_preserves_dropped_european_mass_as_remainder(self):
+        # bgr survives; the small sub-pops are dropped — their European mass
+        # must not vanish. It is preserved as an "Other European" remainder so
+        # the composition still sums to (roughly) the European total.
+        result = self._fn()(
+            {"nfe_bgr": 40.0, "nfe_est": 0.2, "nfe_nwe": 0.2, "fin": 0.2},
+            79.0, self._make_defs(),
+        )
+        assert abs(sum(e["percentage"] for e in result) - 79.0) < 1.0
+        assert any(e["region"] == "Other European" for e in result)
+
+    def test_no_remainder_when_entries_fully_allocate(self):
+        result = self._fn()({"nfe_nwe": 100.0}, 30.0, self._make_defs())
+        assert all(e["region"] != "Other European" for e in result)
+
+    def test_no_remainder_when_all_dropped(self):
+        # Nothing survives -> return empty; the super-pop fallback in
+        # _build_full_composition preserves the European fraction instead.
+        result = self._fn()({"nfe_nwe": 0.1}, 50.0, self._make_defs())
+        assert result == []
+
+
+class TestConfidenceBand:
+    def _fn(self):
+        from backend.services.insight_generators.ancestry import _confidence_band
+        return _confidence_band
+
+    def test_high_above_60(self):
+        assert self._fn()(65.0) == "high"
+
+    def test_moderate_between_35_and_60(self):
+        assert self._fn()(40.0) == "moderate"
+
+    def test_low_at_or_below_35(self):
+        assert self._fn()(30.0) == "low"
+
 
 class TestBuildFullComposition:
     """Tests for _build_full_composition."""

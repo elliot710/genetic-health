@@ -404,6 +404,22 @@ def _build_subpop_composition(
             "origin": defn.get("origin", ""),
             "description": defn.get("description", ""),
         })
+
+    # Preserve any European mass dropped by the per-entry thresholds as an
+    # "Other European" remainder so the composition still sums to the European
+    # total. Without this the breakdown shrinks to whatever few sub-populations
+    # survived — the "collapsed to one population" symptom. Only applies when at
+    # least one sub-pop survived; when none do, returning [] lets the super-pop
+    # fallback in _build_full_composition keep the European fraction.
+    if entries:
+        remainder = round(eur_total_pct - sum(e["percentage"] for e in entries), 1)
+        if remainder >= 0.5:
+            entries.append({
+                "region": "Other European",
+                "percentage": remainder,
+                "origin": "Europe",
+                "description": "Other European sub-populations",
+            })
     return sorted(entries, key=lambda x: x["percentage"], reverse=True)
 
 
@@ -440,6 +456,16 @@ def _build_full_composition(
         )
 
     return sorted(composition, key=lambda x: x["percentage"], reverse=True)
+
+
+def _confidence_band(primary_pct: float) -> str:
+    """Confidence for the dominant population: a ~40 % primary is 'moderate',
+    not 'high' — the dominant share must be clearly majority to claim high."""
+    return (
+        "high" if primary_pct > 60
+        else "moderate" if primary_pct > 35
+        else "low"
+    )
 
 
 # ── Main generator ──────────────────────────────────────────────────
@@ -560,11 +586,7 @@ async def generate_ancestry_results(ctx: GeneratorContext) -> int:
         primary_pct = super_pcts[dominant_super]
         primary_origin = SUPER_POP_ORIGINS.get(dominant_super, "")
 
-    confidence = (
-        "high" if primary_pct > 60
-        else "moderate" if primary_pct > 35
-        else "low"
-    )
+    confidence = _confidence_band(primary_pct)
 
     logger.info(
         f"Ancestry: {primary_pop} {primary_pct}% ({confidence}) | "

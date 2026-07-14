@@ -137,6 +137,8 @@ export default function DashboardOverview({
         const succeeded = ist?.generators_succeeded
         const total = ist?.generators_total
         const failed = ist?.failed ?? []
+        const noFindings = ist?.no_findings ?? []
+        const fmtCategory = (name: string) => name.replace(/_/g, ' ')
         return (
           <section
             aria-label="Analysis completeness"
@@ -177,11 +179,17 @@ export default function DashboardOverview({
               </div>
             )}
 
+            {noFindings.length > 0 && (
+              <p className={`text-xs ${theme.text.muted} mt-3`}>
+                No findings in {noFindings.length} {noFindings.length === 1 ? 'category' : 'categories'}: {noFindings.map(fmtCategory).join(', ')}
+              </p>
+            )}
+
             {failed.length > 0 && (
-              <div className="flex items-start gap-2 mt-3">
+              <div className="flex items-start gap-2 mt-3" role="alert">
                 <AlertTriangle className="h-4 w-4 text-amber-500 flex-shrink-0 mt-0.5" aria-hidden="true" />
                 <p className={`text-xs ${theme.text.muted}`}>
-                  {failed.length} {failed.length === 1 ? 'category' : 'categories'} could not be generated: {failed.join(', ')}
+                  {failed.length} {failed.length === 1 ? 'category' : 'categories'} could not be generated: {failed.map(fmtCategory).join(', ')}
                 </p>
               </div>
             )}
@@ -537,18 +545,27 @@ function CategoryHighlights({
     })
   }
 
-  // Ancestry
+  // Ancestry — the generator writes a single row whose `composition` array
+  // holds the multi-population breakdown, so count/list those regions rather
+  // than the row count (which is always 1).
   if (Array.isArray(data.ancestry_results) && data.ancestry_results.length > 0) {
+    const composition = data.ancestry_results[0]?.composition ?? []
+    const regions = composition.length > 0
+      ? composition.map((r) => ({ region: r.region, percentage: r.percentage }))
+      : data.ancestry_results.map((a) => ({
+          region: a.population,
+          percentage: typeof a.percentage === 'number' ? a.percentage : Number(a.percentage) || 0,
+        }))
     categoryCards.push({
       id: 'ancestry',
       title: 'Ancestry & Origins',
       icon: Target,
       gradient: 'from-indigo-500 to-blue-500',
-      items: data.ancestry_results.slice(0, 3).map((a) => ({
-        label: a.population,
-        value: typeof a.percentage === 'number' ? `${a.percentage}%` : a.percentage,
+      items: regions.slice(0, 3).map((r) => ({
+        label: r.region,
+        value: `${r.percentage}%`,
       })),
-      summary: `${data.ancestry_results.length} populations identified`,
+      summary: `${regions.length} ${regions.length === 1 ? 'population' : 'populations'} identified`,
       hasData: true,
     })
   }
