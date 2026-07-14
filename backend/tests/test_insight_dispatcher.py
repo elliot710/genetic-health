@@ -77,6 +77,70 @@ class TestBuildInsightStatus:
         assert status["generators_succeeded"] == 2
 
 
+class TestThreeStateModel:
+    def _statuses(self):
+        return {
+            "health_risks": {"status": "generated", "count": 5},
+            "ancestry_results": {"status": "empty", "count": 0},
+            "drug_responses": {"status": "failed", "count": 0},
+        }
+
+    def test_no_findings_lists_empty_categories(self):
+        status = _build_insight_status(self._statuses(), ["drug_responses"], 5, 14)
+        assert status["no_findings"] == ["ancestry_results"]
+
+    def test_no_findings_counts_as_succeeded(self):
+        status = _build_insight_status(self._statuses(), ["drug_responses"], 5, 14)
+        assert status["generators_succeeded"] == 2
+
+    def test_enrichment_tracked_separately_not_as_category(self):
+        enrichment = {"gwas_enrichment": {"status": "empty", "count": 0}}
+        status = _build_insight_status(self._statuses(), ["drug_responses"], 5, 14, enrichment)
+        assert status["enrichment"] == enrichment
+        assert "gwas_enrichment" not in status["failed"]
+        assert "gwas_enrichment" not in status["generated"]
+        assert "gwas_enrichment" not in status["no_findings"]
+        assert status["generators_total"] == 14
+
+
+class TestDispatcherStatusAccounting:
+    @pytest.mark.asyncio
+    async def test_empty_generator_is_no_findings_not_failed(self):
+        captured: dict = {}
+        real = _build_insight_status
+
+        def _capture(category_status, failed, total_insights, generators_total, enrichment=None):
+            captured["category_status"] = dict(category_status)
+            captured["failed"] = list(failed)
+            return real(category_status, failed, total_insights, generators_total, enrichment)
+
+        async def gen_empty(ctx):
+            return 0
+
+        async def gen_full(ctx):
+            return 3
+
+        fake = [("empty_panel", gen_empty), ("full_panel", gen_full)]
+
+        with patch("backend.services.insight_dispatcher.async_session_factory",
+                   return_value=_mock_session_ctx()), \
+             patch("backend.services.insight_dispatcher.delete"), \
+             patch("backend.services.insight_dispatcher.ALL_GENERATORS", fake), \
+             patch("backend.services.insight_dispatcher.build_variant_profiles",
+                   AsyncMock(return_value={})), \
+             patch("backend.services.insight_dispatcher._build_insight_status",
+                   side_effect=_capture):
+            await generate_comprehensive_insights(
+                variants=[], annotation_results={}, analysis_id=1,
+                rsid_gene_map={}, registry={}, progress=_make_progress(),
+            )
+
+        assert captured["failed"] == []
+        assert captured["category_status"]["empty_panel"]["status"] == "empty"
+        assert captured["category_status"]["full_panel"]["status"] == "generated"
+        assert "gwas_enrichment" not in captured["category_status"]
+
+
 class TestTargetedRegeneration:
     def _fake_generators(self, calls):
         async def gen_health(ctx):
