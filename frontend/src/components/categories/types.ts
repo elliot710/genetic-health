@@ -233,6 +233,8 @@ export interface DashboardData {
       generators_succeeded?: number
       failed?: string[]
       generated?: string[]
+      no_findings?: string[]
+      enrichment?: Record<string, { status: string; count: number }>
     } | null
     coverage?: {
       score: number | null

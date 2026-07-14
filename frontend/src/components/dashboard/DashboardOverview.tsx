@@ -137,6 +137,8 @@ export default function DashboardOverview({
         const succeeded = ist?.generators_succeeded
         const total = ist?.generators_total
         const failed = ist?.failed ?? []
+        const noFindings = ist?.no_findings ?? []
+        const fmtCategory = (name: string) => name.replace(/_/g, ' ')
         return (
           <section
             aria-label="Analysis completeness"
@@ -177,11 +179,17 @@ export default function DashboardOverview({
               </div>
             )}
 
+            {noFindings.length > 0 && (
+              <p className={`text-xs ${theme.text.muted} mt-3`}>
+                No findings in {noFindings.length} {noFindings.length === 1 ? 'category' : 'categories'}: {noFindings.map(fmtCategory).join(', ')}
+              </p>
+            )}
+
             {failed.length > 0 && (
-              <div className="flex items-start gap-2 mt-3">
+              <div className="flex items-start gap-2 mt-3" role="alert">
                 <AlertTriangle className="h-4 w-4 text-amber-500 flex-shrink-0 mt-0.5" aria-hidden="true" />
                 <p className={`text-xs ${theme.text.muted}`}>
-                  {failed.length} {failed.length === 1 ? 'category' : 'categories'} could not be generated: {failed.join(', ')}
+                  {failed.length} {failed.length === 1 ? 'category' : 'categories'} could not be generated: {failed.map(fmtCategory).join(', ')}
                 </p>
               </div>
             )}
