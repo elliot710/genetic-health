@@ -7,6 +7,7 @@ import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import VariantDetailDialog from './VariantDetailDialog'
 import {
+  getTheme,
   getGlassBackground,
   getGlassBorder,
   getTextPrimary,
@@ -16,8 +17,14 @@ import {
 
 // ─── Theme Hook ────────────────────────────────────────────────
 
+// Single source of truth: delegate to the canonical getTheme() object so
+// category panels can reach the full token set (text.*, primary, success/
+// error/warning, categories, interactive, form). The flat aliases below are
+// preserved verbatim so existing `theme.glass|border|textPrimary|...` call
+// sites keep their exact classes — this consolidation changes nothing visual.
 export function useThemeClasses(isDarkMode: boolean) {
   return {
+    ...getTheme(isDarkMode),
     glass: getGlassBackground(isDarkMode),
     border: getGlassBorder(isDarkMode),
     textPrimary: getTextPrimary(isDarkMode),
