@@ -21,7 +21,7 @@ from ..db.models import (
     AnnotationSourceConfig, EnsemblGene,
 )
 from ..core.exceptions import AnalysisNotFoundException
-from .analysis_service import _MarkerLite, VariantLite, AnnotationResult
+from .variant_types import _MarkerLite, VariantLite, AnnotationResult
 
 logger = logging.getLogger(__name__)
 

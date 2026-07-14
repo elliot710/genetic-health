@@ -1,0 +1,93 @@
+# .claudeignore — keep heavy / noise files out of Claude's context.
+# Syntax = .gitignore. Source code and config stay VISIBLE on purpose;
+# only dependencies, build output, caches, big data, and secrets are hidden.
+
+# ── Dependencies ────────────────────────────────────────────────
+node_modules/
+.venv/
+venv/
+env/
+ENV/
+.npm/
+.yarn/
+.pnpm-store/
+wheels/
+*.egg-info/
+
+# ── Lockfiles (huge, low signal) ────────────────────────────────
+uv.lock
+pnpm-lock.yaml
+package-lock.json
+package-lock.json.bak
+yarn.lock
+
+# ── Build output ────────────────────────────────────────────────
+dist/
+build/
+out/
+frontend/.next/
+*.tsbuildinfo
+next-env.d.ts
+*.js.map
+
+# ── Python caches ───────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# ── Coverage ────────────────────────────────────────────────────
+.coverage
+coverage.json
+htmlcov/
+
+# ── Tooling / agent caches ──────────────────────────────────────
+.serena/
+.playwright-mcp/
+
+# ── Big DNA / genomic data & DB dumps (token sinks) ─────────────
+raw_dna_data.csv
+Genetic_Genie*
+backups/
+*.dump
+*.db
+data_sources/**/.tkg_cache/
+data_sources/**/.clinvar_cache/
+data_sources/**/.vep_cache/
+data_sources/**/*.vcf
+data_sources/**/*.vcf.gz
+data_sources/**/*.txt
+data_sources/**/*.txt.gz
+
+# ── Secrets & environment ───────────────────────────────────────
+.env
+.env.*
+!.env.example
+genetic-health-*.json
+*.pem
+*.key
+
+# ── Test / report artifacts ─────────────────────────────────────
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+allure-results/
+allure-report/
+traces/
+videos/
+screenshots/
+*.webm
+
+# ── Logs ────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── OS files ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

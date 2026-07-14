@@ -22,7 +22,7 @@ from ..core.exceptions import AnalysisNotFoundException
 from ..core.config import settings
 from ..core.telemetry import get_tracer
 from .job_logs import JobLogCollector
-from .shared_annotation_service import SharedVariantAnnotationService
+from .variant_types import AnnotationResult
 
 logger = logging.getLogger(__name__)
 tracer = get_tracer(__name__)
@@ -65,61 +65,6 @@ class AnalysisProgress:
         offset = self._PHASE_OFFSETS.get(self.phase, 0)
         weight = self._PHASE_WEIGHTS.get(self.phase, 0)
         return min(99, int(offset + weight * self.phase_progress))
-
-
-@dataclass
-class AnnotationResult:
-    """Result of variant annotation with reuse tracking."""
-    rsid: str
-    was_reused: bool
-    annotation_data: Optional[Dict[str, Any]]
-    source: str  # 'existing', 'api', 'failed'
-
-
-@dataclass
-class _MarkerLite:
-    """Lightweight marker proxy — avoids SQLAlchemy ORM overhead for 600k+ variants."""
-    id: int
-    rsid: Optional[str]
-    chromosome: Optional[str]
-    position: Optional[int]
-    ref_allele: Optional[str]
-    alt_alleles: Optional[str]
-    gene_symbol: Optional[str] = None  # Cached gene symbol (PERF-04)
-
-
-@dataclass
-class VariantLite:
-    """Lightweight variant with the same public interface as AnalysisVariant.
-
-    Using Core SQL rows + dataclasses instead of ORM objects avoids the
-    60-90 second event-loop stall caused by SQLAlchemy materialising
-    600k+ ORM instances after selectinload returns.
-    """
-    id: int
-    analysis_id: int
-    marker_id: int
-    genotype: Optional[str]
-    quality: Optional[str]
-    filter_status: Optional[str]
-    info: Optional[dict]
-    marker: '_MarkerLite'
-
-    # Proxy properties to match AnalysisVariant interface
-    @property
-    def rsid(self): return self.marker.rsid
-
-    @property
-    def chromosome(self): return self.marker.chromosome
-
-    @property
-    def position(self): return self.marker.position
-
-    @property
-    def ref_allele(self): return self.marker.ref_allele
-
-    @property
-    def alt_allele(self): return self.marker.alt_alleles
 
 
 # ---------------------------------------------------------------------------
@@ -306,20 +251,23 @@ class ComprehensiveAnalysisService:
         logger.info(f"Phase 1/4 complete: {len(self._rsid_gene_map)} genes mapped")
 
     async def _run_phase2_annotations(self, analysis_id, variants, progress):
-        from ..db.database import async_session_factory
-
         progress.phase = 2
         progress.phase_progress = 0.0
         progress.current_step = "annotating_variants"
         await self._update_progress(analysis_id, progress)
         logger.info("Phase 2/4: Annotating variants")
 
+        from .annotation_coordinator import annotate_variants_efficiently
+
         with tracer.start_as_current_span("analysis.phase2.annotate_variants") as span:
             span.set_attribute("variant.count", len(variants))
-            annotation_service = SharedVariantAnnotationService()
-            annotation_results = await self._annotate_variants_efficiently(
-                variants, analysis_id, annotation_service, progress,
+            annotation_results = await annotate_variants_efficiently(
+                variants, analysis_id, progress,
+                api_service=self.api_service,
+                enabled_sources=await self._load_enabled_sources(),
+                rsid_gene_map=self._rsid_gene_map,
                 update_progress_fn=self._update_progress,
+                check_cancelled_fn=self._check_if_cancelled,
             )
             span.set_attribute("annotation.reused", progress.reused_annotations)
             span.set_attribute("annotation.new", progress.new_annotations)
@@ -337,17 +285,18 @@ class ComprehensiveAnalysisService:
         total_variants = len(annotation_results)
         logger.info(f"Phase 3/4: BigQuery + Open Targets enrichment ({total_variants} variants)")
 
-        with tracer.start_as_current_span("analysis.phase3.bigquery_enrichment"):
-            logger.info("Phase 3/4 [1/3]: Starting BigQuery enrichment (ChEMBL, FDA Drug)")
-            await self._bulk_enrich_bigquery(annotation_results, analysis_id, progress)
-            logger.info("Phase 3/4 [1/3]: BigQuery enrichment complete")
+        # BigQuery enrichment writes chembl_data/fda_drug_data; Open Targets writes
+        # open_targets_data — disjoint columns and disjoint in-memory keys, so the
+        # two network-bound passes run concurrently.
+        with tracer.start_as_current_span("analysis.phase3.enrichment"):
+            logger.info("Phase 3/4 [1/2]: Enriching (BigQuery ChEMBL/FDA + Open Targets)")
+            await asyncio.gather(
+                self._bulk_enrich_bigquery(annotation_results, analysis_id, progress),
+                self._bulk_enrich_open_targets(annotation_results),
+            )
+            logger.info("Phase 3/4 [1/2]: BigQuery + Open Targets enrichment complete")
 
-        with tracer.start_as_current_span("analysis.phase3.open_targets"):
-            logger.info("Phase 3/4 [2/3]: Starting Open Targets enrichment")
-            await self._bulk_enrich_open_targets(annotation_results)
-            logger.info("Phase 3/4 [2/3]: Open Targets enrichment complete")
-
-        logger.info("Phase 3/4 [3/3]: Enriching mappings from annotations")
+        logger.info("Phase 3/4 [2/2]: Enriching mappings from annotations")
         new_mappings = await self._enrich_mappings_from_annotations(annotation_results)
         if new_mappings > 0:
             await self._load_registry()
@@ -378,7 +327,7 @@ class ComprehensiveAnalysisService:
         progress.processed_variants = len(variants)
         progress.phase = 4
         progress.phase_progress = 1.0
-        await self._update_progress(analysis_id, progress, force_percentage=100)
+        await self._update_progress(analysis_id, progress, force_percentage=100, completed=True)
 
         try:
             from ..db.database import async_session_factory
@@ -436,21 +385,6 @@ class ComprehensiveAnalysisService:
         """Delegate to variant_loader."""
         from .variant_loader import correct_ref_alleles
         await correct_ref_alleles(variants, annotation_results)
-
-    async def _annotate_variants_efficiently(
-        self, variants, analysis_id, annotation_service, progress,
-        update_progress_fn=None,
-    ) -> Dict[str, AnnotationResult]:
-        """Delegate to annotation_coordinator."""
-        from .annotation_coordinator import annotate_variants_efficiently
-        return await annotate_variants_efficiently(
-            variants, analysis_id, annotation_service, progress,
-            api_service=self.api_service,
-            enabled_sources=await self._load_enabled_sources(),
-            rsid_gene_map=self._rsid_gene_map,
-            update_progress_fn=update_progress_fn,
-            check_cancelled_fn=self._check_if_cancelled,
-        )
 
     async def _bulk_enrich_bigquery(self, annotation_results, analysis_id, progress):
         """Delegate to annotation_coordinator."""
@@ -614,17 +548,19 @@ class ComprehensiveAnalysisService:
     # ------------------------------------------------------------------
 
     async def _update_progress(self, analysis_id: int, progress: AnalysisProgress,
-                               *, force_percentage: Optional[int] = None):
+                               *, force_percentage: Optional[int] = None,
+                               completed: bool = False):
         pct = force_percentage if force_percentage is not None else progress.progress_percentage
-        await self._update_db(
-            analysis_id,
+        values = dict(
             progress_percentage=pct,
             processed_variants=progress.processed_variants,
             current_step=progress.current_step,
             analysis_status=progress.status,
             estimated_completion=progress.estimated_completion,
-            guard_paused=True,
         )
+        if completed:
+            values["completed_at"] = func.now()
+        await self._update_db(analysis_id, guard_paused=True, **values)
 
     async def _update_analysis_status(self, analysis_id: int, status: str, step: str):
         await self._update_db(analysis_id, analysis_status=status, current_step=step)

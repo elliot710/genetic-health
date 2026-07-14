@@ -311,7 +311,7 @@ async def _backfill_source(params: dict, job_id: Optional[int] = None) -> dict:
 
             try:
                 if source_name == 'alpha_missense':
-                    from backend.api.admin_routes import _extract_am_coords
+                    from backend.api.admin.annotation_sources import _extract_am_coords
                     from backend.utils.alpha_missense import get_alpha_missense_service
                     coords = _extract_am_coords(ann.ensembl_data)
                     if coords:

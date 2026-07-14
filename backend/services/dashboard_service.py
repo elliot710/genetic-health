@@ -169,6 +169,33 @@ async def build_dashboard_for_user(db: AsyncSession, user_id: int) -> Optional[D
     return dashboard_data
 
 
+def _analysis_coverage(insight_status, processed_variants, total_variants) -> Dict[str, Any]:
+    """Honest per-analysis completeness: the mean of the variant-annotation rate
+    and the insight-category success rate, each 0-1. Either input may be missing
+    (older analyses have no insight_status); score is None only when neither is
+    available."""
+    processed_variants = processed_variants or 0
+    total_variants = total_variants or 0
+    variant_rate = (processed_variants / total_variants) if total_variants else None
+
+    category_rate = None
+    categories = None
+    if isinstance(insight_status, dict):
+        generators_total = insight_status.get("generators_total") or 0
+        generators_succeeded = insight_status.get("generators_succeeded")
+        if generators_total and generators_succeeded is not None:
+            category_rate = generators_succeeded / generators_total
+            categories = {"succeeded": generators_succeeded, "total": generators_total}
+
+    rates = [r for r in (variant_rate, category_rate) if r is not None]
+    score = round(100 * sum(rates) / len(rates)) if rates else None
+    return {
+        "score": score,
+        "variant_annotation": {"processed": processed_variants, "total": total_variants},
+        "insight_categories": categories,
+    }
+
+
 async def _assemble_dashboard(
     db: AsyncSession, analyses, primary_analysis, analysis_ids: List[int],
 ) -> Dict[str, Any]:
@@ -187,6 +214,11 @@ async def _assemble_dashboard(
             "status": primary_analysis.analysis_status,
             "upload_date": upload_date.isoformat() if upload_date else None,
             "filename": getattr(primary_analysis, 'filename', None),
+            "insight_status": getattr(primary_analysis, 'insight_status', None),
+            "coverage": _analysis_coverage(
+                getattr(primary_analysis, 'insight_status', None),
+                processed_variants, total_variants,
+            ),
         },
     }
 

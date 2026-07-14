@@ -36,7 +36,7 @@ SOURCE_TO_COLUMN: Dict[str, str] = {
     #     pipeline is single-writer — annotation_coordinator writes
     #     ensembl_data only from the local ensembl_vep source.
     #   - The only place both sources can be in play together is the admin
-    #     retrigger/backfill path (_retrigger_sources in admin_routes.py).
+    #     retrigger/backfill path (_retrigger_sources in admin/annotation_sources.py).
     #     That path MUST NOT let a retrigger of 'ensembl' blindly overwrite
     #     an already-populated (found=True) ensembl_data value — it skips
     #     the clobbering write instead (see the guard + log there). Do not

@@ -32,12 +32,12 @@ A full-stack genetic data analysis platform that provides personalised health in
 
 ## Quick Start (Docker)
 
-\`\`\`bash
+```bash
 git clone git@github.com:elliot710/genetic-health.git dna_toolkit
 cd dna_toolkit
 cp .env.example .env          # fill in API keys
 docker compose up --build
-\`\`\`
+```
 
 | Service | URL |
 |---------|-----|
@@ -51,7 +51,7 @@ docker compose up --build
 
 ## Project Structure
 
-\`\`\`
+```
 ├── backend/
 │   ├── main.py                 # FastAPI app, CORS, router mounts
 │   ├── worker.py               # Background analysis worker
@@ -69,7 +69,7 @@ docker compose up --build
 ├── data_sources/               # Local annotation files (not in git)
 ├── deploy.sh                   # Production deploy script
 └── docker-compose.yml
-\`\`\`
+```
 
 ---
 
@@ -77,24 +77,24 @@ docker compose up --build
 
 ### Local (without Docker)
 
-\`\`\`bash
+```bash
 # Backend
 cd backend
 PYTHONPATH=.. uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 # Frontend
 cd frontend && npm run dev      # Turbopack
-\`\`\`
+```
 
 ### Database migrations
 
-\`\`\`bash
+```bash
 # Apply all pending migrations
 docker exec dna_toolkit-backend-1 uv run alembic upgrade head
 
 # Create a new migration
 docker exec dna_toolkit-backend-1 uv run alembic revision --autogenerate -m "description"
-\`\`\`
+```
 
 ---
 
@@ -102,12 +102,12 @@ docker exec dna_toolkit-backend-1 uv run alembic revision --autogenerate -m "des
 
 A `deploy.sh` script handles the full production deploy from your local machine:
 
-\`\`\`bash
+```bash
 ./deploy.sh                   # pull + migrate + rebuild backend, worker, frontend
 ./deploy.sh --backend-only    # skip frontend rebuild (faster)
 ./deploy.sh --frontend-only   # UI changes only
 ./deploy.sh --no-build        # pull + migrate only
-\`\`\`
+```
 
 The script uses the server's `~/.ssh/github_deploy` deploy key, stashes any manual hotfixes, runs migrations, rebuilds Docker images, and waits for a healthy backend before exiting.
 

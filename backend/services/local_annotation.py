@@ -385,7 +385,9 @@ async def run_all_lookups(
                 logger.info(f"  gnomAD v2: PG found {pg_found}/{len(v2_candidates)} "
                             f"({time.monotonic() - t0:.1f}s)")
             else:
-                # Strategy 2: tabix position lookup (slower — per-variant seeks)
+                # Strategy 2: tabix position lookup (slower — per-variant seeks).
+                # Position seeks assume the user's coordinates are on the same
+                # build as the VCF (gnomAD v2 = GRCh37); no build detection yet.
                 pos_tuples = _build_pos_tuples(v2_candidates, rsid_to_variant)
                 logger.info(f"  gnomAD v2: tabix position lookup for {len(pos_tuples)} variants "
                             f"({len(v2_candidates)} unfound RSIDs)...")
@@ -398,6 +400,7 @@ async def run_all_lookups(
                     results.gnomad[rsid] = {
                         "found": True,
                         "source": "gnomad_v2_exome",
+                        "assembly": sources.gnomad_v2.ASSEMBLY,
                         "rsid": rsid,
                         "af": afs.get("af_nfe"),
                         "population_afs": {

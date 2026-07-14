@@ -7,7 +7,7 @@ import {
   Dna, Shield, Info, ExternalLink 
 } from 'lucide-react'
 import { getTheme } from '../utils/theme'
-import { apiUrl } from '@/lib/api'
+import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Disclaimer } from '@/components/Disclaimer'
 import type { DashboardData } from '@/components/categories/types'
@@ -43,19 +43,13 @@ export default function FileUpload({ onAnalysisComplete, token, isDarkMode }: Fi
       }, 150)
 
       // Upload file to backend — returns immediately after parsing
-      const uploadResponse = await fetch(apiUrl(`/upload/${fileType}`), {
+      const uploadResponse = await apiFetch(`/upload/${fileType}`, {
         method: 'POST',
-        credentials: 'include',
         body: formData,
       })
 
       clearInterval(progressInterval)
       setProgress(100)
-
-      if (!uploadResponse.ok) {
-        const errorData = await uploadResponse.json()
-        throw new Error(errorData.detail || 'Upload failed')
-      }
 
       const uploadResult = await uploadResponse.json()
       const analysisId = uploadResult.analysis_id

@@ -62,6 +62,12 @@ class GnomadV2Service:
     3. Sequential VCF scan (bulk) — for ancestry panel refresh
     """
 
+    # Genome build of the underlying VCF/PG data. rsID lookups (strategies 1)
+    # are build-independent; the tabix position fallback (strategy 2) uses the
+    # user variant's coordinates as-is and therefore assumes the upload is on
+    # this same build — the pipeline does not yet detect the upload's build.
+    ASSEMBLY = "GRCh37"
+
     def __init__(self):
         self._vcf_files: Dict[str, Path] = {}   # chrom → path (e.g. "1" → Path)
         self._loaded = False

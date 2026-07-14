@@ -18,7 +18,7 @@ from ..services.notification_service import get_notification_service
 from ..services.dashboard_service import (
     EMPTY_DASHBOARD, analysis_fingerprint, stale_or_placeholder,
     build_dashboard_for_user, persist_dashboard_cache,
-    _assemble_dashboard,
+    _assemble_dashboard, _analysis_coverage,
 )
 
 logger = logging.getLogger(__name__)
@@ -235,6 +235,12 @@ async def get_analysis_results(
             "processed_variants": getattr(analysis, 'processed_variants', 0) or 0,
             "total_variants": getattr(analysis, 'total_variants', 0) or 0,
             "upload_date": upload_date.isoformat() if upload_date else None,
+            "insight_status": getattr(analysis, 'insight_status', None),
+            "coverage": _analysis_coverage(
+                getattr(analysis, 'insight_status', None),
+                getattr(analysis, 'processed_variants', 0),
+                getattr(analysis, 'total_variants', 0),
+            ),
         }
     except HTTPException:
         raise

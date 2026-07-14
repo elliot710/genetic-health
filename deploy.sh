@@ -13,8 +13,9 @@
 #
 # The script:
 #   1. Pulls latest code on the server using the deploy key
-#   2. Runs database migrations (alembic upgrade head)
-#   3. Rebuilds and restarts the requested containers
+#   2. Builds the new backend image, runs migrations WITH that image
+#      (alembic upgrade head) so new migrations are never skipped, then restarts
+#   3. Rebuilds the frontend
 #   4. Tails backend logs briefly to confirm startup
 
 set -euo pipefail
@@ -99,37 +100,49 @@ echo "  HEAD: $(git log -1 --oneline)"
 REMOTE
 success "Code updated"
 
-# ── Migrations ───────────────────────────────────────────────────────────────
-info "Running database migrations …"
-ssh "$SERVER" bash -s -- "$APP_DIR" "$BACKEND_CONTAINER" <<'REMOTE'
-set -euo pipefail
-APP_DIR="$1"
-CONTAINER="$2"
-cd "$APP_DIR"
-# Container may still be starting after a prior build — wait briefly
-for i in 1 2 3 4 5; do
-  STATUS=$(docker inspect --format '{{.State.Status}}' "$CONTAINER" 2>/dev/null || echo "absent")
-  [[ "$STATUS" == "running" ]] && break
-  echo "  Waiting for $CONTAINER to be running (attempt $i/5) …"
-  sleep 4
-done
-docker exec "$CONTAINER" uv run alembic upgrade head
-echo "  Migration version: $(docker exec "$CONTAINER" uv run alembic current 2>&1 | grep '(' | head -1)"
-REMOTE
-success "Migrations applied"
-
-# ── Rebuild containers ───────────────────────────────────────────────────────
+# ── Build → migrate → restart ────────────────────────────────────────────────
+# IMPORTANT ordering: migrations must run with the NEWLY BUILT image. If they run
+# against the still-running old container (as they used to), `alembic upgrade
+# head` executes with the old migration files and silently skips any new
+# migration. So: build the image first, apply migrations via a one-off container
+# from that new image (before the live app is recreated, so it never serves an
+# un-migrated schema), then recreate the running containers.
 if [[ "$SKIP_BUILD" == true ]]; then
-  warn "Skipping container rebuild (--no-build)"
+  # --no-build: no new image is built, so migrate against the running container.
+  info "Running database migrations (no rebuild — uses the running backend) …"
+  ssh "$SERVER" bash -s -- "$APP_DIR" "$BACKEND_CONTAINER" <<'REMOTE'
+set -euo pipefail
+cd "$1"
+docker exec "$2" uv run alembic upgrade head
+echo "  Migration version: $(docker exec "$2" uv run alembic current 2>&1 | grep '(' | head -1)"
+REMOTE
+  success "Migrations applied"
 else
   if [[ "$BUILD_BACKEND" == true ]]; then
-    info "Rebuilding backend + worker …"
+    info "Building backend + worker images …"
     ssh "$SERVER" bash -s -- "$APP_DIR" <<'REMOTE'
 set -euo pipefail
 cd "$1"
-docker compose up -d --build backend worker 2>&1 | grep -E 'Built|Started|Recreated|error' || true
+docker compose build backend worker
 REMOTE
-    success "Backend + worker rebuilt"
+    success "Images built"
+
+    info "Running database migrations (new image) …"
+    ssh "$SERVER" bash -s -- "$APP_DIR" <<'REMOTE'
+set -euo pipefail
+cd "$1"
+docker compose run --rm backend uv run alembic upgrade head
+REMOTE
+    success "Migrations applied"
+
+    info "Restarting backend + worker …"
+    ssh "$SERVER" bash -s -- "$APP_DIR" "$BACKEND_CONTAINER" <<'REMOTE'
+set -euo pipefail
+cd "$1"
+docker compose up -d backend worker 2>&1 | grep -E 'Built|Started|Recreated|error' || true
+echo "  Migration version: $(docker exec "$2" uv run alembic current 2>&1 | grep '(' | head -1)"
+REMOTE
+    success "Backend + worker restarted"
   fi
 
   if [[ "$BUILD_FRONTEND" == true ]]; then

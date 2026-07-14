@@ -3,7 +3,7 @@
 import React, { useState, useCallback } from 'react'
 import { Sparkles, RefreshCw, AlertCircle, Lightbulb, CheckCircle2, Brain, ChevronDown, ChevronUp } from 'lucide-react'
 import { useThemeClasses, SectionCard } from './categories/shared'
-import { apiUrl } from '@/lib/api'
+import { apiFetch, ApiError } from '@/lib/api'
 
 interface InsightData {
   summary: string
@@ -48,30 +48,27 @@ export default function SmartInsights({ isDarkMode, token, section, title, rsid,
     try {
       let resp: Response
       if (isVariantMode) {
-        resp = await fetch(apiUrl('/api/insights/generate-variant'), {
+        resp = await apiFetch('/api/insights/generate-variant', {
           method: 'POST',
-          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ rsid, variant_data: variantData }),
         })
       } else if (section) {
-        resp = await fetch(apiUrl(`/api/insights/generate/${section}`), {
+        resp = await apiFetch(`/api/insights/generate/${section}`, {
           method: 'POST',
-          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
         })
       } else {
         return
       }
-      if (resp.ok) {
-        const data = await resp.json()
-        setInsight(data)
+      const data = await resp.json()
+      setInsight(data)
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setInsight({ summary: err.message, key_findings: [], recommendations: [], confidence: 'low', error: err.message })
       } else {
-        const err = await resp.json().catch(() => ({ detail: 'Request failed' }))
-        setInsight({ summary: err.detail || 'Failed to generate insight', key_findings: [], recommendations: [], confidence: 'low', error: err.detail })
+        setInsight({ summary: 'Could not reach the insights service.', key_findings: [], recommendations: [], confidence: 'low', error: 'Network error' })
       }
-    } catch {
-      setInsight({ summary: 'Could not reach the insights service.', key_findings: [], recommendations: [], confidence: 'low', error: 'Network error' })
     } finally {
       setLoading(false)
     }
@@ -80,10 +77,8 @@ export default function SmartInsights({ isDarkMode, token, section, title, rsid,
   const fetchStatus = useCallback(async () => {
     if (!token || status) return
     try {
-      const resp = await fetch(apiUrl('/api/insights/status'), {
-        credentials: 'include',
-      })
-      if (resp.ok) setStatus(await resp.json())
+      const resp = await apiFetch('/api/insights/status')
+      setStatus(await resp.json())
     } catch { /* ignore */ }
   }, [token, status])
 

@@ -5,22 +5,52 @@ A full-stack genetic data analysis platform providing personalized health insigh
 
 ## Coding Guide
 
-The source code should follow clean code architecture and separation of concerns.
-The source code should include unit tests for all the logical parts, with all the 3rd party or API calls being mocked. 
-The source code should not include any documentations or md files. Comments should only be used in exceptional cases. The code should be self explanatory.
-Do not try anything more than 3 times, if you cannot find the solution or in a loop for 3 times, ask for feedback.
-Do not praise me or apologize, just be clear and respond with short and simple responses.
-Always do plan first and only after do start with the implementations. 
-Do not add logs and debugs everwhere, those should be used and implemented with the confirmation only. if you added any debugging logs, clean up after the final iterations.
-All the variables should have meaningful names. 
-Methods should not be longer than 30 lines of codes, and each class should not be longer than 300 lines of code.
-If you need to convert anything, use extensions and utils.
-We will use dependency injection with proper namings.
+- Simplicity First: Make every change as simple as possible. Impact minimal code.
+- No Laziness: Find root causes. No temporary fixes. Senior developer standards.
+- Minimal Impact: Changes should only touch what's necessary. Avoid introducing bugs.
+- The source code should follow clean code architecture and separation of concerns.
+- The source code should include unit tests for all the logical parts, with all the 3rd party or API calls being mocked. 
+- The source code should not include any documentations or md files. Comments should only be used in exceptional cases. The code should be self explanatory.
+- Do not try anything more than 3 times, if you cannot find the solution or in a loop for 3 times, ask for feedback.
+- Do not praise me or apologize, just be clear and respond with short and simple responses.
+- Always do plan first and only after do start with the implementations. 
+- Do not add logs and debugs everwhere, those should be used and implemented with the confirmation only. if you added any debugging logs, clean up after the final iterations.
+- All the variables should have meaningful names. 
+- Methods should not be longer than 30 lines of codes, and each class should not be longer than 300 lines of code.
+- If you need to convert anything, use extensions and utils.
+- Use dependency injection with proper namings.
 
-## App Specifics
+### Plan Mode Default
 
+- Enter plan mode for ANY non trivial task.
+- Use plan mode for verification steps, not only for building.
+- Write detailed specs upfront to reduce ambiguity
 
+### Subagent Strategy
 
+- Use subagents to keep main context window clean
+- Offload research, exploration and parallel analysis to subagents
+- One task for subagent for focused execution
+
+### Verification
+
+- Never mark a task complete without proving it works
+- Ask yourself: "Would a staff engineer approve this?"
+- Run tests, check logs, verify correctness
+
+### Implementation
+
+- For non-trivial changes: pause and ask "is there a more elegant way?"
+- If a fix feels hacky: "Knowing everything I know now, implement the elegant solution"
+- Skip this for simple, obvious fixes - don't over-engineer
+- Challenge your own work before presenting it
+
+### Autonomous Bug Fixing
+
+- When given a bug report: just fix it. Don't ask for hand-holding
+- Point at logs, errors, failing tests - then resolve them
+- Zero context switching required from the user
+- Go fix failing CI tests without being told how
 
 ## Quick Reference
 

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { apiUrl } from '@/lib/api'
+import { apiUrl, apiFetch, ApiError } from '@/lib/api'
 
 interface UseAnalysisControlsOptions {
   analysisId?: number | null
@@ -108,36 +108,32 @@ export function useAnalysisControls({
     if (!token || !analysisId) return
 
     try {
-      const response = await fetch(apiUrl(`/api/analysis/status/${analysisId}`), {
-        credentials: 'include',
-      })
-      if (response.ok) {
-        const progress = await response.json()
+      const response = await apiFetch(`/api/analysis/status/${analysisId}`)
+      const progress = await response.json()
 
-        const hasCompletedResults =
-          progress.analysis_results?.status === 'completed' && progress.status === 'processing'
-        const shouldBeCompleted =
-          progress.progress_percentage >= 100 && progress.status !== 'completed'
+      const hasCompletedResults =
+        progress.analysis_results?.status === 'completed' && progress.status === 'processing'
+      const shouldBeCompleted =
+        progress.progress_percentage >= 100 && progress.status !== 'completed'
 
-        if (hasCompletedResults || shouldBeCompleted) {
-          setAnalysisStatus('completed')
-          setAnalysisProgress(100)
-          setTotalVariants(progress.total_variants || 0)
-          setProcessedVariants(progress.processed_variants || progress.total_variants || 0)
-          setIsAnalysisRunning(false)
-        } else {
-          setAnalysisStatus(progress.status)
-          setAnalysisProgress(progress.progress_percentage || 0)
-          setTotalVariants(progress.total_variants || 0)
-          setProcessedVariants(progress.processed_variants || 0)
-          setIsAnalysisRunning(progress.status === 'processing')
-        }
+      if (hasCompletedResults || shouldBeCompleted) {
+        setAnalysisStatus('completed')
+        setAnalysisProgress(100)
+        setTotalVariants(progress.total_variants || 0)
+        setProcessedVariants(progress.processed_variants || progress.total_variants || 0)
+        setIsAnalysisRunning(false)
+      } else {
+        setAnalysisStatus(progress.status)
+        setAnalysisProgress(progress.progress_percentage || 0)
+        setTotalVariants(progress.total_variants || 0)
+        setProcessedVariants(progress.processed_variants || 0)
+        setIsAnalysisRunning(progress.status === 'processing')
+      }
 
-        if (progress.status === 'completed' || hasCompletedResults || shouldBeCompleted) {
-          closeSSEStream()
-          if (onRefresh && token) {
-            await onRefresh(token)
-          }
+      if (progress.status === 'completed' || hasCompletedResults || shouldBeCompleted) {
+        closeSSEStream()
+        if (onRefresh && token) {
+          await onRefresh(token)
         }
       }
     } catch (error) {
@@ -164,46 +160,40 @@ export function useAnalysisControls({
 
     try {
       setIsAnalysisRunning(true)
-      const response = await fetch(apiUrl(`/api/analysis/start/${analysisId}`), {
-        method: 'POST',
-        credentials: 'include',
-      })
+      const response = await apiFetch(`/api/analysis/start/${analysisId}`, { method: 'POST' })
+      const result = await response.json()
 
-      if (response.ok) {
-        const result = await response.json()
+      if (result.message && result.message.includes('already')) {
+        setAnalysisStatus(result.status)
+        setAnalysisProgress(result.progress_percentage || 0)
+        setTotalVariants(result.total_variants || 0)
+        setProcessedVariants(result.processed_variants || 0)
+        setIsAnalysisRunning(result.status === 'processing')
 
-        if (result.message && result.message.includes('already')) {
-          setAnalysisStatus(result.status)
-          setAnalysisProgress(result.progress_percentage || 0)
-          setTotalVariants(result.total_variants || 0)
-          setProcessedVariants(result.processed_variants || 0)
-          setIsAnalysisRunning(result.status === 'processing')
-
-          if (result.status === 'completed') {
-            showNotification('Analysis is already completed', 'info')
-          } else {
-            showNotification(`Analysis is already ${result.status}`, 'info')
-          }
+        if (result.status === 'completed') {
+          showNotification('Analysis is already completed', 'info')
         } else {
-          const isRestart = result.status === 'processing' && result.progress_percentage === 0
-          setAnalysisStatus(result.status)
-          setAnalysisProgress(result.progress_percentage || 0)
-          setTotalVariants(result.total_variants || 0)
-          setProcessedVariants(result.processed_variants || 0)
-          setShowProgress(true)
-          startProgressPolling()
-          showNotification(
-            isRestart ? 'Analysis restarted successfully' : 'Analysis started successfully',
-            'success'
-          )
+          showNotification(`Analysis is already ${result.status}`, 'info')
         }
       } else {
-        const errorText = await response.text()
-        showNotification(`Failed to start analysis: ${response.status} - ${errorText}`, 'error')
-        setIsAnalysisRunning(false)
+        const isRestart = result.status === 'processing' && result.progress_percentage === 0
+        setAnalysisStatus(result.status)
+        setAnalysisProgress(result.progress_percentage || 0)
+        setTotalVariants(result.total_variants || 0)
+        setProcessedVariants(result.processed_variants || 0)
+        setShowProgress(true)
+        startProgressPolling()
+        showNotification(
+          isRestart ? 'Analysis restarted successfully' : 'Analysis started successfully',
+          'success'
+        )
       }
     } catch (error) {
-      showNotification(`Error starting analysis: ${error}`, 'error')
+      if (error instanceof ApiError) {
+        showNotification(`Failed to start analysis: ${error.status} - ${error.message}`, 'error')
+      } else {
+        showNotification(`Error starting analysis: ${error}`, 'error')
+      }
       setIsAnalysisRunning(false)
     }
   }, [token, analysisId, showNotification, startProgressPolling])
@@ -215,23 +205,18 @@ export function useAnalysisControls({
     }
 
     try {
-      const response = await fetch(apiUrl(`/api/analysis/cancel/${analysisId}`), {
-        method: 'POST',
-        credentials: 'include',
-      })
-
-      if (response.ok) {
-        setAnalysisStatus('stopped')
-        setIsAnalysisRunning(false)
-        stopProgressPolling()
-        await checkAnalysisStatus()
-        showNotification('Analysis stopped successfully', 'success')
-      } else {
-        const errorText = await response.text()
-        showNotification(`Failed to stop analysis: ${response.status} - ${errorText}`, 'error')
-      }
+      await apiFetch(`/api/analysis/cancel/${analysisId}`, { method: 'POST' })
+      setAnalysisStatus('stopped')
+      setIsAnalysisRunning(false)
+      stopProgressPolling()
+      await checkAnalysisStatus()
+      showNotification('Analysis stopped successfully', 'success')
     } catch (error) {
-      showNotification(`Error stopping analysis: ${error}`, 'error')
+      if (error instanceof ApiError) {
+        showNotification(`Failed to stop analysis: ${error.status} - ${error.message}`, 'error')
+      } else {
+        showNotification(`Error stopping analysis: ${error}`, 'error')
+      }
     }
   }, [token, analysisId, showNotification, stopProgressPolling, checkAnalysisStatus])
 
@@ -242,23 +227,18 @@ export function useAnalysisControls({
     }
 
     try {
-      const response = await fetch(apiUrl(`/api/analysis/pause/${analysisId}`), {
-        method: 'POST',
-        credentials: 'include',
-      })
-
-      if (response.ok) {
-        setAnalysisStatus('paused')
-        setIsAnalysisRunning(false)
-        stopProgressPolling()
-        await checkAnalysisStatus()
-        showNotification('Analysis paused successfully', 'success')
-      } else {
-        const errorText = await response.text()
-        showNotification(`Failed to pause analysis: ${response.status} - ${errorText}`, 'error')
-      }
+      await apiFetch(`/api/analysis/pause/${analysisId}`, { method: 'POST' })
+      setAnalysisStatus('paused')
+      setIsAnalysisRunning(false)
+      stopProgressPolling()
+      await checkAnalysisStatus()
+      showNotification('Analysis paused successfully', 'success')
     } catch (error) {
-      showNotification(`Error pausing analysis: ${error}`, 'error')
+      if (error instanceof ApiError) {
+        showNotification(`Failed to pause analysis: ${error.status} - ${error.message}`, 'error')
+      } else {
+        showNotification(`Error pausing analysis: ${error}`, 'error')
+      }
     }
   }, [token, analysisId, showNotification, stopProgressPolling, checkAnalysisStatus])
 
@@ -270,23 +250,17 @@ export function useAnalysisControls({
 
     try {
       setIsAnalysisRunning(true)
-      const response = await fetch(apiUrl(`/api/analysis/resume/${analysisId}`), {
-        method: 'POST',
-        credentials: 'include',
-      })
-
-      if (response.ok) {
-        setAnalysisStatus('processing')
-        setShowProgress(true)
-        startProgressPolling()
-        showNotification('Analysis resumed successfully', 'success')
-      } else {
-        const errorText = await response.text()
-        showNotification(`Failed to resume analysis: ${response.status} - ${errorText}`, 'error')
-        setIsAnalysisRunning(false)
-      }
+      await apiFetch(`/api/analysis/resume/${analysisId}`, { method: 'POST' })
+      setAnalysisStatus('processing')
+      setShowProgress(true)
+      startProgressPolling()
+      showNotification('Analysis resumed successfully', 'success')
     } catch (error) {
-      showNotification(`Error resuming analysis: ${error}`, 'error')
+      if (error instanceof ApiError) {
+        showNotification(`Failed to resume analysis: ${error.status} - ${error.message}`, 'error')
+      } else {
+        showNotification(`Error resuming analysis: ${error}`, 'error')
+      }
       setIsAnalysisRunning(false)
     }
   }, [token, analysisId, showNotification, startProgressPolling])

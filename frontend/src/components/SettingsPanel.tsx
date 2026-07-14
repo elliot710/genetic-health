@@ -8,11 +8,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import type { DashboardData } from './categories/types'
-import { apiUrl } from '@/lib/api'
+import { apiFetch, ApiError } from '@/lib/api'
+import { useFeedback } from '@/hooks/useFeedback'
 import VariantDetailDialog from './categories/VariantDetailDialog'
 import { DISCLAIMER_TEXT } from '@/components/Disclaimer'
-
-const API = apiUrl('')
 
 interface SharedUser {
   id: number
@@ -49,8 +48,8 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
   const [passwords, setPasswords] = useState({ current: '', new_password: '', confirm: '' })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
-  const [pwMessage, setPwMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  const { feedback: message, showFeedback: showMessage, clearFeedback: clearMessage } = useFeedback()
+  const { feedback: pwMessage, showFeedback: showPwMessage, clearFeedback: clearPwMessage } = useFeedback()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Saved variants state
@@ -80,7 +79,7 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
   // Dashboard sharing state
   const [shareEmail, setShareEmail] = useState('')
   const [shareLoading, setShareLoading] = useState(false)
-  const [shareMessage, setShareMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+  const { feedback: shareMessage, showFeedback: showShareMessage, clearFeedback: clearShareMessage } = useFeedback()
   const [myShares, setMyShares] = useState<SharedUser[]>([])
   const [sharedWithMe, setSharedWithMe] = useState<SharedUser[]>([])
   const [sharesLoading, setSharesLoading] = useState(false)
@@ -88,36 +87,30 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
   const fetchSavedVariants = async () => {
     setSavedLoading(true)
     try {
-      const res = await fetch(apiUrl('/auth/saved-variants'), { credentials: 'include' })
-      if (res.ok) setSavedVariants(await res.json())
+      const res = await apiFetch('/auth/saved-variants')
+      setSavedVariants(await res.json())
     } catch { /* ignore */ }
     finally { setSavedLoading(false) }
   }
 
   const removeSavedVariant = async (rsid: string) => {
     try {
-      const res = await fetch(apiUrl(`/auth/saved-variants/${rsid}`), {
-        method: 'DELETE',
-        credentials: 'include',
-      })
-      if (res.ok) setSavedVariants(prev => prev.filter(v => v.rsid !== rsid))
+      await apiFetch(`/auth/saved-variants/${rsid}`, { method: 'DELETE' })
+      setSavedVariants(prev => prev.filter(v => v.rsid !== rsid))
     } catch { /* ignore */ }
   }
 
   const saveNote = async (rsid: string, note: string) => {
     setNoteSaving(true)
     try {
-      const res = await fetch(apiUrl(`/auth/saved-variants/${rsid}`), {
+      const res = await apiFetch(`/auth/saved-variants/${rsid}`, {
         method: 'PATCH',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ note: note.trim() || null }),
       })
-      if (res.ok) {
-        const updated = await res.json()
-        setSavedVariants(prev => prev.map(v => v.rsid === rsid ? { ...v, note: updated.note } : v))
-        setEditingNote(null)
-      }
+      const updated = await res.json()
+      setSavedVariants(prev => prev.map(v => v.rsid === rsid ? { ...v, note: updated.note } : v))
+      setEditingNote(null)
     } catch { /* ignore */ }
     finally { setNoteSaving(false) }
   }
@@ -131,8 +124,8 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
     // Fetch full annotation details for all variants in parallel (served from cache)
     const details = await Promise.all(
       savedVariants.map(v =>
-        fetch(apiUrl(`/api/annotations/variant-details/${v.rsid}`), { credentials: 'include' })
-          .then(r => r.ok ? r.json() : null)
+        apiFetch(`/api/annotations/variant-details/${v.rsid}`)
+          .then(r => r.json())
           .catch(() => null)
       )
     )
@@ -230,8 +223,8 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
   const fetchNotifPrefs = async () => {
     setNotifLoading(true)
     try {
-      const res = await fetch(apiUrl('/auth/notification-preferences'), { credentials: 'include' })
-      if (res.ok) setNotifPrefs(await res.json())
+      const res = await apiFetch('/auth/notification-preferences')
+      setNotifPrefs(await res.json())
     } catch { /* ignore */ }
     finally { setNotifLoading(false) }
   }
@@ -240,9 +233,8 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
     setNotifPrefs(prev => ({ ...prev, [key]: value }))
     setNotifSaving(key)
     try {
-      await fetch(apiUrl('/auth/notification-preferences'), {
+      await apiFetch('/auth/notification-preferences', {
         method: 'PUT',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ preferences: { [key]: value } }),
       })
@@ -253,12 +245,12 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
   const fetchShares = async () => {
     setSharesLoading(true)
     try {
-      const [myRes, withMeRes] = await Promise.all([
-        fetch(apiUrl('/api/sharing/my-shares'), { credentials: 'include' }),
-        fetch(apiUrl('/api/sharing/shared-with-me'), { credentials: 'include' }),
+      const [mine, withMe] = await Promise.all([
+        apiFetch('/api/sharing/my-shares').then(r => r.json()).catch(() => null),
+        apiFetch('/api/sharing/shared-with-me').then(r => r.json()).catch(() => null),
       ])
-      if (myRes.ok) setMyShares(await myRes.json())
-      if (withMeRes.ok) setSharedWithMe(await withMeRes.json())
+      if (mine) setMyShares(mine)
+      if (withMe) setSharedWithMe(withMe)
     } catch { /* ignore */ }
     finally { setSharesLoading(false) }
   }
@@ -266,24 +258,19 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
   const handleShare = async () => {
     if (!shareEmail.trim()) return
     setShareLoading(true)
-    setShareMessage(null)
+    clearShareMessage()
     try {
-      const res = await fetch(apiUrl('/api/sharing/share'), {
+      const res = await apiFetch('/api/sharing/share', {
         method: 'POST',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: shareEmail.trim() }),
       })
       const json = await res.json().catch(() => ({}))
-      if (res.ok) {
-        setShareMessage({ text: json.detail || 'Dashboard shared!', type: 'success' })
-        setShareEmail('')
-        fetchShares()
-      } else {
-        setShareMessage({ text: json.detail || 'Failed to share', type: 'error' })
-      }
-    } catch {
-      setShareMessage({ text: 'Network error', type: 'error' })
+      showShareMessage({ message: json.detail || 'Dashboard shared!', type: 'success' })
+      setShareEmail('')
+      fetchShares()
+    } catch (e) {
+      showShareMessage({ message: e instanceof ApiError ? e.message : 'Network error', type: 'error' })
     } finally {
       setShareLoading(false)
     }
@@ -291,25 +278,19 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
 
   const handleRevoke = async (recipientId: number) => {
     try {
-      const res = await fetch(apiUrl(`/api/sharing/share/${recipientId}`), {
-        method: 'DELETE',
-        credentials: 'include',
-      })
-      if (res.ok) setMyShares(prev => prev.filter(u => u.id !== recipientId))
+      await apiFetch(`/api/sharing/share/${recipientId}`, { method: 'DELETE' })
+      setMyShares(prev => prev.filter(u => u.id !== recipientId))
     } catch { /* ignore */ }
   }
 
   useEffect(() => {
     const fetchProfile = async () => {
       try {
-        const res = await fetch(`${API}/auth/me`, {
-          credentials: 'include',
-        })
-        if (res.ok) {
-          const data = await res.json()
-          setProfile({ email: data.email, username: data.username, full_name: data.full_name || '', avatar_url: data.avatar_url || '' })
-        }
-      } finally {
+        const res = await apiFetch('/auth/me')
+        const data = await res.json()
+        setProfile({ email: data.email, username: data.username, full_name: data.full_name || '', avatar_url: data.avatar_url || '' })
+      } catch { /* ignore */ }
+      finally {
         setLoading(false)
       }
     }
@@ -323,11 +304,11 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
     const file = e.target.files?.[0]
     if (!file) return
     if (!file.type.startsWith('image/')) {
-      setMessage({ text: 'Please select an image file', type: 'error' })
+      showMessage({ message: 'Please select an image file', type: 'error' })
       return
     }
     if (file.size > 350_000) {
-      setMessage({ text: 'Image must be under 350KB', type: 'error' })
+      showMessage({ message: 'Image must be under 350KB', type: 'error' })
       return
     }
     const reader = new FileReader()
@@ -340,58 +321,46 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
 
   const saveProfile = async () => {
     setSaving(true)
-    setMessage(null)
+    clearMessage()
     try {
-      const res = await fetch(`${API}/auth/me`, {
+      await apiFetch('/auth/me', {
         method: 'PUT',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ full_name: profile.full_name, avatar_url: profile.avatar_url || '' }),
       })
-      if (res.ok) {
-        setMessage({ text: 'Profile updated successfully', type: 'success' })
-        onProfileUpdate?.()
-      } else {
-        const err = await res.json().catch(() => ({ detail: 'Failed to update' }))
-        setMessage({ text: err.detail || 'Failed to update', type: 'error' })
-      }
-    } catch {
-      setMessage({ text: 'Network error', type: 'error' })
+      showMessage({ message: 'Profile updated successfully', type: 'success' })
+      onProfileUpdate?.()
+    } catch (e) {
+      showMessage({ message: e instanceof ApiError ? e.message : 'Network error', type: 'error' })
     } finally {
       setSaving(false)
     }
   }
 
   const changePassword = async () => {
-    setPwMessage(null)
+    clearPwMessage()
     if (passwords.new_password !== passwords.confirm) {
-      setPwMessage({ text: 'Passwords do not match', type: 'error' })
+      showPwMessage({ message: 'Passwords do not match', type: 'error' })
       return
     }
     if (passwords.new_password.length < 6) {
-      setPwMessage({ text: 'Password must be at least 6 characters', type: 'error' })
+      showPwMessage({ message: 'Password must be at least 6 characters', type: 'error' })
       return
     }
     setSaving(true)
     try {
-      const res = await fetch(`${API}/auth/change-password`, {
+      await apiFetch('/auth/change-password', {
         method: 'POST',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           current_password: passwords.current,
           new_password: passwords.new_password,
         }),
       })
-      if (res.ok) {
-        setPwMessage({ text: 'Password changed successfully', type: 'success' })
-        setPasswords({ current: '', new_password: '', confirm: '' })
-      } else {
-        const err = await res.json().catch(() => ({ detail: 'Failed to change password' }))
-        setPwMessage({ text: err.detail || 'Failed to change password', type: 'error' })
-      }
-    } catch {
-      setPwMessage({ text: 'Network error', type: 'error' })
+      showPwMessage({ message: 'Password changed successfully', type: 'success' })
+      setPasswords({ current: '', new_password: '', confirm: '' })
+    } catch (e) {
+      showPwMessage({ message: e instanceof ApiError ? e.message : 'Network error', type: 'error' })
     } finally {
       setSaving(false)
     }
@@ -493,7 +462,7 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
             {message && (
               <p className={`text-sm flex items-center gap-1 ${message.type === 'success' ? 'text-green-500' : 'text-red-500'}`}>
                 {message.type === 'success' && <Check className="h-4 w-4" />}
-                {message.text}
+                {message.message}
               </p>
             )}
             <Button onClick={saveProfile} disabled={saving} className="gap-2">
@@ -595,7 +564,7 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
             {pwMessage && (
               <p className={`text-sm flex items-center gap-1 ${pwMessage.type === 'success' ? 'text-green-500' : 'text-red-500'}`}>
                 {pwMessage.type === 'success' && <Check className="h-4 w-4" />}
-                {pwMessage.text}
+                {pwMessage.message}
               </p>
             )}
             <Button onClick={changePassword} disabled={saving || !passwords.current || !passwords.new_password} className="gap-2">
@@ -678,7 +647,7 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
             {shareMessage && (
               <p className={`text-sm flex items-center gap-1 ${shareMessage.type === 'success' ? 'text-green-500' : 'text-red-500'}`}>
                 {shareMessage.type === 'success' && <Check className="h-4 w-4" />}
-                {shareMessage.text}
+                {shareMessage.message}
               </p>
             )}
             {sharesLoading ? (
@@ -724,7 +693,7 @@ export default function SettingsPanel({ token, theme, data, onProfileUpdate, onV
               <UserCheck className="h-5 w-5 text-green-400" />
               Shared With Me
             </CardTitle>
-            <CardDescription>View another user's genetic insights</CardDescription>
+            <CardDescription>View another user&apos;s genetic insights</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             {sharesLoading ? (

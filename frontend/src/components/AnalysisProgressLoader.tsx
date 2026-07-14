@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AlertCircle, Check, ChevronLeft, ChevronRight, Clock, Info, Loader2 } from 'lucide-react';
 import { getTheme } from '../utils/theme';
+import { useDarkMode } from '@/hooks/useDarkMode';
 import { Button } from '@/components/ui/button';
-import { apiUrl } from '@/lib/api';
+import { apiUrl, apiFetch } from '@/lib/api';
 import type { DashboardData } from '@/components/categories/types';
 
 interface AnalysisProgress {
@@ -15,6 +16,13 @@ interface AnalysisProgress {
   estimated_completion: string | null;
   filename: string;
 }
+
+// Phase 3 (BigQuery + Open Targets enrichment) reports fine-grained progress
+// only for its BigQuery sub-step, then runs silently through Open Targets and
+// mapping enrichment on a real ~600K-variant file. Rather than let a frozen
+// percentage/step imply either a hang or near-completion, treat no change in
+// (percentage, step) for this long as indeterminate.
+const STALL_THRESHOLD_MS = 30_000;
 
 interface AnalysisProgressLoaderProps {
   analysisId: number;
@@ -36,13 +44,11 @@ export default function AnalysisProgressLoader({
   const [error, setError] = useState<string | null>(null);
 
   // Use prop if provided, otherwise read from localStorage
-  const [localDarkMode, setLocalDarkMode] = useState(false);
-  useEffect(() => {
-    if (isDarkModeProp === undefined) {
-      const saved = localStorage.getItem('darkMode');
-      if (saved) setLocalDarkMode(JSON.parse(saved));
-    }
-  }, [isDarkModeProp]);
+  const { isDarkMode: localDarkMode } = useDarkMode({
+    enabled: isDarkModeProp === undefined,
+    persist: false,
+    syncDocumentClass: false,
+  });
   const isDarkMode = isDarkModeProp ?? localDarkMode;
   const theme = getTheme(isDarkMode);
 
@@ -57,12 +63,15 @@ export default function AnalysisProgressLoader({
     const handleCompleted = async () => {
       setIsLoading(false);
       if (onComplete) {
-        const resultsResponse = await fetch(apiUrl('/api/analysis/dashboard-data'), {
-          credentials: 'include',
-        });
-        if (resultsResponse.ok) {
+        try {
+          const resultsResponse = await apiFetch('/api/analysis/dashboard-data');
           const results = await resultsResponse.json();
           onComplete(results);
+        } catch (err) {
+          console.error('Error loading analysis results:', err);
+          const errorMsg = 'Failed to load analysis results.';
+          setError(errorMsg);
+          if (onError) onError(errorMsg);
         }
       }
     };
@@ -111,6 +120,27 @@ export default function AnalysisProgressLoader({
 
     return () => eventSource.close();
   }, [analysisId, onComplete, onError]);
+
+  // Tracks the last time (percentage, step) actually changed, so we can tell
+  // a real stall apart from steady progress without any new backend signal.
+  const lastSignalRef = useRef<{ key: string; at: number }>({ key: '', at: Date.now() });
+  const [isStalled, setIsStalled] = useState(false);
+
+  useEffect(() => {
+    if (!progress) return;
+    const signalKey = `${progress.progress_percentage}:${progress.current_step}`;
+    if (signalKey !== lastSignalRef.current.key) {
+      lastSignalRef.current = { key: signalKey, at: Date.now() };
+      setIsStalled(false);
+    }
+  }, [progress]);
+
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      setIsStalled(Date.now() - lastSignalRef.current.at > STALL_THRESHOLD_MS);
+    }, 5000);
+    return () => clearInterval(intervalId);
+  }, []);
 
   if (error) {
     return (
@@ -271,13 +301,15 @@ export default function AnalysisProgressLoader({
                 Progress
               </span>
               <span className={`text-sm font-medium ${theme.text.secondary}`}>
-                {progressPercentage}%
+                {isStalled ? 'Still working…' : `${progressPercentage}%`}
               </span>
             </div>
-            <div className={`w-full ${theme.glassSecondary} rounded-full h-3`}>
+            <div className={`w-full ${theme.glassSecondary} rounded-full h-3 overflow-hidden`}>
               <div
-                className="bg-gradient-to-r from-teal-500 to-cyan-500 h-3 rounded-full transition-all duration-500"
-                style={{ width: `${progressPercentage}%` }}
+                className={`bg-gradient-to-r from-teal-500 to-cyan-500 h-3 rounded-full transition-all duration-500 ${
+                  isStalled ? 'w-full animate-pulse' : ''
+                }`}
+                style={isStalled ? undefined : { width: `${progressPercentage}%` }}
               />
             </div>
           </div>
@@ -378,16 +410,22 @@ export default function AnalysisProgressLoader({
                 {progress.status === 'pending' ? (
                   <div>
                     <strong>Analysis queued...</strong> Your genetic data has been uploaded successfully and is waiting in the processing queue. 
-                    We'll begin analyzing your {progress.total_variants.toLocaleString()} variants shortly.
+                    We&apos;ll begin analyzing your {progress.total_variants.toLocaleString()} variants shortly.
                   </div>
                 ) : isUploadingVariants ? (
                   <div>
-                    <strong>Processing your upload...</strong> We're storing and deduplicating your genetic variants.
+                    <strong>Processing your upload...</strong> We&apos;re storing and deduplicating your genetic variants.
                     Analysis will begin automatically once processing is complete.
+                  </div>
+                ) : isStalled ? (
+                  <div>
+                    <strong>Still working — this step is taking longer than usual.</strong> Large files can spend an
+                    extended stretch on a single step with no visible progress change. No action is needed; we&apos;re
+                    continuing to analyze your {progress.total_variants.toLocaleString()} variants.
                   </div>
                 ) : (
                   <div>
-                    <strong>Processing your genetic data... It may take a while, depending on available resources.</strong> We're analyzing {progress.total_variants.toLocaleString()} variants 
+                    <strong>Processing your genetic data...</strong> We&apos;re analyzing {progress.total_variants.toLocaleString()} variants
                     across 14 comprehensive categories including health, nutrition, drug responses, physical traits, sports performance, 
                     intelligence, personality, ancestry, wellness, methylation, and detoxification pathways.
                   </div>

@@ -46,8 +46,9 @@ def _collect_existing_dedup_keys(ctx: GeneratorContext) -> Dict[str, set]:
         keys[cat] = cat_keys
     return keys
 
-# Re-use dataclasses from analysis_service
-from .analysis_service import AnnotationResult, AnalysisProgress, AnalysisCancelled
+# Re-use dataclasses from analysis_service / variant_types
+from .analysis_service import AnalysisProgress, AnalysisCancelled
+from .variant_types import AnnotationResult
 
 # All insight tables for cleanup
 INSIGHT_TABLES = [
@@ -57,6 +58,50 @@ INSIGHT_TABLES = [
     MethylationProfile, DetoxificationProfile, RareMutation,
     UncommonMutation,
 ]
+
+# Generator name (from ALL_GENERATORS) -> the category table it writes. Used by
+# targeted regeneration to clear only the affected category's rows.
+CATEGORY_TO_TABLE = {
+    'health_risks': HealthRisk,
+    'drug_responses': DrugResponse,
+    'physical_traits': PhysicalTrait,
+    'nutrition_traits': NutritionTrait,
+    'sports_performance': SportsPerformance,
+    'cognitive_profiles': CognitiveProfile,
+    'personality_traits': PersonalityTrait,
+    'ancestry_results': AncestryResult,
+    'carrier_status': CarrierStatus,
+    'wellness_metrics': WellnessMetric,
+    'methylation_profiles': MethylationProfile,
+    'detox_profiles': DetoxificationProfile,
+    'rare_mutations': RareMutation,
+    'uncommon_mutations': UncommonMutation,
+}
+
+# Insight generators run concurrently in bounded batches. Each generator owns an
+# isolated DB session and writes a disjoint category table, so within-batch
+# concurrency is safe; the cap keeps peak connections well under the pool
+# (pool_size=20 + overflow, × WORKER_MAX_CONCURRENT analyses).
+GENERATOR_CONCURRENCY = 4
+
+
+def _build_insight_status(
+    category_status: Dict[str, Dict[str, Any]],
+    failed_generators: List[str],
+    total_insights: int,
+    generators_total: int,
+) -> Dict[str, Any]:
+    """Per-category generation outcome, persisted so a partially-generated
+    dashboard is an honest, visible state rather than a silent gap."""
+    generated = [name for name, s in category_status.items() if s.get("status") == "generated"]
+    return {
+        "total_insights": total_insights,
+        "generators_total": generators_total,
+        "generators_succeeded": len(category_status) - len(failed_generators),
+        "generated": generated,
+        "failed": list(failed_generators),
+        "categories": category_status,
+    }
 
 
 async def generate_comprehensive_insights(
@@ -70,6 +115,7 @@ async def generate_comprehensive_insights(
     check_cancelled_fn: Optional[Callable] = None,
     update_progress_fn: Optional[Callable] = None,
     inferred_sex: Optional[str] = None,
+    only_categories: Optional[List[str]] = None,
 ) -> int:
     """Generate comprehensive insights for all categories.
 
@@ -78,15 +124,31 @@ async def generate_comprehensive_insights(
 
     Each generator runs in its own DB session so that a connection
     failure in one generator does not poison subsequent generators.
+
+    When ``only_categories`` is given, only those categories' tables are
+    cleared and only their generators run — a targeted regeneration that
+    avoids recomputing all 14 categories when one category's inputs changed.
+    The GWAS enrichment pass (which augments already-generated category rows)
+    is skipped for targeted runs. When ``only_categories`` is None, the full
+    delete-all + regenerate-all behavior is preserved.
     """
-    # Clean up any partial insights from a previous interrupted run
+    selected = [name for name, _ in ALL_GENERATORS] if not only_categories \
+        else [name for name, _ in ALL_GENERATORS if name in set(only_categories)]
+
+    # Clean up existing insights so a re-run does not produce duplicates.
+    tables_to_clear = INSIGHT_TABLES if not only_categories else [
+        CATEGORY_TO_TABLE[name] for name in selected if name in CATEGORY_TO_TABLE
+    ]
     async with async_session_factory() as cleanup_session:
-        for tbl in INSIGHT_TABLES:
+        for tbl in tables_to_clear:
             await cleanup_session.execute(
                 delete(tbl).where(tbl.analysis_id == analysis_id)
             )
         await cleanup_session.commit()
-    logger.info(f"  Cleared {len(INSIGHT_TABLES)} insight tables for fresh generation")
+    logger.info(
+        f"  Cleared {len(tables_to_clear)} insight table(s) for "
+        f"{'targeted' if only_categories else 'fresh'} generation"
+    )
 
     # Build variant profiles ONCE — all generators share these
     profile_start = time.time()
@@ -132,46 +194,62 @@ async def generate_comprehensive_insights(
     )
 
     insights_generated = 0
-    total_generators = len(ALL_GENERATORS)
+    generators = [(name, func) for name, func in ALL_GENERATORS if name in set(selected)]
+    total_generators = len(generators)
     failed_generators: list[str] = []
+    category_status: Dict[str, Dict[str, Any]] = {}
 
-    for gen_idx, (gen_name, gen_func) in enumerate(ALL_GENERATORS):
+    async def _run_generator(gen_name: str, gen_func) -> int:
+        async with async_session_factory() as gen_session:
+            ctx = GeneratorContext(
+                analysis_id=analysis_id,
+                variants=interesting_variants,
+                annotation_results=annotation_results,
+                session=gen_session,
+                rsid_gene_map=rsid_gene_map,
+                registry=registry,
+                variant_profiles=variant_profiles,
+                inferred_sex=inferred_sex,
+            )
+            count = await gen_func(ctx)
+            await gen_session.commit()
+            return count
+
+    for batch_start in range(0, total_generators, GENERATOR_CONCURRENCY):
         if check_cancelled_fn:
             await check_cancelled_fn(analysis_id)
-        try:
-            progress.current_step = f"generating_{gen_name}"
-            progress.phase_progress = gen_idx / total_generators
-            if update_progress_fn:
-                await update_progress_fn(analysis_id, progress)
 
-            async with async_session_factory() as gen_session:
-                ctx = GeneratorContext(
-                    analysis_id=analysis_id,
-                    variants=interesting_variants,
-                    annotation_results=annotation_results,
-                    session=gen_session,
-                    rsid_gene_map=rsid_gene_map,
-                    registry=registry,
-                    variant_profiles=variant_profiles,
-                    inferred_sex=inferred_sex,
-                )
-                count = await gen_func(ctx)
-                await gen_session.commit()
-            insights_generated += count
-            logger.info(f"  [{gen_idx + 1}/{total_generators}] {gen_name}: {count} insights")
-        except AnalysisCancelled:
-            raise
-        except Exception as e:
-            failed_generators.append(gen_name)
-            logger.error(f"  [{gen_idx + 1}/{total_generators}] {gen_name}: FAILED — {e}")
-            continue
+        batch = generators[batch_start:batch_start + GENERATOR_CONCURRENCY]
+        progress.current_step = "generating_insights"
+        progress.phase_progress = batch_start / total_generators
+        if update_progress_fn:
+            await update_progress_fn(analysis_id, progress)
+
+        results = await asyncio.gather(
+            *(_run_generator(name, func) for name, func in batch),
+            return_exceptions=True,
+        )
+        for (gen_name, _), result in zip(batch, results):
+            if isinstance(result, AnalysisCancelled):
+                raise result
+            if isinstance(result, Exception):
+                failed_generators.append(gen_name)
+                category_status[gen_name] = {"status": "failed", "count": 0}
+                logger.error(f"  {gen_name}: FAILED — {result}")
+            else:
+                insights_generated += result
+                category_status[gen_name] = {
+                    "status": "generated" if result > 0 else "empty",
+                    "count": result,
+                }
+                logger.info(f"  {gen_name}: {result} insights")
 
     if failed_generators:
         logger.warning(f"  {len(failed_generators)} generator(s) failed: {', '.join(failed_generators)}")
 
     # GWAS enrichment pass: add insights from genome-wide significant
     # associations that weren't covered by registry-based generators
-    if gwas_variants:
+    if gwas_variants and not only_categories:
         try:
             all_gwas_pool = interesting_variants + gwas_variants
             async with async_session_factory() as gwas_session:
@@ -189,14 +267,40 @@ async def generate_comprehensive_insights(
                 gwas_count = await generate_gwas_enrichment(gwas_ctx, existing_keys)
                 await gwas_session.commit()
             insights_generated += gwas_count
+            category_status["gwas_enrichment"] = {
+                "status": "generated" if gwas_count > 0 else "empty",
+                "count": gwas_count,
+            }
             logger.info(f"  GWAS enrichment: {gwas_count} additional insights")
         except Exception as e:
+            failed_generators.append("gwas_enrichment")
+            category_status["gwas_enrichment"] = {"status": "failed", "count": 0}
             logger.error(f"  GWAS enrichment: FAILED — {e}")
+
+    insight_status = _build_insight_status(
+        category_status, failed_generators, insights_generated, total_generators
+    )
+    try:
+        from sqlalchemy import update as sa_update
+        from ..db.models import GeneticAnalysis
+        async with async_session_factory() as status_session:
+            await status_session.execute(
+                sa_update(GeneticAnalysis)
+                .where(GeneticAnalysis.id == analysis_id)
+                .values(insight_status=insight_status)
+            )
+            await status_session.commit()
+    except Exception as e:
+        logger.warning(f"  Failed to persist insight_status for analysis {analysis_id}: {e}")
 
     return insights_generated
 
 
-async def regenerate_insights(analysis_id: int, user_id: Optional[int] = None) -> Dict[str, Any]:
+async def regenerate_insights(
+    analysis_id: int,
+    user_id: Optional[int] = None,
+    only_categories: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """Re-generate all insight tables using existing annotations.
 
     Skips Phases 1-3 entirely. Loads variants and cached annotations from DB,
@@ -284,6 +388,7 @@ async def regenerate_insights(analysis_id: int, user_id: Optional[int] = None) -
             variants, annotation_results, analysis_id,
             rsid_gene_map, registry, progress,
             inferred_sex=inferred_sex,
+            only_categories=only_categories,
         )
 
         # Invalidate dashboard cache

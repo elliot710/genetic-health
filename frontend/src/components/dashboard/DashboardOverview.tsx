@@ -129,6 +129,66 @@ export default function DashboardOverview({
         </div>
       )}
 
+      {/* Analysis Completeness (honest coverage + per-category status) */}
+      {(data?.summary?.coverage || data?.summary?.insight_status) && (() => {
+        const cov = data?.summary?.coverage
+        const ist = data?.summary?.insight_status
+        const score = cov?.score ?? null
+        const succeeded = ist?.generators_succeeded
+        const total = ist?.generators_total
+        const failed = ist?.failed ?? []
+        return (
+          <section
+            aria-label="Analysis completeness"
+            className={`${theme.glass} border ${theme.glassBorder} rounded-xl p-4`}
+          >
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-gradient-to-br from-teal-500 to-cyan-500 rounded-lg shadow-lg">
+                  <Target className="h-4 w-4 text-white" />
+                </div>
+                <div>
+                  <p className={`text-sm font-semibold ${theme.text.primary}`}>Analysis completeness</p>
+                  {typeof succeeded === 'number' && typeof total === 'number' && (
+                    <p className={`text-xs ${theme.text.muted}`}>
+                      {succeeded} of {total} insight categories generated
+                    </p>
+                  )}
+                </div>
+              </div>
+              {score !== null && (
+                <span className={`text-2xl font-bold ${theme.text.primary}`}>{score}%</span>
+              )}
+            </div>
+
+            {score !== null && (
+              <div
+                className={`w-full ${isDarkMode ? 'bg-gray-700' : 'bg-gray-200'} rounded-full h-2`}
+                role="progressbar"
+                aria-valuenow={score}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label="Analysis completeness score"
+              >
+                <div
+                  className="bg-gradient-to-r from-teal-500 to-cyan-500 h-2 rounded-full transition-all duration-500"
+                  style={{ width: `${Math.max(0, Math.min(100, score))}%` }}
+                />
+              </div>
+            )}
+
+            {failed.length > 0 && (
+              <div className="flex items-start gap-2 mt-3">
+                <AlertTriangle className="h-4 w-4 text-amber-500 flex-shrink-0 mt-0.5" aria-hidden="true" />
+                <p className={`text-xs ${theme.text.muted}`}>
+                  {failed.length} {failed.length === 1 ? 'category' : 'categories'} could not be generated: {failed.join(', ')}
+                </p>
+              </div>
+            )}
+          </section>
+        )
+      })()}
+
       {/* Key Metrics Row */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
         {[

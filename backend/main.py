@@ -11,7 +11,7 @@ import os
 
 from .api import auth_routes, upload_routes, annotation_routes, variant_routes
 from .api.analysis_routes import router as analysis_router
-from .api.admin_routes import router as admin_router
+from .api.admin import router as admin_router
 from .api.insights_routes import router as insights_router
 from .api.notification_routes import router as notification_ws_router, notification_router
 from .api.sharing_routes import router as sharing_router

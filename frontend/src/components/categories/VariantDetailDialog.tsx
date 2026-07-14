@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { ExternalLink, Dna, FlaskConical, BookOpen, Activity, X, ChevronDown, ChevronUp, AlertTriangle, Pill, Shield, Atom, RefreshCw, Bookmark } from 'lucide-react'
 import { Badge } from '../ui/badge'
-import { apiUrl } from '@/lib/api'
+import { apiFetch, ApiError } from '@/lib/api'
 import SmartInsights from '../SmartInsights'
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -398,8 +398,8 @@ export default function VariantDetailDialog({
   // Check if this variant is already saved when the dialog opens
   useEffect(() => {
     if (!open || !rsid) return
-    fetch(apiUrl('/auth/saved-variants'), { credentials: 'include' })
-      .then(r => r.ok ? r.json() : [])
+    apiFetch('/auth/saved-variants')
+      .then(r => r.json())
       .then((list: { rsid: string }[]) => setIsSaved(list.some(v => v.rsid === rsid)))
       .catch(() => {})
   }, [open, rsid])
@@ -409,25 +409,27 @@ export default function VariantDetailDialog({
     setSaveBusy(true)
     try {
       if (isSaved) {
-        const res = await fetch(apiUrl(`/auth/saved-variants/${rsid}`), {
-          method: 'DELETE',
-          credentials: 'include',
-        })
-        if (res.ok) setIsSaved(false)
+        await apiFetch(`/auth/saved-variants/${rsid}`, { method: 'DELETE' })
+        setIsSaved(false)
       } else {
-        const res = await fetch(apiUrl('/auth/saved-variants'), {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            rsid,
-            gene: gene || details?.transcripts?.[0]?.gene_symbol || null,
-            genotype: genotypeProp || details?.user_genotype || null,
-            most_severe_consequence: details?.most_severe_consequence || null,
-            clinical_significance: details?.clinical_significance?.[0] || null,
-          }),
-        })
-        if (res.ok || res.status === 409) setIsSaved(true)
+        try {
+          await apiFetch('/auth/saved-variants', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              rsid,
+              gene: gene || details?.transcripts?.[0]?.gene_symbol || null,
+              genotype: genotypeProp || details?.user_genotype || null,
+              most_severe_consequence: details?.most_severe_consequence || null,
+              clinical_significance: details?.clinical_significance?.[0] || null,
+            }),
+          })
+          setIsSaved(true)
+        } catch (err) {
+          // Already-saved (409) still counts as saved — same tolerance as before.
+          if (err instanceof ApiError && err.status === 409) setIsSaved(true)
+          else throw err
+        }
       }
     } catch { /* ignore */ }
     finally { setSaveBusy(false) }
@@ -443,10 +445,7 @@ export default function VariantDetailDialog({
     }
     setShowPubs(false)
 
-    const url = apiUrl(`/api/annotations/variant-details/${rsid}${forceRefresh ? '?refresh=true' : ''}`)
-    fetch(url, {
-      credentials: 'include',
-    })
+    apiFetch(`/api/annotations/variant-details/${rsid}${forceRefresh ? '?refresh=true' : ''}`)
       .then((res) => res.json())
       .then((data) => {
         // Use detailsRef (not details state) so we always read the latest value,

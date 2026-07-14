@@ -312,7 +312,7 @@ class TestVariantSearch:
         # scalar_one_or_none=None makes analysis query return None → early return
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=None))
         app, _ = self._build(session)
-        with patch("backend.api.variant_routes.select"):
+        with patch("backend.api.variant.search.select"):
             with TestClient(app) as client:
                 resp = client.get("/api/variants/search")
                 assert resp.status_code in (200, 400, 422)
@@ -328,7 +328,7 @@ class TestVariantSearch:
         marker.alt_allele = "G"
         session.execute = AsyncMock(return_value=_make_mock_result(scalars_list=[marker]))
         app, _ = self._build(session)
-        with patch("backend.api.variant_routes.select"):
+        with patch("backend.api.variant.search.select"):
             with TestClient(app) as client:
                 resp = client.get("/api/variants/search?q=rs12345")
                 assert resp.status_code in (200, 400, 500)
@@ -339,21 +339,34 @@ class TestVariantSearch:
 # ──────────────────────────────────────────────────
 
 def _admin_sa_patch():
-    """Context manager that patches SQLAlchemy functions in admin_routes."""
+    """Context manager that patches SQLAlchemy functions in admin_routes and
+    the admin domain sub-modules whose handlers were split out (users in U1;
+    variant_mappings + discoveries in U2)."""
     import contextlib
     @contextlib.contextmanager
     def _patch():
-        with patch("backend.api.admin_routes.select"), \
-             patch("backend.api.admin_routes.func"), \
-             patch("backend.api.admin_routes.delete"), \
-             patch("backend.api.admin_routes.update"):
+        with patch("backend.api.admin.category_rules.select"), \
+             patch("backend.api.admin.category_rules.delete"), \
+             patch("backend.api.admin.category_rules.update"), \
+             patch("backend.api.admin.users.select"), \
+             patch("backend.api.admin.users.func"), \
+             patch("backend.api.admin.variant_mappings.select"), \
+             patch("backend.api.admin.variant_mappings.func"), \
+             patch("backend.api.admin.discoveries.select"), \
+             patch("backend.api.admin.discoveries.func"), \
+             patch("backend.api.admin.annotation_sources.select"), \
+             patch("backend.api.admin.annotation_sources.func"), \
+             patch("backend.api.admin.jobs.select"), \
+             patch("backend.api.admin.jobs.func"), \
+             patch("backend.api.admin.jobs.delete"), \
+             patch("backend.api.admin.jobs.update"):
             yield
     return _patch()
 
 
 class TestAdminUsers:
     def _build(self, session=None, user=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         u = user or _make_admin_user()
         return _build_app([router], current_user=u, session=session)
 
@@ -439,7 +452,7 @@ class TestAdminUsers:
 
 class TestAdminDiscoveries:
     def _build(self, session=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         return _build_app([router], session=session)
 
     def test_discovery_summary_returns_200(self):
@@ -520,7 +533,7 @@ class TestAdminDiscoveries:
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=discovery))
         app, _ = self._build(session)
         with _admin_sa_patch():
-            with patch("backend.api.admin_routes.get_notification_service"):
+            with patch("backend.api.admin.discoveries.get_notification_service"):
                 with TestClient(app) as client:
                     resp = client.post(
                         "/api/admin/discoveries/1/review",
@@ -544,7 +557,7 @@ class TestAdminDiscoveries:
 
 class TestAdminVariantMappings:
     def _build(self, session=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         return _build_app([router], session=session)
 
     def test_list_mapping_categories_returns_200(self):
@@ -624,7 +637,7 @@ class TestAdminVariantMappings:
 
 class TestAdminJobs:
     def _build(self, session=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         return _build_app([router], session=session)
 
     def test_jobs_summary_returns_200(self):
@@ -647,6 +660,35 @@ class TestAdminJobs:
                 data = client.get("/api/admin/jobs/summary").json()
                 assert "total" in data
                 assert "pending" in data
+
+
+    def test_jobs_latency_empty_when_no_completed_analyses(self):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_mock_result(all_rows=[]))
+        app, _ = self._build(session)
+        with _admin_sa_patch():
+            with TestClient(app) as client:
+                data = client.get("/api/admin/jobs/latency").json()
+                assert data["sample_size"] == 0
+                assert data["p50_seconds"] is None
+                assert data["p95_seconds"] is None
+
+    def test_jobs_latency_computes_p50_p95_from_durations(self):
+        session = _make_mock_session()
+        rows = [
+            (datetime(2024, 1, 1, 0, 0, 0), datetime(2024, 1, 1, 0, 1, 0)),  # 60s
+            (datetime(2024, 1, 1, 0, 0, 0), datetime(2024, 1, 1, 0, 2, 0)),  # 120s
+            (datetime(2024, 1, 1, 0, 0, 0), datetime(2024, 1, 1, 0, 5, 0)),  # 300s
+        ]
+        session.execute = AsyncMock(return_value=_make_mock_result(all_rows=rows))
+        app, _ = self._build(session)
+        with _admin_sa_patch():
+            with TestClient(app) as client:
+                data = client.get("/api/admin/jobs/latency").json()
+                assert data["sample_size"] == 3
+                assert data["p50_seconds"] == 120.0
+                assert data["p95_seconds"] == 300.0
+                assert data["exceeds_threshold"] is False
 
     def test_list_jobs_returns_200(self):
         session = _make_mock_session()
@@ -758,7 +800,7 @@ class TestAdminJobs:
 
 class TestAdminCategoryRules:
     def _build(self, session=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         return _build_app([router], session=session)
 
     def test_list_rules_empty(self):
@@ -830,7 +872,7 @@ class TestAdminCategoryRules:
 
 class TestAdminAnnotationSources:
     def _build(self, session=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         return _build_app([router], session=session)
 
     def test_list_annotation_sources_returns_200(self):
@@ -847,7 +889,7 @@ class TestAdminAnnotationSources:
         # Ensure scalar returns 0 for count queries
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=0, all_rows=[]))
 
-        with patch("backend.api.admin_routes._ensure_source_configs", new=AsyncMock(return_value=[mock_source])):
+        with patch("backend.api.admin.annotation_sources._ensure_source_configs", new=AsyncMock(return_value=[mock_source])):
             with _admin_sa_patch():
                 app, _ = self._build(session)
                 with TestClient(app) as client:
@@ -856,7 +898,7 @@ class TestAdminAnnotationSources:
 
     def test_update_annotation_source_not_found(self):
         session = _make_mock_session()
-        with patch("backend.api.admin_routes._ensure_source_configs", new=AsyncMock(return_value=[])):
+        with patch("backend.api.admin.annotation_sources._ensure_source_configs", new=AsyncMock(return_value=[])):
             with _admin_sa_patch():
                 session.execute = AsyncMock(return_value=_make_mock_result(scalar=None))
                 app, _ = self._build(session)
@@ -867,7 +909,7 @@ class TestAdminAnnotationSources:
 
 class TestAdminClinvarEtl:
     def _build(self, session=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         return _build_app([router], session=session)
 
     def test_clinvar_etl_status(self):
@@ -889,7 +931,7 @@ class TestAdminClinvarEtl:
 
 class TestAdminGnomadEtl:
     def _build(self, session=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         return _build_app([router], session=session)
 
     def test_gnomad_etl_status(self):
@@ -904,15 +946,15 @@ class TestAdminGnomadEtl:
 
 class TestAdminIncompleteAnnotations:
     def _build(self, session=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         return _build_app([router], session=session)
 
     def test_incomplete_summary_returns_200(self):
         session = _make_mock_session()
         # Patch the helper functions to avoid complex DB query mocking
-        with patch("backend.api.admin_routes._get_all_enabled_source_names", new=AsyncMock(return_value=["ensembl", "clinvar"])):
-            with patch("backend.api.admin_routes._get_enabled_source_names", new=AsyncMock(return_value=["ensembl"])):
-                with patch("backend.api.admin_routes._build_incomplete_condition", return_value=None):
+        with patch("backend.api.admin.annotation_sources._get_all_enabled_source_names", new=AsyncMock(return_value=["ensembl", "clinvar"])):
+            with patch("backend.api.admin.annotation_sources._get_enabled_source_names", new=AsyncMock(return_value=["ensembl"])):
+                with patch("backend.api.admin.annotation_sources._build_incomplete_condition", return_value=None):
                     session.execute = AsyncMock(return_value=_make_mock_result(scalar=10))
                     app, _ = self._build(session)
                     with _admin_sa_patch():
@@ -922,9 +964,9 @@ class TestAdminIncompleteAnnotations:
 
     def test_incomplete_list_returns_200(self):
         session = _make_mock_session()
-        with patch("backend.api.admin_routes._get_all_enabled_source_names", new=AsyncMock(return_value=["ensembl"])):
-            with patch("backend.api.admin_routes._get_enabled_source_names", new=AsyncMock(return_value=[])):
-                with patch("backend.api.admin_routes._build_incomplete_condition", return_value=None):
+        with patch("backend.api.admin.annotation_sources._get_all_enabled_source_names", new=AsyncMock(return_value=["ensembl"])):
+            with patch("backend.api.admin.annotation_sources._get_enabled_source_names", new=AsyncMock(return_value=[])):
+                with patch("backend.api.admin.annotation_sources._build_incomplete_condition", return_value=None):
                     app, _ = self._build(session)
                     with _admin_sa_patch():
                         with TestClient(app) as client:
@@ -951,7 +993,7 @@ class TestRetriggerSourcesEnsemblGuard:
         return SharedVariantAnnotation(rsid="rs123", ensembl_data=ensembl_data)
 
     async def test_retrigger_ensembl_skips_when_ensembl_data_already_found(self):
-        from backend.api.admin_routes import _retrigger_sources
+        from backend.api.admin.annotation_sources import _retrigger_sources
 
         existing_data = {"found": True, "source": "ensembl_vep", "data": {"consequence": "missense_variant"}}
         annotation = self._make_annotation(ensembl_data=existing_data)
@@ -972,7 +1014,7 @@ class TestRetriggerSourcesEnsemblGuard:
         assert "ensembl" not in still_failed
 
     async def test_retrigger_ensembl_writes_when_ensembl_data_absent(self):
-        from backend.api.admin_routes import _retrigger_sources
+        from backend.api.admin.annotation_sources import _retrigger_sources
 
         annotation = self._make_annotation(ensembl_data=None)
         fresh_data = {"found": True, "source": "ensembl", "data": {"consequence": "missense_variant"}}
@@ -993,7 +1035,7 @@ class TestRetriggerSourcesEnsemblGuard:
     async def test_retrigger_ensembl_retries_when_existing_is_confirmed_no_data(self):
         """A confirmed-absent result (found=False) is not 'populated' — the guard
         only blocks found=True data, so a retry attempt is still allowed to run."""
-        from backend.api.admin_routes import _retrigger_sources
+        from backend.api.admin.annotation_sources import _retrigger_sources
 
         existing_data = {"found": False, "confirmed_no_data": True, "source": "ensembl_vep"}
         annotation = self._make_annotation(ensembl_data=existing_data)
@@ -1013,7 +1055,7 @@ class TestRetriggerSourcesEnsemblGuard:
 
 class TestAdminPurgeDeleted:
     def _build(self, session=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         return _build_app([router], session=session)
 
     def test_purge_deleted_success(self):

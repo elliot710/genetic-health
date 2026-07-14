@@ -273,17 +273,26 @@ def _admin_sa_patch():
 
     @contextlib.contextmanager
     def _patch():
-        with patch("backend.api.admin_routes.select"), \
-             patch("backend.api.admin_routes.func"), \
-             patch("backend.api.admin_routes.delete"), \
-             patch("backend.api.admin_routes.update"):
+        with patch("backend.api.admin.category_rules.select"), \
+             patch("backend.api.admin.category_rules.delete"), \
+             patch("backend.api.admin.category_rules.update"), \
+             patch("backend.api.admin.users.select"), \
+             patch("backend.api.admin.users.func"), \
+             patch("backend.api.admin.variant_mappings.select"), \
+             patch("backend.api.admin.variant_mappings.func"), \
+             patch("backend.api.admin.discoveries.select"), \
+             patch("backend.api.admin.discoveries.func"), \
+             patch("backend.api.admin.jobs.select"), \
+             patch("backend.api.admin.jobs.func"), \
+             patch("backend.api.admin.jobs.delete"), \
+             patch("backend.api.admin.jobs.update"):
             yield
     return _patch()
 
 
 class TestAdminRoutesExtra:
     def _app(self, session=None):
-        from backend.api.admin_routes import router
+        from backend.api.admin import router
         user = _make_mock_user(is_admin=True, username="admin")
         return _build_app(router, current_user=user, session=session)
 
@@ -414,7 +423,7 @@ class TestVariantRoutesDeep:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_mock_result(scalars_list=[]))
         app, _ = self._app(session)
-        with patch("backend.api.variant_routes.select", return_value=MagicMock()):
+        with patch("backend.api.variant.search.select", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.get("/api/variants/search?q=")
                 assert resp.status_code in (200, 400, 422, 500)
@@ -423,7 +432,7 @@ class TestVariantRoutesDeep:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_mock_result(scalars_list=[]))
         app, _ = self._app(session)
-        with patch("backend.api.variant_routes.select", return_value=MagicMock()):
+        with patch("backend.api.variant.search.select", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.get("/api/variants/search?q=BRCA1")
                 assert resp.status_code in (200, 500)
@@ -432,7 +441,7 @@ class TestVariantRoutesDeep:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=0))
         app, _ = self._app(session)
-        with patch("backend.api.variant_routes.select", return_value=MagicMock()):
+        with patch("backend.api.variant.search.select", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.get("/api/variants/stats")
                 assert resp.status_code in (200, 500)
@@ -447,7 +456,7 @@ class TestVariantRoutesDeep:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_mock_result(scalars_list=[]))
         app, _ = self._app(session)
-        with patch("backend.api.variant_routes.select", return_value=MagicMock()):
+        with patch("backend.api.variant.search.select", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.get("/api/variants/categories")
                 assert resp.status_code in (200, 500)
@@ -459,7 +468,7 @@ class TestVariantRoutesDeep:
 
 class TestAnalysisServicePure:
     def test_annotation_result_creation(self):
-        from backend.services.analysis_service import AnnotationResult
+        from backend.services.variant_types import AnnotationResult
         result = AnnotationResult(
             rsid="rs12345",
             was_reused=True,
@@ -497,33 +506,33 @@ class TestAnalysisServicePure:
 
 
 # ──────────────────────────────────────────────────────────────────
-# insights_service tests
+# ai_insights_service tests
 # ──────────────────────────────────────────────────────────────────
 
 class TestInsightsService:
     def test_llm_status_function_exists(self):
-        from backend.services.insights_service import get_llm_status
+        from backend.services.ai_insights_service import get_llm_status
         assert callable(get_llm_status)
 
     def test_llm_status_returns_dict(self):
-        from backend.services.insights_service import get_llm_status
+        from backend.services.ai_insights_service import get_llm_status
         status = get_llm_status()
         assert isinstance(status, dict)
 
     def test_set_insights_enabled(self):
-        from backend.services.insights_service import set_insights_enabled
+        from backend.services.ai_insights_service import set_insights_enabled
         result = set_insights_enabled(False)
         assert isinstance(result, dict)
         # Restore
         set_insights_enabled(True)
 
     def test_build_user_prompt(self):
-        from backend.services.insights_service import _build_user_prompt
+        from backend.services.ai_insights_service import _build_user_prompt
         result = _build_user_prompt("health", {"risks": []})
         assert isinstance(result, str)
 
     def test_is_express_mode_key(self):
-        from backend.services.insights_service import _is_express_mode_key
+        from backend.services.ai_insights_service import _is_express_mode_key
         result = _is_express_mode_key("health")
         assert isinstance(result, bool)
 

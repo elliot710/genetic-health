@@ -2,8 +2,7 @@
 
 import { useState } from 'react'
 import { Mail, MessageSquare, Clock } from 'lucide-react'
-import Navbar from '@/components/marketing/Navbar'
-import Footer from '@/components/marketing/Footer'
+import MarketingLayout from '@/components/marketing/MarketingLayout'
 
 const TOPICS = [
   'General inquiry',
@@ -29,9 +28,7 @@ export default function ContactPage() {
   }
 
   return (
-    <div className="min-h-screen bg-white dark:bg-slate-950 text-slate-900 dark:text-white">
-      <Navbar />
-
+    <MarketingLayout>
       <section className="pt-32 pb-20">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
           {/* Header */}
@@ -145,8 +142,6 @@ export default function ContactPage() {
           </div>
         </div>
       </section>
-
-      <Footer />
-    </div>
+    </MarketingLayout>
   )
 }

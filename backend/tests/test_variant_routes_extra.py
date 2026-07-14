@@ -264,8 +264,8 @@ class TestVariantLookup:
         cached.lookup_count = 5
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=cached))
         app, _ = self._build(session=session)
-        with patch("backend.api.variant_routes.select", return_value=MagicMock()), \
-             patch("backend.api.variant_routes._create_multi_source_mappings", new=AsyncMock()):
+        with patch("backend.api.variant.lookup.select", return_value=MagicMock()), \
+             patch("backend.api.variant.lookup._create_multi_source_mappings", new=AsyncMock()):
             with TestClient(app) as client:
                 resp = client.post("/api/variants/lookup", json={"variant_id": "rs12345"})
                 assert resp.status_code == 200
@@ -277,10 +277,10 @@ class TestVariantLookup:
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=None))
         app, _ = self._build(session=session)
         mock_svc = self._mock_api_service()
-        with patch("backend.api.variant_routes.select", return_value=MagicMock()), \
-             patch("backend.api.variant_routes.GeneticAPIService", return_value=mock_svc), \
-             patch("backend.api.variant_routes.process_lookup_discoveries", new=AsyncMock()), \
-             patch("backend.api.variant_routes._create_multi_source_mappings", new=AsyncMock()):
+        with patch("backend.api.variant.lookup.select", return_value=MagicMock()), \
+             patch("backend.api.variant.lookup.GeneticAPIService", return_value=mock_svc), \
+             patch("backend.api.variant.lookup.process_lookup_discoveries", new=AsyncMock()), \
+             patch("backend.api.variant.lookup._create_multi_source_mappings", new=AsyncMock()):
             with TestClient(app) as client:
                 resp = client.post("/api/variants/lookup", json={"variant_id": "rs12345"})
                 assert resp.status_code == 200
@@ -293,10 +293,10 @@ class TestVariantLookup:
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=None))
         app, _ = self._build(session=session)
         mock_svc = self._mock_api_service()
-        with patch("backend.api.variant_routes.select", return_value=MagicMock()), \
-             patch("backend.api.variant_routes.GeneticAPIService", return_value=mock_svc), \
-             patch("backend.api.variant_routes.process_lookup_discoveries", new=AsyncMock()), \
-             patch("backend.api.variant_routes._create_multi_source_mappings", new=AsyncMock()):
+        with patch("backend.api.variant.lookup.select", return_value=MagicMock()), \
+             patch("backend.api.variant.lookup.GeneticAPIService", return_value=mock_svc), \
+             patch("backend.api.variant.lookup.process_lookup_discoveries", new=AsyncMock()), \
+             patch("backend.api.variant.lookup._create_multi_source_mappings", new=AsyncMock()):
             with TestClient(app) as client:
                 resp = client.post("/api/variants/lookup", json={"variant_id": "rs12345", "force_refresh": True})
                 assert resp.status_code == 200
@@ -306,8 +306,8 @@ class TestVariantLookup:
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=None))
         app, _ = self._build(session=session)
         mock_svc = self._mock_api_service(annotation_result={"error": "not found"})
-        with patch("backend.api.variant_routes.select", return_value=MagicMock()), \
-             patch("backend.api.variant_routes.GeneticAPIService", return_value=mock_svc):
+        with patch("backend.api.variant.lookup.select", return_value=MagicMock()), \
+             patch("backend.api.variant.lookup.GeneticAPIService", return_value=mock_svc):
             with TestClient(app) as client:
                 resp = client.post("/api/variants/lookup", json={"variant_id": "rs12345"})
                 assert resp.status_code == 200
@@ -321,8 +321,8 @@ class TestVariantLookup:
         mock_svc.initialize = AsyncMock()
         mock_svc.annotate_variant = AsyncMock(return_value=None)
         mock_svc.close = AsyncMock()
-        with patch("backend.api.variant_routes.select", return_value=MagicMock()), \
-             patch("backend.api.variant_routes.GeneticAPIService", return_value=mock_svc):
+        with patch("backend.api.variant.lookup.select", return_value=MagicMock()), \
+             patch("backend.api.variant.lookup.GeneticAPIService", return_value=mock_svc):
             with TestClient(app) as client:
                 resp = client.post("/api/variants/lookup", json={"variant_id": "rs12345"})
                 assert resp.status_code == 200
@@ -362,7 +362,7 @@ class TestVariantStats:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=0, all_rows=[]))
         app, _ = self._build(session=session)
-        with patch("backend.api.variant_routes.select", return_value=MagicMock()):
+        with patch("backend.api.variant.search.select", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.get("/api/variants/stats")
                 assert resp.status_code == 200
@@ -376,7 +376,7 @@ class TestVariantSearch:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=None))
         app, _ = self._build(session=session)
-        with patch("backend.api.variant_routes.select", return_value=MagicMock()):
+        with patch("backend.api.variant.search.select", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.get("/api/variants/search")
                 assert resp.status_code == 200
@@ -395,8 +395,8 @@ class TestVariantSearch:
         ])
         session.execute = AsyncMock(side_effect=lambda *a, **kw: results_iter.__next__())
         app, _ = self._build(session=session)
-        with patch("backend.api.variant_routes.select", return_value=MagicMock()), \
-             patch("backend.api.variant_routes.sa_func", MagicMock()):
+        with patch("backend.api.variant.search.select", return_value=MagicMock()), \
+             patch("backend.api.variant.search.sa_func", MagicMock()):
             with TestClient(app) as client:
                 resp = client.get("/api/variants/search")
                 assert resp.status_code == 200
@@ -410,7 +410,7 @@ class TestVariantCategories:
         session = _make_mock_session()
         session.execute = AsyncMock(return_value=_make_mock_result(scalar=None))
         app, _ = self._build(session=session)
-        with patch("backend.api.variant_routes.select", return_value=MagicMock()):
+        with patch("backend.api.variant.search.select", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.get("/api/variants/categories")
                 assert resp.status_code == 200
@@ -428,9 +428,9 @@ class TestVariantCategories:
         results_iter = iter([analysis_result, count_result, rows_result])
         session.execute = AsyncMock(side_effect=lambda *a, **kw: results_iter.__next__())
         app, _ = self._build(session=session)
-        with patch("backend.api.variant_routes.select", return_value=MagicMock()), \
-             patch("backend.api.variant_routes.sa_func", MagicMock()), \
-             patch("backend.api.variant_routes.literal_column", return_value=MagicMock()):
+        with patch("backend.api.variant.search.select", return_value=MagicMock()), \
+             patch("backend.api.variant.search.sa_func", MagicMock()), \
+             patch("backend.api.variant.search.literal_column", return_value=MagicMock()):
             with TestClient(app) as client:
                 resp = client.get("/api/variants/categories")
                 assert resp.status_code == 200
@@ -441,7 +441,7 @@ class TestVariantCategories:
         session = _make_mock_session()
         session.execute = AsyncMock(side_effect=Exception("DB error"))
         app, _ = self._build(session=session)
-        with patch("backend.api.variant_routes.select", side_effect=Exception("DB error")):
+        with patch("backend.api.variant.search.select", side_effect=Exception("DB error")):
             with TestClient(app) as client:
                 resp = client.get("/api/variants/categories")
                 assert resp.status_code == 500

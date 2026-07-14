@@ -17,7 +17,7 @@ import {
 import type { Payload } from 'recharts/types/component/DefaultTooltipContent'
 import { Badge } from './ui/badge'
 import { useThemeClasses, CategoryHeader, EmptyState, SectionCard } from './categories/shared'
-import { apiUrl } from '@/lib/api'
+import { apiFetch, ApiError } from '@/lib/api'
 import VariantDetailDialog from './categories/VariantDetailDialog'
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -125,13 +125,10 @@ export default function KnowledgeGraph({ isDarkMode, token }: KnowledgeGraphProp
     if (!token) { setLoading(false); return }
     ;(async () => {
       try {
-        const resp = await fetch(apiUrl('/api/insights/knowledge-graph'), {
-          credentials: 'include',
-        })
-        if (resp.ok) setGraphData(await resp.json())
-        else setError('Failed to load data')
-      } catch {
-        setError('Network error')
+        const resp = await apiFetch('/api/insights/knowledge-graph')
+        setGraphData(await resp.json())
+      } catch (err) {
+        setError(err instanceof ApiError ? 'Failed to load data' : 'Network error')
       } finally {
         setLoading(false)
       }
