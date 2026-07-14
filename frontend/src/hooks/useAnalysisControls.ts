@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { apiFetch, ApiError } from '@/lib/api'
+import { apiUrl, apiFetch, ApiError } from '@/lib/api'
 
 interface UseAnalysisControlsOptions {
   analysisId?: number | null
