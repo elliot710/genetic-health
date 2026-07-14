@@ -10,6 +10,16 @@ _CLINGEN_SKIP = frozenset({'Disputed', 'Refuted'})
 
 
 async def generate_health_risks(ctx: GeneratorContext) -> int:
+    # NOTE: zero health risks is a legitimate, common outcome — not a bug.
+    # Health uses conservative clinical gates (generate_from_maps with
+    # max_population_af=0.05 + alt-allele-carry verification + benign
+    # exclusion), so a genome whose health-mapped variants are benign or don't
+    # carry the risk allele correctly yields 0. This is intentionally stricter
+    # than the drug panel (which filters only hom-ref/no-call/benign), which is
+    # why drug counts run high while health can be 0. Do NOT "fix" a zero count
+    # by loosening these gates — that reintroduces false-positive health scares.
+    # The golden-genome snapshot proves the generator fires for genuine
+    # pathogenic variants (rs1001, rs1005).
     def _is_clingen_disputed(rsid):
         ar = ctx.annotation_results.get(rsid)
         validity = get_clingen_validity(ar)
