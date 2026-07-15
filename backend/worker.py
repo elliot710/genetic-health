@@ -125,6 +125,22 @@ async def _run_one(analysis_id: int, user_id: int, regen_only: bool = False) -> 
     try:
         if regen_only:
             await service.regenerate_insights(analysis_id)
+            # regenerate_insights recomputes insights but never touches
+            # analysis_status, so mark the job complete here. Without this the
+            # analysis sits at 'processing'/90% until a worker restart (the only
+            # other place _recover_stale would fix it), and the dashboard won't
+            # surface the freshly generated insights.
+            async with session_factory() as sess:
+                await sess.execute(
+                    update(GeneticAnalysis)
+                    .where(GeneticAnalysis.id == analysis_id)
+                    .values(
+                        analysis_status="completed",
+                        current_step="completed",
+                        progress_percentage=100,
+                    )
+                )
+                await sess.commit()
         else:
             await service.process_analysis(analysis_id)
         logger.info(f"[job {analysis_id}] completed")
