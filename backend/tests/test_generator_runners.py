@@ -610,3 +610,23 @@ class TestAnalysisQueueExtended:
         q1 = get_analysis_queue()
         q2 = get_analysis_queue()
         assert q1 is q2
+
+
+class TestGenerateFromMapsIndelGenotype:
+    @pytest.mark.asyncio
+    async def test_indel_genotype_health_variant_does_not_raise(self):
+        # Regression: map_generation used indel_d_is_ref() without importing it,
+        # so any registry-mapped variant with a consumer-array indel (D/I)
+        # genotype crashed its generator with NameError. Real genomes hit this
+        # (health_risks: FAILED — name 'indel_d_is_ref' is not defined); the
+        # SNP-only golden-genome fixture never exercised the branch.
+        from backend.services.insight_generators.health import generate_health_risks
+        variant = _make_variant("rs_indel", genotype="DI", ref="A", alt="AT")
+        variant.chromosome = "1"
+        ctx = _make_ctx(
+            variants=[variant],
+            rsid_map={"rs_indel": {"condition": "Test Condition", "risk_multiplier": 1.5, "gene": "GENE"}},
+            category="health",
+        )
+        result = await generate_health_risks(ctx)
+        assert isinstance(result, int)

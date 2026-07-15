@@ -12,7 +12,7 @@ from ....db.annotation_schemas import validate_associated_variants
 from .alleles import (
     STRAND_COMPLEMENT, get_user_genotype, is_no_call_genotype,
     _get_effective_ref_allele, get_annotation_allele_parts,
-    is_homozygous_reference, is_indel_genotype, _parse_alleles,
+    is_homozygous_reference, is_indel_genotype, indel_d_is_ref, _parse_alleles,
 )
 from .clinical import is_clinvar_benign, _get_all_clinvar_significances, should_skip_sex_linked
 from .context import GeneratorContext
