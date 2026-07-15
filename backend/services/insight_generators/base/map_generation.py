@@ -23,6 +23,20 @@ logger = logging.getLogger(__name__)
 _BENIGN_CLASSIFICATIONS = frozenset(('benign', 'likely_benign'))
 
 
+def _should_exclude_benign(max_population_af, path_score) -> bool:
+    """Benign-exclusion is a CLINICAL gate only. A benign-classified variant is
+    not a health/carrier finding — but lifestyle panels (sports, methylation,
+    nutrition, …; max_population_af=0.20) report traits that are benign by
+    nature (ACTN3, MTHFR, …). Applying the filter there wrongly zeroes them, so
+    gate on the clinical AF threshold (<=0.05) that already separates the two."""
+    return bool(
+        settings.analysis.exclude_benign_from_panels
+        and max_population_af is not None and max_population_af <= 0.05
+        and isinstance(path_score, dict)
+        and path_score.get('classification') in _BENIGN_CLASSIFICATIONS
+    )
+
+
 async def generate_from_maps(
     ctx: GeneratorContext,
     *,
@@ -216,9 +230,7 @@ async def generate_from_maps(
                 # Filter benign/likely_benign variants — applies to all panels.
                 # Lifestyle panels with max_population_af already filter common
                 # variants above, so this catches remaining benign-classified ones.
-                if (settings.analysis.exclude_benign_from_panels
-                        and isinstance(_path_score, dict)
-                        and _path_score.get('classification') in _BENIGN_CLASSIFICATIONS):
+                if _should_exclude_benign(max_population_af, _path_score):
                     continue
                 # RC-7: When no scoring data exists and no ClinVar evidence,
                 # skip for clinical panels (health/carrier/drug) to prevent
@@ -293,9 +305,7 @@ async def generate_from_maps(
                     )
                 )
                 info_with_gt = {**info, '_ref_allele': effective_ref, '_genotype': genotype or '', '_pathogenicity_score': _path_score}
-                if (settings.analysis.exclude_benign_from_panels
-                        and isinstance(_path_score, dict)
-                        and _path_score.get('classification') in _BENIGN_CLASSIFICATIONS):
+                if _should_exclude_benign(max_population_af, _path_score):
                     continue
                 item = build_from_gene(ctx.analysis_id, rsid, gene, consequence, info_with_gt)
                 if item:

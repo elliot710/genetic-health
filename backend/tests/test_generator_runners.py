@@ -612,6 +612,26 @@ class TestAnalysisQueueExtended:
         assert q1 is q2
 
 
+class TestBenignExclusionScope:
+    def _fn(self):
+        from backend.services.insight_generators.base.map_generation import _should_exclude_benign
+        return _should_exclude_benign
+
+    def test_clinical_af_excludes_benign(self):
+        assert self._fn()(0.05, {"classification": "benign"}) is True
+
+    def test_lifestyle_af_keeps_benign(self):
+        # sports/methylation/nutrition (max_population_af=0.20) report traits
+        # that are benign by nature; they must not be dropped by the filter.
+        assert self._fn()(0.20, {"classification": "benign"}) is False
+
+    def test_non_benign_not_excluded(self):
+        assert self._fn()(0.05, {"classification": "pathogenic"}) is False
+
+    def test_none_af_not_excluded(self):
+        assert self._fn()(None, {"classification": "benign"}) is False
+
+
 class TestGenerateFromMapsIndelGenotype:
     @pytest.mark.asyncio
     async def test_indel_genotype_health_variant_does_not_raise(self):
