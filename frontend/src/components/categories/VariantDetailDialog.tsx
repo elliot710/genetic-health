@@ -390,6 +390,7 @@ export default function VariantDetailDialog({
   const [refreshing, setRefreshing] = useState(false)
   const [isSaved, setIsSaved] = useState(false)
   const [saveBusy, setSaveBusy] = useState(false)
+  const [showAllEvidence, setShowAllEvidence] = useState(false)
 
   // Keep a ref so fetchDetails always reads the latest details without stale closure issues
   const detailsRef = useRef<VariantDetails | null>(null)
@@ -975,6 +976,26 @@ export default function VariantDetailDialog({
               </div>
             )}
 
+            {/* ── Detailed evidence (collapsible: keeps the summary above visible,
+                   tucks the ~19 evidence sections behind one disclosure) ── */}
+            <button
+              type="button"
+              onClick={() => setShowAllEvidence((v) => !v)}
+              aria-expanded={showAllEvidence}
+              className={`flex items-center justify-between gap-3 w-full ${cardBg} rounded-xl p-4 border ${border} text-left text-sm font-semibold ${textPrimary} hover:opacity-90 transition-opacity focus:outline-none focus:ring-2 focus:ring-blue-500/50`}
+            >
+              <span className="flex items-center gap-2 min-w-0">
+                <FlaskConical className="h-4 w-4 text-blue-400 shrink-0" />
+                <span className="shrink-0">{showAllEvidence ? 'Hide detailed evidence' : 'Show detailed evidence'}</span>
+                <span className={`hidden md:inline text-xs font-normal ${textSecondary} truncate`}>
+                  VEP · gnomAD · 1000 Genomes · pharmacogenomics · protein structure · literature
+                </span>
+              </span>
+              <ChevronDown className={`h-4 w-4 ${textSecondary} shrink-0 transition-transform ${showAllEvidence ? 'rotate-180' : ''}`} />
+            </button>
+
+            {showAllEvidence && (
+            <>
             {/* ── Ensembl VEP Summary ── */}
             {details.transcripts && details.transcripts.length > 0 && (() => {
               const tcs = details.transcripts
@@ -2287,6 +2308,8 @@ export default function VariantDetailDialog({
               compact
               title="AI Variant Analysis"
             />
+            </>
+            )}
 
             {/* ── External Links ── */}
             <div className={`flex flex-wrap gap-2 pt-2 border-t ${border}`}>
