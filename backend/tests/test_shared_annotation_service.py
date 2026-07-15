@@ -85,3 +85,12 @@ class TestGetExistingAnnotations:
         assert "rs000" not in result
         assert "rs111" in result
         assert result["rs111"]["success_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_fast_forwards_on_progress(self):
+        # regen streams annotation-load progress into the UI bar via this hook
+        svc = SharedVariantAnnotationService()
+        cb = AsyncMock()
+        with patch.object(svc, 'get_existing_annotations', AsyncMock(return_value={})) as mock_ge:
+            await svc.get_existing_annotations_fast(["rs1"], on_progress=cb)
+        assert mock_ge.await_args.kwargs.get("on_progress") is cb

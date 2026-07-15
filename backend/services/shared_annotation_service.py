@@ -120,8 +120,10 @@ class SharedVariantAnnotationService:
         )
         return annotation_map
 
-    async def get_existing_annotations_fast(self, rsids: List[str]) -> Dict[str, Dict[str, Any]]:
-        return await self.get_existing_annotations(rsids, update_usage=False, chunk_size=5000)
+    async def get_existing_annotations_fast(self, rsids: List[str], on_progress=None) -> Dict[str, Dict[str, Any]]:
+        return await self.get_existing_annotations(
+            rsids, update_usage=False, chunk_size=5000, on_progress=on_progress
+        )
 
     async def _increment_usage_counts(self, rsids: List[str]) -> None:
         from ..db.database import async_session_factory

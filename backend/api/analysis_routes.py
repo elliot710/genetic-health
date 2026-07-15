@@ -139,7 +139,7 @@ async def regenerate_insights(
 
         await db.execute(
             update(GeneticAnalysis).where(GeneticAnalysis.id == analysis_id)
-            .values(analysis_status="pending", progress_percentage=90, current_step="regenerating_insights", job_logs=None)
+            .values(analysis_status="pending", progress_percentage=5, current_step="regenerating_insights", job_logs=None)
         )
         await db.commit()
         return {"analysis_id": analysis_id, "status": "pending", "message": "Insight regeneration queued"}
