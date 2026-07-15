@@ -312,6 +312,27 @@ async def generate_comprehensive_insights(
     return insights_generated
 
 
+async def _persist_regen_progress(analysis_id: int, pct: float) -> None:
+    """Persist coarse regen progress so the UI bar moves through the real stages
+    (load → annotate → generate) instead of freezing at a fixed value. Capped at
+    99 — the worker sets 100 once the job actually completes."""
+    try:
+        from sqlalchemy import update as sa_update
+        from ..db.models import GeneticAnalysis
+        async with async_session_factory() as sess:
+            await sess.execute(
+                sa_update(GeneticAnalysis)
+                .where(GeneticAnalysis.id == analysis_id)
+                .values(
+                    progress_percentage=max(0, min(99, int(pct))),
+                    current_step="regenerating_insights",
+                )
+            )
+            await sess.commit()
+    except Exception as e:
+        logger.debug(f"  regen progress persist failed for {analysis_id}: {e}")
+
+
 async def regenerate_insights(
     analysis_id: int,
     user_id: Optional[int] = None,
@@ -371,14 +392,22 @@ async def regenerate_insights(
 
         logger.info(f"═══ Insight regeneration for analysis {analysis_id} ═══")
         logger.info(f"  Variants: {len(variants)}")
+        await _persist_regen_progress(analysis_id, 10)
 
         # Build gene map
         rsid_gene_map = await build_rsid_gene_map(variants)
 
-        # Load existing annotations
+        # Load existing annotations — the biggest time chunk; stream its progress
+        # into the 10→55% band so the bar moves during the load.
         annotation_service = SharedVariantAnnotationService()
         rsids = [str(v.rsid) for v in variants if v.rsid]
-        existing = await annotation_service.get_existing_annotations_fast(rsids)
+
+        async def _ann_progress(checked: int, total: int) -> None:
+            await _persist_regen_progress(analysis_id, 10 + 45 * (checked / max(total, 1)))
+
+        existing = await annotation_service.get_existing_annotations_fast(
+            rsids, on_progress=_ann_progress
+        )
         annotation_results: Dict[str, AnnotationResult] = {}
         for rsid, data in existing.items():
             annotation_results[rsid] = AnnotationResult(
@@ -399,12 +428,20 @@ async def regenerate_insights(
             phase_progress=0.0,
         )
 
+        await _persist_regen_progress(analysis_id, 55)
+
+        async def _gen_progress(aid: int, prog) -> None:
+            # generator batches span the 55→95% band
+            pp = getattr(prog, "phase_progress", 0) or 0
+            await _persist_regen_progress(aid, 55 + 40 * pp)
+
         # Run Phase 4 only
         insights_generated = await generate_comprehensive_insights(
             variants, annotation_results, analysis_id,
             rsid_gene_map, registry, progress,
             inferred_sex=inferred_sex,
             only_categories=only_categories,
+            update_progress_fn=_gen_progress,
         )
 
         # Invalidate dashboard cache
