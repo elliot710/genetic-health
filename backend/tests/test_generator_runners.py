@@ -632,6 +632,55 @@ class TestBenignExclusionScope:
         assert self._fn()(None, {"classification": "benign"}) is False
 
 
+class TestRarityHardVeto:
+    """U2: a common allele carrying a ClinVar-pathogenic label must not surface
+    as a clinical (health) finding — the ClinVar AF-gate bypass is bounded by a
+    hard rarity cap. A genuine rare pathogenic allele is still emitted."""
+
+    def _seed_annotation(self):
+        annotation = MagicMock()
+        annotation.annotation_data = {"annotations": {
+            "clinvar_local": {
+                "found": True,
+                "clinical_significances": ["Pathogenic"],
+                "ref_allele": "C",
+                "alt_allele": "T",
+            },
+        }}
+        return annotation
+
+    def _seed_ctx(self, population_frequency):
+        variant = _make_variant("rs397518480", genotype="T/T", ref="C", alt="T")
+        variant.chromosome = "X"
+        ctx = _make_ctx(
+            variants=[variant],
+            rsid_map={"rs397518480": {
+                "condition": "X-linked parkinsonism-spasticity syndrome",
+                "risk_multiplier": 2.3, "gene": "ATP6AP2",
+                "clinical_significance": "pathogenic",
+            }},
+            category="health",
+        )
+        ctx.inferred_sex = "male"
+        ctx.annotation_results = {"rs397518480": self._seed_annotation()}
+        profile = MagicMock()
+        profile.population_frequency = population_frequency
+        ctx.variant_profiles = {"rs397518480": profile}
+        return ctx
+
+    @pytest.mark.asyncio
+    async def test_common_clinvar_pathogenic_allele_suppressed(self):
+        from backend.services.insight_generators.health import generate_health_risks
+        result = await generate_health_risks(self._seed_ctx(population_frequency=0.79))
+        assert result == 0
+
+    @pytest.mark.asyncio
+    async def test_rare_clinvar_pathogenic_allele_preserved(self):
+        from backend.services.insight_generators.health import generate_health_risks
+        result = await generate_health_risks(self._seed_ctx(population_frequency=0.0005))
+        assert result >= 1
+
+
 class TestGenerateFromMapsIndelGenotype:
     @pytest.mark.asyncio
     async def test_indel_genotype_health_variant_does_not_raise(self):
