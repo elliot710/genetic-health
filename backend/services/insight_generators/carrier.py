@@ -107,7 +107,7 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
             # RC-5: Skip variants where all sources agree benign
             if is_clinvar_benign(annotation_result):
                 continue
-            # Skip common variants (AF > 5%) unless ClinVar pathogenic
+            # Skip common variants (AF > 5%) — a recessive carrier allele is rare.
             _freq = extract_frequency(annotation_result)
             if _freq and _freq > 0.05:
                 continue
@@ -155,6 +155,14 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
 
         # Only carrier-relevant: pathogenic/likely pathogenic variants
         if not any(kw in sig_lower for kw in ('pathogenic', 'risk_factor', 'risk factor')):
+            continue
+
+        # Common variants are not carrier findings — a recessive carrier allele
+        # is rare. Gate the ClinVar-local discovery path like the registry path
+        # above (U10), so a common ClinVar-pathogenic allele does not surface as
+        # an 'affected'/'carrier' false positive.
+        _disc_freq = extract_frequency(annotation_result)
+        if _disc_freq and _disc_freq > 0.05:
             continue
 
         gene_conditions = cv_local.get('gene_conditions', [])

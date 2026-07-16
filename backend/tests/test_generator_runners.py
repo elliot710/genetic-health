@@ -632,6 +632,43 @@ class TestBenignExclusionScope:
         assert self._fn()(None, {"classification": "benign"}) is False
 
 
+class TestCarrierRarityGate:
+    """U10: the carrier ClinVar-local discovery path must also reject common
+    alleles — not only the registry path."""
+
+    def _annotation(self, af):
+        annotation = MagicMock()
+        annotation.annotation_data = {"annotations": {
+            "clinvar_local": {
+                "found": True,
+                "clinical_significances": ["Pathogenic"],
+                "gene_conditions": [{"disease": "Some recessive disease"}],
+                "genes": ["GENE"],
+                "ref_allele": "C", "alt_allele": "T",
+            },
+            "gnomad": {"found": True, "af": af},
+        }}
+        return annotation
+
+    def _ctx(self, af):
+        variant = _make_variant("rs_carrier_common", genotype="T/T", ref="C", alt="T")
+        variant.chromosome = "1"
+        ctx = _make_ctx(variants=[variant], category="carrier")
+        ctx.inferred_sex = "male"
+        ctx.annotation_results = {"rs_carrier_common": self._annotation(af)}
+        return ctx
+
+    @pytest.mark.asyncio
+    async def test_common_pathogenic_allele_not_a_carrier_finding(self):
+        from backend.services.insight_generators.carrier import generate_carrier_status
+        assert await generate_carrier_status(self._ctx(af=0.79)) == 0
+
+    @pytest.mark.asyncio
+    async def test_rare_pathogenic_allele_is_a_carrier_finding(self):
+        from backend.services.insight_generators.carrier import generate_carrier_status
+        assert await generate_carrier_status(self._ctx(af=0.0004)) >= 1
+
+
 class TestRarityHardVeto:
     """U2: a common allele carrying a ClinVar-pathogenic label must not surface
     as a clinical (health) finding — the ClinVar AF-gate bypass is bounded by a
