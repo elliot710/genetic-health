@@ -22,6 +22,17 @@ logger = logging.getLogger(__name__)
 
 _BENIGN_CLASSIFICATIONS = frozenset(('benign', 'likely_benign'))
 
+# Hard population-frequency ceiling for the ClinVar-pathogenic AF-gate bypass.
+# A ClinVar "pathogenic" label may override the per-category soft ceiling
+# (max_population_af) only for genuinely uncommon alleles. A pathogenic
+# rare-disease allele is by definition rare (Mendelian disease alleles are
+# <1%); an allele carried by >10% of the population is the common/major allele,
+# so a pathogenic classification on it is contradictory and must not surface as
+# a personal risk finding. This is the minor-allele safeguard (R3): a risk
+# allele must be uncommon, enforced by frequency rather than fragile ref/alt
+# orientation.
+_PATHOGENIC_AF_HARD_CAP = 0.10
+
 
 def _should_exclude_benign(max_population_af, path_score) -> bool:
     """Benign-exclusion is a CLINICAL gate only. A benign-classified variant is
@@ -105,7 +116,10 @@ async def generate_from_maps(
                     _has_clinvar_path = any(
                         'pathogenic' in s.lower() for s in _cv_sigs
                     )
-                if not _has_clinvar_path:
+                # ClinVar-pathogenic bypasses the soft ceiling only up to the
+                # hard rarity cap; a common allele is suppressed regardless of
+                # its ClinVar label (see _PATHOGENIC_AF_HARD_CAP).
+                if not _has_clinvar_path or _var_freq > _PATHOGENIC_AF_HARD_CAP:
                     continue
 
         # rsid-based matching

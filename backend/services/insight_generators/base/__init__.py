@@ -38,6 +38,7 @@ from .frequency import extract_gene_and_consequence, extract_frequency
 from .zygosity import (
     risk_level_to_score,
     zygosity_adjust,
+    cap_risk_for_rarity,
     boost_if_pathogenic,
     assess_risk_level,
     assess_drug_response,
@@ -229,7 +230,7 @@ __all__ = [
     'indel_d_is_ref', 'get_user_genotype', 'is_indel_genotype', 'is_no_call_genotype',
     'is_homozygous_reference', 'is_heterozygous',
     'extract_gene_and_consequence', 'extract_frequency',
-    'risk_level_to_score', 'zygosity_adjust', 'boost_if_pathogenic',
+    'risk_level_to_score', 'zygosity_adjust', 'cap_risk_for_rarity', 'boost_if_pathogenic',
     'assess_risk_level', 'assess_drug_response',
     'get_health_recommendations', 'get_drug_recommendations', 'get_trait_description',
     'is_clinvar_benign', 'should_skip_sex_linked',

@@ -788,9 +788,14 @@ export default function VariantDetailDialog({
                     </span>
                   </div>
 
-                  <div className={`inline-block rounded-lg px-3 py-1 border text-sm font-medium mb-3 ${classificationBg(ps.classification)} ${classificationColor(ps.classification)}`}>
+                  <div className={`inline-block rounded-lg px-3 py-1 border text-sm font-medium mb-1 ${classificationBg(ps.classification)} ${classificationColor(ps.classification)}`}>
                     {clsLabel}
                   </div>
+                  <p className={`text-[10px] leading-relaxed ${textSecondary} mb-3`}>
+                    Classification of the variant itself — not your personal risk. Personal
+                    risk also depends on your genotype and how common the variant is in the
+                    population.
+                  </p>
 
                   {/* Per-source breakdown */}
                   <div className="space-y-1.5 mt-2">

@@ -23,6 +23,7 @@ from ..db.models import (
     SharedVariantAnnotation, GeneticMarker,
 )
 from .multi_source_categorizer import categorize_variant, CategorySuggestion, _SEVERE_EXCLUSION_KW
+from .mapping_reliability import is_reliable_clinical_mapping
 
 logger = logging.getLogger(__name__)
 
@@ -420,6 +421,10 @@ class AutoCategorizer:
                 ClinVarVariant.clinical_significance,
                 ClinVarVariant.conditions,
                 ClinVarVariant.review_status,
+                ClinVarVariant.molecular_consequence,
+                ClinVarVariant.af_exac,
+                ClinVarVariant.af_tgp,
+                ClinVarVariant.af_esp,
             )
             .where(ClinVarVariant.clinical_significance.ilike(f"%{sig_pattern}%"))
             .where(ClinVarVariant.rsid.isnot(None))
@@ -440,7 +445,11 @@ class AutoCategorizer:
         )
         out: Dict[str, dict] = {}
         for row in result.all():
-            rsid, gene, sig, cond, review = row
+            rsid, gene, sig, cond, review, _mol_cons, _af_exac, _af_tgp, _af_esp = row
+            # U5: do not mint clinical mappings for benign/conflicting, non-damaging
+            # (synonymous/intron/UTR/…), or common-allele ClinVar records.
+            if not is_reliable_clinical_mapping(sig, _mol_cons, _af_exac, _af_tgp, _af_esp)[0]:
+                continue
             cond = cond or f"{gene or 'Unknown'} variant"
             clean = self._clean_condition(cond)
             if not clean:
@@ -474,6 +483,10 @@ class AutoCategorizer:
                 ClinVarVariant.clinical_significance,
                 ClinVarVariant.conditions,
                 ClinVarVariant.review_status,
+                ClinVarVariant.molecular_consequence,
+                ClinVarVariant.af_exac,
+                ClinVarVariant.af_tgp,
+                ClinVarVariant.af_esp,
             )
             .where(ClinVarVariant.conditions.ilike(f"%{keyword}%"))
             .where(ClinVarVariant.rsid.isnot(None))
@@ -492,7 +505,11 @@ class AutoCategorizer:
         )
         out: Dict[str, dict] = {}
         for row in result.all():
-            rsid, gene, sig, cond, review = row
+            rsid, gene, sig, cond, review, _mol_cons, _af_exac, _af_tgp, _af_esp = row
+            # U5: do not mint clinical mappings for benign/conflicting, non-damaging
+            # (synonymous/intron/UTR/…), or common-allele ClinVar records.
+            if not is_reliable_clinical_mapping(sig, _mol_cons, _af_exac, _af_tgp, _af_esp)[0]:
+                continue
             cond = cond or keyword
             clean = self._clean_condition(cond)
             if not clean:
@@ -622,6 +639,10 @@ class AutoCategorizer:
                 ClinVarVariant.clinical_significance,
                 ClinVarVariant.conditions,
                 ClinVarVariant.review_status,
+                ClinVarVariant.molecular_consequence,
+                ClinVarVariant.af_exac,
+                ClinVarVariant.af_tgp,
+                ClinVarVariant.af_esp,
             )
             .where(ClinVarVariant.origin.ilike(f"%{origin_val}%"))
             .where(ClinVarVariant.rsid.isnot(None))

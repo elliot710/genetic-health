@@ -2,7 +2,7 @@
 Annotation extraction helpers for gene/consequence and population frequency
 (pure functions, no DB access).
 """
-from typing import Dict
+from typing import Dict, Optional
 
 
 def extract_gene_and_consequence(
@@ -61,18 +61,20 @@ def extract_gene_and_consequence(
         return None, None, None
 
 
-def extract_frequency(annotation_result) -> float:
-    """Extract population frequency from annotation data.
+def resolve_population_frequency(annotations: Dict) -> Optional[float]:
+    """Resolve the population allele frequency from a merged annotations dict
+    (the ``annotation_data['annotations']`` shape), trying sources in order:
 
-    Tries multiple sources in order:
     1. Ensembl VEP colocated_variants gnomAD frequencies
     2. gnomAD local allele frequency (af)
     3. 1000 Genomes global allele frequency
-    """
-    if not annotation_result or not annotation_result.annotation_data:
-        return 0.0
 
-    annotations = annotation_result.annotation_data.get('annotations', {})
+    Returns ``None`` when no source carries a frequency — distinct from a
+    genuine ``0.0``. Callers that need the rarity signal (matching gate, scorer,
+    risk assessment) must treat ``None`` as *unknown*, not *ultra-rare*.
+    """
+    if not annotations:
+        return None
 
     try:
         # 1. Ensembl VEP
@@ -83,7 +85,7 @@ def extract_frequency(annotation_result) -> float:
             freqs = entry.get('colocated_variants', [{}])[0].get('frequencies', {})
             if freqs:
                 first_allele = next(iter(freqs.values()), {})
-                val = first_allele.get('gnomade', first_allele.get('gnomad', 0.0))
+                val = first_allele.get('gnomade', first_allele.get('gnomad'))
                 if val:
                     return val
     except (KeyError, IndexError, TypeError, StopIteration):
@@ -109,4 +111,15 @@ def extract_frequency(annotation_result) -> float:
     except (KeyError, TypeError):
         pass
 
-    return 0.0
+    return None
+
+
+def extract_frequency(annotation_result) -> float:
+    """Population frequency for an annotation_result, as a float (0.0 when
+    unknown). Thin wrapper over :func:`resolve_population_frequency` that
+    preserves the legacy float contract for existing callers."""
+    if not annotation_result or not annotation_result.annotation_data:
+        return 0.0
+    annotations = annotation_result.annotation_data.get('annotations', {})
+    resolved = resolve_population_frequency(annotations)
+    return resolved if resolved is not None else 0.0
