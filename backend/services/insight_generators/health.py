@@ -3,8 +3,13 @@ from ...db.models import HealthRisk
 from .base import (
     GeneratorContext, generate_from_maps, assess_risk_level,
     get_health_recommendations, extract_gene_and_consequence,
-    risk_level_to_score, zygosity_adjust, get_clingen_validity,
+    risk_level_to_score, zygosity_adjust, cap_risk_for_rarity, get_clingen_validity,
 )
+
+
+def _population_frequency(ctx, rsid):
+    prof = ctx.variant_profiles.get(rsid)
+    return getattr(prof, 'population_frequency', None) if prof else None
 
 _CLINGEN_SKIP = frozenset({'Disputed', 'Refuted'})
 
@@ -38,6 +43,7 @@ async def generate_health_risks(ctx: GeneratorContext) -> int:
             genotype, info['risk_multiplier'],
             ref_allele=info.get('_ref_allele'),
             pathogenicity_score=path_score,
+            population_frequency=_population_frequency(ctx, rsid),
         )
         recommendations = info.get('recommendations')
         if not recommendations or recommendations == ['Consult with healthcare provider']:
@@ -59,6 +65,7 @@ async def generate_health_risks(ctx: GeneratorContext) -> int:
         genotype = info.get('_genotype', '')
         ref_allele = info.get('_ref_allele')
         risk_level = zygosity_adjust(info['risk_level'], genotype, ref_allele=ref_allele)
+        risk_level = cap_risk_for_rarity(risk_level, _population_frequency(ctx, rsid))
         _ps = info.get('_pathogenicity_score')
         _classification = _ps.get('classification') if isinstance(_ps, dict) else None
         return HealthRisk(

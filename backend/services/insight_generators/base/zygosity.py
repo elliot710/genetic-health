@@ -126,10 +126,39 @@ def boost_if_pathogenic(level: str, pathogenicity_score: Optional[Dict]) -> str:
     return result
 
 
+# Above this population frequency a variant is common; carrying it means
+# carrying the normal (major) allele, so it cannot be a high/very_high personal
+# risk regardless of zygosity or composite score.
+_CLINICAL_AF_CEILING = 0.05
+
+
+def cap_risk_for_rarity(level: str, population_frequency: Optional[float]) -> str:
+    """Cap a risk level at 'moderate' when the variant is common (U3). A known
+    frequency below the clinical ceiling — or an unknown frequency — leaves the
+    level unchanged."""
+    if not isinstance(population_frequency, (int, float)) or isinstance(population_frequency, bool):
+        return level  # unknown frequency — do not cap
+    if population_frequency <= _CLINICAL_AF_CEILING:
+        return level
+    normalised = level.strip().lower().replace(' ', '_')
+    resolved = _LEVEL_ALIASES.get(normalised, normalised)
+    idx = _SEVERITY_IDX.get(resolved)
+    cap_idx = _SEVERITY_IDX['moderate']
+    if idx is None or idx <= cap_idx:
+        return level
+    capped = _SEVERITY_LADDER[cap_idx]
+    if level and level[0].isupper():
+        capped = capped.replace('_', ' ').title()
+    return capped
+
+
 def assess_risk_level(genotype: str, risk_multiplier: float, ref_allele: Optional[str] = None,
-                      pathogenicity_score: Optional[Dict] = None) -> str:
+                      pathogenicity_score: Optional[Dict] = None,
+                      population_frequency: Optional[float] = None) -> str:
     """Assess risk level considering the risk multiplier, zygosity, and
-    optionally the composite pathogenicity score from the scoring engine."""
+    optionally the composite pathogenicity score from the scoring engine.
+    A common allele (population_frequency above the clinical ceiling) is capped
+    at 'moderate' regardless of the other signals."""
     if not genotype or is_no_call_genotype(genotype):
         return 'unknown'
 
@@ -161,8 +190,9 @@ def assess_risk_level(genotype: str, risk_multiplier: float, ref_allele: Optiona
             base = 'low'
         else:
             base = 'average'
-    # Adjust for zygosity
-    return zygosity_adjust(base, genotype, ref_allele=ref_allele)
+    # Adjust for zygosity, then cap common alleles (U3)
+    level = zygosity_adjust(base, genotype, ref_allele=ref_allele)
+    return cap_risk_for_rarity(level, population_frequency)
 
 
 def assess_drug_response(genotype: str, gene: str, ref_allele: Optional[str] = None) -> str:
