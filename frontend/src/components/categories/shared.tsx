@@ -242,15 +242,20 @@ export function riskToSeverity(risk: string): Severity {
   }
 }
 
-/** Map detox/methylation capacity to severity */
+/** Map detox/methylation capacity to severity — high capacity is good
+ *  function (green), impaired is reduced function (red). */
 export function capacityToSeverity(capacity: string): Severity {
   switch (capacity?.toLowerCase()) {
     case 'impaired':
+    case 'low':
       return 'danger'
     case 'variant_detected':
     case 'reduced':
+    case 'moderate':
       return 'warning'
     case 'normal':
+    case 'high':
+    case 'very_high':
       return 'success'
     default:
       return 'neutral'
@@ -270,18 +275,20 @@ export function advantageToSeverity(value: string): Severity {
 }
 
 /**
- * Toxin/pathway sensitivity: Low function = BAD, High function = GOOD.
- * In genetic detox context, "sensitivity: low" means the pathway 
- * has reduced function → bad → red.
+ * Attention scale for mixed-valence trait strength (nutrient sensitivity,
+ * toxin sensitivity, wellness predisposition). These name conditions that may
+ * be favorable or adverse, so the badge flags how strongly the trait applies
+ * rather than asserting good or bad: high/very_high = worth attention (amber),
+ * low = not notable (green), moderate = neutral.
  */
 export function sensitivityToSeverity(sensitivity: string): Severity {
   switch (sensitivity?.toLowerCase()) {
+    case 'very_high':
     case 'high':
-      return 'success'
-    case 'moderate':
       return 'warning'
     case 'low':
-      return 'danger'
+      return 'success'
+    case 'moderate':
     default:
       return 'neutral'
   }
@@ -292,7 +299,7 @@ export function clinicalSignificanceToSeverity(significance: string): Severity {
   const s = significance?.toLowerCase() || ''
   if (s.includes('pathogenic') && !s.includes('likely')) return 'danger'
   if (s.includes('likely') && s.includes('pathogenic')) return 'danger'
-  if (s.includes('vus') || s.includes('uncertain') || s === 'moderate' || s === 'high') return 'warning'
+  if (s.includes('vus') || s.includes('uncertain') || s.includes('conflicting') || s === 'moderate' || s === 'high') return 'warning'
   if (s.includes('benign') || s === 'low') return 'success'
   return 'neutral'
 }

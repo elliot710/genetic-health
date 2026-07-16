@@ -16,7 +16,7 @@ import {
   AlphaFoldBadge,
   GeneBurdenStrip,
   ClickableRsidBadge,
-  capacityToSeverity,
+  sensitivityToSeverity,
   formatLabel,
   MasonryLayout,
   cleanCondition,
@@ -227,7 +227,7 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
                 <div className="flex flex-wrap gap-1">
                   <StatusBadge
                     label={formatLabel(trait.value)}
-                    severity={capacityToSeverity(trait.value)}
+                    severity={sensitivityToSeverity(trait.value)}
                   />
                   {trait.associated_variants && trait.associated_variants.length > 0
                     ? trait.associated_variants.map((v, i) => (
