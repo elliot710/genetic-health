@@ -24,6 +24,12 @@ class ScoringEngine(_SourceScorers):
     # We clamp the denominator to at least this value.
     MIN_WEIGHT_FLOOR = 0.40
 
+    # Above this population frequency a "pathogenic"/"likely pathogenic"
+    # classification is contradictory — a Mendelian pathogenic allele is rare.
+    # The composite label is capped to "uncertain" and a conflict is recorded;
+    # the numeric bar is kept for transparency (U4).
+    RARITY_CAP_AF = 0.05
+
     def score_variant(self, annotations: Dict[str, Any]) -> Dict[str, Any]:
         """Score a variant using all available annotation sources.
 
@@ -132,7 +138,33 @@ class ScoringEngine(_SourceScorers):
         if ev:
             evidences.append(ev)
 
-        return self._aggregate(evidences).to_dict()
+        result = self._aggregate(evidences)
+        self._apply_rarity_cap(result, annotations)
+        return result.to_dict()
+
+    def _apply_rarity_cap(self, result: ScoringResult, annotations: Dict[str, Any]) -> None:
+        """Cap a pathogenic classification for a common allele (U4).
+
+        Leaves the composite_score untouched (transparency) but downgrades the
+        label to 'uncertain' and records a conflict, so the dialog can explain
+        why a high raw score is not a trustworthy pathogenic call."""
+        if result.classification not in ("pathogenic", "likely_pathogenic"):
+            return
+        from backend.services.insight_generators.base.frequency import (
+            resolve_population_frequency,
+        )
+        af = resolve_population_frequency(annotations)
+        if af is None or af <= self.RARITY_CAP_AF:
+            return
+        result.classification = "uncertain"
+        result.conflicts = list(result.conflicts) + [
+            f"Common in population (allele frequency {af:.0%}); a pathogenic "
+            "classification on a common allele is uncertain and may reflect an "
+            "outdated or allele-orientation-specific ClinVar entry."
+        ]
+        result.confidence = self._compute_confidence(
+            result.evidence_count, result.total_weight, len(result.conflicts) * 0.15
+        )
 
     # ------------------------------------------------------------------
     # Aggregation
