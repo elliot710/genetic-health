@@ -632,6 +632,68 @@ class TestBenignExclusionScope:
         assert self._fn()(None, {"classification": "benign"}) is False
 
 
+class TestStrictClinicalHealth:
+    """U14: the health panel shows only conditions a user is plausibly AFFECTED
+    by — drop non-damaging consequences, route recessive+het to carrier, skip
+    ambiguous hom-indel codes. Frequency is unknown/rare for all (the real
+    prod case), so these gates — not the frequency veto — do the work."""
+
+    def _ctx(self, *, genotype, ref, alt, consequence, condition):
+        variant = _make_variant("rs_strict", genotype=genotype, ref=ref, alt=alt)
+        variant.chromosome = "1"
+        annotation = MagicMock()
+        annotation.annotation_data = {"annotations": {"clinvar_local": {
+            "found": True, "clinical_significances": ["Pathogenic"],
+            "ref_allele": ref, "alt_allele": alt,
+        }}}
+        profile = MagicMock()
+        profile.population_frequency = None  # rare / unknown — frequency veto inert
+        profile.consequence = consequence
+        ctx = _make_ctx(
+            variants=[variant],
+            rsid_map={"rs_strict": {
+                "condition": condition, "risk_multiplier": 2.3, "gene": "GENE",
+                "clinical_significance": "pathogenic",
+                "review_status": "criteria_provided_multiple_submitters",
+            }},
+            category="health",
+        )
+        ctx.inferred_sex = "male"
+        ctx.annotation_results = {"rs_strict": annotation}
+        ctx.variant_profiles = {"rs_strict": profile}
+        return ctx
+
+    async def _run(self, ctx):
+        from backend.services.insight_generators.health import generate_health_risks
+        return await generate_health_risks(ctx)
+
+    @pytest.mark.asyncio
+    async def test_synonymous_variant_not_a_health_risk(self):
+        assert await self._run(self._ctx(
+            genotype="A/A", ref="C", alt="A", consequence="synonymous_variant",
+            condition="Some dominant disorder")) == 0
+
+    @pytest.mark.asyncio
+    async def test_recessive_heterozygous_is_not_a_health_risk(self):
+        assert await self._run(self._ctx(
+            genotype="C/A", ref="C", alt="A", consequence="missense_variant",
+            condition="Some autosomal recessive disorder")) == 0
+
+    @pytest.mark.asyncio
+    async def test_dominant_heterozygous_damaging_is_kept(self):
+        assert await self._run(self._ctx(
+            genotype="C/A", ref="C", alt="A", consequence="missense_variant",
+            condition="Some autosomal dominant disorder")) >= 1
+
+    @pytest.mark.asyncio
+    async def test_homozygous_indel_code_is_not_a_health_risk(self):
+        # DD at a real deletion locus (ref longer) would otherwise be called
+        # hom-alt affected; too ambiguous for consumer arrays.
+        assert await self._run(self._ctx(
+            genotype="DD", ref="CAT", alt="C", consequence="frameshift_variant",
+            condition="Some dominant disorder")) == 0
+
+
 class TestCarrierRarityGate:
     """U10: the carrier ClinVar-local discovery path must also reject common
     alleles — not only the registry path."""
