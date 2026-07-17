@@ -17,7 +17,7 @@ import {
   GeneBurdenStrip,
   ZygosityBadge,
   ClickableRsidBadge,
-  advantageToSeverity,
+  descriptiveStrengthToSeverity,
   MasonryLayout,
   cleanCondition,
   useGrouping,
@@ -30,7 +30,7 @@ import type { LucideIcon } from 'lucide-react'
 
 interface PersonalityTrait {
   trait: string
-  score: number
+  score: number | null
   gene: string
   description: string
   icon: LucideIcon
@@ -78,7 +78,7 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
         const styles = getTraitStyles(name)
         return {
           trait: name,
-          score: typeof trait.score === 'number' ? trait.score : (parseInt(trait.confidence) || 50),
+          score: typeof trait.score === 'number' ? trait.score : null,
           gene: trait.gene || 'Multiple markers',
           description: trait.description || 'Analysis based on genetic markers',
           icon: getTraitIcon(name),
@@ -101,7 +101,7 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
     }
     if (scoreFilter !== 'all') {
       list = list.filter(t => {
-        const level = t.score >= 75 ? 'high' : t.score >= 50 ? 'moderate' : 'low'
+        const level = t.score == null ? 'unknown' : t.score >= 75 ? 'high' : t.score >= 50 ? 'moderate' : 'low'
         return level === scoreFilter
       })
     }
@@ -122,7 +122,7 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
 
   const PERSONALITY_GROUP_OPTIONS: Record<string, string> = { none: 'No Grouping', score: 'Score Level' }
   const getGroupKey = useCallback((t: PersonalityTrait): string => {
-    if (groupBy === 'score') return t.score >= 75 ? 'High Score' : t.score >= 50 ? 'Moderate Score' : 'Low Score'
+    if (groupBy === 'score') return t.score == null ? 'Unknown Score' : t.score >= 75 ? 'High Score' : t.score >= 50 ? 'Moderate Score' : 'Low Score'
     return 'all'
   }, [groupBy])
   const { groups, collapsedGroups, toggleGroup, resetCollapsed } = useGrouping(filteredTraits, groupBy, getGroupKey, 'All Traits')
@@ -162,9 +162,9 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
     <div className="space-y-6">
       <CategoryHeader {...headerProps} />
 
-      {personalityTraits.length >= 3 && (
+      {personalityTraits.filter(t => t.score != null).length >= 3 && (
         <SectionCard title="Trait Overview" theme={theme}>
-          <TraitRadarChart data={personalityTraits.map(t => ({ label: t.trait, value: t.score, fullMark: 100 }))} isDarkMode={isDarkMode} height={300} fillColor={isDarkMode ? 'rgba(236,72,153,0.2)' : 'rgba(219,39,119,0.15)'} strokeColor={isDarkMode ? '#ec4899' : '#db2777'} />
+          <TraitRadarChart data={personalityTraits.filter(t => t.score != null).map(t => ({ label: t.trait, value: t.score, fullMark: 100 }))} isDarkMode={isDarkMode} height={300} fillColor={isDarkMode ? 'rgba(236,72,153,0.2)' : 'rgba(219,39,119,0.15)'} strokeColor={isDarkMode ? '#ec4899' : '#db2777'} />
         </SectionCard>
       )}
 
@@ -206,7 +206,7 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
             const IconComponent = trait.icon
             const itemKey = `personality-${index}`
             const isExpanded = selectedItem === itemKey
-            const scoreLabel = trait.score >= 75 ? 'high' : trait.score >= 50 ? 'moderate' : 'low'
+            const scoreLabel = trait.score == null ? 'unknown' : trait.score >= 75 ? 'high' : trait.score >= 50 ? 'moderate' : 'low'
             const scoreDisplay = scoreLabel.charAt(0).toUpperCase() + scoreLabel.slice(1)
             const rsid = trait.gene?.startsWith('rs') ? trait.gene : undefined
             const gene = !trait.gene?.startsWith('rs') ? trait.gene : (rsid ? data?.gene_symbol_map?.[rsid] : undefined)
@@ -229,7 +229,7 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
                 <div className="flex flex-wrap gap-1">
                   <StatusBadge
                     label={scoreDisplay}
-                    severity={advantageToSeverity(scoreLabel)}
+                    severity={descriptiveStrengthToSeverity(scoreLabel)}
                   />
                   {trait.gene?.startsWith('rs') && <ClickableRsidBadge rsid={trait.gene} genotype={data?.genotype_map?.[trait.gene]} alleleString={data?.allele_string_map?.[trait.gene]} token={token} isDarkMode={isDarkMode} />}
                   {!trait.gene?.startsWith('rs') && trait.gene && trait.gene !== 'Multiple markers' && <Badge variant="outline" className="text-xs">{trait.gene}</Badge>}

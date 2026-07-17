@@ -18,7 +18,7 @@ import {
   DisclaimerCard,
   ZygosityBadge,
   ClickableRsidBadge,
-  advantageToSeverity,
+  descriptiveStrengthToSeverity,
   formatLabel,
   MasonryLayout,
   cleanCondition,
@@ -54,8 +54,8 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
       return intelligenceData.map((trait: IntelligenceTrait) => ({
         trait: trait.cognitive_ability || trait.trait_name,
         gene: trait.associated_variants?.[0] || 'Multiple',
-        result: trait.genetic_advantage || trait.genetic_result || 'moderate',
-        score: trait.percentile || (trait.genetic_advantage === 'high' ? 85 : trait.genetic_advantage === 'moderate' ? 65 : 45),
+        result: trait.genetic_advantage || trait.genetic_result || 'unknown',
+        score: typeof trait.percentile === 'number' ? trait.percentile : 0,
         description: trait.description || `Genetic analysis for ${trait.cognitive_ability || trait.trait_name}`,
         icon: getTraitIcon(trait.cognitive_ability || trait.trait_name),
         suggestions: Array.isArray(trait.enhancement_suggestions) ? trait.enhancement_suggestions : (trait.enhancement_suggestions ? [trait.enhancement_suggestions] : []),
@@ -207,7 +207,7 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
                 <div className="flex flex-wrap gap-1">
                   <StatusBadge
                     label={formatLabel(trait.result)}
-                    severity={advantageToSeverity(trait.result)}
+                    severity={descriptiveStrengthToSeverity(trait.result)}
                   />
                   {rsid && <ClickableRsidBadge rsid={rsid} gene={gene} genotype={data?.genotype_map?.[rsid]} alleleString={data?.allele_string_map?.[rsid]} token={token} isDarkMode={isDarkMode} />}
                   {gene && <Badge variant="outline" className="text-xs">{gene}</Badge>}

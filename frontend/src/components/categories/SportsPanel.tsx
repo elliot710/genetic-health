@@ -17,7 +17,7 @@ import {
   GeneBurdenStrip,
   ZygosityBadge,
   ClickableRsidBadge,
-  advantageToSeverity,
+  descriptiveStrengthToSeverity,
   formatLabel,
   MasonryLayout,
   cleanCondition,
@@ -191,7 +191,7 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
                 <div className="flex flex-wrap gap-1">
                   <StatusBadge
                     label={formatLabel(trait.result || 'Detected')}
-                    severity={advantageToSeverity(trait.result || 'moderate')}
+                    severity={descriptiveStrengthToSeverity(trait.result || 'moderate')}
                   />
                   {rsid && <ClickableRsidBadge rsid={rsid} gene={gene} genotype={data?.genotype_map?.[rsid]} alleleString={data?.allele_string_map?.[rsid]} token={token} isDarkMode={isDarkMode} />}
                   {gene && <Badge variant="outline" className="text-xs">{gene}</Badge>}

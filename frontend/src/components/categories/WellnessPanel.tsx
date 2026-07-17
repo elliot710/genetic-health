@@ -50,7 +50,7 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
       category: t.category || 'General',
       value: t.value || 'Normal',
       gene: t.gene || 'Multiple',
-      confidence: t.confidence || 'Medium',
+      confidence: t.confidence || 'Unknown',
       recommendations: Array.isArray(t.recommendations) ? t.recommendations : [],
       associated_variants: Array.isArray(t.associated_variants) ? t.associated_variants : [],
     }))

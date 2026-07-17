@@ -262,16 +262,18 @@ export function capacityToSeverity(capacity: string): Severity {
   }
 }
 
-/** Map genetic advantage / confidence to severity */
-export function advantageToSeverity(value: string): Severity {
+/**
+ * Descriptive traits (physical appearance, personality dimensions, cognitive
+ * results, prediction confidence) carry no inherent good/bad valence — a "high"
+ * value is not an achievement and a "low" one is not a deficiency. Badge them on
+ * a neutral strength ramp (blue = notable/strong, gray = baseline) so the colour
+ * never reads as approval (green check) or alarm (red).
+ */
+export function descriptiveStrengthToSeverity(value: string): Severity {
   const v = value?.toLowerCase() || ''
   if (v.includes('high') || v.includes('strong') || v.includes('enhanced'))
-    return 'success'
-  if (v.includes('moderate') || v.includes('variant'))
-    return 'warning'
-  if (v.includes('low') || v.includes('none'))
-    return 'neutral'
-  return 'info'
+    return 'info'
+  return 'neutral'
 }
 
 /**
