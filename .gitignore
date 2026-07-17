@@ -14,6 +14,11 @@ Genetic_Genie**
 .playwright*
 .vscode
 data_sources
+# Built annotation runtime caches (rebuilt from data_sources/)
+.mane_cache/
+.dbsnp_cache/
+.vep_cache/
+.snpeff_cache/
 backups
 genetic-health-490017-b854a959d61b.json
 .insights_state
