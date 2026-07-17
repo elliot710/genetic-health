@@ -34,6 +34,18 @@ _COMMON_AF_CEILING = 0.05
 _BENIGN_PREFIXES = ('benign', 'likely_benign', 'likely benign')
 
 
+def is_non_damaging_consequence(consequence: Optional[str]) -> bool:
+    """True when a single molecular-consequence string is affirmatively
+    non-damaging (synonymous/intron/UTR/… with no damaging term on any
+    transcript). Unknown/empty consequence returns False (not disqualifying)."""
+    cons = (consequence or '').strip().lower().replace(' ', '_')
+    if not cons:
+        return False
+    has_damaging = any(t in cons for t in _DAMAGING_CONSEQUENCE_TOKENS)
+    has_non_damaging = any(t in cons for t in _NON_DAMAGING_CONSEQUENCE_TOKENS)
+    return has_non_damaging and not has_damaging
+
+
 def is_reliable_clinical_mapping(
     clinical_significance: Optional[str],
     molecular_consequence: Optional[str],
