@@ -90,11 +90,14 @@ class SnpEffConsequenceCache:
     def consequence_for(self, rsid: Optional[str]) -> Optional[str]:
         if not rsid or not os.path.exists(self._db_path):
             return None
-        conn = sqlite3.connect(self._db_path)
         try:
-            row = conn.execute(
-                "SELECT consequence FROM snpeff_consequence WHERE rsid = ?", (rsid,)
-            ).fetchone()
-        finally:
-            conn.close()
+            conn = sqlite3.connect(self._db_path, timeout=1.0)
+            try:
+                row = conn.execute(
+                    "SELECT consequence FROM snpeff_consequence WHERE rsid = ?", (rsid,)
+                ).fetchone()
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return None
         return row[0] if row else None

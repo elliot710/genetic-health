@@ -88,13 +88,18 @@ class DbsnpMcCache:
         self._db_path = db_path
 
     def consequence_for_rsid(self, rsid: Optional[str]) -> List[str]:
-        if not rsid:
+        # Enrichment must never break analysis: a locked/absent/corrupt cache
+        # degrades to "no consequence", never raises.
+        if not rsid or not os.path.exists(self._db_path):
             return []
-        conn = sqlite3.connect(self._db_path)
         try:
-            row = conn.execute(
-                "SELECT consequences FROM dbsnp_mc WHERE rsid = ?", (rsid,)
-            ).fetchone()
-        finally:
-            conn.close()
+            conn = sqlite3.connect(self._db_path, timeout=1.0)
+            try:
+                row = conn.execute(
+                    "SELECT consequences FROM dbsnp_mc WHERE rsid = ?", (rsid,)
+                ).fetchone()
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return []
         return row[0].split(",") if row and row[0] else []
