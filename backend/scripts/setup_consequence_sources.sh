@@ -20,7 +20,7 @@ DATA=data_sources
 MANE_URL="https://ftp.ncbi.nlm.nih.gov/refseq/MANE/MANE_human/current/MANE.GRCh38.v1.5.summary.txt.gz"
 DBSNP_URL="https://ftp.ncbi.nlm.nih.gov/snp/organisms/human_9606_b151_GRCh37p13/VCF/00-All.vcf.gz"
 VEP_URL="https://ftp.ensembl.org/pub/release-113/variation/indexed_vep_cache/homo_sapiens_vep_113_GRCh37.tar.gz"
-SNPEFF_URL="https://snpeff.blob.core.windows.net/versions/snpEff_latest_core.zip"
+SNPEFF_URL="https://sourceforge.net/projects/snpeff/files/snpEff_latest_core.zip/download"
 
 CHECK="${1:-}"
 
