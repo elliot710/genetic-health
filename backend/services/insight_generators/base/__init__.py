@@ -98,6 +98,14 @@ async def build_variant_profiles(
         gene, consequence, impact = extract_gene_and_consequence(
             annotation_result, rsid_gene_map
         )
+        # U5: fill consequence from the offline caches (dbSNP MC / VEP / SnpEff)
+        # when the primary annotation has none — this is the coverage that lets
+        # the consequence-based gates (reliability predicate, health U14) fire.
+        if not consequence:
+            from backend.services.annotation_sources.consequence_resolver import (
+                get_consequence_resolver,
+            )
+            consequence = get_consequence_resolver().resolve(rsid)
 
         # Extract frequency — None means "no data available" (not 0%)
         raw_freq = extract_frequency(annotation_result)

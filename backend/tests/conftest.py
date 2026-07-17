@@ -87,3 +87,19 @@ _auth_stub._cache = {}
 sys.modules['backend.core.auth'] = _auth_stub
 
 
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_consequence_resolver():
+    """Insulate tests from any locally-built consequence caches (.dbsnp_cache,
+    .vep_cache, .snpeff_cache) so snapshot/characterization output stays
+    deterministic. Tests that need the resolver inject caches into
+    ConsequenceResolver(...) directly."""
+    from backend.services.annotation_sources import consequence_resolver as _cr
+    _cr._resolver = _cr.ConsequenceResolver()  # empty — consults no caches
+    try:
+        yield
+    finally:
+        _cr._resolver = None
