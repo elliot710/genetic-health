@@ -3,7 +3,6 @@
 import React, { useState, useMemo, useCallback } from 'react'
 import { Dna, ChevronRight, CheckCircle, Search, Filter } from 'lucide-react'
 import SmartInsights from '../SmartInsights'
-import { Badge } from '../ui/badge'
 import { CapacityChart } from './GenomicCharts'
 import {
   useThemeClasses,
@@ -172,7 +171,6 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
             const capacity = item.methylation_capacity || 'normal'
             const geneKey = `${item.gene}-${index}`
             const isExpanded = selectedGene === geneKey
-            const description = item.supplement_recommendations?.[0] || ''
 
             return (
               <div
@@ -182,11 +180,7 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
               >
                 <div className="flex items-start justify-between mb-1 gap-1">
                   <div className="flex-1 min-w-0">
-                    {description ? (
-                      <p className={`text-sm font-semibold ${theme.textPrimary} leading-snug`}>{description}</p>
-                    ) : (
-                      <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug`}>{item.gene}</h4>
-                    )}
+                    <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug`}>{item.gene}</h4>
                   </div>
                   <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                 </div>
@@ -196,7 +190,6 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
                     label={formatLabel(capacity)}
                     severity={capacityToSeverity(capacity)}
                   />
-                  <Badge variant="secondary" className="text-xs font-medium">{item.gene}</Badge>
                   {rsid && (
                     <>
                       <ClickableRsidBadge rsid={rsid} gene={item.gene} genotype={data?.genotype_map?.[rsid]} alleleString={data?.allele_string_map?.[rsid]} token={token} isDarkMode={isDarkMode} />

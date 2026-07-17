@@ -251,9 +251,9 @@ export default function CarrierStatusPanel({ isDarkMode = false, data, token }: 
     gradientTo: 'to-green-500/20',
     borderColor: 'border-teal-500/30',
     title: 'Carrier Status',
-    description: 'Genetic carrier screening for inherited conditions',
-    count: allCarriers.length,
-    countLabel: allCarriers.length === 1 ? 'Condition' : 'Conditions',
+    description: `Genetic carrier screening · ${allCarriers.length} condition${allCarriers.length === 1 ? '' : 's'} screened`,
+    count: summary.carrier,
+    countLabel: summary.carrier === 1 ? 'Carrier Condition' : 'Carrier Conditions',
     theme,
   }
 

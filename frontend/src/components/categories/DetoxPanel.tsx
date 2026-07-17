@@ -214,11 +214,7 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                 >
                   <div className="flex items-start justify-between mb-1 gap-1">
                     <div className="flex-1 min-w-0">
-                      {Array.isArray(item.support_recommendations) && item.support_recommendations[0] ? (
-                        <p className={`text-sm font-semibold ${theme.textPrimary} leading-snug`}>{item.support_recommendations[0]}</p>
-                      ) : (
-                        <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug`}>{item.gene}</h4>
-                      )}
+                      <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug`}>{item.gene}</h4>
                     </div>
                     <ChevronRight className={`h-4 w-4 shrink-0 mt-0.5 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                   </div>
@@ -235,7 +231,6 @@ export default function DetoxPanel({ isDarkMode = false, data, token }: Category
                         showIcon={false}
                       />
                     )}
-                    <Badge variant="secondary" className="text-xs font-medium">{item.gene}</Badge>
                     {item.associated_variants?.length > 0 && item.associated_variants.map((v: string) => (
                       <ClickableRsidBadge key={v} rsid={v} gene={item.gene} genotype={data?.genotype_map?.[v]} alleleString={data?.allele_string_map?.[v]} token={token} isDarkMode={isDarkMode} />
                     ))}

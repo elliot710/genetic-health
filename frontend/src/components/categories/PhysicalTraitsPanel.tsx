@@ -17,7 +17,7 @@ import {
   GeneBurdenStrip,
   ZygosityBadge,
   ClickableRsidBadge,
-  advantageToSeverity,
+  descriptiveStrengthToSeverity,
   formatLabel,
   MasonryLayout,
   cleanCondition,
@@ -42,9 +42,8 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
         category: trait.trait_name || trait.category,
         trait: trait.genetic_result || trait.trait_value || trait.result,
         gene: trait.associated_variants?.[0] || trait.associated_gene || 'Multiple',
-        probability: trait.confidence === 'high' ? 85 : trait.confidence === 'moderate' ? 65 : 45,
         description: trait.description || `Genetic analysis shows predisposition for ${trait.trait_name || trait.category}`,
-        confidence: trait.confidence || 'moderate',
+        confidence: trait.confidence || 'unknown',
       }))
     }
 
@@ -55,7 +54,7 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
 
   const confidenceOptions = useMemo(() => {
     const set = new Set<string>()
-    for (const t of physicalTraits) set.add((t.confidence || 'moderate').toLowerCase())
+    for (const t of physicalTraits) set.add((t.confidence || 'unknown').toLowerCase())
     return Array.from(set).sort()
   }, [physicalTraits])
 
@@ -66,7 +65,7 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
       list = list.filter(t => t.category.toLowerCase().includes(q) || t.gene.toLowerCase().includes(q) || (t.trait || '').toLowerCase().includes(q))
     }
     if (confidenceFilter !== 'all') {
-      list = list.filter(t => (t.confidence || 'moderate').toLowerCase() === confidenceFilter)
+      list = list.filter(t => (t.confidence || 'unknown').toLowerCase() === confidenceFilter)
     }
     return list
   }, [physicalTraits, searchQuery, confidenceFilter])
@@ -74,7 +73,7 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
   const PHYSICAL_GROUP_OPTIONS: Record<string, string> = { none: 'No Grouping', confidence: 'Confidence Level', category: 'Trait Category' }
   const getGroupKey = useCallback((t: typeof physicalTraits[0]): string => {
     switch (groupBy) {
-      case 'confidence': return `${(t.confidence || 'moderate').charAt(0).toUpperCase()}${(t.confidence || 'moderate').slice(1)} Confidence`
+      case 'confidence': return `${(t.confidence || 'unknown').charAt(0).toUpperCase()}${(t.confidence || 'unknown').slice(1)} Confidence`
       case 'category': {
         const c = (t.category || '').toLowerCase()
         if (c.includes('eye')) return 'Eye Traits'
@@ -143,7 +142,7 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
 
       {physicalTraits.length >= 3 && (
         <SectionCard title="Confidence Distribution" theme={theme}>
-          <CapacityChart data={physicalTraits.map(t => ({ name: t.category, capacity: t.confidence || 'moderate' }))} isDarkMode={isDarkMode} />
+          <CapacityChart data={physicalTraits.map(t => ({ name: t.category, capacity: t.confidence || 'unknown' }))} isDarkMode={isDarkMode} />
         </SectionCard>
       )}
 
@@ -201,8 +200,8 @@ export default function PhysicalTraitsPanel({ isDarkMode = false, data, token }:
 
                 <div className="flex flex-wrap gap-1">
                   <StatusBadge
-                    label={formatLabel(trait.confidence || 'moderate')}
-                    severity={advantageToSeverity(trait.confidence || 'moderate')}
+                    label={formatLabel(trait.confidence || 'unknown')}
+                    severity={descriptiveStrengthToSeverity(trait.confidence || 'unknown')}
                   />
                   {rsid && <ClickableRsidBadge rsid={rsid} gene={gene} genotype={data?.genotype_map?.[rsid]} alleleString={data?.allele_string_map?.[rsid]} token={token} isDarkMode={isDarkMode} />}
                   {gene && <Badge variant="outline" className="text-xs">{gene}</Badge>}

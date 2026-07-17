@@ -242,46 +242,55 @@ export function riskToSeverity(risk: string): Severity {
   }
 }
 
-/** Map detox/methylation capacity to severity */
+/** Map detox/methylation capacity to severity — high capacity is good
+ *  function (green), impaired is reduced function (red). */
 export function capacityToSeverity(capacity: string): Severity {
   switch (capacity?.toLowerCase()) {
     case 'impaired':
+    case 'low':
       return 'danger'
     case 'variant_detected':
     case 'reduced':
+    case 'moderate':
       return 'warning'
     case 'normal':
+    case 'high':
+    case 'very_high':
       return 'success'
     default:
       return 'neutral'
   }
 }
 
-/** Map genetic advantage / confidence to severity */
-export function advantageToSeverity(value: string): Severity {
+/**
+ * Descriptive traits (physical appearance, personality dimensions, cognitive
+ * results, prediction confidence) carry no inherent good/bad valence — a "high"
+ * value is not an achievement and a "low" one is not a deficiency. Badge them on
+ * a neutral strength ramp (blue = notable/strong, gray = baseline) so the colour
+ * never reads as approval (green check) or alarm (red).
+ */
+export function descriptiveStrengthToSeverity(value: string): Severity {
   const v = value?.toLowerCase() || ''
   if (v.includes('high') || v.includes('strong') || v.includes('enhanced'))
-    return 'success'
-  if (v.includes('moderate') || v.includes('variant'))
-    return 'warning'
-  if (v.includes('low') || v.includes('none'))
-    return 'neutral'
-  return 'info'
+    return 'info'
+  return 'neutral'
 }
 
 /**
- * Toxin/pathway sensitivity: Low function = BAD, High function = GOOD.
- * In genetic detox context, "sensitivity: low" means the pathway 
- * has reduced function → bad → red.
+ * Attention scale for mixed-valence trait strength (nutrient sensitivity,
+ * toxin sensitivity, wellness predisposition). These name conditions that may
+ * be favorable or adverse, so the badge flags how strongly the trait applies
+ * rather than asserting good or bad: high/very_high = worth attention (amber),
+ * low = not notable (green), moderate = neutral.
  */
 export function sensitivityToSeverity(sensitivity: string): Severity {
   switch (sensitivity?.toLowerCase()) {
+    case 'very_high':
     case 'high':
-      return 'success'
-    case 'moderate':
       return 'warning'
     case 'low':
-      return 'danger'
+      return 'success'
+    case 'moderate':
     default:
       return 'neutral'
   }
@@ -292,7 +301,7 @@ export function clinicalSignificanceToSeverity(significance: string): Severity {
   const s = significance?.toLowerCase() || ''
   if (s.includes('pathogenic') && !s.includes('likely')) return 'danger'
   if (s.includes('likely') && s.includes('pathogenic')) return 'danger'
-  if (s.includes('vus') || s.includes('uncertain') || s === 'moderate' || s === 'high') return 'warning'
+  if (s.includes('vus') || s.includes('uncertain') || s.includes('conflicting') || s === 'moderate' || s === 'high') return 'warning'
   if (s.includes('benign') || s === 'low') return 'success'
   return 'neutral'
 }

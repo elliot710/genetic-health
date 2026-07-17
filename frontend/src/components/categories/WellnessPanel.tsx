@@ -16,7 +16,7 @@ import {
   AlphaFoldBadge,
   GeneBurdenStrip,
   ClickableRsidBadge,
-  capacityToSeverity,
+  sensitivityToSeverity,
   formatLabel,
   MasonryLayout,
   cleanCondition,
@@ -50,7 +50,7 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
       category: t.category || 'General',
       value: t.value || 'Normal',
       gene: t.gene || 'Multiple',
-      confidence: t.confidence || 'Medium',
+      confidence: t.confidence || 'Unknown',
       recommendations: Array.isArray(t.recommendations) ? t.recommendations : [],
       associated_variants: Array.isArray(t.associated_variants) ? t.associated_variants : [],
     }))
@@ -227,7 +227,7 @@ export default function WellnessPanel({ isDarkMode = false, data, token }: Categ
                 <div className="flex flex-wrap gap-1">
                   <StatusBadge
                     label={formatLabel(trait.value)}
-                    severity={capacityToSeverity(trait.value)}
+                    severity={sensitivityToSeverity(trait.value)}
                   />
                   {trait.associated_variants && trait.associated_variants.length > 0
                     ? trait.associated_variants.map((v, i) => (
