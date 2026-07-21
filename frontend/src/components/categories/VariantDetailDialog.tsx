@@ -24,11 +24,6 @@ interface TranscriptConsequence {
   protein_position?: string
 }
 
-interface PopulationFrequency {
-  allele: string
-  frequency: number
-}
-
 interface Publication {
   pmid?: string
   title?: string
@@ -48,7 +43,6 @@ interface VariantDetails {
   total_transcripts?: number
   clinical_significance?: string[]
   clinvar_ids?: string[]
-  population_frequencies?: Record<string, PopulationFrequency>
   clinvar?: {
     found: boolean
     count: number
