@@ -20,6 +20,7 @@ from sqlalchemy import select, func, text as sa_text
 
 from backend.db.database import async_session_factory
 from backend.db.models import GeneticMarker
+from backend.services.gnomad.grch38_bridge import ensembl_grch38_variants
 from backend.services.datasource_utils import (
     interpret_cadd,
     get_multi_file_fingerprint,
@@ -191,23 +192,11 @@ class GnomadCacheService:
                 if not batch_rows:
                     break
                 for rsid, chrom, pos, allele_str in batch_rows:
-                    if not chrom or not pos or not allele_str:
-                        continue
-                    chrom_clean = str(chrom).replace('chr', '').strip()
-                    parts = allele_str.split('/')
-                    if len(parts) < 2:
-                        continue
-                    ref = parts[0].strip()
-                    is_indel = ref == '-' or any(
-                        a.strip() == '-' for p in parts[1:] for a in p.split(',')
-                    )
-                    vcf_pos = int(pos) - 1 if is_indel else int(pos)
-                    for alt_part in parts[1:]:
-                        for alt in alt_part.split(','):
-                            alt = alt.strip()
-                            if alt:
-                                pos_map.setdefault((chrom_clean, vcf_pos), []).append((rsid, ref, alt))
-                                extracted += 1
+                    for _r, chrom_clean, vcf_pos, ref, alt in ensembl_grch38_variants(
+                        rsid, chrom, pos, allele_str
+                    ):
+                        pos_map.setdefault((chrom_clean, vcf_pos), []).append((rsid, ref, alt))
+                        extracted += 1
                 offset += BATCH
                 if offset % 200000 == 0:
                     logger.info("  GRCh38 bridge: %d/%d processed, %d positions extracted",
