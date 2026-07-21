@@ -94,6 +94,39 @@ async def _update_existing_annotation(rsid, raw, db, current_user):
     return existing_ann
 
 
+async def resolve_gene_symbol(
+    rsid: str, response: dict, db: AsyncSession
+) -> Optional[str]:
+    # Gene-level enrichment (Gene Constraint, Open Targets, BigQuery) needs an
+    # HGNC symbol. Mirror the analysis pipeline's resolution order so on-demand
+    # details attach the same gene the analysis did: the genetic_markers cache
+    # (~363k rsids) covers variants whose live VEP call returned no transcript —
+    # VEP-only resolution silently dropped those, forcing gene sources to ✗.
+    marker_gene = await _marker_gene_symbol(rsid, db)
+    return marker_gene or _response_gene_symbol(response)
+
+
+async def _marker_gene_symbol(rsid: str, db: AsyncSession) -> Optional[str]:
+    result = await db.execute(
+        select(GeneticMarker.gene_symbol).where(GeneticMarker.rsid == rsid)
+    )
+    return result.scalar_one_or_none()
+
+
+def _response_gene_symbol(response: dict) -> Optional[str]:
+    transcripts = response.get("transcripts") or []
+    if transcripts and transcripts[0].get("gene_symbol"):
+        return transcripts[0]["gene_symbol"]
+    genes = (response.get("clinvar_local") or {}).get("genes") or []
+    if genes and genes[0]:
+        return genes[0]
+    for source in ("gnomad", "gnomad_tx"):
+        gene = (response.get(source) or {}).get("gene")
+        if gene:
+            return gene
+    return None
+
+
 async def attach_user_genotype(
     rsid: str, user_id: int, db: AsyncSession, response: dict
 ):

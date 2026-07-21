@@ -21,7 +21,7 @@ from backend.services.variant_detail_builder import (
 )
 from backend.services.annotation_loader import (
     load_or_fetch_annotation, attach_user_genotype,
-    enrich_bigquery, attach_open_targets,
+    enrich_bigquery, attach_open_targets, resolve_gene_symbol,
 )
 from backend.services.clinical_summary_builder import (
     build_clinical_summary, build_clinical_summary_from_cache,
@@ -174,7 +174,7 @@ async def get_variant_details(
     )
     response["pathogenicity_score"] = score
 
-    gene_symbol = _first_gene_symbol(response)
+    gene_symbol = await resolve_gene_symbol(rsid, response, db)
     await enrich_bigquery(annotation, response, gene_symbol, db)
     await attach_open_targets(
         annotation, response, scoring_annotations, gene_symbol, db
@@ -199,11 +199,6 @@ def _extract_all_sources(annotation, response: dict):
         response.get("rsid", ""), response
     )
     backfill_clinical_significance(annotation, response)
-
-
-def _first_gene_symbol(response: dict) -> Optional[str]:
-    transcripts = response.get("transcripts", [])
-    return transcripts[0].get("gene_symbol") if transcripts else None
 
 
 async def _attach_gene_level_data(
