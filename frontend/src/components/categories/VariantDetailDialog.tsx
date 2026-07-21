@@ -24,11 +24,6 @@ interface TranscriptConsequence {
   protein_position?: string
 }
 
-interface PopulationFrequency {
-  allele: string
-  frequency: number
-}
-
 interface Publication {
   pmid?: string
   title?: string
@@ -48,7 +43,6 @@ interface VariantDetails {
   total_transcripts?: number
   clinical_significance?: string[]
   clinvar_ids?: string[]
-  population_frequencies?: Record<string, PopulationFrequency>
   clinvar?: {
     found: boolean
     count: number
@@ -849,14 +843,19 @@ export default function VariantDetailDialog({
                 { key: 'clinvar', label: 'ClinVar', available: !!(details.clinvar?.found || (details.clinical_significance && details.clinical_significance.length > 0) || psKeys.includes('clinvar')) },
                 { key: 'ensembl', label: 'Ensembl VEP', available: !!(details.transcripts && details.transcripts.length > 0) || psKeys.includes('ensembl_vep') },
                 { key: 'gnomad', label: 'gnomAD', available: !!details.gnomad?.found || psKeys.includes('gnomad') },
+                { key: 'thousand_genomes', label: '1000 Genomes', available: !!details.thousand_genomes?.found },
                 { key: 'alpha_missense', label: 'AlphaMissense', available: !!details.alpha_missense?.found || psKeys.includes('alpha_missense') },
                 { key: 'snpedia', label: 'SNPedia', available: !!details.snpedia?.found },
+                { key: 'pharmgkb', label: 'PharmGKB', available: !!details.pharmacogenomics?.found },
                 { key: 'publications', label: 'Literature', available: !!(details.publications && details.publications.count > 0) },
                 { key: 'gnomad_tx', label: 'gnomAD-tx', available: !!details.gnomad_tx?.found },
                 { key: 'gene_constraint', label: 'Gene Constraint', available: !!(details.gene_constraint?.pli != null || details.gene_constraint?.loeuf != null) },
                 { key: 'gwas', label: 'GWAS', available: !!details.gwas_catalog?.found },
                 { key: 'clingen', label: 'ClinGen', available: !!details.clingen?.found },
                 { key: 'open_targets', label: 'Open Targets', available: !!details.open_targets?.found },
+                { key: 'chembl', label: 'ChEMBL', available: !!(details.chembl?.found && details.chembl.drugs && details.chembl.drugs.length > 0) },
+                { key: 'fda_drug', label: 'FDA Labels', available: !!(details.fda_drug?.found && details.fda_drug.items && details.fda_drug.items.length > 0) },
+                { key: 'alphafold', label: 'AlphaFold', available: !!details.alphafold?.found },
               ]
               const available = sources.filter(s => s.available)
               const unavailable = sources.filter(s => !s.available)

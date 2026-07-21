@@ -51,30 +51,14 @@ def _extract_transcripts(entry: dict) -> list:
 
 def _extract_colocated(entry: dict, response: Dict[str, Any]) -> None:
     colocated = entry.get("colocated_variants", [])
-    clin_sigs, clinvar_ids, frequencies = [], [], {}
+    clin_sigs, clinvar_ids = [], []
     for cv in colocated:
         if cv.get("clin_sig"):
             clin_sigs.extend(cv["clin_sig"])
         if cv.get("var_synonyms", {}).get("ClinVar"):
             clinvar_ids.extend(cv["var_synonyms"]["ClinVar"])
-        _extract_population_freqs(cv, frequencies)
     response["clinical_significance"] = list(set(clin_sigs))
     response["clinvar_ids"] = list(set(clinvar_ids))
-    response["population_frequencies"] = frequencies
-
-
-def _extract_population_freqs(cv: dict, frequencies: Dict) -> None:
-    freqs = cv.get("frequencies", {})
-    pop_name_map = {
-        "gnomade": "gnomAD exomes (global)", "gnomadg": "gnomAD genomes (global)",
-        "af": "1000 Genomes (global)",
-    }
-    for allele, pops in freqs.items():
-        for pop, freq in pops.items():
-            if pop in pop_name_map or pop.startswith("gnomade_") or pop.startswith("gnomadg_"):
-                clean_pop = pop_name_map.get(pop, pop.replace("gnomade_", "gnomAD exomes: ").replace("gnomadg_", "gnomAD genomes: "))
-                if clean_pop not in frequencies or freq > frequencies[clean_pop]["frequency"]:
-                    frequencies[clean_pop] = {"allele": allele, "frequency": freq}
 
 
 def extract_clinvar(annotation, response: Dict[str, Any], db_session=None) -> None:

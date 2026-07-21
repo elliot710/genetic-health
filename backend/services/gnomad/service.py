@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import async_session_factory
 from backend.db.models import GnomadVariant, GnomadGeneConstraint, GeneticMarker
 from backend.services.datasource_utils import interpret_cadd
+from backend.services.gnomad.grch38_bridge import ensembl_grch38_variants
 from backend.services.gnomad.cache import get_gnomad_cache_service
 
 logger = logging.getLogger(__name__)
@@ -601,18 +602,12 @@ class GnomadLocalService:
                     if not data:
                         continue
                     entry = data[0] if isinstance(data, list) else data
-                    e_chrom = entry.get('seq_region_name')
-                    e_pos = entry.get('start')
-                    allele_str = entry.get('allele_string', '')
-                    parts = allele_str.split('/')
-                    if not e_chrom or not e_pos or len(parts) < 2:
-                        continue
-                    chrom_clean = str(e_chrom).replace('chr', '').strip()
-                    ref = parts[0].strip()
-                    alt = parts[1].strip()
-                    is_indel = ref == '-' or alt == '-'
-                    vcf_pos = int(e_pos) - 1 if is_indel else int(e_pos)
-                    translated.append((row.rsid, chrom_clean, vcf_pos, ref, alt))
+                    translated.extend(ensembl_grch38_variants(
+                        row.rsid,
+                        entry.get('seq_region_name'),
+                        entry.get('start'),
+                        entry.get('allele_string'),
+                    ))
 
         if translated:
             logger.info(
