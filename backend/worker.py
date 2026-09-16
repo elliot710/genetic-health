@@ -165,8 +165,11 @@ async def _run_one(analysis_id: int, user_id: int, regen_only: bool = False) -> 
                         )
                     )
                 await sess.commit()
-        except Exception:
-            pass
+        except Exception as bookkeeping_error:
+            logger.error(
+                f"[job {analysis_id}] could not record failed status: {bookkeeping_error}",
+                exc_info=True,
+            )
     finally:
         flush_task.cancel()
         try:
@@ -297,8 +300,11 @@ async def _backfill_source(params: dict, job_id: Optional[int] = None) -> dict:
                     update(WorkerJob).where(WorkerJob.id == job_id).values(job_logs=snapshot)
                 )
                 await sess.commit()
-        except Exception:
-            pass
+        except Exception as bookkeeping_error:
+            logger.error(
+                f"[worker_job {job_id}] could not flush job logs: {bookkeeping_error}",
+                exc_info=True,
+            )
 
     source_type = "API (rate-limited)" if is_api_source else "local"
     start_msg = f"[backfill {source_name}] starting {len(rows)} rows via {source_type}"
@@ -548,8 +554,11 @@ async def _run_job(job_id: int, job_type: str, params: dict) -> None:
                     )
                 )
                 await sess.commit()
-        except Exception:
-            pass
+        except Exception as bookkeeping_error:
+            logger.error(
+                f"[worker_job {job_id}] could not record failed status: {bookkeeping_error}",
+                exc_info=True,
+            )
     finally:
         _active_jobs.discard(job_id)
 
