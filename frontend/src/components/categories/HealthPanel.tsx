@@ -65,10 +65,10 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
     }
   }
 
-  const getHealthRisks = () => {
-    const healthRisks = Array.isArray(data?.health_risks) ? data.health_risks as HealthRisk[] : []
-    if (healthRisks.length > 0) {
-      return healthRisks
+  const healthRisks = useMemo((): MappedHealthRisk[] => {
+    const rawRisks = Array.isArray(data?.health_risks) ? data.health_risks as HealthRisk[] : []
+    if (rawRisks.length > 0) {
+      return rawRisks
         .map((risk: HealthRisk) => {
           // Find max pathogenicity score from associated variants
           const variants = risk.associated_variants || []
@@ -143,13 +143,12 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
         riskLevel: 'unknown',
         prevention: ['Analysis in progress...'],
         reviewStatus: null,
+        pathogenicityClassification: null,
       }]
     }
 
     return []
-  }
-
-  const healthRisks = getHealthRisks()
+  }, [data])
 
   const riskOptions = useMemo(() => {
     const set = new Set<string>()
