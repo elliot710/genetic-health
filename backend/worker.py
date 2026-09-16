@@ -34,7 +34,7 @@ import logging
 import os
 import signal
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Optional, Set
 
 from sqlalchemy import select, text, update
@@ -288,7 +288,7 @@ async def _backfill_source(params: dict, job_id: Optional[int] = None) -> dict:
     _log_buffer: list[dict] = []
 
     def _append_log(msg: str) -> None:
-        _log_buffer.append({"ts": datetime.utcnow().strftime("%H:%M:%S"), "level": "INFO", "msg": msg})
+        _log_buffer.append({"ts": datetime.now(UTC).strftime("%H:%M:%S"), "level": "INFO", "msg": msg})
 
     async def _flush_logs_to_db() -> None:
         if job_id is None or not _log_buffer:
