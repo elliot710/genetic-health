@@ -6,13 +6,16 @@
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@tabler/icons-react": "3.40.0",
     "@types/react-simple-maps": "3.0.6",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
+    "effect": "4.0.0-rc.115",
     "framer-motion": "12.36.0",
     "lucide-react": "0.541.0",
     "next": "15.5.14",
@@ -34,6 +37,7 @@
     }
   },
   "devDependencies": {
+    "@effect/vitest": "4.0.0-rc.115",
     "@eslint/eslintrc": "3.3.5",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "20.19.37",
@@ -43,6 +47,7 @@
     "eslint-config-next": "15.5.14",
     "shadcn": "4.0.6",
     "tailwindcss": "4.2.1",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "vitest": "5.0.1"
   }
 }

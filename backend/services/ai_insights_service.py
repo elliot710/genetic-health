@@ -9,7 +9,7 @@ import os
 import json
 import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import UTC, datetime
 
 import aiohttp
 
@@ -272,7 +272,7 @@ async def generate_insight(
     try:
         result = await _call_llm(user_prompt)
         result["provider"] = "gemini"
-        result["generated_at"] = datetime.utcnow().isoformat()
+        result["generated_at"] = datetime.now(UTC).isoformat()
 
         # Persist to DB
         if db:
@@ -282,10 +282,10 @@ async def generate_insight(
                 cache_key=db_key,
                 result=result,
                 provider="gemini",
-                generated_at=datetime.utcnow(),
+                generated_at=datetime.now(UTC),
             ).on_conflict_do_update(
                 index_elements=["cache_key"],
-                set_={"result": result, "provider": "gemini", "generated_at": datetime.utcnow()},
+                set_={"result": result, "provider": "gemini", "generated_at": datetime.now(UTC)},
             )
             await db.execute(stmt)
             await db.commit()
@@ -361,7 +361,7 @@ async def generate_variant_insight(rsid: str, variant_data: dict, db=None, force
     try:
         result = await _call_llm(user_prompt)
         result["provider"] = "gemini"
-        result["generated_at"] = datetime.utcnow().isoformat()
+        result["generated_at"] = datetime.now(UTC).isoformat()
 
         # Persist to DB
         if db:
@@ -371,10 +371,10 @@ async def generate_variant_insight(rsid: str, variant_data: dict, db=None, force
                 cache_key=db_key,
                 result=result,
                 provider="gemini",
-                generated_at=datetime.utcnow(),
+                generated_at=datetime.now(UTC),
             ).on_conflict_do_update(
                 index_elements=["cache_key"],
-                set_={"result": result, "provider": "gemini", "generated_at": datetime.utcnow()},
+                set_={"result": result, "provider": "gemini", "generated_at": datetime.now(UTC)},
             )
             await db.execute(stmt)
             await db.commit()

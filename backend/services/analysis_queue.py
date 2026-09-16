@@ -5,7 +5,7 @@ Ensures proper resource allocation and prevents user interference
 import asyncio
 import logging
 from typing import Dict, Optional
-from datetime import datetime
+from datetime import UTC, datetime
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ class QueuedAnalysis:
     
     def __post_init__(self):
         if self.queued_at is None:
-            self.queued_at = datetime.utcnow()
+            self.queued_at = datetime.now(UTC)
 
 class AnalysisQueue:
     """
@@ -148,7 +148,7 @@ class AnalysisQueue:
         
         # Mark as running (protected by lock for atomic counter updates)
         async with self._jobs_lock:
-            queued_analysis.started_at = datetime.utcnow()
+            queued_analysis.started_at = datetime.now(UTC)
             self._running_jobs[analysis_id] = queued_analysis
             self._user_running_count[user_id] = self._user_running_count.get(user_id, 0) + 1
             self._queued_analysis_ids.discard(analysis_id)

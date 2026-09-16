@@ -158,13 +158,17 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
     )
   }
 
+  const scoredTraits = personalityTraits.filter(
+    (t): t is typeof t & { score: number } => t.score != null
+  )
+
   return (
     <div className="space-y-6">
       <CategoryHeader {...headerProps} />
 
-      {personalityTraits.filter(t => t.score != null).length >= 3 && (
+      {scoredTraits.length >= 3 && (
         <SectionCard title="Trait Overview" theme={theme}>
-          <TraitRadarChart data={personalityTraits.filter(t => t.score != null).map(t => ({ label: t.trait, value: t.score, fullMark: 100 }))} isDarkMode={isDarkMode} height={300} fillColor={isDarkMode ? 'rgba(236,72,153,0.2)' : 'rgba(219,39,119,0.15)'} strokeColor={isDarkMode ? '#ec4899' : '#db2777'} />
+          <TraitRadarChart data={scoredTraits.map(t => ({ label: t.trait, value: t.score, fullMark: 100 }))} isDarkMode={isDarkMode} height={300} fillColor={isDarkMode ? 'rgba(236,72,153,0.2)' : 'rgba(219,39,119,0.15)'} strokeColor={isDarkMode ? '#ec4899' : '#db2777'} />
         </SectionCard>
       )}
 
@@ -233,11 +237,13 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
                   />
                   {trait.gene?.startsWith('rs') && <ClickableRsidBadge rsid={trait.gene} genotype={data?.genotype_map?.[trait.gene]} alleleString={data?.allele_string_map?.[trait.gene]} token={token} isDarkMode={isDarkMode} />}
                   {!trait.gene?.startsWith('rs') && trait.gene && trait.gene !== 'Multiple markers' && <Badge variant="outline" className="text-xs">{trait.gene}</Badge>}
-                  <AlphaFoldBadge
-                    confidence={data?.alphafold_map?.[rsid]?.confidence}
-                    highPct={data?.alphafold_map?.[rsid]?.high_confidence_pct}
-                    lowPct={data?.alphafold_map?.[rsid]?.low_confidence_pct}
-                  />
+                  {rsid && (
+                    <AlphaFoldBadge
+                      confidence={data?.alphafold_map?.[rsid]?.confidence}
+                      highPct={data?.alphafold_map?.[rsid]?.high_confidence_pct}
+                      lowPct={data?.alphafold_map?.[rsid]?.low_confidence_pct}
+                    />
+                  )}
                 </div>
                 {gene && data?.gene_stats_map?.[gene] && (
                   <GeneBurdenStrip gene={gene} stats={data.gene_stats_map[gene]} theme={theme} />

@@ -428,7 +428,7 @@ def run_etl(
     # ── Step 5: Write metadata ────────────────────────────────────────────────
     import datetime
     conn.execute("INSERT OR REPLACE INTO metadata VALUES ('build_date', ?)",
-                 (datetime.datetime.utcnow().isoformat(),))
+                 (datetime.datetime.now(datetime.UTC).isoformat(),))
     conn.execute("INSERT OR REPLACE INTO metadata VALUES ('source', ?)", (tar_src,))
     conn.execute("INSERT OR REPLACE INTO metadata VALUES ('version', 'v6')")
     cur = conn.execute("SELECT COUNT(*) FROM predictions")

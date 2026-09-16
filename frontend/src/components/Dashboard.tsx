@@ -155,7 +155,6 @@ export default function Dashboard({
     analysisId,
     token,
     onRefresh,
-    onDataRefresh: () => refreshData(true),
     showNotification,
   })
 

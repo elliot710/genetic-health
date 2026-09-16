@@ -7,7 +7,6 @@ interface UseAnalysisControlsOptions {
   analysisId?: number | null
   token?: string
   onRefresh?: (token: string) => Promise<void>
-  onDataRefresh?: () => Promise<void>
   showNotification: (message: string, type: 'success' | 'error' | 'info') => void
 }
 
@@ -31,7 +30,6 @@ export function useAnalysisControls({
   analysisId,
   token,
   onRefresh,
-  onDataRefresh,
   showNotification,
 }: UseAnalysisControlsOptions): UseAnalysisControlsReturn {
   const [analysisStatus, setAnalysisStatus] = useState<string>('pending')
@@ -41,6 +39,8 @@ export function useAnalysisControls({
   const [isAnalysisRunning, setIsAnalysisRunning] = useState(false)
   const [showProgress, setShowProgress] = useState(false)
   const eventSourceRef = useRef<EventSource | null>(null)
+  const onRefreshRef = useRef(onRefresh)
+  onRefreshRef.current = onRefresh
 
   const closeSSEStream = useCallback(() => {
     if (eventSourceRef.current) {
@@ -85,8 +85,8 @@ export function useAnalysisControls({
         if (isTerminal || hasCompletedResults || shouldBeCompleted) {
           es.close()
           eventSourceRef.current = null
-          if (onRefresh && token) {
-            await onRefresh(token)
+          if (onRefreshRef.current && token) {
+            await onRefreshRef.current(token)
           }
         }
       } catch (err) {
@@ -97,7 +97,7 @@ export function useAnalysisControls({
     es.onerror = () => {
       console.warn('SSE connection issue for analysis status.')
     }
-  }, [analysisId, token, onRefresh])
+  }, [analysisId, token])
 
   // Aliases used by action handlers below
   const startProgressPolling = openSSEStream
@@ -150,7 +150,7 @@ export function useAnalysisControls({
   useEffect(() => {
     if (!token || !analysisId) return
     openSSEStream()
-  }, [analysisId, token])
+  }, [analysisId, token, openSSEStream])
 
   const handleStartAnalysis = useCallback(async () => {
     if (!token || !analysisId) {

@@ -8,7 +8,7 @@ import logging
 import re
 import threading
 from collections import deque
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Dict, List, Optional
 
 # ContextVar tracks the active analysis_id per asyncio Task
@@ -58,7 +58,7 @@ class JobLogCollector:
             if analysis_id not in self._logs:
                 self._logs[analysis_id] = deque(maxlen=self._max_lines)
             self._logs[analysis_id].append({
-                "ts": datetime.utcnow().strftime("%H:%M:%S"),
+                "ts": datetime.now(UTC).strftime("%H:%M:%S"),
                 "level": level,
                 "msg": message,
             })

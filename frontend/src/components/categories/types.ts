@@ -165,6 +165,7 @@ export interface WellnessTrait {
   result: string
   marker: string
   recommendations: string[]
+  associated_variants?: string[]
 }
 
 export interface PhysicalTrait {
