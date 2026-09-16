@@ -17,7 +17,6 @@ import {
   AlphaFoldDetailBox,
   AlphaFoldBadge,
   GeneBurdenStrip,
-  ZygosityBadge,
   ClickableRsidBadge,
   formatLabel,
   MasonryLayout,
@@ -34,7 +33,10 @@ export default function MethylationPanel({ isDarkMode = false, data, token }: Ca
   const [groupBy, setGroupBy] = useState('none')
   const theme = useThemeClasses(isDarkMode)
 
-  const profiles: MethylationProfile[] = data?.methylation_profiles || []
+  const profiles: MethylationProfile[] = useMemo(
+    () => data?.methylation_profiles || [],
+    [data?.methylation_profiles]
+  )
 
   const allSupplements = useMemo(() => {
     const seen = new Set<string>()
