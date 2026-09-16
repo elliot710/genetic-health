@@ -1,7 +1,9 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { apiFetch, ApiError } from '@/lib/api'
+import { Effect } from 'effect'
+
+import { json, type JsonError } from '@/lib/effect/ApiClient'
 import type { DashboardData } from '@/components/categories/types'
 
 interface UseDashboardDataOptions {
@@ -34,6 +36,12 @@ interface UseDashboardDataReturn {
   variantCategoryStats: { total: number; annotated: number }
 }
 
+interface VariantCategoriesResponse {
+  categories?: { name: string; count: number }[]
+  total_variants?: number
+  annotated_variants?: number
+}
+
 export function useDashboardData({
   initialData,
   analysisId,
@@ -55,33 +63,39 @@ export function useDashboardData({
 
   // Fetch dashboard data from server
   const fetchDashboardData = useCallback(async () => {
-    try {
-      const response = await apiFetch('/api/analysis/dashboard-data')
-      const result = await response.json()
-      setData(result)
+    // Effect is run here, at the hook boundary -- components stay Effect-free.
+    // A transient 5xx or timeout now self-heals instead of blanking the
+    // dashboard, and the error channel is tagged rather than instanceof-checked.
+    const outcome = await Effect.runPromise(
+      Effect.match(json<DashboardData>('/api/analysis/dashboard-data'), {
+        onSuccess: (value) => ({ ok: true as const, value }),
+        onFailure: (failure: JsonError) => ({ ok: false as const, failure }),
+      })
+    )
+
+    if (outcome.ok) {
+      setData(outcome.value)
       setError(null)
       setLastFetchedAt(Date.now())
       setIsCached(false)
-      return result
-    } catch (err) {
-      if (err instanceof ApiError) {
-        const msg = `Failed to load dashboard data (HTTP ${err.status}). Please try again.`
-        console.error('Failed to load dashboard data:', err.status)
-        setError(msg)
-      } else {
-        const msg = 'Could not reach the server. Check your connection and try again.'
-        console.error('Error loading dashboard data:', err)
-        setError(msg)
-      }
-      return null
+      return outcome.value
     }
+
+    const { failure } = outcome
+    if (failure._tag === 'HttpError') {
+      console.error('Failed to load dashboard data:', failure.status)
+      setError(`Failed to load dashboard data (HTTP ${failure.status}). Please try again.`)
+    } else {
+      console.error('Error loading dashboard data:', failure)
+      setError('Could not reach the server. Check your connection and try again.')
+    }
+    return null
   }, [])
 
   // Fetch variant categories
   const fetchVariantCategories = useCallback(async () => {
     try {
-      const response = await apiFetch('/api/variants/categories')
-      const d = await response.json()
+      const d = await Effect.runPromise(json<VariantCategoriesResponse>('/api/variants/categories'))
       if (d?.categories) {
         setVariantCategories(d.categories)
         setVariantCategoryStats({
