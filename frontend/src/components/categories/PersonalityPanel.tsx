@@ -158,13 +158,17 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
     )
   }
 
+  const scoredTraits = personalityTraits.filter(
+    (t): t is typeof t & { score: number } => t.score != null
+  )
+
   return (
     <div className="space-y-6">
       <CategoryHeader {...headerProps} />
 
-      {personalityTraits.filter(t => t.score != null).length >= 3 && (
+      {scoredTraits.length >= 3 && (
         <SectionCard title="Trait Overview" theme={theme}>
-          <TraitRadarChart data={personalityTraits.filter(t => t.score != null).map(t => ({ label: t.trait, value: t.score, fullMark: 100 }))} isDarkMode={isDarkMode} height={300} fillColor={isDarkMode ? 'rgba(236,72,153,0.2)' : 'rgba(219,39,119,0.15)'} strokeColor={isDarkMode ? '#ec4899' : '#db2777'} />
+          <TraitRadarChart data={scoredTraits.map(t => ({ label: t.trait, value: t.score, fullMark: 100 }))} isDarkMode={isDarkMode} height={300} fillColor={isDarkMode ? 'rgba(236,72,153,0.2)' : 'rgba(219,39,119,0.15)'} strokeColor={isDarkMode ? '#ec4899' : '#db2777'} />
         </SectionCard>
       )}
 

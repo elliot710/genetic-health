@@ -210,9 +210,8 @@ interface LookupResult {
     gwas_catalog?: GwasAnnotation
     clingen?: ClinGenAnnotation
     open_targets?: OpenTargetsAnnotation
-    transcript_consequences?: TranscriptConsequence[]
     [key: string]: LookupAnnotationSource | undefined
-  }
+  } & { transcript_consequences?: TranscriptConsequence[] }
   literature?: {
     snpedia_found?: boolean
     title?: string
@@ -1079,7 +1078,7 @@ export default function VariantSearch({ token, isDarkMode = false, theme }: Vari
                               <span className={`${t.text.tertiary} text-xs`}>Type</span>
                               <p className={`${t.text.primary}`}>{(v.type as string) || '—'} · {(v.changeClassification as string) || '—'}</p>
                             </div>
-                            {v.clinicalSignificance && (
+                            {Boolean(v.clinicalSignificance) && (
                               <div>
                                 <span className={`${t.text.tertiary} text-xs`}>Clinical Significance</span>
                                 <p className={`font-medium ${(v.clinicalSignificance as string) === 'drug-response' ? 'text-purple-500' : t.text.primary}`}>{(v.clinicalSignificance as string)}</p>

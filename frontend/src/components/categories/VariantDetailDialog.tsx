@@ -31,7 +31,7 @@ interface Publication {
   year?: string | number
 }
 
-interface VariantDetails {
+type VariantDetails = {
   found: boolean
   rsid: string
   description?: string
@@ -2308,7 +2308,7 @@ export default function VariantDetailDialog({
               isDarkMode={isDarkMode}
               token={token}
               rsid={rsid}
-              variantData={details as Record<string, unknown>}
+              variantData={details}
               compact
               title="AI Variant Analysis"
             />
