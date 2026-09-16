@@ -294,11 +294,13 @@ export default function RareMutationsPanel({ data, isDarkMode = false, token }: 
                   {mutation.mutation_type && (
                     <Badge variant="outline" className="text-xs">{formatLabel(mutation.mutation_type)}</Badge>
                   )}
-                  <AlphaFoldBadge
-                    confidence={data?.alphafold_map?.[rsid]?.confidence}
-                    highPct={data?.alphafold_map?.[rsid]?.high_confidence_pct}
-                    lowPct={data?.alphafold_map?.[rsid]?.low_confidence_pct}
-                  />
+                  {rsid && (
+                    <AlphaFoldBadge
+                      confidence={data?.alphafold_map?.[rsid]?.confidence}
+                      highPct={data?.alphafold_map?.[rsid]?.high_confidence_pct}
+                      lowPct={data?.alphafold_map?.[rsid]?.low_confidence_pct}
+                    />
+                  )}
                 </div>
 
                 {/* Show disease as description only when it wasn't used as the title */}

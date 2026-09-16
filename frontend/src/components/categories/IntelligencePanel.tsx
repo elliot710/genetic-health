@@ -211,11 +211,13 @@ export default function IntelligencePanel({ isDarkMode = false, data, token }: C
                   />
                   {rsid && <ClickableRsidBadge rsid={rsid} gene={gene} genotype={data?.genotype_map?.[rsid]} alleleString={data?.allele_string_map?.[rsid]} token={token} isDarkMode={isDarkMode} />}
                   {gene && <Badge variant="outline" className="text-xs">{gene}</Badge>}
-                  <AlphaFoldBadge
-                    confidence={data?.alphafold_map?.[rsid]?.confidence}
-                    highPct={data?.alphafold_map?.[rsid]?.high_confidence_pct}
-                    lowPct={data?.alphafold_map?.[rsid]?.low_confidence_pct}
-                  />
+                  {rsid && (
+                    <AlphaFoldBadge
+                      confidence={data?.alphafold_map?.[rsid]?.confidence}
+                      highPct={data?.alphafold_map?.[rsid]?.high_confidence_pct}
+                      lowPct={data?.alphafold_map?.[rsid]?.low_confidence_pct}
+                    />
+                  )}
                 </div>
                 {gene && data?.gene_stats_map?.[gene] && (
                   <GeneBurdenStrip gene={gene} stats={data.gene_stats_map[gene]} theme={theme} />

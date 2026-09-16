@@ -233,11 +233,13 @@ export default function PersonalityPanel({ isDarkMode = false, data, token }: Ca
                   />
                   {trait.gene?.startsWith('rs') && <ClickableRsidBadge rsid={trait.gene} genotype={data?.genotype_map?.[trait.gene]} alleleString={data?.allele_string_map?.[trait.gene]} token={token} isDarkMode={isDarkMode} />}
                   {!trait.gene?.startsWith('rs') && trait.gene && trait.gene !== 'Multiple markers' && <Badge variant="outline" className="text-xs">{trait.gene}</Badge>}
-                  <AlphaFoldBadge
-                    confidence={data?.alphafold_map?.[rsid]?.confidence}
-                    highPct={data?.alphafold_map?.[rsid]?.high_confidence_pct}
-                    lowPct={data?.alphafold_map?.[rsid]?.low_confidence_pct}
-                  />
+                  {rsid && (
+                    <AlphaFoldBadge
+                      confidence={data?.alphafold_map?.[rsid]?.confidence}
+                      highPct={data?.alphafold_map?.[rsid]?.high_confidence_pct}
+                      lowPct={data?.alphafold_map?.[rsid]?.low_confidence_pct}
+                    />
+                  )}
                 </div>
                 {gene && data?.gene_stats_map?.[gene] && (
                   <GeneBurdenStrip gene={gene} stats={data.gene_stats_map[gene]} theme={theme} />

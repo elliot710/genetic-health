@@ -74,7 +74,7 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
   }, [athleticTraits, searchQuery, advantageFilter])
 
   const SPORTS_GROUP_OPTIONS: Record<string, string> = { none: 'No Grouping', advantage: 'Genetic Advantage' }
-  const getGroupKey = useCallback((trait: { result: string }) => {
+  const getGroupKey = useCallback((trait: (typeof athleticTraits)[number]) => {
     if (groupBy === 'advantage') {
       const r = (trait.result || 'moderate').toLowerCase()
       return r.charAt(0).toUpperCase() + r.slice(1) + ' Advantage'
@@ -195,11 +195,13 @@ export default function SportsPanel({ isDarkMode = false, data, token }: Categor
                   />
                   {rsid && <ClickableRsidBadge rsid={rsid} gene={gene} genotype={data?.genotype_map?.[rsid]} alleleString={data?.allele_string_map?.[rsid]} token={token} isDarkMode={isDarkMode} />}
                   {gene && <Badge variant="outline" className="text-xs">{gene}</Badge>}
-                  <AlphaFoldBadge
-                    confidence={data?.alphafold_map?.[rsid]?.confidence}
-                    highPct={data?.alphafold_map?.[rsid]?.high_confidence_pct}
-                    lowPct={data?.alphafold_map?.[rsid]?.low_confidence_pct}
-                  />
+                  {rsid && (
+                    <AlphaFoldBadge
+                      confidence={data?.alphafold_map?.[rsid]?.confidence}
+                      highPct={data?.alphafold_map?.[rsid]?.high_confidence_pct}
+                      lowPct={data?.alphafold_map?.[rsid]?.low_confidence_pct}
+                    />
+                  )}
                 </div>
                 {gene && data?.gene_stats_map?.[gene] && (
                   <GeneBurdenStrip gene={gene} stats={data.gene_stats_map[gene]} theme={theme} />
