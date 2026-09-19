@@ -41,6 +41,7 @@ interface MappedHealthRisk {
   prevention: string[]
   reviewStatus: string | null   // ClinVar review status (FE-02/03)
   pathogenicityClassification: string | null
+  provenance: 'variant' | 'gene'
 }
 
 export default function HealthPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
@@ -84,13 +85,16 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
           riskScore: pathScore ?? (risk.risk_level === 'high' ? 85 : risk.risk_level === 'moderate' ? 65 : risk.risk_level === 'low' ? 35 : 20),
           gene: rsid || 'Unknown',
           geneSymbol: risk.gene || null,
-          description: `Genetic analysis shows ${risk.risk_level} risk for this condition`,
+          description: risk.provenance === 'gene'
+            ? `Reported in association with ${risk.gene || 'this gene'}. Not established for your specific variant.`
+            : `Genetic analysis shows ${risk.risk_level} risk for this condition`,
           variantInfo: risk.associated_variants || [],
           clinicalSignificance: risk.clinical_significance || 'Under research',
           riskLevel: risk.risk_level,
           prevention: Array.isArray(risk.recommendations) ? risk.recommendations : [risk.recommendations || 'Consult with healthcare provider'],
           reviewStatus: risk.review_status ?? null,
           pathogenicityClassification: risk.pathogenicity_classification ?? null,
+          provenance: risk.provenance === 'gene' ? 'gene' as const : 'variant' as const,
           }
         })
         .sort((a: MappedHealthRisk, b: MappedHealthRisk) => {
@@ -115,13 +119,16 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
           riskScore: pathScore ?? (risk.risk_level === 'high' ? 85 : risk.risk_level === 'moderate' ? 65 : risk.risk_level === 'low' ? 35 : 20),
           gene: rsid || 'Unknown',
           geneSymbol: risk.gene || null,
-          description: `Genetic variant analysis shows ${risk.risk_level} risk`,
+          description: risk.provenance === 'gene'
+            ? `Reported in association with ${risk.gene || 'this gene'}. Not established for your specific variant.`
+            : `Genetic variant analysis shows ${risk.risk_level} risk`,
           variantInfo: risk.associated_variants || [],
           clinicalSignificance: risk.clinical_significance || 'Under research',
           riskLevel: risk.risk_level,
           prevention: risk.recommendations || ['Consult with healthcare provider', 'Monitor regularly', 'Maintain healthy lifestyle'],
           reviewStatus: risk.review_status ?? null,
           pathogenicityClassification: risk.pathogenicity_classification ?? null,
+          provenance: risk.provenance === 'gene' ? 'gene' as const : 'variant' as const,
           }
         })
         .sort((a: MappedHealthRisk, b: MappedHealthRisk) => {
@@ -144,6 +151,7 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
         prevention: ['Analysis in progress...'],
         reviewStatus: null,
         pathogenicityClassification: null,
+        provenance: 'variant' as const,
       }]
     }
 
@@ -325,10 +333,14 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                 </div>
 
                 <div className="flex flex-wrap gap-1">
-                  <StatusBadge
-                    label={`${risk.risk} Risk`}
-                    severity={riskToSeverity(risk.riskLevel)}
-                  />
+                  {risk.provenance === 'gene' ? (
+                    <StatusBadge label="Gene association" severity="info" />
+                  ) : (
+                    <StatusBadge
+                      label={`${risk.risk} Risk`}
+                      severity={riskToSeverity(risk.riskLevel)}
+                    />
+                  )}
                   {risk.geneSymbol && (
                     <Badge variant="secondary" className="text-xs font-medium">
                       {risk.geneSymbol}
