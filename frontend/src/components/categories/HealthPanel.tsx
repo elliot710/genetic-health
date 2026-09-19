@@ -206,8 +206,13 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
   }, [groupBy])
   const { groups, collapsedGroups, toggleGroup, resetCollapsed } = useGrouping(filteredRisks, groupBy, getGroupKey, 'All Health Risks')
 
-  const highRiskItems = healthRisks.filter((r: MappedHealthRisk) => r.riskLevel === 'high')
-  const moderateRiskItems = healthRisks.filter((r: MappedHealthRisk) => r.riskLevel === 'moderate')
+  // Drawn from what is actually on screen, and only from the user's own
+  // variant-level results. Reading these off the unfiltered list named
+  // conditions the reader had filtered away, and "Watch: X" is an assertion
+  // about the reader that a gene-level association does not support.
+  const actionableRisks = filteredRisks.filter((r: MappedHealthRisk) => r.provenance !== 'gene')
+  const highRiskItems = actionableRisks.filter((r: MappedHealthRisk) => r.riskLevel === 'high')
+  const moderateRiskItems = actionableRisks.filter((r: MappedHealthRisk) => r.riskLevel === 'moderate')
 
   const headerProps = {
     icon: Heart,
