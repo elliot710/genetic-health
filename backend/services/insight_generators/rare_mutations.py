@@ -6,7 +6,8 @@ from .base import (
     GeneratorContext, extract_gene_and_consequence, extract_frequency,
     get_user_genotype, _get_effective_ref_allele, is_homozygous_reference,
     is_no_call_genotype, is_indel_genotype, get_annotation_allele_parts,
-    is_heterozygous, indel_d_is_ref, STRAND_COMPLEMENT,
+    is_heterozygous, indel_d_is_ref, requires_corroboration, has_strong_review,
+    STRAND_COMPLEMENT,
 )
 
 logger = logging.getLogger(__name__)
@@ -240,6 +241,7 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
         # "Rett syndrome" or "Fabry disease" don't contain "x-linked".
         variant_chrom = getattr(variant, 'chromosome', None)
         effective_x_linked = (inheritance_pattern == 'x_linked') or (variant_chrom == 'X')
+        is_hemizygous_claim = False
         if effective_x_linked:
             if profile:
                 is_het = profile.is_het
@@ -262,6 +264,19 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
             # II/DD array code becomes a diagnosis again — that ordering is
             # what reported Rett syndrome and Duchenne muscular dystrophy to an
             # unaffected adult in 2026-09.
+            is_hemizygous_claim = (ctx.inferred_sex == 'male')
+
+        # Plausibility gate (defence in depth). Deliberately independent of the
+        # carriage check above: it tests only condition severity and ClinVar
+        # review status, so a regression in carriage verification cannot also
+        # disable this. An affected claim for a condition that is lethal or
+        # grossly disabling in childhood — or any hemizygous-affected claim —
+        # needs corroborated evidence before it is presented as significant.
+        if requires_corroboration(disease_association, is_hemizygous_claim) \
+                and not has_strong_review(review_statuses):
+            if clinical_significance in ('pathogenic', 'likely_pathogenic'):
+                clinical_significance = 'uncertain'
+                penetrance = 'unknown'
 
         # Use scoring engine composite score for informational purposes only.
         # BUG-05 fix: Do NOT upgrade conflicting/uncertain classifications based
