@@ -6,7 +6,7 @@ from .base import (
     GeneratorContext, extract_gene_and_consequence, extract_frequency,
     get_user_genotype, _get_effective_ref_allele, is_homozygous_reference,
     is_no_call_genotype, is_indel_genotype, get_annotation_allele_parts,
-    is_heterozygous, indel_d_is_ref, requires_corroboration, has_strong_review,
+    is_heterozygous, indel_d_is_ref, requires_corroboration, is_corroborated,
     STRAND_COMPLEMENT,
 )
 
@@ -312,7 +312,8 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
         # grossly disabling in childhood — or any hemizygous-affected claim —
         # needs corroborated evidence before it is presented as significant.
         if requires_corroboration(disease_association, is_hemizygous_claim) \
-                and not has_strong_review(review_statuses):
+                and not is_corroborated(disease_association, review_statuses,
+                                        is_indel_genotype(user_gt)):
             if clinical_significance in ('pathogenic', 'likely_pathogenic'):
                 clinical_significance = 'uncertain'
                 penetrance = 'unknown'

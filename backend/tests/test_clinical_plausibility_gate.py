@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from backend.services.insight_generators.base import (
     is_severe_early_onset, has_strong_review, requires_corroboration,
+    is_corroborated,
 )
 
 STRONG = ["criteria provided, multiple submitters, no conflicts"]
@@ -171,3 +172,23 @@ class TestGateIsIndependentOfCarriageVerification:
 
         added = _emit("rs7", "MECP2", "Rett syndrome", WEAK, genotype="II")
         assert added[0].clinical_significance == "uncertain"
+
+
+class TestCorroborationMustBeAboutCarriage:
+    """Review status corroborates the VARIANT; the doubt is about the PERSON."""
+
+    def test_strong_review_cannot_rescue_a_severe_claim_from_an_indel_code(self):
+        assert is_corroborated("Duchenne muscular dystrophy", STRONG,
+                               is_low_confidence_call=True) is False
+
+    def test_strong_review_still_corroborates_a_severe_claim_from_a_clean_call(self):
+        assert is_corroborated("Duchenne muscular dystrophy", STRONG,
+                               is_low_confidence_call=False) is True
+
+    def test_an_indel_code_is_fine_for_a_condition_an_adult_can_have(self):
+        assert is_corroborated("Thrombophilia X-linked, factor 8 defect", STRONG,
+                               is_low_confidence_call=True) is True
+
+    def test_weak_review_is_still_uncorroborated_on_a_clean_call(self):
+        assert is_corroborated("Duchenne muscular dystrophy", WEAK,
+                               is_low_confidence_call=False) is False

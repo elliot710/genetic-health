@@ -37,6 +37,7 @@ from .alleles import (
 from .frequency import extract_gene_and_consequence, extract_frequency
 from .plausibility import (
     is_severe_early_onset,
+    is_corroborated,
     has_strong_review,
     requires_corroboration,
 )
@@ -239,6 +240,7 @@ async def _bulk_load_clinvar_gene_stats(rsid_gene_map: Dict[str, str]) -> Dict[s
 __all__ = [
     'GeneratorContext', 'VariantProfile',
     'is_severe_early_onset', 'has_strong_review', 'requires_corroboration',
+    'is_corroborated',
     'STRAND_COMPLEMENT',
     'get_ref_allele', 'get_annotation_ref_allele', 'get_annotation_allele_parts',
     'indel_d_is_ref', 'get_user_genotype', 'is_indel_genotype', 'is_no_call_genotype',

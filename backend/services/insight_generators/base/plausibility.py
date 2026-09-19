@@ -66,6 +66,31 @@ def has_strong_review(review_statuses: Optional[Iterable[str]]) -> bool:
     )
 
 
+def is_corroborated(condition: Optional[str],
+                    review_statuses: Optional[Iterable[str]],
+                    is_low_confidence_call: bool) -> bool:
+    """Whether an affected claim has evidence of the RIGHT KIND to stand.
+
+    Review status corroborates that the variant is pathogenic. It says nothing
+    about whether this person carries it, and carriage is the thing in doubt.
+
+    A consumer-array I/D code reports only that an allele is longer or shorter
+    than the reference. Resolving which one is the alternate (see
+    rare_mutations._carries_clinvar_indel) establishes what the code *would*
+    mean if the call were right; it does not make the call reliable. For a
+    condition that is lethal or grossly disabling in childhood, being told a
+    living adult is affected on that basis is not something a well-reviewed
+    ClinVar record can rescue -- the record is about the variant, and the
+    doubt is about the person.
+
+    So for that combination no amount of review status corroborates, and the
+    claim is reported as uncertain pending confirmatory testing.
+    """
+    if is_low_confidence_call and is_severe_early_onset(condition):
+        return False
+    return has_strong_review(review_statuses)
+
+
 def requires_corroboration(condition: Optional[str], is_hemizygous_claim: bool) -> bool:
     """Whether an affected claim needs corroborating review status to stand.
 
