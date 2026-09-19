@@ -9,7 +9,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 
-import { AlphaFoldBadge, formatPopulationFrequency } from '../shared'
+import { AlphaFoldBadge, AlphaFoldDetailBox, formatPopulationFrequency } from '../shared'
 
 afterEach(cleanup)
 
@@ -56,5 +56,32 @@ describe('formatPopulationFrequency', () => {
 
   it('reports an absent frequency as unknown rather than as zero', () => {
     expect(formatPopulationFrequency(0)).toBe('unknown')
+  })
+})
+
+describe('AlphaFoldDetailBox', () => {
+  const theme = { textPrimary: '', textSecondary: '', border: '', isDarkMode: true } as never
+
+  const renderAt = (confidence: number) =>
+    render(<AlphaFoldDetailBox rsid="rs1" alphafoldData={{ confidence }} theme={theme} />)
+
+  it('makes no disruption claim when the model is confident', () => {
+    const { container } = renderAt(95)
+    expect(container.textContent).not.toMatch(/disrupt/i)
+  })
+
+  it('makes no inverse claim when the model is not confident', () => {
+    const { container } = renderAt(35)
+    expect(container.textContent).not.toMatch(/disrupt/i)
+  })
+
+  it('says plainly that the number describes the model, not the variant', () => {
+    const { container } = renderAt(95)
+    expect(container.textContent).toContain('not your variant')
+  })
+
+  it('still labels the number as a pLDDT model confidence', () => {
+    const { container } = renderAt(95)
+    expect(container.textContent).toContain('Global model confidence (pLDDT)')
   })
 })

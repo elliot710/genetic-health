@@ -725,9 +725,11 @@ interface AlphaFoldDetailBoxProps {
 
 /**
  * Expanded section: full AlphaFold protein structure confidence breakdown.
- * Shows pLDDT score visually with per-region breakdown and clinical interpretation.
- * High confidence (≥70%) = reliable structure prediction → variant likely disrupts real domain.
- * Low confidence (<50%) = intrinsically disordered region → variant effect harder to predict.
+ *
+ * pLDDT is a global, per-protein measure of how sure AlphaFold is about its own
+ * prediction. No part of it is computed from the user's variant, so the copy
+ * below describes the model only and makes no claim about what this variant
+ * does to the structure.
  */
 export function AlphaFoldDetailBox({ rsid, alphafoldData, theme }: AlphaFoldDetailBoxProps) {
   if (!alphafoldData || alphafoldData.confidence == null) return null
@@ -746,10 +748,10 @@ export function AlphaFoldDetailBox({ rsid, alphafoldData, theme }: AlphaFoldDeta
     pct >= 70 ? 'bg-green-500' : pct >= 50 ? 'bg-amber-500' : 'bg-red-500'
 
   const interpretation =
-    pct >= 90 ? 'Very high confidence — structure is highly reliable. Variant likely disrupts a well-defined structural domain.' :
-    pct >= 70 ? 'Confident structure. Variant falls in a region with reliable 3D prediction — functional impact is assessable.' :
-    pct >= 50 ? 'Low confidence — this region may be partially disordered. Structural impact harder to predict.' :
-                'Very low confidence — intrinsically disordered region. AlphaFold structure not reliable here.'
+    pct >= 90 ? 'Very high confidence — AlphaFold predicts this protein’s shape reliably. This describes the model, not your variant.' :
+    pct >= 70 ? 'Confident prediction of this protein’s shape. This describes the model, not your variant.' :
+    pct >= 50 ? 'Low confidence — parts of this protein may be disordered, so the predicted shape is less reliable.' :
+                'Very low confidence — likely an intrinsically disordered region, where AlphaFold predictions are unreliable.'
 
   return (
     <div>
