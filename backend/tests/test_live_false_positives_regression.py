@@ -10,8 +10,13 @@ flags cleared. Nothing here asserts the variant is benign; it asserts the app
 does not claim this person is affected by it.
 """
 import asyncio
+from types import SimpleNamespace
 
 import pytest
+
+from backend.scripts.rerun_corrected_analyses import (
+    REASON_SEVERE_CLAIM, classify_affected, rare_mutation_reasons,
+)
 
 from backend.services.insight_generators.rare_mutations import generate_rare_mutations
 from backend.services.insight_generators.carrier import generate_carrier_status
@@ -58,3 +63,30 @@ def test_carrier_panel_makes_no_affected_claim_either(finding):
     ctx, emitted = build_carrier_context(*finding)
     asyncio.new_event_loop().run_until_complete(generate_carrier_status(ctx))
     assert all(row.carrier_status != "affected" for row in emitted)
+
+
+# ---------------------------------------------------------------------------
+# U11 discovery must actually find these analyses, or --apply silently no-ops
+# ---------------------------------------------------------------------------
+
+def _stored_rare_row(gene, disease_association):
+    """A row shaped the way the pre-fix pipeline wrote it."""
+    return SimpleNamespace(gene=gene, disease_association=disease_association,
+                           clinical_significance="pathogenic")
+
+
+class TestDiscoveryFindsTheOwnersAnalysis:
+    def test_every_severe_finding_is_flagged_for_regeneration(self):
+        rows = [_stored_rare_row(f[1], f[0]) for f in SEVERE_CHILDHOOD_FINDINGS]
+        assert all(rare_mutation_reasons(row) for row in rows)
+
+    def test_a_joined_multi_condition_string_is_still_matched(self):
+        """disease_association is '; '.join(conditions[:3]), so the severe name
+        is often not the whole field."""
+        row = _stored_rare_row(
+            "MECP2", "Encephalopathy, neonatal severe; Rett syndrome; Intellectual disability")
+        assert REASON_SEVERE_CLAIM in rare_mutation_reasons(row)
+
+    def test_the_analysis_as_a_whole_is_flagged(self):
+        rows = [_stored_rare_row(f[1], f[0]) for f in SEVERE_CHILDHOOD_FINDINGS]
+        assert classify_affected(42, rows, []) is not None
