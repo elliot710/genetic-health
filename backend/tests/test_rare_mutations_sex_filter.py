@@ -571,3 +571,42 @@ class TestIndelSingleSubmitterFilter:
         _run(generate_rare_mutations(ctx))
         assert ctx._added == [], "multi-submitter evidence must not substitute for verified carriage"
 
+
+
+class TestCarriageIsVerifiedBeforeAffectedClaim:
+    """The hemizygous-affected branch reads 'not heterozygous' as 'affected'.
+    That is only sound because carriage is verified first. These tests lock the
+    ordering, which is the part a refactor could silently undo.
+    """
+
+    def _run(self, genotype, cv_ref, cv_alt, inferred_sex="male"):
+        from backend.services.insight_generators.rare_mutations import generate_rare_mutations
+        rsid = "rs398124078"  # DMD, one of the live 2026-09-16 false positives
+        variant = _make_variant(rsid, "X", genotype)
+        annotation = _make_annotation(
+            rsid, "X", "DMD", ["Pathogenic"], cv_alt,
+            ["Duchenne muscular dystrophy"],
+            review_statuses=["criteria provided, multiple submitters, no conflicts"],
+            cv_ref=cv_ref,
+        )
+        profile = _make_profile(rsid, genotype, "DMD", is_het=False,
+                                annotation_result=annotation, variant=variant)
+        ctx = _make_ctx(
+            variants=[variant], profiles={rsid: profile},
+            annotation_results={rsid: annotation}, inferred_sex=inferred_sex,
+        )
+        _run(generate_rare_mutations(ctx))
+        return ctx._added
+
+    def test_unverifiable_indel_never_reaches_the_affected_branch(self):
+        """No ClinVar ref allele: direction is unresolvable, so no affected
+        claim is supportable no matter what the sex filter would conclude."""
+        assert self._run("II", cv_ref=None, cv_alt="C") == []
+
+    def test_hemizygous_male_claim_requires_carrying_the_alt_allele(self):
+        # Deletion variant: I is the reference allele, so "II" carries no alt.
+        assert self._run("II", cv_ref="CTT", cv_alt="C") == []
+
+    def test_hemizygous_male_claim_survives_when_carriage_is_verified(self):
+        # Insertion variant: I is the alternate allele, so "II" does carry it.
+        assert len(self._run("II", cv_ref="C", cv_alt="CTT")) == 1

@@ -254,6 +254,14 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
                 continue
             # Homozygous female on X — she IS affected, do not filter
             # Hemizygous (hom-reported) male on X — he IS affected, do not filter
+            #
+            # INVARIANT: this branch may only read "not heterozygous" as
+            # "affected" because allele carriage was already verified above.
+            # Absence of a het call is not by itself evidence of anything. If
+            # the carriage check is ever moved below this point, an ambiguous
+            # II/DD array code becomes a diagnosis again — that ordering is
+            # what reported Rett syndrome and Duchenne muscular dystrophy to an
+            # unaffected adult in 2026-09.
 
         # Use scoring engine composite score for informational purposes only.
         # BUG-05 fix: Do NOT upgrade conflicting/uncertain classifications based
