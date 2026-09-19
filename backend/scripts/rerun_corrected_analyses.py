@@ -102,6 +102,94 @@ def format_report(analysis_id: int, changes: List[VerdictChange]) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Affected-analysis discovery
+# ---------------------------------------------------------------------------
+
+REASON_SEVERE_CLAIM = 'severe childhood-onset condition claimed as affected'
+REASON_BARE_SYMBOL = 'gene symbol shown as the disease condition'
+REASON_PHARMACOGENOMIC = 'drug-response entry listed as a rare disease'
+REASON_BENIGN_ESCALATION = 'benign-classified variant above low risk'
+
+
+@dataclass(frozen=True)
+class AffectedAnalysis:
+    analysis_id: int
+    reasons: Tuple[str, ...]
+
+
+def rare_mutation_reasons(row) -> List[str]:
+    """Defect signatures visible on a stored RareMutation row."""
+    from ..services.insight_generators.base import is_severe_early_onset
+    from ..services.insight_generators.rare_mutations import (
+        _is_bare_gene_symbol, _is_pharmacogenomic_condition,
+    )
+
+    condition = row.disease_association or ''
+    gene = row.gene or ''
+    reasons: List[str] = []
+    if is_severe_early_onset(condition) and row.clinical_significance in (
+            'pathogenic', 'likely_pathogenic'):
+        reasons.append(REASON_SEVERE_CLAIM)
+    if condition and _is_bare_gene_symbol(condition, {gene.strip().lower()}):
+        reasons.append(REASON_BARE_SYMBOL)
+    if condition and _is_pharmacogenomic_condition(condition):
+        reasons.append(REASON_PHARMACOGENOMIC)
+    return reasons
+
+
+def health_risk_reasons(row) -> List[str]:
+    """Defect signatures visible on a stored HealthRisk row."""
+    classification = (row.pathogenicity_classification or '').lower()
+    if classification in ('benign', 'likely_benign') and row.risk_level != 'low':
+        return [REASON_BENIGN_ESCALATION]
+    return []
+
+
+def classify_affected(analysis_id: int, rare_rows, health_rows) -> Optional[AffectedAnalysis]:
+    """None when nothing stored for this analysis matches a known defect."""
+    reasons: List[str] = []
+    for row in rare_rows:
+        reasons.extend(rare_mutation_reasons(row))
+    for row in health_rows:
+        reasons.extend(health_risk_reasons(row))
+    if not reasons:
+        return None
+    return AffectedAnalysis(analysis_id, tuple(sorted(set(reasons))))
+
+
+def format_discovery_report(affected: List[AffectedAnalysis]) -> str:
+    if not affected:
+        return 'no affected analyses found'
+    lines = [f'{len(affected)} affected analysis/analyses:']
+    for item in affected:
+        lines.append(f'  analysis {item.analysis_id}: ' + '; '.join(item.reasons))
+    return '\n'.join(lines)
+
+
+async def find_affected_analyses(session) -> List[AffectedAnalysis]:
+    """Scan stored insight rows for the defect signatures this plan corrects."""
+    from collections import defaultdict
+    from sqlalchemy import select
+    from ..db.models import HealthRisk, RareMutation
+
+    rare_by_analysis = defaultdict(list)
+    for row in (await session.execute(select(RareMutation))).scalars():
+        rare_by_analysis[row.analysis_id].append(row)
+
+    health_by_analysis = defaultdict(list)
+    for row in (await session.execute(select(HealthRisk))).scalars():
+        health_by_analysis[row.analysis_id].append(row)
+
+    affected = []
+    for analysis_id in sorted(rare_by_analysis.keys() | health_by_analysis.keys()):
+        item = classify_affected(analysis_id, rare_by_analysis[analysis_id],
+                                 health_by_analysis[analysis_id])
+        if item:
+            affected.append(item)
+    return affected
+
+
 async def _read_verdicts(session, analysis_id: int):
     """Snapshot stored health-risk and drug-response verdicts into plain, detached
     objects (so a later regeneration that deletes+replaces these rows can't mutate
@@ -143,18 +231,36 @@ async def rerun_analysis(analysis_id: int, user_id: Optional[int] = None):
     return changes, format_report(analysis_id, changes)
 
 
-async def _run(analysis_ids: List[int]) -> None:
-    for analysis_id in analysis_ids:
-        _, report = await rerun_analysis(analysis_id)
+async def _discover(explicit_ids: List[int]) -> List[AffectedAnalysis]:
+    from ..db.database import async_session_factory
+
+    async with async_session_factory() as session:
+        affected = await find_affected_analyses(session)
+    if explicit_ids:
+        wanted = set(explicit_ids)
+        affected = [a for a in affected if a.analysis_id in wanted]
+    return affected
+
+
+async def _run(explicit_ids: List[int], apply_changes: bool) -> None:
+    affected = await _discover(explicit_ids)
+    print(format_discovery_report(affected))
+    if not apply_changes:
+        print('\ndry run — nothing written. Re-run with --apply to regenerate.')
+        return
+    for item in affected:
+        _, report = await rerun_analysis(item.analysis_id)
         print(report)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('analysis_ids', type=int, nargs='+',
-                        help='One or more analysis IDs to re-run and diff (report only).')
+    parser.add_argument('analysis_ids', type=int, nargs='*',
+                        help='Limit to these analysis IDs. Omit to scan all analyses.')
+    parser.add_argument('--apply', action='store_true',
+                        help='Regenerate insights. Without it this only reports.')
     args = parser.parse_args()
-    asyncio.run(_run(args.analysis_ids))
+    asyncio.run(_run(args.analysis_ids, args.apply))
 
 
 if __name__ == '__main__':
