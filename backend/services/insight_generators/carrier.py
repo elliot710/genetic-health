@@ -23,18 +23,24 @@ def _classify_carrier_status(user_gt: str, ref_allele: str, alt_allele: str) -> 
     # Whether D maps to ref or alt depends on the variant type.
     if is_indel_genotype(user_gt):
         gt = user_gt.strip().upper()
+        # Multi-allelic site: an I/D code says the allele is longer or shorter,
+        # not WHICH alternate it is, so it cannot be attributed to this
+        # condition. Parity with rare_mutations._carries_clinvar_indel.
+        if ',' in (alt_allele or ''):
+            return 'unaffected'
         if gt in ('DI', 'ID'):
             return 'carrier'  # heterozygous regardless of mapping
         d_ref = indel_d_is_ref(ref_allele, alt_allele)
         if d_ref is True:
             # Insertion variant (ref shorter): D=ref, I=alt
             return 'unaffected' if gt == 'DD' else 'affected'  # II=affected
-        elif d_ref is False:
+        if d_ref is False:
             # Deletion variant (ref longer): I=ref, D=alt
             return 'affected' if gt == 'DD' else 'unaffected'  # II=unaffected
-        else:
-            # Can't determine allele mapping — be conservative
-            return 'carrier'
+        # Direction unresolvable. 'carrier' reads as conservative but is still a
+        # clinical claim built on an ambiguous array code — the defect that
+        # produced the 2026-09 false positives. Make no claim at all.
+        return 'unaffected'
 
     alleles = _parse_alleles(user_gt)
     if not alleles:
