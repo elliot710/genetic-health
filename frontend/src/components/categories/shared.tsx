@@ -515,6 +515,70 @@ export function AlphaFoldBadge({ confidence, highPct, lowPct }: AlphaFoldBadgePr
   )
 }
 
+// ─── Pathogenicity evidence ────────────────────────────────────
+
+const PATHOGENICITY_LABELS: Record<string, string> = {
+  pathogenic: 'Pathogenic',
+  likely_pathogenic: 'Likely pathogenic',
+  uncertain: 'Uncertain significance',
+  likely_benign: 'Likely benign',
+  benign: 'Benign',
+}
+
+const PATHOGENICITY_SEVERITY: Record<string, Severity> = {
+  pathogenic: 'danger',
+  likely_pathogenic: 'warning',
+  uncertain: 'neutral',
+  likely_benign: 'success',
+  benign: 'success',
+}
+
+interface EvidenceBandProps {
+  classification?: string | null
+}
+
+/**
+ * How strong the evidence is that a variant is damaging — in words.
+ *
+ * This replaces a bare percentage printed beside the condition name, which
+ * read as the chance of having the disease. It is not that: it is a composite
+ * confidence that the variant is damaging at all, and 28% of that is not 28%
+ * of anything a reader cares about. An absent classification renders as
+ * unclear rather than silently reassuring.
+ */
+export function EvidenceBand({ classification }: EvidenceBandProps) {
+  const key = (classification || '').toLowerCase()
+  const label = PATHOGENICITY_LABELS[key] ?? 'Evidence unclear'
+  const severity = PATHOGENICITY_SEVERITY[key] ?? 'neutral'
+  return <StatusBadge label={label} severity={severity} />
+}
+
+interface PathogenicityScoreDetailProps {
+  classification?: string | null
+  score?: number | null
+  theme: ThemeClasses
+}
+
+/**
+ * The numeric score, shown only in the expanded view and only next to the
+ * classification it supports, so the two cannot be read apart.
+ */
+export function PathogenicityScoreDetail({ classification, score, theme }: PathogenicityScoreDetailProps) {
+  if (score == null || !Number.isFinite(score)) return null
+  const key = (classification || '').toLowerCase()
+  const label = PATHOGENICITY_LABELS[key]
+  return (
+    <div className={`text-xs ${theme.textSecondary}`}>
+      <span className="font-medium">Variant pathogenicity score:</span>{' '}
+      <span className="font-mono tabular-nums">{Math.round(score)} / 100</span>
+      {label && <span> — {label.toLowerCase()}</span>}
+      <p className="mt-0.5">
+        Confidence that this variant damages the protein. Not the chance of having the condition.
+      </p>
+    </div>
+  )
+}
+
 /**
  * Population allele frequency as text. A rare disease allele is rare by orders
  * of magnitude, so a fixed one-decimal percentage collapsed every such value to
