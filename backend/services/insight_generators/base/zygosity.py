@@ -172,13 +172,14 @@ def assess_risk_level(genotype: str, risk_multiplier: float, ref_allele: Optiona
         elif composite >= 0.30:
             base = 'moderate' if risk_multiplier >= 2.0 else 'average'
         else:
-            # Low pathogenicity — use multiplier-based thresholds
-            if risk_multiplier >= 2.0:
-                base = 'moderate'  # Downgrade from 'high' if scoring says benign
-            elif risk_multiplier >= 1.2:
-                base = 'low'
-            else:
-                base = 'low'
+            # Scoring says likely benign. A curated population risk_multiplier
+            # is not evidence that this individual's variant is pathogenic, so
+            # it cannot lift the result out of the low band — it previously
+            # returned 'moderate' at multiplier >= 2.0, which is how a 0.28
+            # "likely benign" score was presented as "Acute lymphoid leukemia —
+            # Moderate Risk", and why one variant produced two different risk
+            # levels for two conditions that differed only by curated multiplier.
+            base = 'low'
     else:
         # Fallback: multiplier-only — cap at 'moderate', never 'high'.
         # 'high' requires evidence from the composite pathogenicity score
