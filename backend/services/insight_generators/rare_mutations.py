@@ -26,6 +26,26 @@ def _clinvar_alleles(cv_local):
     return (ref or None), (alt or None)
 
 
+def _is_bare_gene_symbol(condition, gene_symbols):
+    """A condition that is just its own gene's symbol is not a disease name.
+
+    ClinVar records with no curated condition sometimes carry the gene symbol in
+    the condition field. Rendered on a card it reads as a diagnosis ("Pold2"),
+    which is worse than showing nothing.
+    """
+    return condition.strip().lower() in gene_symbols
+
+
+def _is_pharmacogenomic_condition(condition):
+    """Drug-metabolism findings belong to the Drug Responses panel.
+
+    "Tramadol response" on CYP2D6 is a real, useful finding and not a rare
+    disease; listing it here frames normal metabolism as a genetic disorder.
+    """
+    text = condition.strip().lower()
+    return text.endswith('response') or 'metabolizer' in text or 'metaboliser' in text
+
+
 def _carries_clinvar_indel(user_gt, ref_allele, alt_allele):
     """Whether a consumer-array D/I genotype carries ClinVar's pathogenic allele.
 
@@ -147,6 +167,9 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
         # Extract clinical significance from ClinVar local
         clinical_significance = 'uncertain'
         disease_association = ''
+        # None until a condition is seen; True once only drug-response entries
+        # have been seen, False as soon as any real disease name appears.
+        is_pharmacogenomic_only = None
         gene_conditions = []
         inheritance_pattern = 'unknown'
         penetrance = 'unknown'
@@ -181,13 +204,23 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
                                   if gc.get('disease')]
             if raw_conditions:
                 _skip = {'not provided', 'not specified', 'see cases', 'not applicable', 'none', ''}
+                _gene_symbols = {g.strip().lower() for g in cv_local.get('genes', []) if g}
+                if gene:
+                    _gene_symbols.add(gene.strip().lower())
                 # Each condition string may itself be semicolon-separated (multiple conditions in one entry)
                 flat_conditions: list[str] = []
                 for raw_c in raw_conditions:
                     for part in raw_c.split(';'):
                         p = part.strip()
-                        if p and p.lower() not in _skip:
-                            flat_conditions.append(p)
+                        if not p or p.lower() in _skip:
+                            continue
+                        if _is_bare_gene_symbol(p, _gene_symbols):
+                            continue
+                        if _is_pharmacogenomic_condition(p):
+                            is_pharmacogenomic_only = is_pharmacogenomic_only is not False
+                            continue
+                        is_pharmacogenomic_only = False
+                        flat_conditions.append(p)
                 if flat_conditions:
                     disease_association = '; '.join(flat_conditions[:3])
 
@@ -210,6 +243,12 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
                 genes = cv_local.get('genes', [])
                 if genes:
                     gene = genes[0]
+
+        # A variant whose only ClinVar conditions are drug-response entries is a
+        # pharmacogenomic finding, not a rare disease. It belongs on the Drug
+        # Responses panel, which already covers it.
+        if is_pharmacogenomic_only:
+            continue
 
         # Skip benign/likely_benign — not clinically relevant as rare findings
         if clinical_significance in ('benign', 'likely_benign'):
