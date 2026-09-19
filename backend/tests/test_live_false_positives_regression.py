@@ -14,7 +14,10 @@ import asyncio
 import pytest
 
 from backend.services.insight_generators.rare_mutations import generate_rare_mutations
-from backend.tests.fixtures.live_false_positives import LIVE_FALSE_POSITIVES, build_context
+from backend.services.insight_generators.carrier import generate_carrier_status
+from backend.tests.fixtures.live_false_positives import (
+    LIVE_FALSE_POSITIVES, build_carrier_context, build_context,
+)
 
 SEVERE_CHILDHOOD_FINDINGS = [f for f in LIVE_FALSE_POSITIVES if f[1] != "F8"]
 
@@ -46,3 +49,12 @@ def test_severe_childhood_finding_raises_no_urgent_counselling(finding):
 def test_severe_childhood_finding_triggers_no_specialist_referral(finding):
     emitted = _run(finding)
     assert all(row.specialist_referral is False for row in emitted)
+
+
+@pytest.mark.parametrize("finding", SEVERE_CHILDHOOD_FINDINGS, ids=_ids(SEVERE_CHILDHOOD_FINDINGS))
+def test_carrier_panel_makes_no_affected_claim_either(finding):
+    """The same finding reaches the Carrier panel, which reported six of these
+    as 'affected' after the rare-mutations fix alone."""
+    ctx, emitted = build_carrier_context(*finding)
+    asyncio.new_event_loop().run_until_complete(generate_carrier_status(ctx))
+    assert all(row.carrier_status != "affected" for row in emitted)

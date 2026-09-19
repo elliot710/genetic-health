@@ -6,6 +6,7 @@ from .base import (
     is_homozygous_reference, is_heterozygous, is_no_call_genotype,
     is_indel_genotype, _parse_alleles, indel_d_is_ref,
     get_annotation_allele_parts, is_clinvar_benign, extract_frequency,
+    is_severe_early_onset, is_indel_genotype as _is_indel_code,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,21 @@ def _classify_carrier_status(user_gt: str, ref_allele: str, alt_allele: str) -> 
     return 'unaffected'
 
 
+def _affected_claim_is_supportable(status, condition, user_gt) -> bool:
+    """An 'affected' status is a diagnosis. Hold it to the same bar as the
+    rare-mutations panel, which reports the identical variant.
+
+    A consumer-array I/D code cannot support telling a living adult they are
+    affected by a condition that is lethal or grossly disabling in childhood,
+    however well the variant itself is reviewed — the doubt is about carriage,
+    not about the variant. Deliberately narrow: an ordinary genotyped
+    homozygote is untouched, and so is any condition an adult can live with.
+    """
+    if status != 'affected':
+        return True
+    return not (_is_indel_code(user_gt) and is_severe_early_onset(condition))
+
+
 async def generate_carrier_status(ctx: GeneratorContext) -> int:
     carrier_rsid_map, _ = ctx.get_maps('carrier')
     carrier_results = []
@@ -131,6 +147,9 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
                     user_gt or '', ann_ref or ref_allele or '', effective_alt
                 )
                 if actual_status == 'unaffected':
+                    seen_conditions.discard(cond)
+                    continue
+                if not _affected_claim_is_supportable(actual_status, cond, user_gt):
                     seen_conditions.discard(cond)
                     continue
                 # Resolve gene symbol from registry info, annotation, or marker
@@ -203,6 +222,8 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
             gc.get('disease', '').lower() not in ('not provided', 'not specified')
         ]
         disease = diseases[0] if diseases else gene_name
+        if not _affected_claim_is_supportable(status, disease, user_gt):
+            continue
         if not disease or disease in seen_conditions:
             continue
         seen_conditions.add(disease)

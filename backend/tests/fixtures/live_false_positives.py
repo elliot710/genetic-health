@@ -75,3 +75,35 @@ def build_context(condition, gene, rsid, genotype, ref, alt, review_status):
         variant_profiles={rsid: profile}, inferred_sex="male",
     )
     return ctx, emitted
+
+
+def build_carrier_context(condition, gene, rsid, genotype, ref, alt, review_status):
+    """Same live finding, routed through the carrier generator.
+
+    The carrier panel reports the identical variant, so it must hold an
+    'affected' claim to the same bar as rare mutations.
+    """
+    from backend.services.insight_generators.base import GeneratorContext
+
+    annotation = build_annotation(rsid, gene, condition, ref, alt, review_status)
+    annotation.annotation_data["annotations"]["clinvar_local"]["gene_conditions"] = [
+        {"gene": gene, "disease": condition}
+    ]
+    annotation.annotation_data["annotations"]["ensembl"] = {
+        "data": [{"allele_string": f"{ref}/{alt}"}]
+    }
+    variant = MagicMock()
+    variant.rsid, variant.genotype, variant.chromosome = rsid, genotype, "X"
+    variant.marker = MagicMock()
+    variant.marker.ref_allele, variant.marker.alt_alleles = ref, alt
+
+    emitted = []
+    session = MagicMock()
+    session.add = MagicMock(side_effect=lambda obj: emitted.append(obj))
+    ctx = MagicMock(spec=GeneratorContext)
+    ctx.analysis_id, ctx.variants = 1, [variant]
+    ctx.annotation_results = {rsid: annotation}
+    ctx.rsid_gene_map, ctx.variant_profiles = {}, {}
+    ctx.inferred_sex, ctx.session = "male", session
+    ctx.get_maps = MagicMock(return_value=({}, {}))
+    return ctx, emitted
