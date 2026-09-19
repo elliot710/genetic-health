@@ -6,10 +6,47 @@ from .base import (
     GeneratorContext, extract_gene_and_consequence, extract_frequency,
     get_user_genotype, _get_effective_ref_allele, is_homozygous_reference,
     is_no_call_genotype, is_indel_genotype, get_annotation_allele_parts,
-    is_heterozygous, STRAND_COMPLEMENT,
+    is_heterozygous, indel_d_is_ref, STRAND_COMPLEMENT,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _clinvar_alleles(cv_local):
+    """ClinVar's own (ref, alt) for this variant, or (None, None).
+
+    The claim being adjudicated is a ClinVar claim, so it is resolved against
+    ClinVar's alleles rather than get_annotation_allele_parts(), which prefers
+    Ensembl's allele_string and returns every alt joined at a multi-allelic
+    site — resolving D/I direction against an allele ClinVar never classified.
+    """
+    ref = (cv_local.get('ref_allele') or cv_local.get('reference_allele') or '').strip().upper()
+    alt = (cv_local.get('alt_allele') or cv_local.get('alternate_allele') or '').strip().upper()
+    return (ref or None), (alt or None)
+
+
+def _carries_clinvar_indel(user_gt, ref_allele, alt_allele):
+    """Whether a consumer-array D/I genotype carries ClinVar's pathogenic allele.
+
+    Returns True/False when direction resolves, and None when it cannot — a
+    multi-allelic site, an equal-length pair, or a missing allele leaves D/I
+    unattributable to one specific alt. None means no clinical claim is
+    supportable; the caller drops the finding rather than guessing.
+    """
+    if not ref_allele or not alt_allele:
+        return None
+    if ',' in alt_allele:
+        # Multi-allelic: "II" cannot be attributed to ClinVar's specific alt.
+        return None
+    gt = (user_gt or '').strip().upper()
+    if gt in ('DI', 'ID'):
+        return True  # one copy of whichever allele is alt
+    d_is_ref = indel_d_is_ref(ref_allele, alt_allele)
+    if d_is_ref is None:
+        return None
+    if d_is_ref:
+        return gt == 'II'  # insertion variant: I is the alternate allele
+    return gt == 'DD'      # deletion variant: D is the alternate allele
 
 
 async def generate_rare_mutations(ctx: GeneratorContext) -> int:
@@ -30,10 +67,12 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
         if not annotation_result or not annotation_result.annotation_data:
             continue
 
-        # Must have ClinVar data to qualify
+        # Must have local ClinVar data to qualify. The legacy clinvar_api source
+        # carries no ref/alt, so a claim sourced from it can never have its
+        # allele carriage verified — and an unverifiable clinical claim is
+        # exactly what this generator must not make.
         cv_local = annotation_result.annotation_data.get('annotations', {}).get('clinvar_local', {})
-        clinvar_api = annotation_result.annotation_data.get('annotations', {}).get('clinvar', {})
-        if not ((cv_local and cv_local.get('found')) or (clinvar_api and clinvar_api.get('found'))):
+        if not (cv_local and cv_local.get('found')):
             continue
 
         # Genotype and zygosity from profile (consistent ref allele)
@@ -77,9 +116,18 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
         # recorded pathogenic allele. Consumer CSV data can have ref=alt entries
         # that survive the hom-ref check when the reference allele is unresolved.
         # Apply strand-flip fallback for arrays reporting on the minus strand.
-        if cv_local and cv_local.get('found') and user_gt and not is_indel_genotype(user_gt):
-            _cv_alt = (cv_local.get('alt_allele') or cv_local.get('alternate_allele') or '').strip().upper()
-            if _cv_alt and len(_cv_alt) == 1:
+        #
+        # Indel genotypes are verified too. They used to be exempt, which is how
+        # the 2026-09-16 incident happened: II/DD on chrX skipped this check
+        # entirely and the X-linked branch below then promoted "not het" into
+        # "hemizygous affected", reporting Rett syndrome and Duchenne muscular
+        # dystrophy for an unaffected adult.
+        if user_gt:
+            _cv_ref, _cv_alt = _clinvar_alleles(cv_local)
+            if is_indel_genotype(user_gt):
+                if _carries_clinvar_indel(user_gt, _cv_ref, _cv_alt) is not True:
+                    continue
+            elif _cv_alt and len(_cv_alt) == 1:
                 gt = user_gt.upper()
                 carries = _cv_alt in set(gt)
                 if not carries:
