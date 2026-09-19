@@ -17,6 +17,7 @@ import {
   GeneContextBox,
   AlphaFoldDetailBox,
   AlphaFoldBadge,
+  formatPopulationFrequency,
   GeneBurdenStrip,
   clinicalSignificanceToSeverity,
   formatLabel,
@@ -330,7 +331,7 @@ export default function RareMutationsPanel({ data, isDarkMode = false, token }: 
 
                     <div className="flex items-center gap-4">
                       <span className={`text-xs ${theme.textSecondary}`}>
-                        Frequency: {(mutation.population_frequency * 100).toFixed(1)}%
+                        Population frequency: {formatPopulationFrequency(mutation.population_frequency)}
                       </span>
                       {mutation.mutation_type && (
                         <span className={`text-xs ${theme.textSecondary}`}>

@@ -482,27 +482,50 @@ interface AlphaFoldBadgeProps {
   lowPct?: number
 }
 
+/** How confident AlphaFold is in its own structure prediction. */
+function confidenceTier(pct: number): string {
+  if (pct >= 70) return 'high'
+  if (pct >= 50) return 'moderate'
+  return 'low'
+}
+
 /**
  * Compact inline badge showing AlphaFold global confidence for the protein.
- * Green ≥ 70%, amber 50–69%, red < 50%.
+ *
+ * Deliberately neutral in colour. The earlier green/amber/red scale read as a
+ * verdict on the user's variant, when it only ever described how sure a model
+ * was about a protein shape — high confidence in a prediction is not good news
+ * about a person. The tier word carries the signal so colour is not the sole
+ * indicator.
  */
 export function AlphaFoldBadge({ confidence, highPct, lowPct }: AlphaFoldBadgeProps) {
   if (confidence == null) return null
   const pct = Math.round(confidence)
-  const color = pct >= 70 ? 'text-green-400 border-green-500/30 bg-green-500/10' :
-                pct >= 50 ? 'text-amber-400 border-amber-500/30 bg-amber-500/10' :
-                            'text-red-400 border-red-500/30 bg-red-500/10'
+  const tier = confidenceTier(pct)
   return (
     <span
       title={`AlphaFold protein structure confidence: ${pct}% global${highPct ? ` · ${Math.round(highPct * 100)}% very high confidence residues` : ''}${lowPct ? ` · ${Math.round(lowPct * 100)}% very low confidence (disordered)` : ''}`}
-      className={`inline-flex items-center gap-1 text-[10px] font-medium rounded px-1.5 py-0.5 border ${color}`}
+      className="inline-flex items-center gap-1 text-[10px] font-medium rounded px-1.5 py-0.5 border text-slate-300 border-slate-400/30 bg-slate-400/10"
     >
       <svg className="h-2.5 w-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
       </svg>
-      AF {pct}%
+      AlphaFold {pct}% · {tier} confidence
     </span>
   )
+}
+
+/**
+ * Population allele frequency as text. A rare disease allele is rare by orders
+ * of magnitude, so a fixed one-decimal percentage collapsed every such value to
+ * "0.0%" — which reads as "not present" rather than "vanishingly rare".
+ */
+export function formatPopulationFrequency(frequency: number): string {
+  if (!Number.isFinite(frequency) || frequency <= 0) return 'unknown'
+  const pct = frequency * 100
+  if (pct >= 1) return `${pct.toFixed(1)}%`
+  if (pct >= 0.01) return `${pct.toFixed(2)}%`
+  return `${pct.toPrecision(2)}%`
 }
 
 /**
