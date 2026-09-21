@@ -243,20 +243,29 @@ async def _discover(explicit_ids: List[int]) -> List[AffectedAnalysis]:
 
 
 async def _run(explicit_ids: List[int], apply_changes: bool) -> None:
-    affected = await _discover(explicit_ids)
-    print(format_discovery_report(affected))
+    # Named IDs mean "regenerate these". Filtering them through discovery would
+    # silently skip an analysis that is clean by today's signatures but whose
+    # verdicts were produced by an older build.
+    if explicit_ids:
+        target_ids = sorted(set(explicit_ids))
+        print(f'{len(target_ids)} analysis/analyses named: ' +
+              ', '.join(str(i) for i in target_ids))
+    else:
+        affected = await _discover([])
+        print(format_discovery_report(affected))
+        target_ids = [item.analysis_id for item in affected]
     if not apply_changes:
         print('\ndry run — nothing written. Re-run with --apply to regenerate.')
         return
-    for item in affected:
-        _, report = await rerun_analysis(item.analysis_id)
+    for analysis_id in target_ids:
+        _, report = await rerun_analysis(analysis_id)
         print(report)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('analysis_ids', type=int, nargs='*',
-                        help='Limit to these analysis IDs. Omit to scan all analyses.')
+                        help='Regenerate exactly these analysis IDs. Omit to scan all analyses.')
     parser.add_argument('--apply', action='store_true',
                         help='Regenerate insights. Without it this only reports.')
     args = parser.parse_args()
