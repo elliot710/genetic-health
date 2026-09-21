@@ -5,6 +5,7 @@ from ...db.models import RareMutation
 from .base import (
     GeneratorContext, extract_gene_and_consequence, extract_frequency,
     get_user_genotype, _get_effective_ref_allele, is_homozygous_reference,
+    is_indel_allele_pair,
     is_no_call_genotype, is_indel_genotype, get_annotation_allele_parts,
     is_heterozygous, indel_d_is_ref, requires_corroboration, is_corroborated,
     STRAND_COMPLEMENT,
@@ -166,6 +167,10 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
             if is_indel_genotype(user_gt):
                 if _carries_clinvar_indel(user_gt, _cv_ref, _cv_alt) is not True:
                     continue
+            elif is_indel_allele_pair(_cv_ref, _cv_alt):
+                # ClinVar describes an indel but the array reported nucleotides.
+                # The two are not comparable, so carriage is unverifiable.
+                continue
             elif _cv_alt and len(_cv_alt) == 1:
                 gt = user_gt.upper()
                 carries = _cv_alt in set(gt)

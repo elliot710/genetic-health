@@ -4,7 +4,7 @@ from ...db.models import CarrierStatus
 from .base import (
     GeneratorContext, get_user_genotype, get_ref_allele,
     is_homozygous_reference, is_heterozygous, is_no_call_genotype,
-    is_indel_genotype, _parse_alleles, indel_d_is_ref,
+    is_indel_genotype, _parse_alleles, indel_d_is_ref, is_indel_allele_pair,
     get_annotation_allele_parts, is_clinvar_benign, extract_frequency,
     is_severe_early_onset, is_indel_genotype as _is_indel_code,
 )
@@ -49,6 +49,12 @@ def _classify_carrier_status(user_gt: str, ref_allele: str, alt_allele: str) -> 
 
     ref = (ref_allele or '').strip().upper()
     alt = (alt_allele or '').strip().upper()
+
+    # A nucleotide genotype cannot be compared with an indel's alleles. Matching
+    # them anyway counts string coincidences: ref=AT alt=A against "AA" reads as
+    # two copies of the alt, i.e. homozygous-affected, from no evidence at all.
+    if is_indel_allele_pair(ref, alt):
+        return 'unaffected'
 
     if ref and alt and ref != alt:
         # We know both the reference and alternate alleles — exact classification
