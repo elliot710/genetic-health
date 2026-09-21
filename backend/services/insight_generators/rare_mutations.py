@@ -36,13 +36,31 @@ def _is_bare_gene_symbol(condition, gene_symbols):
     return condition.strip().lower() in gene_symbols
 
 
+# Nouns that mark a condition as a disease entity. A ClinVar name containing
+# one of these is a diagnosis however it happens to end -- "Cone dystrophy with
+# supernormal rod response" is an inherited retinal disease, not a drug entry.
+_DISEASE_NOUNS = (
+    'dystrophy', 'syndrome', 'disease', 'deficiency', 'anemia', 'anaemia',
+    'myopathy', 'neuropathy', 'carcinoma', 'cancer', 'tumor', 'tumour',
+    'atrophy', 'dysplasia', 'encephalopathy', 'retinitis', 'ataxia',
+    'epilepsy', 'malformation', 'immunodeficiency', 'thrombophilia',
+)
+
+
 def _is_pharmacogenomic_condition(condition):
     """Drug-metabolism findings belong to the Drug Responses panel.
 
     "Tramadol response" on CYP2D6 is a real, useful finding and not a rare
     disease; listing it here frames normal metabolism as a genetic disorder.
+
+    A trailing "response" alone is not enough to decide that. Scanning the
+    local ClinVar corpus, the bare suffix rule also caught "Cone dystrophy with
+    supernormal rod response", a genuine inherited retinal disease -- so a
+    condition naming a disease entity is kept regardless of how it ends.
     """
     text = condition.strip().lower()
+    if any(noun in text for noun in _DISEASE_NOUNS):
+        return False
     return text.endswith('response') or 'metabolizer' in text or 'metaboliser' in text
 
 

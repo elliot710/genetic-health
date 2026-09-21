@@ -87,3 +87,20 @@ class TestPharmacogenomicEntriesBelongToDrugResponses:
     def test_a_variant_with_a_real_disease_too_is_still_reported(self):
         added = _emit("CYP2C19", ["Tramadol response", "Some real syndrome"])
         assert added[0].disease_association == "Some real syndrome"
+
+
+class TestDiseaseNamesEndingInResponse:
+    """Scanning the real ClinVar corpus, a bare "ends with response" rule also
+    caught a genuine inherited retinal disease. Over-suppression hides a true
+    finding, which is the failure mode this whole change exists to avoid."""
+
+    def test_a_retinal_dystrophy_is_not_mistaken_for_a_drug_entry(self):
+        added = _emit("KCNV2", ["Cone dystrophy with supernormal rod response"])
+        assert added[0].disease_association == "Cone dystrophy with supernormal rod response"
+
+    def test_a_real_drug_response_entry_is_still_suppressed(self):
+        assert _emit("CYP2C9", ["Warfarin response"]) == []
+
+    def test_a_disease_noun_anywhere_in_the_name_protects_it(self):
+        added = _emit("ABCA4", ["Retinitis pigmentosa with paradoxical response"])
+        assert added[0].disease_association == "Retinitis pigmentosa with paradoxical response"
