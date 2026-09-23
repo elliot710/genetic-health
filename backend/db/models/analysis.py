@@ -132,7 +132,11 @@ class HealthRisk(Base):
     gene = Column(String(100))  # Gene symbol (FE-01)
     review_status = Column(String(200))  # ClinVar review status for evidence level (FE-02/03)
     pathogenicity_classification = Column(String(30))  # benign, likely_benign, uncertain, likely_pathogenic, pathogenic
-    
+    # 'variant': the user's own genotype at this rsid drives the assessment.
+    # 'gene': a condition associated with the gene, not established for this
+    # user's variant — must not be presented as their assessed risk.
+    provenance = Column(String(10), nullable=False, server_default='variant')
+
 class DrugResponse(Base):
     __tablename__ = "drug_responses"
     

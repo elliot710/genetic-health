@@ -12,6 +12,8 @@ import {
   AlphaFoldDetailBox,
   GeneBurdenStrip,
   AlphaFoldBadge,
+  EvidenceBand,
+  PathogenicityScoreDetail,
   DisclaimerCard,
   ClickableRsidBadge,
   EvidenceBadge,
@@ -41,6 +43,8 @@ interface MappedHealthRisk {
   prevention: string[]
   reviewStatus: string | null   // ClinVar review status (FE-02/03)
   pathogenicityClassification: string | null
+  pathogenicityScore: number | null   // real composite score; null when unscored
+  provenance: 'variant' | 'gene'
 }
 
 export default function HealthPanel({ isDarkMode = false, data, token }: CategoryPanelProps) {
@@ -84,13 +88,17 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
           riskScore: pathScore ?? (risk.risk_level === 'high' ? 85 : risk.risk_level === 'moderate' ? 65 : risk.risk_level === 'low' ? 35 : 20),
           gene: rsid || 'Unknown',
           geneSymbol: risk.gene || null,
-          description: `Genetic analysis shows ${risk.risk_level} risk for this condition`,
+          description: risk.provenance === 'gene'
+            ? `Reported in association with ${risk.gene || 'this gene'}. Not established for your specific variant.`
+            : `Genetic analysis shows ${risk.risk_level} risk for this condition`,
           variantInfo: risk.associated_variants || [],
           clinicalSignificance: risk.clinical_significance || 'Under research',
           riskLevel: risk.risk_level,
           prevention: Array.isArray(risk.recommendations) ? risk.recommendations : [risk.recommendations || 'Consult with healthcare provider'],
           reviewStatus: risk.review_status ?? null,
           pathogenicityClassification: risk.pathogenicity_classification ?? null,
+          pathogenicityScore: pathScore,
+          provenance: risk.provenance === 'gene' ? 'gene' as const : 'variant' as const,
           }
         })
         .sort((a: MappedHealthRisk, b: MappedHealthRisk) => {
@@ -115,13 +123,17 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
           riskScore: pathScore ?? (risk.risk_level === 'high' ? 85 : risk.risk_level === 'moderate' ? 65 : risk.risk_level === 'low' ? 35 : 20),
           gene: rsid || 'Unknown',
           geneSymbol: risk.gene || null,
-          description: `Genetic variant analysis shows ${risk.risk_level} risk`,
+          description: risk.provenance === 'gene'
+            ? `Reported in association with ${risk.gene || 'this gene'}. Not established for your specific variant.`
+            : `Genetic variant analysis shows ${risk.risk_level} risk`,
           variantInfo: risk.associated_variants || [],
           clinicalSignificance: risk.clinical_significance || 'Under research',
           riskLevel: risk.risk_level,
           prevention: risk.recommendations || ['Consult with healthcare provider', 'Monitor regularly', 'Maintain healthy lifestyle'],
           reviewStatus: risk.review_status ?? null,
           pathogenicityClassification: risk.pathogenicity_classification ?? null,
+          pathogenicityScore: pathScore,
+          provenance: risk.provenance === 'gene' ? 'gene' as const : 'variant' as const,
           }
         })
         .sort((a: MappedHealthRisk, b: MappedHealthRisk) => {
@@ -144,6 +156,8 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
         prevention: ['Analysis in progress...'],
         reviewStatus: null,
         pathogenicityClassification: null,
+        pathogenicityScore: null,
+        provenance: 'variant' as const,
       }]
     }
 
@@ -192,8 +206,13 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
   }, [groupBy])
   const { groups, collapsedGroups, toggleGroup, resetCollapsed } = useGrouping(filteredRisks, groupBy, getGroupKey, 'All Health Risks')
 
-  const highRiskItems = healthRisks.filter((r: MappedHealthRisk) => r.riskLevel === 'high')
-  const moderateRiskItems = healthRisks.filter((r: MappedHealthRisk) => r.riskLevel === 'moderate')
+  // Drawn from what is actually on screen, and only from the user's own
+  // variant-level results. Reading these off the unfiltered list named
+  // conditions the reader had filtered away, and "Watch: X" is an assertion
+  // about the reader that a gene-level association does not support.
+  const actionableRisks = filteredRisks.filter((r: MappedHealthRisk) => r.provenance !== 'gene')
+  const highRiskItems = actionableRisks.filter((r: MappedHealthRisk) => r.riskLevel === 'high')
+  const moderateRiskItems = actionableRisks.filter((r: MappedHealthRisk) => r.riskLevel === 'moderate')
 
   const headerProps = {
     icon: Heart,
@@ -312,23 +331,19 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                 <div className="flex items-start justify-between mb-1 gap-1">
                   <h4 className={`font-semibold text-sm ${theme.textPrimary} leading-snug flex-1 min-w-0`}>{risk.condition}</h4>
                   <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
-                    {/* Inline pathogenicity % for quick scan */}
-                    {risk.riskScore > 0 && (
-                      <span className={`text-xs font-mono font-semibold tabular-nums ${
-                        risk.riskScore >= 70 ? 'text-red-400' :
-                        risk.riskScore >= 45 ? 'text-orange-400' :
-                        risk.riskScore >= 25 ? 'text-yellow-400' : 'text-green-400'
-                      }`}>{risk.riskScore}%</span>
-                    )}
                     <ChevronRight className={`h-4 w-4 ${theme.textSecondary} transition-transform duration-300 ${isExpanded ? 'rotate-90' : ''}`} />
                   </div>
                 </div>
 
                 <div className="flex flex-wrap gap-1">
-                  <StatusBadge
-                    label={`${risk.risk} Risk`}
-                    severity={riskToSeverity(risk.riskLevel)}
-                  />
+                  {risk.provenance === 'gene' ? (
+                    <StatusBadge label="Gene association" severity="info" />
+                  ) : (
+                    <StatusBadge
+                      label={`${risk.risk} Risk`}
+                      severity={riskToSeverity(risk.riskLevel)}
+                    />
+                  )}
                   {risk.geneSymbol && (
                     <Badge variant="secondary" className="text-xs font-medium">
                       {risk.geneSymbol}
@@ -341,11 +356,7 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                   {risk.clinicalSignificance && risk.clinicalSignificance !== 'Under research' && (
                     <Badge variant="outline" className="text-xs">{risk.clinicalSignificance}</Badge>
                   )}
-                  {risk.pathogenicityClassification && ['pathogenic', 'likely_pathogenic'].includes(risk.pathogenicityClassification) && (
-                    <Badge variant="outline" className={`text-xs ${risk.pathogenicityClassification === 'pathogenic' ? 'bg-red-500/15 text-red-400 border-red-500/30' : 'bg-orange-500/15 text-orange-400 border-orange-500/30'}`}>
-                      {risk.pathogenicityClassification.replace(/_/g, ' ')}
-                    </Badge>
-                  )}
+                  <EvidenceBand classification={risk.pathogenicityClassification} />
                   {/* AlphaFold protein confidence badge */}
                   {risk.variantInfo?.[0] && data?.alphafold_map?.[risk.variantInfo[0]] && (
                     <AlphaFoldBadge
@@ -380,6 +391,12 @@ export default function HealthPanel({ isDarkMode = false, data, token }: Categor
                     ) : (
                       <p className={`text-sm ${theme.textSecondary} leading-relaxed`}>{risk.description}</p>
                     )}
+
+                    <PathogenicityScoreDetail
+                      classification={risk.pathogenicityClassification}
+                      score={risk.pathogenicityScore}
+                      theme={theme}
+                    />
 
                     {risk.variantInfo && risk.variantInfo.length > 0 && (
                       <div className="space-y-2">

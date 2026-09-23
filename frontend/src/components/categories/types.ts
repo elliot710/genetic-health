@@ -30,6 +30,8 @@ export interface HealthRisk {
   gene?: string
   review_status?: string
   pathogenicity_classification?: string
+  /** 'gene': associated with the gene, not established for this user's variant. */
+  provenance?: 'variant' | 'gene'
 }
 
 export interface DrugResponse {

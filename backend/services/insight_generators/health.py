@@ -102,6 +102,7 @@ async def generate_health_risks(ctx: GeneratorContext) -> int:
             gene=info.get('gene') or None,
             review_status=info.get('review_status') or None,
             pathogenicity_classification=_classification,
+            provenance='variant',
         )
 
     def from_gene(aid, rsid, gene, consequence, info):
@@ -122,6 +123,7 @@ async def generate_health_risks(ctx: GeneratorContext) -> int:
             gene=gene or info.get('gene') or None,
             review_status=info.get('review_status') or None,
             pathogenicity_classification=_classification,
+            provenance='gene',
         )
 
     rsid_map, gene_map = ctx.get_maps('health')

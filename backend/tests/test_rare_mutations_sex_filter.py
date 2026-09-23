@@ -25,6 +25,7 @@ def _make_annotation(
     cv_alt: str = "T",
     conditions: list = None,
     review_statuses: list = None,
+    cv_ref: str = None,
 ):
     """Build a minimal AnnotationResult-like object that mimics the real structure."""
     clin_sigs = clin_sigs or ["Likely_pathogenic"]
@@ -40,6 +41,8 @@ def _make_annotation(
         "alt_allele": cv_alt,
         "review_statuses": review_statuses,
     }
+    if cv_ref is not None:
+        cv_local["ref_allele"] = cv_ref
 
     ann = MagicMock()
     ann.rsid = rsid
@@ -125,13 +128,27 @@ MECP2_HET_GENOTYPE = "DI"   # heterozygous del/ins
 MECP2_HOM_GENOTYPE = "DD"   # homozygous deletion
 
 
+def _carrying_alleles(genotype: str):
+    """ClinVar (ref, alt) under which `genotype` genuinely carries the alt.
+
+    Indel carriage is now verified, so fixtures must supply real alleles rather
+    than the bare array code. D is the shorter allele and I the longer one, so
+    the direction that makes a genotype carrying is the opposite for II vs DD.
+    """
+    gt = genotype.strip().upper()
+    if gt == "II":
+        return ("C", "CTT")    # insertion variant: I is the alternate allele
+    return ("CTT", "C")        # deletion variant: D is the alternate allele
+
+
 def _mecp2_annotation():
     return _make_annotation(
         rsid=MECP2_RSID,
         chromosome="X",
         gene="MECP2",
         clin_sigs=["Likely_pathogenic"],
-        cv_alt="I",          # indel — allele verification skipped
+        cv_alt="C",
+        cv_ref="CTT",        # deletion variant: DD and DI both carry the alt
         conditions=["Rett syndrome"],
     )
 
@@ -297,7 +314,9 @@ class TestMultipleVariantsMixedChromosomes:
         rsid_auto = "rs80359550"
 
         variant_x = _make_variant(rsid_x, "X", "DD")
-        ann_x = _make_annotation(rsid_x, "X", "MECP2", ["Likely_pathogenic"], "I", ["Rett syndrome"])
+        _ref_x, _alt_x = _carrying_alleles("DD")
+        ann_x = _make_annotation(rsid_x, "X", "MECP2", ["Likely_pathogenic"], _alt_x,
+                                 ["Rett syndrome"], cv_ref=_ref_x)
         profile_x = _make_profile(rsid_x, "DD", "MECP2", is_het=False, annotation_result=ann_x, variant=variant_x)
 
         variant_auto = _make_variant(rsid_auto, "13", "AT")
@@ -400,12 +419,14 @@ class TestIndelSingleSubmitterFilter:
         rsid = "rs267608531"
         genotype = "DD"
         variant = _make_variant(rsid, chromosome, genotype)
+        _ref, _alt = _carrying_alleles(genotype)
         annotation = _make_annotation(
             rsid, chromosome, "MECP2",
             clin_sigs or ["Likely_pathogenic"],
-            "I",
+            _alt,
             ["Rett syndrome"],
             review_statuses=review_statuses,
+            cv_ref=_ref,
         )
         profile = _make_profile(
             rsid, genotype, "MECP2",
@@ -479,9 +500,11 @@ class TestIndelSingleSubmitterFilter:
         ]
         for rsid, gene, condition, genotype in cases:
             variant = _make_variant(rsid, "X", genotype)
+            _ref, _alt = _carrying_alleles(genotype)
             annotation = _make_annotation(
-                rsid, "X", gene, ["Likely_pathogenic"], "I", [condition],
+                rsid, "X", gene, ["Likely_pathogenic"], _alt, [condition],
                 review_statuses=["criteria provided, single submitter"],
+                cv_ref=_ref,
             )
             profile = _make_profile(rsid, genotype, gene, is_het=False, annotation_result=annotation, variant=variant)
             ctx = _make_ctx(
@@ -493,8 +516,9 @@ class TestIndelSingleSubmitterFilter:
             _run(generate_rare_mutations(ctx))
             assert len(ctx._added) == 0, f"{gene} ({rsid}) single-submitter indel should be filtered"
 
-    def test_multi_submitter_indel_kept_for_males(self):
-        """ALD (ABCD1) and Fabry (GLA) have multi-submitter evidence — must appear for males."""
+    def test_multi_submitter_indel_kept_for_males_when_carriage_is_verified(self):
+        """ALD (ABCD1) and Fabry (GLA) multi-submitter evidence — kept for males
+        only once the genotype is verified to carry ClinVar's alternate allele."""
         from backend.services.insight_generators.rare_mutations import generate_rare_mutations
 
         cases = [
@@ -503,9 +527,11 @@ class TestIndelSingleSubmitterFilter:
         ]
         for rsid, gene, condition, genotype in cases:
             variant = _make_variant(rsid, "X", genotype)
+            _ref, _alt = _carrying_alleles(genotype)
             annotation = _make_annotation(
-                rsid, "X", gene, ["Pathogenic/Likely pathogenic"], "I", [condition],
+                rsid, "X", gene, ["Pathogenic/Likely pathogenic"], _alt, [condition],
                 review_statuses=["criteria provided, multiple submitters, no conflicts"],
+                cv_ref=_ref,
             )
             profile = _make_profile(rsid, genotype, gene, is_het=False, annotation_result=annotation, variant=variant)
             ctx = _make_ctx(
@@ -517,3 +543,70 @@ class TestIndelSingleSubmitterFilter:
             _run(generate_rare_mutations(ctx))
             assert len(ctx._added) == 1, f"{gene} ({rsid}) multi-submitter indel should be kept for males"
 
+    def test_multi_submitter_indel_dropped_when_carriage_is_not_verified(self):
+        """Strong ClinVar evidence establishes that the VARIANT is pathogenic.
+        It says nothing about whether this user carries it.
+
+        Regression for the 2026-09-16 incident: ABCD1 rs713993050 was reported
+        to a real user as hemizygous-affected adrenoleukodystrophy purely on
+        multi-submitter evidence, with the indel genotype never checked against
+        ClinVar's alternate allele."""
+        from backend.services.insight_generators.rare_mutations import generate_rare_mutations
+
+        rsid, gene, genotype = "rs713993050", "ABCD1", "II"
+        variant = _make_variant(rsid, "X", genotype)
+        # Deletion variant: I is the REFERENCE allele, so "II" carries no alt.
+        annotation = _make_annotation(
+            rsid, "X", gene, ["Pathogenic/Likely pathogenic"], "C",
+            ["Adrenoleukodystrophy"],
+            review_statuses=["criteria provided, multiple submitters, no conflicts"],
+            cv_ref="CTT",
+        )
+        profile = _make_profile(rsid, genotype, gene, is_het=False,
+                                annotation_result=annotation, variant=variant)
+        ctx = _make_ctx(
+            variants=[variant], profiles={rsid: profile},
+            annotation_results={rsid: annotation}, inferred_sex="male",
+        )
+        _run(generate_rare_mutations(ctx))
+        assert ctx._added == [], "multi-submitter evidence must not substitute for verified carriage"
+
+
+
+class TestCarriageIsVerifiedBeforeAffectedClaim:
+    """The hemizygous-affected branch reads 'not heterozygous' as 'affected'.
+    That is only sound because carriage is verified first. These tests lock the
+    ordering, which is the part a refactor could silently undo.
+    """
+
+    def _run(self, genotype, cv_ref, cv_alt, inferred_sex="male"):
+        from backend.services.insight_generators.rare_mutations import generate_rare_mutations
+        rsid = "rs398124078"  # DMD, one of the live 2026-09-16 false positives
+        variant = _make_variant(rsid, "X", genotype)
+        annotation = _make_annotation(
+            rsid, "X", "DMD", ["Pathogenic"], cv_alt,
+            ["Duchenne muscular dystrophy"],
+            review_statuses=["criteria provided, multiple submitters, no conflicts"],
+            cv_ref=cv_ref,
+        )
+        profile = _make_profile(rsid, genotype, "DMD", is_het=False,
+                                annotation_result=annotation, variant=variant)
+        ctx = _make_ctx(
+            variants=[variant], profiles={rsid: profile},
+            annotation_results={rsid: annotation}, inferred_sex=inferred_sex,
+        )
+        _run(generate_rare_mutations(ctx))
+        return ctx._added
+
+    def test_unverifiable_indel_never_reaches_the_affected_branch(self):
+        """No ClinVar ref allele: direction is unresolvable, so no affected
+        claim is supportable no matter what the sex filter would conclude."""
+        assert self._run("II", cv_ref=None, cv_alt="C") == []
+
+    def test_hemizygous_male_claim_requires_carrying_the_alt_allele(self):
+        # Deletion variant: I is the reference allele, so "II" carries no alt.
+        assert self._run("II", cv_ref="CTT", cv_alt="C") == []
+
+    def test_hemizygous_male_claim_survives_when_carriage_is_verified(self):
+        # Insertion variant: I is the alternate allele, so "II" does carry it.
+        assert len(self._run("II", cv_ref="C", cv_alt="CTT")) == 1

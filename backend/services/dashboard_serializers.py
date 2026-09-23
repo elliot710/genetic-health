@@ -42,7 +42,10 @@ def serialize_health_risks(rows) -> list:
          "risk_score": r.risk_score, "associated_variants": r.associated_variants,
          "recommendations": _to_list(r.recommendations), "gene": r.gene,
          "review_status": r.review_status,
-         "pathogenicity_classification": r.pathogenicity_classification}
+         "pathogenicity_classification": r.pathogenicity_classification,
+         # getattr: rows written before the provenance migration read as
+         # variant-level, which is what they were.
+         "provenance": getattr(r, 'provenance', None) or 'variant'}
         for r in rows
     ], "condition")
 

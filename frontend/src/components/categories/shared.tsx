@@ -482,27 +482,114 @@ interface AlphaFoldBadgeProps {
   lowPct?: number
 }
 
+/** How confident AlphaFold is in its own structure prediction. */
+function confidenceTier(pct: number): string {
+  if (pct >= 70) return 'high'
+  if (pct >= 50) return 'moderate'
+  return 'low'
+}
+
 /**
  * Compact inline badge showing AlphaFold global confidence for the protein.
- * Green ≥ 70%, amber 50–69%, red < 50%.
+ *
+ * Deliberately neutral in colour. The earlier green/amber/red scale read as a
+ * verdict on the user's variant, when it only ever described how sure a model
+ * was about a protein shape — high confidence in a prediction is not good news
+ * about a person. The tier word carries the signal so colour is not the sole
+ * indicator.
  */
 export function AlphaFoldBadge({ confidence, highPct, lowPct }: AlphaFoldBadgeProps) {
   if (confidence == null) return null
   const pct = Math.round(confidence)
-  const color = pct >= 70 ? 'text-green-400 border-green-500/30 bg-green-500/10' :
-                pct >= 50 ? 'text-amber-400 border-amber-500/30 bg-amber-500/10' :
-                            'text-red-400 border-red-500/30 bg-red-500/10'
+  const tier = confidenceTier(pct)
   return (
     <span
       title={`AlphaFold protein structure confidence: ${pct}% global${highPct ? ` · ${Math.round(highPct * 100)}% very high confidence residues` : ''}${lowPct ? ` · ${Math.round(lowPct * 100)}% very low confidence (disordered)` : ''}`}
-      className={`inline-flex items-center gap-1 text-[10px] font-medium rounded px-1.5 py-0.5 border ${color}`}
+      className="inline-flex items-center gap-1 text-[10px] font-medium rounded px-1.5 py-0.5 border text-slate-300 border-slate-400/30 bg-slate-400/10"
     >
       <svg className="h-2.5 w-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
       </svg>
-      AF {pct}%
+      AlphaFold {pct}% · {tier} confidence
     </span>
   )
+}
+
+// ─── Pathogenicity evidence ────────────────────────────────────
+
+const PATHOGENICITY_LABELS: Record<string, string> = {
+  pathogenic: 'Pathogenic',
+  likely_pathogenic: 'Likely pathogenic',
+  uncertain: 'Uncertain significance',
+  likely_benign: 'Likely benign',
+  benign: 'Benign',
+}
+
+const PATHOGENICITY_SEVERITY: Record<string, Severity> = {
+  pathogenic: 'danger',
+  likely_pathogenic: 'warning',
+  uncertain: 'neutral',
+  likely_benign: 'success',
+  benign: 'success',
+}
+
+interface EvidenceBandProps {
+  classification?: string | null
+}
+
+/**
+ * How strong the evidence is that a variant is damaging — in words.
+ *
+ * This replaces a bare percentage printed beside the condition name, which
+ * read as the chance of having the disease. It is not that: it is a composite
+ * confidence that the variant is damaging at all, and 28% of that is not 28%
+ * of anything a reader cares about. An absent classification renders as
+ * unclear rather than silently reassuring.
+ */
+export function EvidenceBand({ classification }: EvidenceBandProps) {
+  const key = (classification || '').toLowerCase()
+  const label = PATHOGENICITY_LABELS[key] ?? 'Evidence unclear'
+  const severity = PATHOGENICITY_SEVERITY[key] ?? 'neutral'
+  return <StatusBadge label={label} severity={severity} />
+}
+
+interface PathogenicityScoreDetailProps {
+  classification?: string | null
+  score?: number | null
+  theme: ThemeClasses
+}
+
+/**
+ * The numeric score, shown only in the expanded view and only next to the
+ * classification it supports, so the two cannot be read apart.
+ */
+export function PathogenicityScoreDetail({ classification, score, theme }: PathogenicityScoreDetailProps) {
+  if (score == null || !Number.isFinite(score)) return null
+  const key = (classification || '').toLowerCase()
+  const label = PATHOGENICITY_LABELS[key]
+  return (
+    <div className={`text-xs ${theme.textSecondary}`}>
+      <span className="font-medium">Variant pathogenicity score:</span>{' '}
+      <span className="font-mono tabular-nums">{Math.round(score)} / 100</span>
+      {label && <span> — {label.toLowerCase()}</span>}
+      <p className="mt-0.5">
+        Confidence that this variant damages the protein. Not the chance of having the condition.
+      </p>
+    </div>
+  )
+}
+
+/**
+ * Population allele frequency as text. A rare disease allele is rare by orders
+ * of magnitude, so a fixed one-decimal percentage collapsed every such value to
+ * "0.0%" — which reads as "not present" rather than "vanishingly rare".
+ */
+export function formatPopulationFrequency(frequency: number): string {
+  if (!Number.isFinite(frequency) || frequency <= 0) return 'unknown'
+  const pct = frequency * 100
+  if (pct >= 1) return `${pct.toFixed(1)}%`
+  if (pct >= 0.01) return `${pct.toFixed(2)}%`
+  return `${pct.toPrecision(2)}%`
 }
 
 /**
@@ -638,9 +725,11 @@ interface AlphaFoldDetailBoxProps {
 
 /**
  * Expanded section: full AlphaFold protein structure confidence breakdown.
- * Shows pLDDT score visually with per-region breakdown and clinical interpretation.
- * High confidence (≥70%) = reliable structure prediction → variant likely disrupts real domain.
- * Low confidence (<50%) = intrinsically disordered region → variant effect harder to predict.
+ *
+ * pLDDT is a global, per-protein measure of how sure AlphaFold is about its own
+ * prediction. No part of it is computed from the user's variant, so the copy
+ * below describes the model only and makes no claim about what this variant
+ * does to the structure.
  */
 export function AlphaFoldDetailBox({ rsid, alphafoldData, theme }: AlphaFoldDetailBoxProps) {
   if (!alphafoldData || alphafoldData.confidence == null) return null
@@ -659,10 +748,10 @@ export function AlphaFoldDetailBox({ rsid, alphafoldData, theme }: AlphaFoldDeta
     pct >= 70 ? 'bg-green-500' : pct >= 50 ? 'bg-amber-500' : 'bg-red-500'
 
   const interpretation =
-    pct >= 90 ? 'Very high confidence — structure is highly reliable. Variant likely disrupts a well-defined structural domain.' :
-    pct >= 70 ? 'Confident structure. Variant falls in a region with reliable 3D prediction — functional impact is assessable.' :
-    pct >= 50 ? 'Low confidence — this region may be partially disordered. Structural impact harder to predict.' :
-                'Very low confidence — intrinsically disordered region. AlphaFold structure not reliable here.'
+    pct >= 90 ? 'Very high confidence — AlphaFold predicts this protein’s shape reliably. This describes the model, not your variant.' :
+    pct >= 70 ? 'Confident prediction of this protein’s shape. This describes the model, not your variant.' :
+    pct >= 50 ? 'Low confidence — parts of this protein may be disordered, so the predicted shape is less reliable.' :
+                'Very low confidence — likely an intrinsically disordered region, where AlphaFold predictions are unreliable.'
 
   return (
     <div>

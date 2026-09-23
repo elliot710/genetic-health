@@ -29,12 +29,19 @@ from .alleles import (
     _get_effective_ref_allele,
     get_user_genotype,
     is_indel_genotype,
+    is_indel_allele_pair,
     is_no_call_genotype,
     _parse_alleles,
     is_homozygous_reference,
     is_heterozygous,
 )
 from .frequency import extract_gene_and_consequence, extract_frequency
+from .plausibility import (
+    is_severe_early_onset,
+    is_corroborated,
+    has_strong_review,
+    requires_corroboration,
+)
 from .zygosity import (
     risk_level_to_score,
     zygosity_adjust,
@@ -233,9 +240,12 @@ async def _bulk_load_clinvar_gene_stats(rsid_gene_map: Dict[str, str]) -> Dict[s
 
 __all__ = [
     'GeneratorContext', 'VariantProfile',
+    'is_severe_early_onset', 'has_strong_review', 'requires_corroboration',
+    'is_corroborated',
     'STRAND_COMPLEMENT',
     'get_ref_allele', 'get_annotation_ref_allele', 'get_annotation_allele_parts',
-    'indel_d_is_ref', 'get_user_genotype', 'is_indel_genotype', 'is_no_call_genotype',
+    'indel_d_is_ref', 'get_user_genotype', 'is_indel_genotype', 'is_indel_allele_pair',
+    'is_no_call_genotype',
     'is_homozygous_reference', 'is_heterozygous',
     'extract_gene_and_consequence', 'extract_frequency',
     'risk_level_to_score', 'zygosity_adjust', 'cap_risk_for_rarity', 'boost_if_pathogenic',

@@ -119,8 +119,10 @@ class TestClassifyCarrierStatus:
         # ref longer → D=alt → II=hom_ref → unaffected
         assert self._fn()("II", "AT", "A") == "unaffected"
 
-    def test_indel_dd_with_unknown_alleles_returns_carrier(self):
-        assert self._fn()("DD", "N", "N") == "carrier"
+    def test_indel_dd_with_unknown_alleles_makes_no_claim(self):
+        # Direction unresolvable: 'carrier' would be a clinical claim built on
+        # an ambiguous array code, so no claim is made at all.
+        assert self._fn()("DD", "N", "N") == "unaffected"
 
     def test_ref_only_all_non_ref_returns_carrier(self):
         # Only ref allele known, all alleles are non-ref → conservative carrier

@@ -634,3 +634,36 @@ class TestGenerateFromMapsValidatesAssociatedVariants:
                 build_from_rsid=build_from_rsid,
                 build_from_gene=lambda *a: None,
             )
+
+
+class TestLikelyBenignCannotEscalate:
+    """A likely-benign composite must not produce a 'moderate' risk level.
+
+    Characterization of the live 2026-09-16 defect: GNB1 rs3820011 scored 0.28
+    ("likely benign") and was rendered as "Acute lymphoid leukemia -- Moderate
+    Risk". A curated population risk_multiplier is not evidence that this
+    individual's variant is pathogenic, so it must not lift a likely-benign
+    score out of the low band.
+    """
+
+    LIKELY_BENIGN = {"composite_score": 0.28}
+
+    def test_high_multiplier_cannot_lift_likely_benign_to_moderate(self):
+        assert assess_risk_level("AG", 2.5, pathogenicity_score=self.LIKELY_BENIGN) == "low"
+
+    def test_low_multiplier_likely_benign_stays_low(self):
+        assert assess_risk_level("AG", 1.0, pathogenicity_score=self.LIKELY_BENIGN) == "low"
+
+    def test_one_variant_yields_one_risk_level_across_conditions(self):
+        """The live defect showed rs3820011 as 'Moderate' for leukemia and 'Low'
+        for neurological development -- identical evidence, different curated
+        multiplier."""
+        leukemia = assess_risk_level("AG", 2.5, pathogenicity_score=self.LIKELY_BENIGN)
+        neuro = assess_risk_level("AG", 1.5, pathogenicity_score=self.LIKELY_BENIGN)
+        assert leukemia == neuro
+
+    def test_genuinely_pathogenic_still_escalates(self):
+        assert assess_risk_level("AG", 2.0, pathogenicity_score={"composite_score": 0.85}) in ("high", "very_high")
+
+    def test_borderline_above_threshold_unaffected(self):
+        assert assess_risk_level("AG", 2.0, pathogenicity_score={"composite_score": 0.35}) == "moderate"

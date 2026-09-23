@@ -32,6 +32,7 @@
         "condition": "Type 2 Diabetes",
         "gene": "TCF7L2",
         "pathogenicity_classification": "pathogenic",
+        "provenance": "variant",
         "recommendations": [
           "Maintain healthy weight"
         ],
@@ -50,6 +51,7 @@
         "condition": "Hereditary Breast Cancer",
         "gene": "BRCA1",
         "pathogenicity_classification": "pathogenic",
+        "provenance": "variant",
         "recommendations": [
           "Discuss screening"
         ],

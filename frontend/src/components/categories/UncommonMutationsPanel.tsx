@@ -14,6 +14,7 @@ import {
   GeneContextBox,
   AlphaFoldDetailBox,
   AlphaFoldBadge,
+  formatPopulationFrequency,
   GeneBurdenStrip,
   ClickableRsidBadge,
   clinicalSignificanceToSeverity,
@@ -222,7 +223,7 @@ export default function UncommonMutationsPanel({ isDarkMode = false, data, token
 
                     <div className="flex items-center gap-4">
                       <span className={`text-xs ${theme.textSecondary}`}>
-                        Frequency: {(mutation.population_frequency * 100).toFixed(1)}%
+                        Population frequency: {formatPopulationFrequency(mutation.population_frequency)}
                       </span>
                       {mutation.research_status && (
                         <span className={`text-xs ${theme.textSecondary}`}>

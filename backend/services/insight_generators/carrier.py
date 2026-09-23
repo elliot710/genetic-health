@@ -4,8 +4,9 @@ from ...db.models import CarrierStatus
 from .base import (
     GeneratorContext, get_user_genotype, get_ref_allele,
     is_homozygous_reference, is_heterozygous, is_no_call_genotype,
-    is_indel_genotype, _parse_alleles, indel_d_is_ref,
+    is_indel_genotype, _parse_alleles, indel_d_is_ref, is_indel_allele_pair,
     get_annotation_allele_parts, is_clinvar_benign, extract_frequency,
+    is_severe_early_onset, is_indel_genotype as _is_indel_code,
 )
 
 logger = logging.getLogger(__name__)
@@ -23,18 +24,24 @@ def _classify_carrier_status(user_gt: str, ref_allele: str, alt_allele: str) -> 
     # Whether D maps to ref or alt depends on the variant type.
     if is_indel_genotype(user_gt):
         gt = user_gt.strip().upper()
+        # Multi-allelic site: an I/D code says the allele is longer or shorter,
+        # not WHICH alternate it is, so it cannot be attributed to this
+        # condition. Parity with rare_mutations._carries_clinvar_indel.
+        if ',' in (alt_allele or ''):
+            return 'unaffected'
         if gt in ('DI', 'ID'):
             return 'carrier'  # heterozygous regardless of mapping
         d_ref = indel_d_is_ref(ref_allele, alt_allele)
         if d_ref is True:
             # Insertion variant (ref shorter): D=ref, I=alt
             return 'unaffected' if gt == 'DD' else 'affected'  # II=affected
-        elif d_ref is False:
+        if d_ref is False:
             # Deletion variant (ref longer): I=ref, D=alt
             return 'affected' if gt == 'DD' else 'unaffected'  # II=unaffected
-        else:
-            # Can't determine allele mapping — be conservative
-            return 'carrier'
+        # Direction unresolvable. 'carrier' reads as conservative but is still a
+        # clinical claim built on an ambiguous array code — the defect that
+        # produced the 2026-09 false positives. Make no claim at all.
+        return 'unaffected'
 
     alleles = _parse_alleles(user_gt)
     if not alleles:
@@ -42,6 +49,12 @@ def _classify_carrier_status(user_gt: str, ref_allele: str, alt_allele: str) -> 
 
     ref = (ref_allele or '').strip().upper()
     alt = (alt_allele or '').strip().upper()
+
+    # A nucleotide genotype cannot be compared with an indel's alleles. Matching
+    # them anyway counts string coincidences: ref=AT alt=A against "AA" reads as
+    # two copies of the alt, i.e. homozygous-affected, from no evidence at all.
+    if is_indel_allele_pair(ref, alt):
+        return 'unaffected'
 
     if ref and alt and ref != alt:
         # We know both the reference and alternate alleles — exact classification
@@ -70,6 +83,21 @@ def _classify_carrier_status(user_gt: str, ref_allele: str, alt_allele: str) -> 
         return 'carrier'
 
     return 'unaffected'
+
+
+def _affected_claim_is_supportable(status, condition, user_gt) -> bool:
+    """An 'affected' status is a diagnosis. Hold it to the same bar as the
+    rare-mutations panel, which reports the identical variant.
+
+    A consumer-array I/D code cannot support telling a living adult they are
+    affected by a condition that is lethal or grossly disabling in childhood,
+    however well the variant itself is reviewed — the doubt is about carriage,
+    not about the variant. Deliberately narrow: an ordinary genotyped
+    homozygote is untouched, and so is any condition an adult can live with.
+    """
+    if status != 'affected':
+        return True
+    return not (_is_indel_code(user_gt) and is_severe_early_onset(condition))
 
 
 async def generate_carrier_status(ctx: GeneratorContext) -> int:
@@ -125,6 +153,9 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
                     user_gt or '', ann_ref or ref_allele or '', effective_alt
                 )
                 if actual_status == 'unaffected':
+                    seen_conditions.discard(cond)
+                    continue
+                if not _affected_claim_is_supportable(actual_status, cond, user_gt):
                     seen_conditions.discard(cond)
                     continue
                 # Resolve gene symbol from registry info, annotation, or marker
@@ -197,6 +228,8 @@ async def generate_carrier_status(ctx: GeneratorContext) -> int:
             gc.get('disease', '').lower() not in ('not provided', 'not specified')
         ]
         disease = diseases[0] if diseases else gene_name
+        if not _affected_claim_is_supportable(status, disease, user_gt):
+            continue
         if not disease or disease in seen_conditions:
             continue
         seen_conditions.add(disease)

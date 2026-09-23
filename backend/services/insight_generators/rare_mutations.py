@@ -5,11 +5,88 @@ from ...db.models import RareMutation
 from .base import (
     GeneratorContext, extract_gene_and_consequence, extract_frequency,
     get_user_genotype, _get_effective_ref_allele, is_homozygous_reference,
+    is_indel_allele_pair,
     is_no_call_genotype, is_indel_genotype, get_annotation_allele_parts,
-    is_heterozygous, STRAND_COMPLEMENT,
+    is_heterozygous, indel_d_is_ref, requires_corroboration, is_corroborated,
+    STRAND_COMPLEMENT,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _clinvar_alleles(cv_local):
+    """ClinVar's own (ref, alt) for this variant, or (None, None).
+
+    The claim being adjudicated is a ClinVar claim, so it is resolved against
+    ClinVar's alleles rather than get_annotation_allele_parts(), which prefers
+    Ensembl's allele_string and returns every alt joined at a multi-allelic
+    site — resolving D/I direction against an allele ClinVar never classified.
+    """
+    ref = (cv_local.get('ref_allele') or cv_local.get('reference_allele') or '').strip().upper()
+    alt = (cv_local.get('alt_allele') or cv_local.get('alternate_allele') or '').strip().upper()
+    return (ref or None), (alt or None)
+
+
+def _is_bare_gene_symbol(condition, gene_symbols):
+    """A condition that is just its own gene's symbol is not a disease name.
+
+    ClinVar records with no curated condition sometimes carry the gene symbol in
+    the condition field. Rendered on a card it reads as a diagnosis ("Pold2"),
+    which is worse than showing nothing.
+    """
+    return condition.strip().lower() in gene_symbols
+
+
+# Nouns that mark a condition as a disease entity. A ClinVar name containing
+# one of these is a diagnosis however it happens to end -- "Cone dystrophy with
+# supernormal rod response" is an inherited retinal disease, not a drug entry.
+_DISEASE_NOUNS = (
+    'dystrophy', 'syndrome', 'disease', 'deficiency', 'anemia', 'anaemia',
+    'myopathy', 'neuropathy', 'carcinoma', 'cancer', 'tumor', 'tumour',
+    'atrophy', 'dysplasia', 'encephalopathy', 'retinitis', 'ataxia',
+    'epilepsy', 'malformation', 'immunodeficiency', 'thrombophilia',
+)
+
+
+def _is_pharmacogenomic_condition(condition):
+    """Drug-metabolism findings belong to the Drug Responses panel.
+
+    "Tramadol response" on CYP2D6 is a real, useful finding and not a rare
+    disease; listing it here frames normal metabolism as a genetic disorder.
+
+    A trailing "response" alone is not enough to decide that. Scanning the
+    local ClinVar corpus, the bare suffix rule also caught "Cone dystrophy with
+    supernormal rod response", a genuine inherited retinal disease -- so a
+    condition naming a disease entity is kept regardless of how it ends.
+    """
+    text = condition.strip().lower()
+    if any(noun in text for noun in _DISEASE_NOUNS):
+        return False
+    return text.endswith('response') or 'metabolizer' in text or 'metaboliser' in text
+
+
+def _carries_clinvar_indel(user_gt, ref_allele, alt_allele):
+    """Whether a consumer-array D/I genotype carries ClinVar's pathogenic allele.
+
+    Returns True/False when direction resolves, and None when it cannot — a
+    multi-allelic site, an equal-length pair, or a missing allele leaves D/I
+    unattributable to one specific alt. None means no clinical claim is
+    supportable; the caller drops the finding rather than guessing.
+    """
+    if not ref_allele or not alt_allele:
+        return None
+    if ',' in alt_allele:
+        # Multi-allelic: "II" cannot be attributed to ClinVar's specific alt.
+        return None
+    gt = (user_gt or '').strip().upper()
+    if gt in ('DI', 'ID'):
+        return True  # one copy of whichever allele is alt
+    d_is_ref = indel_d_is_ref(ref_allele, alt_allele)
+    if d_is_ref is None:
+        return None
+    if d_is_ref:
+        return gt == 'II'  # insertion variant: I is the alternate allele
+    return gt == 'DD'      # deletion variant: D is the alternate allele
 
 
 async def generate_rare_mutations(ctx: GeneratorContext) -> int:
@@ -30,10 +107,12 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
         if not annotation_result or not annotation_result.annotation_data:
             continue
 
-        # Must have ClinVar data to qualify
+        # Must have local ClinVar data to qualify. The legacy clinvar_api source
+        # carries no ref/alt, so a claim sourced from it can never have its
+        # allele carriage verified — and an unverifiable clinical claim is
+        # exactly what this generator must not make.
         cv_local = annotation_result.annotation_data.get('annotations', {}).get('clinvar_local', {})
-        clinvar_api = annotation_result.annotation_data.get('annotations', {}).get('clinvar', {})
-        if not ((cv_local and cv_local.get('found')) or (clinvar_api and clinvar_api.get('found'))):
+        if not (cv_local and cv_local.get('found')):
             continue
 
         # Genotype and zygosity from profile (consistent ref allele)
@@ -77,9 +156,22 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
         # recorded pathogenic allele. Consumer CSV data can have ref=alt entries
         # that survive the hom-ref check when the reference allele is unresolved.
         # Apply strand-flip fallback for arrays reporting on the minus strand.
-        if cv_local and cv_local.get('found') and user_gt and not is_indel_genotype(user_gt):
-            _cv_alt = (cv_local.get('alt_allele') or cv_local.get('alternate_allele') or '').strip().upper()
-            if _cv_alt and len(_cv_alt) == 1:
+        #
+        # Indel genotypes are verified too. They used to be exempt, which is how
+        # the 2026-09-16 incident happened: II/DD on chrX skipped this check
+        # entirely and the X-linked branch below then promoted "not het" into
+        # "hemizygous affected", reporting Rett syndrome and Duchenne muscular
+        # dystrophy for an unaffected adult.
+        if user_gt:
+            _cv_ref, _cv_alt = _clinvar_alleles(cv_local)
+            if is_indel_genotype(user_gt):
+                if _carries_clinvar_indel(user_gt, _cv_ref, _cv_alt) is not True:
+                    continue
+            elif is_indel_allele_pair(_cv_ref, _cv_alt):
+                # ClinVar describes an indel but the array reported nucleotides.
+                # The two are not comparable, so carriage is unverifiable.
+                continue
+            elif _cv_alt and len(_cv_alt) == 1:
                 gt = user_gt.upper()
                 carries = _cv_alt in set(gt)
                 if not carries:
@@ -98,6 +190,9 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
         # Extract clinical significance from ClinVar local
         clinical_significance = 'uncertain'
         disease_association = ''
+        # None until a condition is seen; True once only drug-response entries
+        # have been seen, False as soon as any real disease name appears.
+        is_pharmacogenomic_only = None
         gene_conditions = []
         inheritance_pattern = 'unknown'
         penetrance = 'unknown'
@@ -132,13 +227,23 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
                                   if gc.get('disease')]
             if raw_conditions:
                 _skip = {'not provided', 'not specified', 'see cases', 'not applicable', 'none', ''}
+                _gene_symbols = {g.strip().lower() for g in cv_local.get('genes', []) if g}
+                if gene:
+                    _gene_symbols.add(gene.strip().lower())
                 # Each condition string may itself be semicolon-separated (multiple conditions in one entry)
                 flat_conditions: list[str] = []
                 for raw_c in raw_conditions:
                     for part in raw_c.split(';'):
                         p = part.strip()
-                        if p and p.lower() not in _skip:
-                            flat_conditions.append(p)
+                        if not p or p.lower() in _skip:
+                            continue
+                        if _is_bare_gene_symbol(p, _gene_symbols):
+                            continue
+                        if _is_pharmacogenomic_condition(p):
+                            is_pharmacogenomic_only = is_pharmacogenomic_only is not False
+                            continue
+                        is_pharmacogenomic_only = False
+                        flat_conditions.append(p)
                 if flat_conditions:
                     disease_association = '; '.join(flat_conditions[:3])
 
@@ -161,6 +266,12 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
                 genes = cv_local.get('genes', [])
                 if genes:
                     gene = genes[0]
+
+        # A variant whose only ClinVar conditions are drug-response entries is a
+        # pharmacogenomic finding, not a rare disease. It belongs on the Drug
+        # Responses panel, which already covers it.
+        if is_pharmacogenomic_only:
+            continue
 
         # Skip benign/likely_benign — not clinically relevant as rare findings
         if clinical_significance in ('benign', 'likely_benign'):
@@ -192,6 +303,7 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
         # "Rett syndrome" or "Fabry disease" don't contain "x-linked".
         variant_chrom = getattr(variant, 'chromosome', None)
         effective_x_linked = (inheritance_pattern == 'x_linked') or (variant_chrom == 'X')
+        is_hemizygous_claim = False
         if effective_x_linked:
             if profile:
                 is_het = profile.is_het
@@ -206,6 +318,28 @@ async def generate_rare_mutations(ctx: GeneratorContext) -> int:
                 continue
             # Homozygous female on X — she IS affected, do not filter
             # Hemizygous (hom-reported) male on X — he IS affected, do not filter
+            #
+            # INVARIANT: this branch may only read "not heterozygous" as
+            # "affected" because allele carriage was already verified above.
+            # Absence of a het call is not by itself evidence of anything. If
+            # the carriage check is ever moved below this point, an ambiguous
+            # II/DD array code becomes a diagnosis again — that ordering is
+            # what reported Rett syndrome and Duchenne muscular dystrophy to an
+            # unaffected adult in 2026-09.
+            is_hemizygous_claim = (ctx.inferred_sex == 'male')
+
+        # Plausibility gate (defence in depth). Deliberately independent of the
+        # carriage check above: it tests only condition severity and ClinVar
+        # review status, so a regression in carriage verification cannot also
+        # disable this. An affected claim for a condition that is lethal or
+        # grossly disabling in childhood — or any hemizygous-affected claim —
+        # needs corroborated evidence before it is presented as significant.
+        if requires_corroboration(disease_association, is_hemizygous_claim) \
+                and not is_corroborated(disease_association, review_statuses,
+                                        is_indel_genotype(user_gt)):
+            if clinical_significance in ('pathogenic', 'likely_pathogenic'):
+                clinical_significance = 'uncertain'
+                penetrance = 'unknown'
 
         # Use scoring engine composite score for informational purposes only.
         # BUG-05 fix: Do NOT upgrade conflicting/uncertain classifications based

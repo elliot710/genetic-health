@@ -183,6 +183,19 @@ _INDEL_CODES = frozenset({'II', 'DD', 'DI', 'ID'})
 _NO_CALL_CODES = frozenset({'--', '00', 'NC', './.', '.|.'})
 
 
+def is_indel_allele_pair(ref_allele: Optional[str], alt_allele: Optional[str]) -> bool:
+    """Whether the known alleles describe an indel rather than a substitution.
+
+    A consumer array reports one base per allele, so it can only be compared
+    with a single-base ref/alt. When either known allele is longer the record
+    is an indel, and a one-base call neither confirms nor denies carrying it.
+    Comparing them anyway matches by string coincidence: ref=AT alt=A against
+    genotype "AA" counts two copies of the alt and reads as homozygous-affected.
+    An unknown allele is not evidence of an indel, so it does not trigger this.
+    """
+    return len(ref_allele or '') > 1 or len(alt_allele or '') > 1
+
+
 def is_indel_genotype(genotype: Optional[str]) -> bool:
     """True when genotype uses consumer array indel codes (II/DD/DI/ID)."""
     if not genotype:

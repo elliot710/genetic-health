@@ -213,7 +213,7 @@
           2.5,
           0.2
         ],
-        "out": "moderate"
+        "out": "low"
       }
     ],
     "cognitive_adjust_percentile": [
@@ -593,6 +593,7 @@
           "condition": "Type 2 Diabetes",
           "gene": "TCF7L2",
           "pathogenicity_classification": "pathogenic",
+          "provenance": "variant",
           "recommendations": [
             "Maintain healthy weight"
           ],

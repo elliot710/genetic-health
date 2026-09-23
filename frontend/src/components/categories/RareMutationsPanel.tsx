@@ -9,7 +9,6 @@ import {
   CategoryHeader,
   EmptyState,
   SectionCard,
-  StatusBadge,
   DisclaimerCard,
   VariantInfoBox,
   ZygosityBadge,
@@ -17,8 +16,9 @@ import {
   GeneContextBox,
   AlphaFoldDetailBox,
   AlphaFoldBadge,
+  EvidenceBand,
+  formatPopulationFrequency,
   GeneBurdenStrip,
-  clinicalSignificanceToSeverity,
   formatLabel,
   MasonryLayout,
   cleanCondition,
@@ -285,10 +285,7 @@ export default function RareMutationsPanel({ data, isDarkMode = false, token }: 
                 </div>
 
                 <div className="flex flex-wrap gap-1">
-                  <StatusBadge
-                    label={formatLabel(mutation.clinical_significance)}
-                    severity={clinicalSignificanceToSeverity(mutation.clinical_significance)}
-                  />
+                  <EvidenceBand classification={mutation.clinical_significance} />
                   {gene && <Badge variant="secondary" className="text-xs">{gene}</Badge>}
                   {rsid && <ClickableRsidBadge rsid={rsid} gene={gene} genotype={data?.genotype_map?.[rsid]} alleleString={data?.allele_string_map?.[rsid]} token={token} isDarkMode={isDarkMode} />}
                   {mutation.mutation_type && (
@@ -330,7 +327,7 @@ export default function RareMutationsPanel({ data, isDarkMode = false, token }: 
 
                     <div className="flex items-center gap-4">
                       <span className={`text-xs ${theme.textSecondary}`}>
-                        Frequency: {(mutation.population_frequency * 100).toFixed(1)}%
+                        Population frequency: {formatPopulationFrequency(mutation.population_frequency)}
                       </span>
                       {mutation.mutation_type && (
                         <span className={`text-xs ${theme.textSecondary}`}>
