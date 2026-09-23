@@ -84,6 +84,9 @@ services:
       start_period: 40s
     volumes:
       - ./data_sources:/app/data_sources
+      - ./.vep_cache:/app/.vep_cache
+      - ./.dbsnp_cache:/app/.dbsnp_cache
+      - ./.snpeff_cache:/app/.snpeff_cache
     command: ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir backend"]
 
   # Jaeger — distributed tracing UI + SPM (http://localhost:16686)
